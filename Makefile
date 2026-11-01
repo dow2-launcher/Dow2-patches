@@ -46,3 +46,7 @@ $(OUT)/MMFind.dll: mmfind/mmfind.c | $(OUT)
 # our own game servers instead of the Relic battle server relays (launcher add-on relay_r2)
 $(OUT)/Relay.dll: relay/relay.c | $(OUT)
 	$(CC) $(CFLAGS) -shared -o $@ $< -lws2_32 -lpsapi -static-libgcc
+
+# experiment: what passes from a player to our game servers (no hooks; NetProbe.log goes with "Send logs")
+$(OUT)/NetProbe.dll: netprobe/netprobe.c | $(OUT)
+	$(CC) $(CFLAGS) -shared -o $@ $< -lws2_32 -static-libgcc -Wl,--exclude-all-symbols
