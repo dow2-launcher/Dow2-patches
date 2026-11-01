@@ -287,7 +287,12 @@ static void decorate(GFxValue *args, unsigned count) {
         // slot type: 0 own, 1 other player; observers may have another - rating is shown to everyone
         if (a[A_NAME].type != GFX_WSTRING || !a[A_NAME].v.ws || !a[A_NAME].v.ws[0]) continue;
         if (a[A_TOOLTIP].type != GFX_WSTRING) continue;          // layout isn't what we expect - leave it alone
-        const wchar_t *name = a[A_NAME].v.ws;
+        // the name as the game sent it: LobbyStats higher in the Invoke chain may have added "  [rating]" already (0.10.1)
+        wchar_t clean[128]; wcsncpy(clean, a[A_NAME].v.ws, 127); clean[127] = 0;
+        { wchar_t *br = wcsstr(clean, L"  ["); size_t L = wcslen(clean);
+          if (br && L && clean[L - 1] == L']') { int dig = br[3] != L']'; for (wchar_t *q = br + 3; q < clean + L - 1; q++) if (*q < L'0' || *q > L'9') dig = 0;
+                                                if (dig) *br = 0; } }
+        const wchar_t *name = clean;
         unsigned long long id = 0;
         int si = a[A_SLOTINDEX].type == GFX_NUMBER ? (int)a[A_SLOTINDEX].v.num : -1;
         if (si >= 0 && si < nids && ids[si]) id = ids[si];       // player ID by slot position
@@ -633,9 +638,17 @@ static char __fastcall hook(void *self, void *edx, const char *method, int flags
 
 static void install(void) {
     unsigned char *target = (unsigned char *)HOOK_ADDR;
-    if (IsBadReadPtr(target, 5) || memcmp(target, PROLOGUE, 5)) { logmsg("DOW2.exe version mismatch at %08X, not hooking", HOOK_ADDR); return; }
+    // 0.10.1: LobbyStats and LoadingRatings (one source) both hook Invoke, MMFind too; whoever comes later wraps the one already
+    // there (a player 01.11.2026 with both ticks: LoadingRatings came first, LobbyStats refused - no rating in the lobby)
+    int chained = !IsBadReadPtr(target, 5) && target[0] == 0xE9;
+    if (IsBadReadPtr(target, 5) || (memcmp(target, PROLOGUE, 5) && !chained)) { logmsg("DOW2.exe version mismatch at %08X, not hooking", HOOK_ADDR); return; }
     unsigned char *tr = VirtualAlloc(NULL, 16, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
-    memcpy(tr, PROLOGUE, 5); tr[5] = 0xE9; *(DWORD *)(tr + 6) = HOOK_RESUME - (DWORD)(tr + 10);
+    if (chained) {
+        DWORD dest = (DWORD)(target + 5) + *(DWORD *)(target + 1);
+        if (IsBadReadPtr((void *)dest, 1)) { logmsg("Invoke hooked by something unknown at %08lX, not hooking", dest); return; }
+        tr[0] = 0xE9; *(DWORD *)(tr + 1) = dest - (DWORD)(tr + 5);
+        logmsg("Invoke already hooked by another add-on (-> %08lX), chaining", dest);
+    } else { memcpy(tr, PROLOGUE, 5); tr[5] = 0xE9; *(DWORD *)(tr + 6) = HOOK_RESUME - (DWORD)(tr + 10); }
     g_orig = (InvokeFn)tr;
     DWORD old; VirtualProtect(target, 5, PAGE_EXECUTE_READWRITE, &old);
     target[0] = 0xE9; *(DWORD *)(target + 1) = (DWORD)hook - (DWORD)(target + 5);
@@ -963,7 +976,7 @@ BOOL WINAPI DllMain(HINSTANCE h, DWORD reason, LPVOID _) {
     _snwprintf(g_probeLog, MAX_PATH, L"%lsLobbyStats_invoke.log", g_dir);
     InitializeCriticalSection(&g_lock); InitializeCriticalSection(&g_probeLock); g_wake = CreateEventW(NULL, FALSE, FALSE, NULL);
     g_probeLast = GetTickCount();
-    logmsg(LS_NAME " v0.10.0, join sound %d%s", g_joinSound, g_probe ? ", UI probe on (LobbyStats_invoke.log)" : "");
+    logmsg(LS_NAME " v0.10.1, join sound %d%s", g_joinSound, g_probe ? ", UI probe on (LobbyStats_invoke.log)" : "");
     if (already_loaded(LS_NAME)) { logmsg("another " LS_NAME " copy is already active in this game, this one stays idle"); return TRUE; }
     g_gameTip = GetPrivateProfileIntW(L"MenuTooltip", L"Game", 1, ini);
     { wchar_t w[128]; GetPrivateProfileStringW(L"MenuTooltip", L"Instance", L"" TIP_INST, w, 128, ini); WideCharToMultiByte(CP_ACP, 0, w, -1, g_tipInst, sizeof g_tipInst, NULL, NULL); }
