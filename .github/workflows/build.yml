@@ -117,11 +117,11 @@ jobs:
         if: always()
         run: rm -rf "$KEYS" "$DIST" "$STORE" launcher
 
-  # On a push to main: a DRAFT GitHub Release vX.Y.Z with the DLLs, SHA256SUMS.txt and addons.json. A draft carries
-  # no tag and is invisible to players, so nothing reaches them from here; it is published by hand after the files are
-  # on the mirrors, and GitHub creates the tag then. If vX.Y.Z is already published, the build only warns to raise the
-  # version. No delivery is done here.
-  draft:
+  # On a push to main: a published GitHub Release vX.Y.Z - the tag on this commit, the DLLs, SHA256SUMS.txt, addons.json
+  # and this version's changelog entry as the description. This is only the git side and does NOT reach players: the
+  # files reach them only when they are put on the mirrors by hand on the server. If vX.Y.Z is already released, the
+  # build only warns to raise the version. No delivery is done here.
+  release:
     needs: [version, publish]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
@@ -137,22 +137,16 @@ jobs:
         with:
           name: dow2-fixes-dlls
           path: dist
-      - name: Assemble the draft
+      - name: Assemble the release
         run: |
           cp addons.json dist/
           python3 scripts/release_notes.py section "$VERSION" > notes.md
           ls -la dist
-      - name: Create or update the draft release
+      - name: Publish the release
         run: |
-          state="$(gh release view "$TAG" --json isDraft -q .isDraft 2>/dev/null || echo absent)"
-          if [ "$state" = false ]; then
-            echo "::warning::$TAG is already published - raise the version in VERSION to make a new draft"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "::warning::$TAG is already released - raise the version in VERSION"
             exit 0
           fi
-          if [ "$state" = true ]; then
-            gh release edit "$TAG" --draft --title "dow2-patches $VERSION" --notes-file notes.md
-            gh release upload "$TAG" dist/* --clobber
-          else
-            gh release create "$TAG" dist/* --draft --title "dow2-patches $VERSION" --notes-file notes.md
-          fi
-          echo "Draft **$TAG** ready ($(ls dist | wc -l) files)" >> "$GITHUB_STEP_SUMMARY"
+          gh release create "$TAG" dist/* --title "dow2-patches $VERSION" --notes-file notes.md --target "$GITHUB_SHA"
+          echo "Released **$TAG** ($(ls dist | wc -l) files)" >> "$GITHUB_STEP_SUMMARY"
