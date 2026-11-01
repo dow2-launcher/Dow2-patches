@@ -332,8 +332,15 @@ static int WSAAPI connect_hook(SOCKET sock, const struct sockaddr *name, int len
         if (p >= 27000 && p <= 27099) {                           // Relic's battleserverrelay (any of their servers)
             char ip[32]; snprintf(ip, sizeof ip, "%s", inet_ntoa(a->sin_addr));
             char use[4] = "";
-            int bridge = 0;
-            if (g_fallback && !(GetEnvironmentVariableA("DOW2_RELAY_USE", use, sizeof use) && use[0] == '1')) {
+            int bridge = 0, toOurs = 0;
+            // Relay 15: the game asks for one of OUR addresses as if it were Relic's relay (seen 01.11: 15.220.68.107:27015 after a
+            // match on our server) - that is our server in any mode: its battle port, never the address itself (other services there)
+            { const char *ours[] = {"15.220.68.107", "116.202.106.150", "83.217.192.34"};
+              for (int i = 0; i < 3; i++) if (a->sin_addr.s_addr == inet_addr(ours[i])) toOurs = 1; }
+            int automatch = GetEnvironmentVariableA("DOW2_RELAY_USE", use, sizeof use) && use[0] == '1';
+            if (toOurs && automatch) toOurs = 0;                  // an automatch: the matchmaker's server (no extra hop)
+            if (toOurs) { g_relayIp = a->sin_addr; g_okAt = GetTickCount(); }
+            if (!toOurs && !automatch && g_fallback) {
                 struct in_addr bh;
                 if (!g_bridge || !pick_bridge(&bh)) {
                     static DWORD said2; if (GetTickCount() - said2 > 60000) { said2 = GetTickCount(); logmsg(g_bridge ? "relay: none of ours answers - %s:%u straight to Relic" : "relay: %s:%u on Relic's servers (not an automatch where everyone has the add-on)", ip, p); }
@@ -341,7 +348,7 @@ static int WSAAPI connect_hook(SOCKET sock, const struct sockaddr *name, int len
                 }
                 bridge = 1; g_relayIp = bh;                       // Relay 15 bridge: a Relic game, carried by our server
             }
-            if (!bridge && !pick_relay()) {
+            if (!bridge && !toOurs && !pick_relay()) {
                 if (!g_fallback) relay_fail("our relay does not answer");
                 static DWORD said; if (GetTickCount() - said > 60000) { said = GetTickCount(); logmsg("relay: none of ours answers - %s:%u on Relic's servers, as without the add-on", ip, p); }
                 return g_connectOrig(sock, name, len);
