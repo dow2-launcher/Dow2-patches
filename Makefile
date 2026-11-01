@@ -7,7 +7,7 @@ STATS_HOST ?= rts.fintebtc.de
 STATS = $(if $(STATS_HOST),-DSTATS_HOST='L"$(STATS_HOST)"',)
 
 all: $(OUT)/ObsFix.dll $(OUT)/LobbyStats.dll $(OUT)/LoadingRatings.dll $(OUT)/Cooldowns.dll $(OUT)/MatchTimer.dll $(OUT)/winmm.dll $(OUT)/FrameProbe.dll $(OUT)/ReinforceFix.dll
-all: $(OUT)/CGNumbers.dll $(OUT)/EliteAI.dll $(OUT)/Reverse.dll $(OUT)/MMFind.dll
+all: $(OUT)/CGNumbers.dll $(OUT)/EliteAI.dll $(OUT)/Reverse.dll $(OUT)/MMFind.dll $(OUT)/Relay.dll
 
 $(OUT):
 	mkdir -p $(OUT)
@@ -42,3 +42,7 @@ $(OUT)/Reverse.dll: reverse/reverse.c | $(OUT)
 
 $(OUT)/MMFind.dll: mmfind/mmfind.c | $(OUT)
 	$(CC) $(CFLAGS) -shared -o $@ $< -lwinhttp -lpsapi -lshell32 -lole32 -static-libgcc
+
+# our own game servers instead of the Relic battle server relays (launcher add-on relay_r2)
+$(OUT)/Relay.dll: relay/relay.c | $(OUT)
+	$(CC) $(CFLAGS) -shared -o $@ $< -lws2_32 -lpsapi -static-libgcc
