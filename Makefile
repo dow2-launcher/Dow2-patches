@@ -49,4 +49,4 @@ $(OUT)/Relay.dll: relay/relay.c | $(OUT)
 
 # experiment: what passes from a player to our game servers (no hooks; NetProbe.log goes with "Send logs")
 $(OUT)/NetProbe.dll: netprobe/netprobe.c | $(OUT)
-	$(CC) $(CFLAGS) -shared -o $@ $< -lws2_32 -static-libgcc -Wl,--exclude-all-symbols
+	$(CC) $(CFLAGS) -shared -o $@ $< -lws2_32 -lwinhttp -static-libgcc -Wl,--exclude-all-symbols
