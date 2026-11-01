@@ -1,8 +1,9 @@
 # Changelog
 
-Every version gets an entry here before it reaches `main`. CI then tags `vX.Y.Z` on its own; for a minor or major
-version (`X.Y.0`) it also publishes a GitHub Release with the DLLs and the entries since the previous `X.Y.0`.
-The version of the set lives only in `VERSION`; each DLL still writes its own version to its log.
+Every version gets an entry here before it reaches `main`. On a push to `main` CI prepares a draft GitHub Release
+`vX.Y.Z` with the DLLs, `SHA256SUMS.txt` and `addons.json`; the tag is created only when that draft is published by
+hand, after the files are on the mirrors. The version of the set lives only in `VERSION`; each DLL still writes its
+own version to its log.
 
 ## 0.1.6 — 2026-10-30
 - MMFind 0.29 (outside addons.json, released by hand): placement by team. The ladder lobby uses random start positions (the game

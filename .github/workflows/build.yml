@@ -75,7 +75,7 @@ jobs:
           } >> "$GITHUB_ENV"
       - uses: actions/checkout@v4
         with:
-          repository: pivolan/Dow2-elite-launcher
+          repository: dow2-launcher/Dow2-elite-launcher
           path: launcher
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
@@ -117,8 +117,11 @@ jobs:
         if: always()
         run: rm -rf "$KEYS" "$DIST" "$STORE" launcher
 
-  # After a merge to main: tag vX.Y.Z if it is new; for X.Y.0 also a GitHub Release with the DLLs.
-  release:
+  # On a push to main: a DRAFT GitHub Release vX.Y.Z with the DLLs, SHA256SUMS.txt and addons.json. A draft carries
+  # no tag and is invisible to players, so nothing reaches them from here; it is published by hand after the files are
+  # on the mirrors, and GitHub creates the tag then. If vX.Y.Z is already published, the build only warns to raise the
+  # version. No delivery is done here.
+  draft:
     needs: [version, publish]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
@@ -130,28 +133,26 @@ jobs:
       GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-      - name: Tag
-        id: tag
-        run: |
-          if git rev-parse "$TAG" >/dev/null 2>&1; then
-            echo "$TAG already exists, nothing to do"
-            echo "new=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          git config user.name 'github-actions[bot]'
-          git config user.email 'github-actions[bot]@users.noreply.github.com'
-          git tag -a "$TAG" -m "$TAG"
-          git push origin "$TAG"
-          echo "new=true" >> "$GITHUB_OUTPUT"
       - uses: actions/download-artifact@v4
-        if: steps.tag.outputs.new == 'true' && needs.version.outputs.release == 'true'
         with:
           name: dow2-fixes-dlls
           path: dist
-      - name: GitHub Release
-        if: steps.tag.outputs.new == 'true' && needs.version.outputs.release == 'true'
+      - name: Assemble the draft
         run: |
-          python3 scripts/release_notes.py notes "$VERSION" > release-notes.md
-          gh release create "$TAG" dist/* --title "dow2-patches $VERSION" --notes-file release-notes.md --verify-tag
+          cp addons.json dist/
+          python3 scripts/release_notes.py section "$VERSION" > notes.md
+          ls -la dist
+      - name: Create or update the draft release
+        run: |
+          state="$(gh release view "$TAG" --json isDraft -q .isDraft 2>/dev/null || echo absent)"
+          if [ "$state" = false ]; then
+            echo "::warning::$TAG is already published - raise the version in VERSION to make a new draft"
+            exit 0
+          fi
+          if [ "$state" = true ]; then
+            gh release edit "$TAG" --draft --title "dow2-patches $VERSION" --notes-file notes.md
+            gh release upload "$TAG" dist/* --clobber
+          else
+            gh release create "$TAG" dist/* --draft --title "dow2-patches $VERSION" --notes-file notes.md
+          fi
+          echo "Draft **$TAG** ready ($(ls dist | wc -l) files)" >> "$GITHUB_STEP_SUMMARY"

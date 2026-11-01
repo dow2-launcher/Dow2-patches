@@ -1,7 +1,8 @@
 """CHANGELOG.md helper for CI.
 
-  release_notes.py check <version>   fails when CHANGELOG.md has no entry for the version
-  release_notes.py notes <version>   prints the entries since the previous X.Y.0 up to the version (release notes)
+  release_notes.py check <version>     fails when CHANGELOG.md has no entry for the version
+  release_notes.py notes <version>     prints the entries since the previous X.Y.0 up to the version (release notes)
+  release_notes.py section <version>   prints only this version's own entry
 """
 import re
 import sys
@@ -35,13 +36,15 @@ def release_entries(version):
 
 
 def main():
-    if len(sys.argv) != 3 or sys.argv[1] not in ("check", "notes"):
+    if len(sys.argv) != 3 or sys.argv[1] not in ("check", "notes", "section"):
         sys.exit(__doc__)
     version = parse_version(sys.argv[2])
     if version not in {v for v, _ in entries()}:
         sys.exit(f"CHANGELOG.md has no entry for {sys.argv[2]}")
     if sys.argv[1] == "notes":
         print("\n\n".join(release_entries(version)))
+    elif sys.argv[1] == "section":
+        print(next(text for v, text in entries() if v == version))
 
 
 if __name__ == "__main__":
