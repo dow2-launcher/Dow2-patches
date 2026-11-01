@@ -410,26 +410,81 @@ static void draw(IDirect3DDevice9 *dev, DWORD now) {
     }
     if (haveVp) IDirect3DDevice9_SetViewport(dev, &vp);
 }
+// ---------- one match core per game (01.11.2026) ----------
+// MatchTimer.dll, Cooldowns.dll and LoadingRatings.dll all carry this file. The first of them to start runs the hooks (the sim
+// imports and the Direct3D device) and puts the address of its core into the process environment (DOW2_MTCORE_<pid>); the
+// others hook nothing and plug into it: Cooldowns its drawing, MatchTimer the clock, LoadingRatings reads the match state.
+// Before, two of them hooked the same game functions at once (a player's log showed every match event twice).
+typedef void (*xdraw_t)(IDirect3DDevice9 *); typedef void (*xreset_t)(IDirect3DDevice9 *, HRESULT);
+typedef struct {
+    int ver;
+    int (*loading)(void); int (*online)(void); int (*ticking)(void); DWORD (*game_ms)(void); long (*ticks)(void); float (*ms_per_tick)(void);
+    void (*add_draw)(xdraw_t draw, xdraw_t lost, xreset_t reset);   // drawn through the core's EndScene / around its Reset
+    void (*want_clock)(const wchar_t *ini, const wchar_t *log);     // MatchTimer.dll: the core draws the clock with these settings
+} mt_core;
+static mt_core *g_remote;                        // the core of another of our DLLs (NULL: this one runs the hooks)
+#define MAX_EXTRA 4
+static struct { xdraw_t draw, lost; xreset_t reset; } g_extra[MAX_EXTRA]; static volatile LONG g_nextra;
+static int g_clockOff;                           // no clock here (the core of Cooldowns / LoadingRatings) until MatchTimer asks for it
+static int g_noDevice;                           // LoadingRatings: the match state only, no Direct3D (until a drawing add-on needs it)
+static volatile LONG g_devStarted;
+static DWORD WINAPI dev_worker(LPVOID _);
+static void need_device(void) {                  // the device hooks once per core, whoever needs them first
+    g_noDevice = 0;
+    if (!InterlockedExchange(&g_devStarted, 1)) CloseHandle(CreateThread(NULL, 0, dev_worker, NULL, 0, NULL));
+}
+static int l_loading(void) { return g_inMatch && !g_ticks; }   // SimulatePre came, no sim tick yet: the loading screen
+static int l_online(void) { return (session_flags() & ONLINE_MASK) != 0; }
+static int l_ticking(void) { return g_inMatch && g_ticks && !g_over; }                  // the match runs (past its loading screen)
+static DWORD l_game_ms(void) { return g_play; }
+static long l_ticks(void) { return g_ticks; }
+static float l_ms_per_tick(void) { return g_ticks > 20 && g_play ? (float)g_play / g_ticks : 100.0f; }   // ~100 ms, measured
+static void l_add_draw(xdraw_t d, xdraw_t l, xreset_t r) {
+    if (!d && !l && !r) return;
+    LONG i = InterlockedIncrement(&g_nextra) - 1;
+    if (i >= MAX_EXTRA) { InterlockedDecrement(&g_nextra); logmsg("no room for one more drawing add-on"); return; }
+    g_extra[i].lost = l; g_extra[i].reset = r; g_extra[i].draw = d;          // draw last: EndScene reads it
+    need_device();
+}
+static void load_ini(void);
+static void l_want_clock(const wchar_t *ini, const wchar_t *log) {
+    lstrcpynW(g_ini, ini, MAX_PATH); lstrcpynW(g_log, log, MAX_PATH);
+    load_ini(); g_clockOff = 0;
+    logmsg("the clock of MatchTimer.dll is drawn by the match core of another add-on (one set of game hooks)");
+    need_device();
+}
+// match state for cooldowns.c / lobbystats.c (LS_LOADING): from the core, wherever it runs
+int mt_loading(void) { return g_remote ? g_remote->loading() : l_loading(); }
+int mt_online(void) { return g_remote ? g_remote->online() : l_online(); }
+int mt_ticking(void) { return g_remote ? g_remote->ticking() : l_ticking(); }
+DWORD mt_game_ms(void) { return g_remote ? g_remote->game_ms() : l_game_ms(); }
+long mt_ticks(void) { return g_remote ? g_remote->ticks() : l_ticks(); }
+float mt_ms_per_tick(void) { return g_remote ? g_remote->ms_per_tick() : l_ms_per_tick(); }
+// 1 = this DLL runs the core (and has published it); 0 = g_remote points at the one already running
+static int core_claim(void) {
+    char n[64], var[40], v[24]; DWORD pid = GetCurrentProcessId();
+    wsprintfA(n, "Local\\dow2patch_mtcore_%lu", pid); wsprintfA(var, "DOW2_MTCORE_%lu", pid);
+    HANDLE mx = CreateMutexA(NULL, FALSE, n); if (mx) WaitForSingleObject(mx, 5000);
+    int mine = 0;
+    if (GetEnvironmentVariableA(var, v, sizeof v) && v[0]) g_remote = (mt_core *)(UINT_PTR)strtoul(v, NULL, 16);
+    else {
+        static mt_core me = { 1, l_loading, l_online, l_ticking, l_game_ms, l_ticks, l_ms_per_tick, l_add_draw, l_want_clock };
+        wsprintfA(v, "%08lX", (unsigned long)(UINT_PTR)&me); SetEnvironmentVariableA(var, v); mine = 1;
+    }
+    if (mx) { ReleaseMutex(mx); CloseHandle(mx); }
+    return mine;
+}
 #ifdef MT_EMBED
-// the host DLL (LobbyStats) draws its own things through the same hook: EndScene, and before/after a device Reset
+// the host DLL (Cooldowns) hands its drawing over through these before mt_start
 void (*mt_extra_draw)(IDirect3DDevice9 *);
 void (*mt_extra_lost)(IDirect3DDevice9 *);
 void (*mt_extra_reset)(IDirect3DDevice9 *, HRESULT);
-static int g_clockOff;                          // a stand-alone MatchTimer.dll draws the clock already
-int mt_loading(void) { return g_inMatch && !g_ticks; }   // SimulatePre came, no sim tick yet: the loading screen
-int mt_online(void) { return (session_flags() & ONLINE_MASK) != 0; }
-int mt_ticking(void) { return g_inMatch && g_ticks && !g_over; }                  // the match runs (past its loading screen)
-DWORD mt_game_ms(void) { return g_play; }
-long mt_ticks(void) { return g_ticks; }
-float mt_ms_per_tick(void) { return g_ticks > 20 && g_play ? (float)g_play / g_ticks : 100.0f; }   // ~100 ms, measured                              // game time of the match, pauses not counted (cooldowns.c)
 #endif
 static HRESULT WINAPI hk_EndScene(IDirect3DDevice9 *dev) {
     DWORD now = GetTickCount();
     InterlockedIncrement(&g_totalCalls); g_calls++;                    // before any early return: the worker's late-hook fallback looks at it
-#ifdef MT_EMBED
-    if (mt_extra_draw) mt_extra_draw(dev);
+    for (LONG i = 0; i < g_nextra && i < MAX_EXTRA; i++) if (g_extra[i].draw) g_extra[i].draw(dev);
     if (g_clockOff) return o_EndScene(dev);
-#endif
     reload_ini(now);
     int vis = g_enabled && clock_visible();
     if (vis != g_shown) {
@@ -456,13 +511,9 @@ static HRESULT WINAPI hk_Reset(IDirect3DDevice9 *dev, D3DPRESENT_PARAMETERS *pp)
         if (g_sprite) g_sprite->lpVtbl->OnLostDevice(g_sprite);
         g_lost = 1;
     }
-#ifdef MT_EMBED
-    if (mt_extra_lost) mt_extra_lost(dev);
-#endif
+    for (LONG i = 0; i < g_nextra && i < MAX_EXTRA; i++) if (g_extra[i].lost) g_extra[i].lost(dev);
     HRESULT hr = o_Reset(dev, pp);
-#ifdef MT_EMBED
-    if (mt_extra_reset) mt_extra_reset(dev, hr);
-#endif
+    for (LONG i = 0; i < g_nextra && i < MAX_EXTRA; i++) if (g_extra[i].reset) g_extra[i].reset(dev, hr);
     if (g_lost && SUCCEEDED(hr)) {
         if (g_font) g_font->lpVtbl->OnResetDevice(g_font);
         if (g_sprite) g_sprite->lpVtbl->OnResetDevice(g_sprite);
@@ -553,8 +604,7 @@ static int hook_by_nullref(void) {
     return SUCCEEDED(hr);
 }
 
-static int g_noDevice;                          // LoadingRatings: the match state only, no Direct3D at all
-static DWORD WINAPI worker(LPVOID _) {
+static DWORD WINAPI dev_worker(LPVOID _) {     // the device hook: Direct3DCreate9 import, else one late NULLREF try
     gf_load(&g_gf, GAME_FONT, NULL);                                            // from the game's files; on failure Book Antiqua
     const char *vers[] = { "d3dx9_43.dll", "d3dx9_42.dll", "d3dx9_41.dll", "d3dx9_40.dll", "d3dx9_38.dll", "d3dx9_35.dll", "d3dx9_34.dll", "d3dx9_31.dll", "d3dx9_30.dll", NULL };
     for (int i = 0; vers[i]; i++) {
@@ -563,10 +613,22 @@ static DWORD WINAPI worker(LPVOID _) {
         p_D3DXCreateSprite = (D3DXCreateSprite_t)GetProcAddress(h, "D3DXCreateSprite");
         if (p_D3DXCreateFontA && p_D3DXCreateSprite) { logmsg("using %s", vers[i]); break; }
     }
-    if (!g_noDevice && (!p_D3DXCreateFontA || !p_D3DXCreateSprite)) { logmsg("no d3dx9_*.dll with D3DXCreateFontA - the clock can't be drawn"); return 0; }
-    int sim = 0, d3d = g_noDevice;
-    for (int i = 0; i < 120 && !(sim && d3d); i++) {                            // only cheap checks here: no devices, no windows
-        if (!sim && (sim = iat_hook(IAT_SIM, "SimEngine.dll", hk_sim, (void **)&o_sim))) {
+    if (!p_D3DXCreateFontA || !p_D3DXCreateSprite) { logmsg("no d3dx9_*.dll with D3DXCreateFontA - nothing can be drawn"); return 0; }
+    int d3d = 0;
+    for (int i = 0; i < 120 && !d3d; i++) {                                    // only cheap checks here: no devices, no windows
+        if ((d3d = hook_create9())) logmsg("Direct3DCreate9 import hooked in %d place(s) after %d s", d3d, i);
+        else Sleep(1000);
+    }
+    if (!d3d) { logmsg("d3d9.dll never came - nothing is drawn"); return 0; }
+    Sleep(30000);                                                               // the game creates its device at start
+    if (!g_devHooked && !g_totalCalls) { logmsg("the game made its device before we came - one NULLREF try"); hook_by_nullref(); }
+    return 0;
+}
+static DWORD WINAPI worker(LPVOID _) {          // the core: sim imports (match state); the device too unless LoadingRatings alone
+    if (!g_noDevice) need_device();
+    int sim = 0;
+    for (int i = 0; i < 120 && !sim; i++) {
+        if ((sim = iat_hook(IAT_SIM, "SimEngine.dll", hk_sim, (void **)&o_sim))) {
             int pre = iat_hook(IAT_SIM_PRE, "SimEngine.dll", hk_pre, (void **)&o_pre);
             int post = iat_hook(IAT_SIM_POST, "SimEngine.dll", hk_post, (void **)&o_post);
             int over = iat_hook(IAT_GAME_OVER, "SimEngine.dll", hk_over, (void **)&o_over);
@@ -575,15 +637,9 @@ static DWORD WINAPI worker(LPVOID _) {
             hook_loadscreen();
             logmsg("sim hooks installed: tick yes, match start %s, match end %s%s", pre ? "yes" : "NO", post ? "yes" : "NO",
                    post ? "" : " - the clock will stay on the post-game screen");
-        }
-        if (!d3d && (d3d = hook_create9())) logmsg("Direct3DCreate9 import hooked in %d place(s) after %d s", d3d, i);
-        if (!(sim && d3d)) Sleep(1000);
+        } else Sleep(1000);
     }
-    if (!sim) { logmsg("World::Simulate import not found at %08X - not DOW2.exe 3.19? The clock stays off", IAT_SIM); return 0; }
-    if (!d3d) { logmsg("d3d9.dll never came - the clock stays off"); return 0; }
-    if (g_noDevice) return 0;
-    Sleep(30000);                                                               // the game creates its device at start
-    if (!g_devHooked && !g_totalCalls) { logmsg("the game made its device before we came - one NULLREF try"); hook_by_nullref(); }
+    if (!sim) logmsg("World::Simulate import not found at %08X - not DOW2.exe 3.19? The clock stays off", IAT_SIM);
     return 0;
 }
 
@@ -601,14 +657,21 @@ void mt_start(const wchar_t *dir, const wchar_t *ini) {
     // LobbyStats 0.9.4 (30.10.2026, owner): the match clock is gone - games crashed with it on. Only the passive parts stay: the sim
     // tick counter (match running / loading screen, for the loading screen ratings and the cooldown numbers) and the one device
     // hook through which LobbyStats draws; nothing of the clock is drawn or created, [MatchTimer] Enabled is ignored.
+    if (!core_claim()) {
+        g_remote->add_draw(mt_extra_draw, mt_extra_lost, mt_extra_reset);
+        logmsg("the match core of another add-on runs already: only the drawing plugs into it (no second set of game hooks)");
+        return;
+    }
     g_clockOff = 1;
-    logmsg("match state and Direct3D hook for the cooldown numbers (no clock)");
-    CloseHandle(CreateThread(NULL, 0, worker, NULL, 0, NULL));   // the device hook is needed for the rest even without the clock
+    l_add_draw(mt_extra_draw, mt_extra_lost, mt_extra_reset);
+    logmsg("match core: match state and Direct3D hook for the cooldown numbers (no clock unless MatchTimer.dll asks)");
+    CloseHandle(CreateThread(NULL, 0, worker, NULL, 0, NULL));
 }
 void mt_start_nodevice(const wchar_t *dir, const wchar_t *ini) {      // LoadingRatings.dll: sim hooks only
     _snwprintf(g_log, MAX_PATH, L"%lsMatchState.log", dir); lstrcpynW(g_ini, ini, MAX_PATH);
+    if (!core_claim()) { logmsg("match state from the match core of another add-on (no second set of game hooks)"); return; }
     g_clockOff = 1; g_noDevice = 1;
-    logmsg("match state for the loading screen ratings (no clock, no Direct3D)");
+    logmsg("match core: match state for the loading screen ratings (no clock, no Direct3D unless a drawing add-on needs it)");
     CloseHandle(CreateThread(NULL, 0, worker, NULL, 0, NULL));
 }
 #else
@@ -622,6 +685,8 @@ BOOL WINAPI DllMain(HINSTANCE h, DWORD reason, LPVOID _) {
     logmsg("MatchTimer v4 (own add-on)");
     if (already_loaded("MatchTimer")) { logmsg("another MatchTimer copy is already active in this game, this one stays idle"); return TRUE; }
     if (!g_enabled) { logmsg("disabled in MatchTimer.ini"); return TRUE; }
+    if (!core_claim()) { g_remote->want_clock(g_ini, g_log); return TRUE; }    // Cooldowns / LoadingRatings came first: their core draws the clock
+    logmsg("match core: the clock");
     CloseHandle(CreateThread(NULL, 0, worker, NULL, 0, NULL));
     return TRUE;
 }
