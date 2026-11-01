@@ -13,17 +13,30 @@
 //                players without it can join our lobbies; none of ours answers -> Relic too.
 //   Fallback=0 - compatibility off: every online game on our servers; the matchmaker pairs such a player only with players
 //                who have our servers on (since 30.10.2026), a custom lobby with Relic players can't play (error, game closes).
+//
+// Relay 15 (01.11.2026, owner: «несколько новых галочек на все случаи»):
+//   Mode=compat|strict|bridge (the launcher's list; without it Fallback=1/0 means compat/strict as before)
+//     bridge - "every game through our server, with anybody": an automatch where everyone has the add-on is hosted on our
+//              server as in compat; every other online game still plays on Relic, but the connection goes through our
+//              server nearest to the player (lowest delay of Poland, Germany, Moscow; or the server picked by hand), which
+//              passes it on to the Relic relay the game wanted ("DWR3"). For players whose own way to Relic is cut or slow.
+//              None of ours answers -> straight to Relic.
+//   UDP=1 - the connection to our server goes in UDP packets with our own delivery (udp_gateway.py on the servers) instead
+//           of TCP, which DPI cuts after ~16-30 KB on the way to foreign hosting. Every connection that goes to our server
+//           (any mode): the game connects to a local port of ours, a thread carries the bytes; no UDP answer in 3 s ->
+//           the same thread carries them over plain TCP, the game notices nothing.
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #include <windows.h>
 #include <psapi.h>
 #include <stdio.h>
 #include <stdarg.h>
+#include <math.h>
 
 typedef int (WSAAPI *ConnectFn)(SOCKET, const struct sockaddr *, int);
 static ConnectFn g_connectOrig; static struct in_addr g_relayIp; static volatile int g_relayOn;
 static int g_port = 47100;                                       // our battle server's port
-static int g_backup = 1, g_fallback = 1, g_handHosts;   // g_handHosts: the player picked the server (launcher: Server)                         // Relay.ini switches, see the top
+static int g_backup = 1, g_fallback = 1, g_handHosts, g_bridge, g_udp;   // g_handHosts: the player picked the server (launcher: Server)                         // Relay.ini switches, see the top
 typedef int (WSAAPI *SendFn)(SOCKET, const char *, int, int);
 typedef int (WSAAPI *RecvFn)(SOCKET, char *, int, int);
 static RecvFn g_recvOrig; static SOCKET g_ours[64]; static void relay_mixed(void);
@@ -72,6 +85,7 @@ static int tcp_ok(struct in_addr ip, unsigned short port, int ms) {   // TCP con
 }
 
 static int tcp_ok(struct in_addr ip, unsigned short port, int ms);
+static struct in_addr g_bridgeHosts[4]; static int g_nBridge; static volatile LONG g_bridgeMs[4] = {-1, -1, -1, -1};   // Relay 15 bridge
 static struct in_addr g_hosts[8]; static int g_nHosts; static volatile DWORD g_okAt; static volatile LONG g_dying;
 
 // The error is shown by a separate process (PowerShell's message box) and the game closes at once: a message box of
@@ -142,6 +156,15 @@ static DWORD WINAPI ping_loop(LPVOID _) {
             for (int k = 0; k < 3; k++) { int r = tcp_rtt(g_hosts[i], (unsigned short)g_port, 2000); if (r >= 0 && (best < 0 || r < best)) best = r; Sleep(100); }
             L += snprintf(env + L, sizeof env - L, "%s%s:%d", L ? "," : "", inet_ntoa(g_hosts[i]), best);
         }
+        for (int i = 0; g_bridge && i < g_nBridge; i++) {         // bridge: Moscow too (the nearest one carries Relic games)
+            int j = -1; for (int k = 0; k < g_nHosts; k++) if (g_hosts[k].s_addr == g_bridgeHosts[i].s_addr) j = k;
+            int best = -1;
+            if (j >= 0) { char *c = strstr(env, inet_ntoa(g_bridgeHosts[i])); if (c) { c = strchr(c, ':'); if (c) best = atoi(c + 1); } }
+            else for (int k = 0; k < 3; k++) { int r = tcp_rtt(g_bridgeHosts[i], (unsigned short)g_port, 2000); if (r >= 0 && (best < 0 || r < best)) best = r; Sleep(100); }
+            g_bridgeMs[i] = best;
+        }
+        if (g_bridge) { char bl[128] = ""; int bL = 0; for (int i = 0; i < g_nBridge; i++) bL += snprintf(bl + bL, sizeof bl - bL, "%s%s:%ld", bL ? "," : "", inet_ntoa(g_bridgeHosts[i]), g_bridgeMs[i]);
+                        static char lastb[128]; if (strcmp(bl, lastb)) { logmsg("relay: bridge servers %s", bl); strcpy(lastb, bl); } }
         SetEnvironmentVariableA("DOW2_RELAY_PING", env);
         if (strcmp(env, last)) { logmsg("relay: ping %s", env); strcpy(last, env); }
         Sleep(300000);
@@ -165,17 +188,160 @@ static int pick_relay(void) {                                   // first host of
     return 0;
 }
 
+
+// ---------- Relay 15: the UDP tunnel (protocol: gameserver/udp_gateway.py) ----------
+enum { U_SYN = 1, U_SYNACK, U_DATA, U_ACK, U_FIN };
+#define U_MAXP 1200
+#define U_WIN 512
+typedef struct { struct in_addr ip; SOCKET lst; } TunArg;
+typedef struct { unsigned char d[U_MAXP]; int n; DWORD first, last; int sends; } UPkt;
+static DWORD g_tunSeed;
+static void u_hdr(unsigned char *b, int t, DWORD cid) { b[0] = 'D'; b[1] = 'U'; b[2] = (unsigned char)t; memcpy(b + 3, &cid, 4); }
+static void pipe_tcp(SOCKET a, SOCKET b) {                      // UDP did not answer: the same bytes over TCP
+    char buf[8192];
+    for (;;) {
+        fd_set r; FD_ZERO(&r); FD_SET(a, &r); FD_SET(b, &r); struct timeval tv = {30, 0};
+        if (select(0, &r, NULL, NULL, &tv) <= 0) break;
+        if (FD_ISSET(a, &r)) { int n = g_recvOrig(a, buf, sizeof buf, 0); if (n <= 0 || g_sendOrig(b, buf, n, 0) != n) break; }
+        if (FD_ISSET(b, &r)) { int n = g_recvOrig(b, buf, sizeof buf, 0); if (n <= 0 || g_sendOrig(a, buf, n, 0) != n) break; }
+    }
+}
+static DWORD WINAPI tunnel(LPVOID pv) {
+    TunArg ta = *(TunArg *)pv; free(pv);
+    fd_set r; FD_ZERO(&r); FD_SET(ta.lst, &r); struct timeval tv = {30, 0};
+    SOCKET g = select(0, &r, NULL, NULL, &tv) > 0 ? accept(ta.lst, NULL, NULL) : INVALID_SOCKET;
+    closesocket(ta.lst);
+    if (g == INVALID_SOCKET) { logmsg("udp: the game did not come to the local port"); return 0; }
+    int one = 1; setsockopt(g, IPPROTO_TCP, TCP_NODELAY, (char *)&one, sizeof one);
+    u_long nb = 0; ioctlsocket(g, FIONBIO, &nb);
+    SOCKET u = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+    struct sockaddr_in sa = {0}; sa.sin_family = AF_INET; sa.sin_addr = ta.ip; sa.sin_port = htons((unsigned short)g_port);
+    g_connectOrig(u, (struct sockaddr *)&sa, sizeof sa);
+    DWORD cid = GetTickCount() ^ (GetCurrentThreadId() << 16) ^ (DWORD)InterlockedIncrement((LONG *)&g_tunSeed) * 2654435761u;
+    unsigned char pk[U_MAXP + 32]; int ok = 0; DWORD t0 = GetTickCount();
+    for (int i = 0; i < 12 && !ok; i++) {                       // SYN every 250 ms, 3 s in all
+        u_hdr(pk, U_SYN, cid); pk[7] = 1; send(u, (char *)pk, 8, 0);
+        fd_set ur; FD_ZERO(&ur); FD_SET(u, &ur); struct timeval t2 = {0, 250000};
+        if (select(0, &ur, NULL, NULL, &t2) > 0) { int n = recv(u, (char *)pk, sizeof pk, 0); if (n >= 7 && pk[0] == 'D' && pk[2] == U_SYNACK) ok = 1; }
+    }
+    if (!ok) {
+        closesocket(u);
+        logmsg("udp: %s does not answer over UDP - this connection goes over TCP", inet_ntoa(ta.ip));
+        SOCKET t = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+        if (g_connectOrig(t, (struct sockaddr *)&sa, sizeof sa) == 0) { setsockopt(t, IPPROTO_TCP, TCP_NODELAY, (char *)&one, sizeof one); pipe_tcp(g, t); }
+        else logmsg("udp: TCP to %s failed too (%d)", inet_ntoa(ta.ip), WSAGetLastError());
+        closesocket(t); closesocket(g); return 0;
+    }
+    logmsg("udp: connection %08lX to %s over UDP (handshake %lu ms)", cid, inet_ntoa(ta.ip), GetTickCount() - t0);
+    UPkt *snd = calloc(U_WIN, sizeof(UPkt)); UPkt *rcv = calloc(U_WIN, sizeof(UPkt));   // ring buffers by packet number % U_WIN
+    char *rhave = calloc(U_WIN, 1);
+    DWORD snext = 0, sbase = 0, rnext = 0, lastIn = GetTickCount(), lastOut = 0, lastAck = (DWORD)-1; int dup = 0;
+    double srtt = 150, rttvar = 50; unsigned resent = 0, sentn = 0, gotn = 0, gapn = 0; int gameOpen = 1;
+    #define SACK() ({ DWORD m_ = 0; for (int i_ = 0; i_ < 32; i_++) if (rhave[(rnext + 1 + i_) % U_WIN]) m_ |= 1u << i_; m_; })
+    for (;;) {
+        DWORD now = GetTickCount();
+        if (now - lastIn > 30000) { logmsg("udp: %08lX - nothing from the server for 30 s", cid); break; }
+        fd_set rs; FD_ZERO(&rs); FD_SET(u, &rs); if (gameOpen && snext - sbase < U_WIN) FD_SET(g, &rs);
+        struct timeval t3 = {0, 20000};
+        int sel = select(0, &rs, NULL, NULL, &t3); now = GetTickCount();
+        if (sel > 0 && FD_ISSET(g, &rs)) {                       // game -> server
+            UPkt *q = &snd[snext % U_WIN];
+            int n = g_recvOrig(g, (char *)q->d, U_MAXP, 0);
+            if (n <= 0) { gameOpen = 0; }
+            else {
+                q->n = n; q->first = q->last = now; q->sends = 1;
+                u_hdr(pk, U_DATA, cid); DWORD sk = SACK(); memcpy(pk + 7, &snext, 4); memcpy(pk + 11, &rnext, 4); memcpy(pk + 15, &sk, 4);
+                memcpy(pk + 19, q->d, n); send(u, (char *)pk, 19 + n, 0); snext++; sentn++; lastOut = now;
+            }
+        }
+        if (sel > 0 && FD_ISSET(u, &rs)) {                       // server -> game
+            int n = recv(u, (char *)pk, sizeof pk, 0);
+            if (n >= 7 && pk[0] == 'D' && pk[1] == 'U' && !memcmp(pk + 3, &cid, 4)) {
+                lastIn = now; int t = pk[2]; DWORD ack = 0, sack = 0;
+                if (t == U_FIN) { logmsg("udp: %08lX closed by the server", cid); break; }
+                if ((t == U_DATA && n >= 19) || (t == U_ACK && n >= 15)) {
+                    int o = t == U_DATA ? 11 : 7; memcpy(&ack, pk + o, 4); memcpy(&sack, pk + o + 4, 4);
+                    while (sbase < ack && sbase < snext) {           // acknowledged in order
+                        UPkt *q = &snd[sbase % U_WIN];
+                        if (q->sends == 1) { double rt = now - q->first; rttvar = 0.75 * rttvar + 0.25 * fabs(srtt - rt); srtt = 0.875 * srtt + 0.125 * rt; }
+                        q->n = 0; sbase++;
+                    }
+                    for (int i = 0; i < 32; i++) if (sack >> i & 1) {   // arrived out of order: negative length = acknowledged
+                        DWORD sq = ack + 1 + i; if (sq >= sbase && sq < snext && snd[sq % U_WIN].n > 0) snd[sq % U_WIN].n = -snd[sq % U_WIN].n; }
+                    if (ack == lastAck && sack && sbase < snext && snd[sbase % U_WIN].n > 0) { if (dup < 2) dup++; } else dup = 0;   // 2 = send the first one again now
+                    lastAck = ack;
+                }
+                if (t == U_DATA && n >= 19) {
+                    DWORD seq; memcpy(&seq, pk + 7, 4); int len = n - 19;
+                    if (seq >= rnext && seq - rnext < U_WIN && !rhave[seq % U_WIN]) {
+                        UPkt *q = &rcv[seq % U_WIN]; memcpy(q->d, pk + 19, len); q->n = len; rhave[seq % U_WIN] = 1;
+                        if (seq != rnext) gapn++;
+                        while (rhave[rnext % U_WIN]) {
+                            UPkt *x = &rcv[rnext % U_WIN]; rhave[rnext % U_WIN] = 0;
+                            for (int off = 0; off < x->n; ) { int w = g_sendOrig(g, (char *)x->d + off, x->n - off, 0); if (w <= 0) { gameOpen = 0; break; } off += w; }
+                            rnext++; gotn++;
+                        }
+                    }
+                    unsigned char a[15]; u_hdr(a, U_ACK, cid); DWORD sk = SACK(); memcpy(a + 7, &rnext, 4); memcpy(a + 11, &sk, 4);
+                    send(u, (char *)a, 15, 0); lastOut = now;
+                }
+            }
+        }
+        // resend what is overdue (RTO from the measured round trip, doubled per resend) and once on two duplicate acks
+        double rto = srtt + 4 * rttvar; if (rto < 60) rto = 60; if (rto > 1000) rto = 1000;
+        for (DWORD sq = sbase; sq < snext && sq < sbase + 64; sq++) {
+            UPkt *q = &snd[sq % U_WIN]; if (q->n <= 0) continue;
+            int mult = q->sends > 4 ? 8 : 1 << (q->sends - 1);
+            if ((now - q->last > rto * mult) || (dup == 2 && sq == sbase)) {
+                if (dup == 2) dup = 3;
+                u_hdr(pk, U_DATA, cid); DWORD sk = SACK(); memcpy(pk + 7, &sq, 4); memcpy(pk + 11, &rnext, 4); memcpy(pk + 15, &sk, 4);
+                memcpy(pk + 19, q->d, q->n); send(u, (char *)pk, 19 + q->n, 0); q->last = now; q->sends++; resent++; lastOut = now;
+            }
+        }
+        while (sbase < snext && snd[sbase % U_WIN].n <= 0) { snd[sbase % U_WIN].n = 0; sbase++; }   // acked out of order earlier
+        if (!gameOpen && sbase == snext) break;                  // the game closed and everything got there
+        if (now - lastOut > 1000) { unsigned char a[15]; u_hdr(a, U_ACK, cid); DWORD sk = SACK(); memcpy(a + 7, &rnext, 4); memcpy(a + 11, &sk, 4); send(u, (char *)a, 15, 0); lastOut = now; }
+    }
+    for (int i = 0; i < 3; i++) { u_hdr(pk, U_FIN, cid); send(u, (char *)pk, 7, 0); }
+    logmsg("udp: %08lX over: sent %u, got %u, sent again %u, out of order in %u, round trip %d ms", cid, sentn, gotn, resent, gapn, (int)srtt);
+    closesocket(u); closesocket(g); free(snd); free(rcv); free(rhave);
+    return 0;
+}
+// a local port for one game connection to our server ip; the thread carries it over UDP (TCP when UDP fails)
+static int tunnel_port(struct in_addr ip) {
+    SOCKET l = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP); if (l == INVALID_SOCKET) return 0;
+    struct sockaddr_in a = {0}; a.sin_family = AF_INET; a.sin_addr.s_addr = htonl(INADDR_LOOPBACK); int al = sizeof a;
+    if (bind(l, (struct sockaddr *)&a, sizeof a) || listen(l, 1) || getsockname(l, (struct sockaddr *)&a, &al)) { closesocket(l); return 0; }
+    TunArg *ta = malloc(sizeof *ta); ta->ip = ip; ta->lst = l;
+    HANDLE th = CreateThread(NULL, 0, tunnel, ta, 0, NULL); if (!th) { free(ta); closesocket(l); return 0; }
+    CloseHandle(th); return ntohs(a.sin_port);
+}
+
+// bridge: our server nearest to the player (the lowest delay the ping loop measured; the one picked by hand wins)
+static int pick_bridge(struct in_addr *out) {
+    int best = -1;
+    for (int i = 0; i < g_nBridge; i++) if (g_bridgeMs[i] > 0 && (best < 0 || g_bridgeMs[i] < g_bridgeMs[best])) best = i;
+    if (best < 0) for (int i = 0; i < g_nBridge; i++) if (tcp_ok(g_bridgeHosts[i], (unsigned short)g_port, 3000)) { best = i; break; }
+    if (best < 0) return 0;
+    *out = g_bridgeHosts[best]; return 1;
+}
+
 static int WSAAPI connect_hook(SOCKET sock, const struct sockaddr *name, int len) {
     if (g_relayOn && name && name->sa_family == AF_INET && len >= (int)sizeof(struct sockaddr_in)) {
         const struct sockaddr_in *a = (const struct sockaddr_in *)name; unsigned short p = ntohs(a->sin_port);
         if (p >= 27000 && p <= 27099) {                           // Relic's battleserverrelay (any of their servers)
             char ip[32]; snprintf(ip, sizeof ip, "%s", inet_ntoa(a->sin_addr));
             char use[4] = "";
+            int bridge = 0;
             if (g_fallback && !(GetEnvironmentVariableA("DOW2_RELAY_USE", use, sizeof use) && use[0] == '1')) {
-                static DWORD said2; if (GetTickCount() - said2 > 60000) { said2 = GetTickCount(); logmsg("relay: %s:%u on Relic's servers (not an automatch where everyone has the add-on)", ip, p); }
-                return g_connectOrig(sock, name, len);
+                struct in_addr bh;
+                if (!g_bridge || !pick_bridge(&bh)) {
+                    static DWORD said2; if (GetTickCount() - said2 > 60000) { said2 = GetTickCount(); logmsg(g_bridge ? "relay: none of ours answers - %s:%u straight to Relic" : "relay: %s:%u on Relic's servers (not an automatch where everyone has the add-on)", ip, p); }
+                    return g_connectOrig(sock, name, len);
+                }
+                bridge = 1; g_relayIp = bh;                       // Relay 15 bridge: a Relic game, carried by our server
             }
-            if (!pick_relay()) {
+            if (!bridge && !pick_relay()) {
                 if (!g_fallback) relay_fail("our relay does not answer");
                 static DWORD said; if (GetTickCount() - said > 60000) { said = GetTickCount(); logmsg("relay: none of ours answers - %s:%u on Relic's servers, as without the add-on", ip, p); }
                 return g_connectOrig(sock, name, len);
@@ -185,14 +351,21 @@ static int WSAAPI connect_hook(SOCKET sock, const struct sockaddr *name, int len
             if (players < 0 || players > 16) players = 0;
             EnterCriticalSection(&g_pk);
             int k = -1; for (int i = 0; i < 64; i++) if (g_pend[i].s == sock || (k < 0 && !g_pend[i].s)) { k = i; if (g_pend[i].s == sock) break; }
-            if (k >= 0) { g_pend[k].s = sock; memcpy(g_pend[k].pre, g_fallback ? "DWR2" : "DWR1", 4); memcpy(g_pend[k].pre + 4, &a->sin_addr, 4);
+            if (k >= 0) { g_pend[k].s = sock; memcpy(g_pend[k].pre, bridge ? "DWR3" : g_fallback ? "DWR2" : "DWR1", 4); memcpy(g_pend[k].pre + 4, &a->sin_addr, 4);
                           g_pend[k].pre[8] = (unsigned char)(p >> 8); g_pend[k].pre[9] = (unsigned char)p;
-                          g_pend[k].pre[10] = (unsigned char)players; g_pend[k].len = g_fallback ? 11 : 10; }
+                          g_pend[k].pre[10] = (unsigned char)players; g_pend[k].len = !bridge && g_fallback ? 11 : 10; }
             LeaveCriticalSection(&g_pk);
             if (k < 0) relay_fail("too many relay connections");
             EnterCriticalSection(&g_pk); for (int i = 0; i < 64; i++) if (!g_ours[i] || g_ours[i] == sock) { g_ours[i] = sock; break; } LeaveCriticalSection(&g_pk);
             struct sockaddr_in b = *a; b.sin_addr = g_relayIp; b.sin_port = htons((unsigned short)g_port);
-            logmsg("relay: %s:%u -> ours %s:%d%s", ip, p, inet_ntoa(g_relayIp), g_port, g_fallback ? " (compatible: a lobby hosted elsewhere is passed on)" : "");
+            char via[40] = "";
+            if (g_udp) {                                          // Relay 15: to a local port of ours, a thread carries it over UDP
+                int lp = tunnel_port(g_relayIp);
+                if (lp) { b.sin_addr.s_addr = htonl(INADDR_LOOPBACK); b.sin_port = htons((unsigned short)lp); strcpy(via, " over UDP"); }
+                else strcpy(via, " (UDP tunnel failed to start - TCP)");
+            }
+            logmsg("relay: %s:%u -> ours %s:%d%s%s", ip, p, inet_ntoa(g_relayIp), g_port, via,
+                   bridge ? " (bridge: a Relic game, our server passes it on)" : g_fallback ? " (compatible: a lobby hosted elsewhere is passed on)" : "");
             return g_connectOrig(sock, (const struct sockaddr *)&b, sizeof b);
         }
     }
@@ -245,6 +418,8 @@ static void load_hosts(void) {                                  // from DllMain:
     if (!own[0] && g_backup)                                    // Germany (Hetzner) after Warsaw
         g_hosts[g_nHosts++].s_addr = inet_addr("116.202.106.150");
     g_relayIp = g_hosts[0]; g_relayOn = 1;                      // from the very first connect: ours, never Relic directly
+    if (g_handHosts) for (int i = 0; i < g_nHosts && g_nBridge < 4; i++) g_bridgeHosts[g_nBridge++] = g_hosts[i];   // bridge: the hand pick
+    else { const char *bh[] = {"15.220.68.107", "116.202.106.150", "83.217.192.34"}; for (int i = 0; i < 3; i++) g_bridgeHosts[g_nBridge++].s_addr = inet_addr(bh[i]); }
 }
 
 static DWORD WINAPI first_check(LPVOID _) {                     // early warning in the log; the hard check is at connect time
@@ -263,6 +438,9 @@ BOOL WINAPI DllMain(HINSTANCE h, DWORD reason, LPVOID _) {
     g_port = GetPrivateProfileIntW(L"Relay", L"Port", 47100, g_ini); InitializeCriticalSection(&g_pk);
     g_backup = GetPrivateProfileIntW(L"Relay", L"Backup", 1, g_ini);
     g_fallback = GetPrivateProfileIntW(L"Relay", L"Fallback", 1, g_ini);   // "Compatibility mode" sub-tick in the launcher (on by default)
+    { wchar_t m[16]; GetPrivateProfileStringW(L"Relay", L"Mode", L"", m, 16, g_ini);   // Relay 15: the launcher's list of modes
+      if (!_wcsicmp(m, L"strict")) g_fallback = 0; else if (!_wcsicmp(m, L"compat")) g_fallback = 1; else if (!_wcsicmp(m, L"bridge")) { g_fallback = 1; g_bridge = 1; } }
+    g_udp = GetPrivateProfileIntW(L"Relay", L"UDP", 0, g_ini);
     HMODULE ws = GetModuleHandleA("ws2_32.dll"); if (!ws) ws = LoadLibraryA("ws2_32.dll");
     void *real = ws ? (void *)GetProcAddress(ws, "connect") : NULL; if (!real) return TRUE;
     g_connectOrig = (ConnectFn)real;
@@ -275,7 +453,8 @@ BOOL WINAPI DllMain(HINSTANCE h, DWORD reason, LPVOID _) {
       WIN32_FILE_ATTRIBUTE_DATA a; if (GetFileAttributesExW(p, GetFileExInfoStandard, &a) && (a.nFileSizeHigh || a.nFileSizeLow > (1u << 20))) MoveFileExW(p, o, MOVEFILE_REPLACE_EXISTING); }
     load_hosts();
     SetEnvironmentVariableA("DOW2_RELAY", g_fallback ? "9c" : "9");   // for MMFind: the matchmaker may mix us with Relic players
-    logmsg("Relay 14 start (%d server(s), Relic fallback %s), connect hooked in %d import(s), send %d, WSASend %d, recv %d%s", g_nHosts, g_fallback ? "on" : "off", n, ns, nw, nr, n ? "" : " - another add-on (automatch) already routes the relay, staying idle");
+    logmsg("Relay 15 start (%d server(s), mode %s%s), connect hooked in %d import(s), send %d, WSASend %d, recv %d%s", g_nHosts,
+           g_bridge ? "bridge" : g_fallback ? "compatible" : "strict", g_udp ? ", UDP to our server" : "", n, ns, nw, nr, n ? "" : " - another add-on (automatch) already routes the relay, staying idle");
     if (n && g_relayOn) { CloseHandle(CreateThread(NULL, 0, first_check, NULL, 0, NULL)); CloseHandle(CreateThread(NULL, 0, ping_loop, NULL, 0, NULL)); }
     return TRUE;
 }
