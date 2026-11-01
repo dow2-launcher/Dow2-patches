@@ -50,3 +50,13 @@ $(OUT)/Relay.dll: relay/relay.c | $(OUT)
 # experiment: what passes from a player to our game servers (no hooks; NetProbe.log goes with "Send logs")
 $(OUT)/NetProbe.dll: netprobe/netprobe.c | $(OUT)
 	$(CC) $(CFLAGS) -shared -o $@ $< -lws2_32 -lwinhttp -static-libgcc -Wl,--exclude-all-symbols
+
+# winmm.dll shim for vanilla: forwards every export to the system winmm.dll (winmm.def) and loads the patch DLLs
+$(OUT)/winmm.dll: vanilla-loader/winmm_proxy.c vanilla-loader/winmm.def | $(OUT)
+	$(CC) -O2 -s -shared -o $@ $^ -static-libgcc
+
+$(OUT)/FrameProbe.dll: frameprobe/frameprobe.c | $(OUT)
+	$(CC) $(CFLAGS) -Wno-unused-variable -shared -o $@ $< -lpsapi -lwinmm -static-libgcc
+
+$(OUT)/ReinforceFix.dll: reinforcefix/reinforcefix.c | $(OUT)
+	$(CC) $(CFLAGS) -shared -o $@ $< -static-libgcc
