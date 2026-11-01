@@ -176,7 +176,17 @@ static void parse_roster(const char *res) {
 }
 unsigned long long g_mySteam;
 static volatile int g_wantJoin, g_wantLeave, g_wantHost, g_hostReported, g_wantStarted, g_wantEnded; static char g_ruined[48]; static volatile int g_loading;
-static int g_maxDiff, g_testBots, g_aiDiff, g_manual, g_autoSwap = 1, g_autoSwapCfg = 1; static char g_group[32];   // Manual=1: no automation in the lobby (tests)   // TestBots: 1 = me vs computers, 2 = computers vs computers, I watch (AI tests)
+static int g_maxDiff, g_testBots, g_aiDiff, g_manual, g_autoSwap = 1, g_autoSwapCfg = 1; static char g_group[32]; static char g_game[24] = "elite";   // Manual=1: no automation in the lobby (tests)   // TestBots: 1 = me vs computers, 2 = computers vs computers, I watch (AI tests)
+// 0.33: vanilla and Elite players never share a queue (the ladder keeps one queue per game). Every Elite start has "-modname Elite"
+// on the command line (players' warnings.txt: RUN OPTIONS); a start without it is vanilla even when an Elite copy of this DLL got
+// loaded (Elite's own Profiler.dll replaces the game's one and is loaded in vanilla too - not a sign of Elite).
+static void detect_game(void) {
+    wchar_t cmd[MAX_PATH]; wcsncpy(cmd, GetCommandLineW(), MAX_PATH - 1); cmd[MAX_PATH - 1] = 0; _wcslwr(cmd);
+    int elite = wcsstr(cmd, L"-modname elite") != NULL;
+    const char *g = elite ? "elite" : "vanilla";
+    if (strcmp(g, g_game)) logmsg("game: %s", g);
+    strcpy(g_game, g);
+}
 static const char *RACES[] = {"chaos_space_marines","eldar","imperial_guard","ordo_malleus","orks","space_marines","tau","tyranids","necron"};
 static HANDLE g_wake;
 static volatile int g_coverWant; static wchar_t g_coverLine[160]; static int g_sending;
@@ -345,10 +355,11 @@ static DWORD WINAPI net_worker(LPVOID _) {
                 }
                 rl += snprintf(rp + rl, sizeof rp - rl, "}");
             }
-            snprintf(body, sizeof body, "{\"steam\":\"%llu\",\"mode\":\"%s\",\"name\":\"%s\",\"race\":\"%s\",\"hero\":\"%d\",\"maps\":[%s],\"max_diff\":%d%s%s%s,\"group\":\"%s\"}",
-                     g_mySteam, MODE_KEY[g_mode], nm, (g_random ? "random" : g_race >= 0 && g_race < 9 ? RACES[g_race] : ""), g_hero, maps, g_maxDiff, g_testBots ? ",\"bots\":true" : "",
+            detect_game();
+            snprintf(body, sizeof body, "{\"steam\":\"%llu\",\"game\":\"%s\",\"mode\":\"%s\",\"name\":\"%s\",\"race\":\"%s\",\"hero\":\"%d\",\"maps\":[%s],\"max_diff\":%d%s%s%s,\"group\":\"%s\"}",
+                     g_mySteam, g_game, MODE_KEY[g_mode], nm, (g_random ? "random" : g_race >= 0 && g_race < 9 ? RACES[g_race] : ""), g_hero, maps, g_maxDiff, g_testBots ? ",\"bots\":true" : "",
                      own ? (compat ? ",\"own_server\":true,\"relay_compat\":true" : ",\"own_server\":true") : "", rp, g_group);
-            http_post(L"join", body, res, sizeof res); logmsg("join -> %s", res);
+            http_post(L"join", body, res, sizeof res); logmsg("join (%s) -> %s", g_game, res);
             g_queue = jint(res, MODE_KEY[g_mode], -1);
         }
         if (g_wantHost && !g_hostReported) {
@@ -1379,7 +1390,7 @@ BOOL WINAPI DllMain(HINSTANCE h, DWORD r, LPVOID _) {
     g_mySteam = my_steam();
     { wchar_t p[MAX_PATH], o[MAX_PATH]; _snwprintf(p, MAX_PATH, L"%lsMMFind.log", g_dir); _snwprintf(o, MAX_PATH, L"%lsMMFind.log.old", g_dir);
       WIN32_FILE_ATTRIBUTE_DATA a; if (GetFileAttributesExW(p, GetFileExInfoStandard, &a) && (a.nFileSizeHigh || a.nFileSizeLow > (1u << 20))) MoveFileExW(p, o, MOVEFILE_REPLACE_EXISTING); }
-    logmsg("MMFind 0.32 start, steam=%llu server=%ls", g_mySteam, g_server);
+    logmsg("MMFind 0.33 start, steam=%llu server=%ls", g_mySteam, g_server);
     { char n[64]; wsprintfA(n, "Local\\dow2patch_MMFind_%lu", GetCurrentProcessId());          // one copy per game (launcher + dow2-patches)
       HANDLE mx = CreateMutexA(NULL, FALSE, n); if (mx && GetLastError() == ERROR_ALREADY_EXISTS) { logmsg("another MMFind copy is active, this one stays idle"); return TRUE; } }
     install(); return TRUE;
