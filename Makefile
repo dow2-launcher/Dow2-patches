@@ -7,32 +7,30 @@ STATS_HOST ?= rts.fintebtc.de
 STATS = $(if $(STATS_HOST),-DSTATS_HOST='L"$(STATS_HOST)"',)
 
 all: $(OUT)/ObsFix.dll $(OUT)/LobbyStats.dll $(OUT)/LoadingRatings.dll $(OUT)/Cooldowns.dll $(OUT)/MatchTimer.dll $(OUT)/winmm.dll $(OUT)/FrameProbe.dll $(OUT)/ReinforceFix.dll
-all: $(OUT)/CGNumbers.dll $(OUT)/EliteAI.dll $(OUT)/Reverse.dll $(OUT)/MMFind.dll $(OUT)/Relay.dll
+all: $(OUT)/EliteAI.dll $(OUT)/Reverse.dll $(OUT)/MMFind.dll $(OUT)/Relay.dll
 
 $(OUT):
 	mkdir -p $(OUT)
 $(OUT)/ObsFix.dll: obsfix/obsfix.c | $(OUT)
 	$(CC) $(CFLAGS) -shared -o $@ $< -static-libgcc
 # LobbyStats carries the match clock (matchtimer.c with -DMT_EMBED) and the cooldown numbers (cooldowns.c): one Direct3D hook for all
-$(OUT)/LobbyStats.dll: lobbystats/lobbystats.c lobbystats/join_sound.h common/gamefont.h | $(OUT)
+$(OUT)/LobbyStats.dll: lobbystats/lobbystats.c lobbystats/join_sound.h | $(OUT)
 	$(CC) $(CFLAGS) $(STATS) -shared -o $@ lobbystats/lobbystats.c -lwinhttp -lpsapi -lgdi32 -lwinmm -static-libgcc -Wl,--kill-at
 
 # 30.10.2026: every feature its own add-on - the loading screen ratings, the cooldown numbers, the match clock (MatchTimer.dll)
-$(OUT)/LoadingRatings.dll: lobbystats/lobbystats.c matchtimer/matchtimer.c common/gamefont.h | $(OUT)
+$(OUT)/LoadingRatings.dll: lobbystats/lobbystats.c matchtimer/matchtimer.c | $(OUT)
 	$(CC) $(CFLAGS) $(STATS) -DLS_LOADING -DMT_EMBED -shared -o $@ lobbystats/lobbystats.c matchtimer/matchtimer.c -lwinhttp -lpsapi -lgdi32 -lwinmm -static-libgcc -Wl,--kill-at
 
-$(OUT)/MatchTimer.dll: matchtimer/matchtimer.c common/gamefont.h | $(OUT)
+$(OUT)/MatchTimer.dll: matchtimer/matchtimer.c | $(OUT)
 	$(CC) $(CFLAGS) -shared -o $@ $< -lpsapi -lgdi32 -static-libgcc -Wl,--exclude-all-symbols
 
-$(OUT)/Cooldowns.dll: cooldowns/cooldowns_main.c cooldowns/cooldowns.c matchtimer/matchtimer.c common/gamefont.h | $(OUT)
+$(OUT)/Cooldowns.dll: cooldowns/cooldowns_main.c cooldowns/cooldowns.c matchtimer/matchtimer.c | $(OUT)
 	$(CC) $(CFLAGS) -DMT_EMBED -DCD_STANDALONE -shared -o $@ cooldowns/cooldowns_main.c cooldowns/cooldowns.c matchtimer/matchtimer.c -lpsapi -lgdi32 -lwinmm -static-libgcc -Wl,--exclude-all-symbols
 
 clean:
 	rm -rf $(OUT)
 .PHONY: all clean
 
-$(OUT)/CGNumbers.dll: cgnumbers/cgnumbers.c | $(OUT)
-	$(CC) $(CFLAGS) -shared -o $@ $< -ld3d9 -static-libgcc
 
 $(OUT)/EliteAI.dll: eliteai/eliteai.c | $(OUT)
 	$(CC) $(CFLAGS) -shared -o $@ $< -static-libgcc

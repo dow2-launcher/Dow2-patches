@@ -1,5 +1,8 @@
 # Dow2-patches
 
+**UI rule:** add-ons show things only inside the game's own interface (its Scaleform movies), never drawn over the
+frame through Direct3D — why and how: [docs/UI_RULES.md](docs/UI_RULES.md).
+
 Small DLL patches for Dawn of War II: Retribution (DOW2.exe 3.19.1.10320, the current Steam build).
 Plain C, built with MinGW. Every patch checks the bytes it is about to change and does nothing if the
 exe is a different build.
@@ -56,16 +59,10 @@ frameprobe/
     The diagnostics DLL I used to find the observer lag: frame times, sim ticks, a stack sampler on the
     game thread, a probe on the post-game Continue button.
 
-cgnumbers/
-    Control-group numbers above squads (experimental, skeleton). When you assign squads to a control
-    group (Ctrl+1..0) the group number is drawn on that squad's banner, handy in 2v2/3v3. Draws through
-    the game's Direct3D9 (DXVK-safe). Stage 1 proves the render path; reading squads/groups is stage 2.
-
 matchtimer/
-    Match clock, built into LobbyStats.dll (no DLL of its own). MM:SS of game time since the match started (pauses
-    not counted), in the game's own font (read from its files), through Direct3D9; off as soon as the match ends.
-    Shown in every game, OnlineOnly=1 keeps it to live multiplayer. Look and position in LobbyStats.ini, section
-    [MatchTimer], picked up while the game runs.
+    Match clock, MatchTimer.dll. MM:SS of game time since the match started (pauses not counted), as text of the
+    game's own Menu button movie (Scaleform, common/gfxui.h - nothing drawn over the game, see docs/UI_RULES.md);
+    off as soon as the match ends. OnlineOnly=1 keeps it to live multiplayer.
 
 eliteai/
     The new AI (launcher add-on "New AI (test, skirmish only)"). EliteAI.dll hooks lua_load in LuaConfig.dll and puts
