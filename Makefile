@@ -53,6 +53,10 @@ $(OUT)/Relay.dll: relay/relay.c | $(OUT)
 $(OUT)/RelayForward.dll: relay/relay.c | $(OUT)
 	$(CC) $(CFLAGS) -DRELAY_FWD -shared -o $@ $< -lws2_32 -lpsapi -static-libgcc
 
+# what closed the game: serious exceptions with module+offset and stack, a minidump on a crash, ExitProcess / TerminateProcess callers
+$(OUT)/CrashLog.dll: crashlog/crashlog.c | $(OUT)
+	$(CC) $(CFLAGS) -shared -o $@ $< -lpsapi -static-libgcc -Wl,--exclude-all-symbols
+
 # experiment: what passes from a player to our game servers (no hooks; NetProbe.log goes with "Send logs")
 $(OUT)/NetProbe.dll: netprobe/netprobe.c | $(OUT)
 	$(CC) $(CFLAGS) -shared -o $@ $< -lws2_32 -lwinhttp -static-libgcc -Wl,--exclude-all-symbols
