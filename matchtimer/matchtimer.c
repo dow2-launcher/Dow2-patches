@@ -51,7 +51,7 @@ static void logmsg(const char *fmt, ...) {
 static int g_enabled = 1, g_size = 22, g_shadow = 1, g_onlineOnly = 0;   // FontSize: in the movie's units (the "Menu" label is 20)
 static int g_plate = 1, g_plateAlpha = 85;                              // a plate under the clock: a copy of the Menu button's own background
 enum { PL_UNDER, PL_LEFT, PL_MENU, PL_TOP };
-static int g_place = PL_UNDER, g_gap = 1, g_width = 100, g_height = 30, g_offX = 0, g_offY = 0, g_raise = 8;   // where the clock is (MatchTimer.ini Place=under|menu|left, Gap, Width, Height, OffsetX/Y, Raise: the Menu button up by this, room under it - the movie clips below its stage, y 75)
+static int g_place = PL_UNDER, g_gap = 1, g_width = 100, g_height = 30, g_offX = 0, g_offY = 0, g_raise = 8, g_textY = 3;   // where the clock is (MatchTimer.ini Place=under|menu|left, Gap, Width, Height, OffsetX/Y, TextY: the digits down in the plate (a Flash field keeps room under the line), Raise: the Menu button up by this, room under it - the movie clips below its stage, y 75)
 static DWORD g_color = 0xFFCAF9FF;                                      // the colour of the "Menu" label
 static FILETIME g_iniTime;
 static DWORD ini_color(const wchar_t *key, const wchar_t *def) {
@@ -78,6 +78,7 @@ static void load_ini(void) {
     g_offX       = ini_int(L"OffsetX", 0, -400, 400);
     g_offY       = ini_int(L"OffsetY", 0, -200, 200);
     g_raise      = ini_int(L"Raise", g_place == PL_UNDER ? 8 : 0, 0, 20);
+    g_textY      = ini_int(L"TextY", 3, -30, 30);
     g_plateAlpha = ini_int(L"PlateAlpha", 85, 0, 100);
 }
 static void clock_restyle(void);
@@ -251,7 +252,7 @@ static void clock_make(void *mv) {
     gfx_setvar(mv, "_root.menu_btn._y", gv_num(mby));
     double px = (g_place == PL_LEFT ? MB_X0 - g_gap - W : MB_X0) + g_offX, py = (g_place == PL_LEFT ? MB_Y0 : MB_Y0 + MB_H + g_gap) - R + g_offY;
     // the text like the Menu label: its field 31 high for size 20 sits 17.4 below the top of the button
-    double fh = 31.0 * g_size / 20.0, fy = py + (H - fh) / 2 + 1, h = fh;
+    double fh = 31.0 * g_size / 20.0, fy = py + (H - fh) / 2 + g_textY, h = fh;
     label_find(mv);
     if (g_place == PL_MENU) {                        // in the button, on the label's line, left-aligned after it
         label_shift(mv, LABEL_X - LABEL_SHIFT);
