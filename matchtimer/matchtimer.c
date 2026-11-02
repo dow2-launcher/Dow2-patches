@@ -51,7 +51,7 @@ static void logmsg(const char *fmt, ...) {
 static int g_enabled = 1, g_size = 22, g_shadow = 1, g_onlineOnly = 0;   // FontSize: in the movie's units (the "Menu" label is 20)
 static int g_plate = 1, g_plateAlpha = 85;                              // a plate under the clock: a copy of the Menu button's own background
 enum { PL_UNDER, PL_LEFT, PL_MENU, PL_TOP };
-static int g_place = PL_UNDER, g_gap = 1, g_width = 100, g_height = 30, g_offX = 0, g_offY = 0, g_raise = 8, g_textY = 3;   // where the clock is (MatchTimer.ini Place=under|menu|left, Gap, Width, Height, OffsetX/Y, TextY: the digits down in the plate (a Flash field keeps room under the line), Raise: the Menu button up by this, room under it - the movie clips below its stage, y 75)
+static int g_place = PL_TOP, g_gap = 1, g_width = 100, g_height = 30, g_offX = 0, g_offY = 0, g_raise = 8, g_textY = 3;   // where the clock is (MatchTimer.ini Place=under|menu|left, Gap, Width, Height, OffsetX/Y, TextY: the digits down in the plate (a Flash field keeps room under the line), Raise: the Menu button up by this, room under it - the movie clips below its stage, y 75)
 static DWORD g_color = 0xFFCAF9FF;                                      // the colour of the "Menu" label
 static FILETIME g_iniTime;
 static DWORD ini_color(const wchar_t *key, const wchar_t *def) {
@@ -66,8 +66,8 @@ static void load_ini(void) {
     WIN32_FILE_ATTRIBUTE_DATA a;
     if (GetFileAttributesExW(g_ini, GetFileExInfoStandard, &a)) g_iniTime = a.ftLastWriteTime;
     g_enabled    = ini_int(L"Enabled", 1, 0, 1);
-    { wchar_t pl[16]; GetPrivateProfileStringW(L"MatchTimer", L"Place", L"under", pl, 16, g_ini); g_place = !_wcsicmp(pl, L"left") ? PL_LEFT : !_wcsicmp(pl, L"menu") ? PL_MENU : !_wcsicmp(pl, L"top") ? PL_TOP : PL_UNDER; }
-    g_size       = ini_int(L"FontSize", g_place == PL_MENU ? 17 : g_place == PL_UNDER ? 18 : 20, 10, 40);
+    { wchar_t pl[16]; GetPrivateProfileStringW(L"MatchTimer", L"Place", L"top", pl, 16, g_ini); g_place = !_wcsicmp(pl, L"left") ? PL_LEFT : !_wcsicmp(pl, L"menu") ? PL_MENU : !_wcsicmp(pl, L"under") ? PL_UNDER : PL_TOP; }
+    g_size       = ini_int(L"FontSize", g_place == PL_MENU ? 17 : g_place == PL_LEFT ? 20 : 18, 10, 40);
     g_shadow     = ini_int(L"Shadow", 1, 0, 1);
     g_onlineOnly = ini_int(L"OnlineOnly", 0, 0, 1);
     g_color      = ini_color(L"Color", g_place == PL_TOP ? L"FFFFFF" : L"CAF9FF");   // top: white like the score
@@ -75,8 +75,8 @@ static void load_ini(void) {
     g_gap        = ini_int(L"Gap", g_place == PL_LEFT ? 6 : 2, -40, 200);
     g_width      = ini_int(L"Width", g_place == PL_LEFT ? 184 : 100, 40, 400);
     g_height     = ini_int(L"Height", g_place == PL_LEFT ? 48 : 34, 16, 100);
-    g_offX       = ini_int(L"OffsetX", g_place == PL_TOP ? -2 : 0, -400, 400);
-    g_offY       = ini_int(L"OffsetY", g_place == PL_TOP ? 3 : 0, -200, 200);
+    g_offX       = ini_int(L"OffsetX", g_place == PL_TOP ? -7 : 0, -400, 400);
+    g_offY       = ini_int(L"OffsetY", g_place == PL_TOP ? 6 : 0, -200, 200);
     g_raise      = ini_int(L"Raise", g_place == PL_UNDER ? 8 : 0, 0, 20);
     g_textY      = ini_int(L"TextY", 3, -30, 30);
     g_plateAlpha = ini_int(L"PlateAlpha", 85, 0, 100);
