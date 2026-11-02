@@ -36,7 +36,8 @@
 static const unsigned char LOADSCREEN_PRO[5] = {0xB8, 0x71, 0x69, 0xEF, 0x00};   // mov eax, 0xEF6971
 #define G_SESSION       0x01335678   // *(*G_SESSION + 4) & 0x558: the session is online (live MP), see docs/OBSERVER_LAG.md
 #define ONLINE_MASK     0x558
-#define PAUSE_MS        1000         // a longer gap between two ticks is a pause or a lag: not game time
+#define PAUSE_MS        1000         // a longer gap between two ticks is a pause or a lag (only logged now)
+#define TICK_MS         100          // one sim tick = 100 ms of game time (measured 02.11.2026: 99.4-99.9 ms per tick)
 
 static wchar_t g_log[MAX_PATH], g_ini[MAX_PATH];
 static void logmsg(const char *fmt, ...) {
@@ -48,6 +49,7 @@ static void logmsg(const char *fmt, ...) {
 // ---------- settings: MatchTimer.ini, re-read while the game runs when the file changes ----------
 // v5: the clock is text of the Menu button movie, so the v1-v4 keys of the Direct3D clock (Style, Font, MenuX, Anchor...) are gone
 static int g_enabled = 1, g_size = 22, g_shadow = 1, g_onlineOnly = 0;   // FontSize: in the movie's units (the "Menu" label is 20)
+static int g_plate = 1, g_plateAlpha = 85;                              // a plate under the clock: a copy of the Menu button's own background
 static DWORD g_color = 0xFFCAF9FF;                                      // the colour of the "Menu" label
 static FILETIME g_iniTime;
 static DWORD ini_color(const wchar_t *key, const wchar_t *def) {
@@ -66,6 +68,8 @@ static void load_ini(void) {
     g_shadow     = ini_int(L"Shadow", 1, 0, 1);
     g_onlineOnly = ini_int(L"OnlineOnly", 0, 0, 1);
     g_color      = ini_color(L"Color", L"CAF9FF");
+    g_plate      = ini_int(L"Plate", 1, 0, 1);
+    g_plateAlpha = ini_int(L"PlateAlpha", 85, 0, 100);
 }
 static void clock_restyle(void);
 static void reload_ini(DWORD now) {
@@ -87,6 +91,7 @@ static void *volatile g_world;                  // World of the current match
 static volatile int g_inMatch;                  // between SimulatePre and SimulatePost
 static volatile DWORD g_play, g_lastTick;       // game time of the match in ms, GetTickCount() at the last sim tick
 static volatile LONG g_ticks;                   // sim ticks in this match
+static volatile DWORD g_wall0;                  // GetTickCount() at the first sim tick (the log at the end: ms per tick)
 static volatile int g_over;                     // the match ended (SetGameOver / EndScript): no clock, no cooldown numbers
 
 static DWORD session_flags(void) {
@@ -96,7 +101,14 @@ static DWORD session_flags(void) {
 }
 static void match_start(void *world, const char *why) {
     logmsg("match start (%s): World %p, previous %p, session flags %lX", why, world, g_world, session_flags());
-    g_world = world; g_play = 0; g_lastTick = 0; g_ticks = 0; g_inMatch = 1; g_over = 0;
+    g_world = world; g_play = 0; g_lastTick = 0; g_ticks = 0; g_inMatch = 1; g_over = 0; g_wall0 = 0;
+}
+// how long a sim tick is (02.11.2026): game time counted, ticks, wall time since the first tick - to see whether the game
+// time can be ticks x a fixed tick (a replay played fast, lags) instead of the wall-clock gaps between ticks
+static void log_tick_rate(const char *when) {
+    DWORD wall = g_wall0 ? GetTickCount() - g_wall0 : 0;
+    logmsg("tick rate (%s): %lu ms of game time in %ld ticks = %.1f ms per tick; %lu ms of wall time since the first tick = %.1f ms per tick",
+           when, g_play, g_ticks, g_ticks ? (double)g_play / g_ticks : 0.0, wall, g_ticks ? (double)wall / g_ticks : 0.0);
 }
 static void __fastcall hk_pre(void *self, void *edx) {
     match_start(self, "SimulatePre");
@@ -109,11 +121,11 @@ static void __fastcall hk_post(void *self, void *edx) {
 }
 static ThisFn o_over; typedef char (__fastcall *BoolThisFn)(void *, void *); static BoolThisFn o_endscript;
 static void __fastcall hk_over(void *self, void *edx) {
-    if (!g_over && g_inMatch) logmsg("game over (SetGameOver): %lu:%02lu of game time, clock off", g_play / 60000, g_play / 1000 % 60);
+    if (!g_over && g_inMatch) { logmsg("game over (SetGameOver): %lu:%02lu of game time, clock off", g_play / 60000, g_play / 1000 % 60); log_tick_rate("game over"); }
     g_over = 1; o_over(self, edx);
 }
 static char __fastcall hk_endscript(void *self, void *edx) {
-    if (!g_over && g_inMatch) logmsg("match scripts end (EndScript): %lu:%02lu of game time, clock off", g_play / 60000, g_play / 1000 % 60);
+    if (!g_over && g_inMatch) { logmsg("match scripts end (EndScript): %lu:%02lu of game time, clock off", g_play / 60000, g_play / 1000 % 60); log_tick_rate("end of scripts"); }
     if (g_inMatch) g_over = 1;
     return o_endscript(self, edx);
 }
@@ -138,9 +150,12 @@ static void hook_loadscreen(void) {
 static void __fastcall hk_sim(void *self, void *edx) {
     DWORD now = GetTickCount(), gap = now - g_lastTick;
     if (self != g_world) match_start(self, "first tick of a new World");    // e.g. the DLL came in mid-match
-    else if (g_lastTick && gap <= PAUSE_MS) g_play += gap;
     else if (g_lastTick && gap > 3000) logmsg("sim stood still for %lu s (pause or lag), the clock waited", gap / 1000);
-    g_lastTick = now; g_ticks++;
+    if (!g_wall0) g_wall0 = now;
+    // game time = sim ticks x TICK_MS (02.11.2026): the same for every player of a match, in a replay at any speed, with
+    // lags - it was the wall-clock gaps between ticks (a replay played fast counted wall time, a lagging clock drifted)
+    g_lastTick = now; g_ticks++; g_play = (DWORD)g_ticks * TICK_MS;
+    if (g_ticks % 480 == 0) log_tick_rate("every 480 ticks");   // a minute or so: the rate also mid-match (and in a replay sped up)
     o_sim(self, edx);
 }
 
@@ -207,6 +222,22 @@ static void clock_make(void *mv) {
         if (!ok) logmsg("Menu button movie %p: createTextField %s failed", mv, nm);
     }
     logmsg("clock made in the Menu button movie %p: %s", mv, gfx_exists(mv, "mt_clock") ? "ok" : "NOT THERE - no clock");
+    // the plate (02.11.2026, siritos: the game's own interface under the digits): the movie's "menu_btn" clip (stage 12.7,-9.6)
+    // holds "up" / "over" / "down", the button's own background (trans_btn_up, 208 x 72). Its copy "mt_plate" in the same clip
+    // (Receive_DuplicateMovieClip, as the cooldown numbers copy the button's count) is scaled to the clock field and put under
+    // it; the clock fields are on _root at depth 16000+, over the whole menu_btn clip. No mouse handlers: takes no clicks.
+    if (g_plate) {
+        if (!gfx_exists(mv, "menu_btn.mt_plate")) {
+            GfxVal a[2] = { gv_str("/menu_btn/up"), gv_str("mt_plate") }, r; memset(&r, 0, sizeof r);
+            gfx_invoke(mv, "Receive_DuplicateMovieClip", &r, a, 2);
+            logmsg("plate: copy of the Menu button's background %s", r.type == GV_BOOL && r.v.b ? "made" : "NOT made");
+        }
+        double w = CLK_W + 10, hh = h + 4, x = CLK_X - 5 - 12.7, y = CLK_Y - 2 + 9.6;   // in menu_btn's own coordinates
+        GfxVal pa[3] = { gv_str("menu_btn.mt_plate"), gv_num(x), gv_num(y) }, sa[3] = { gv_str("menu_btn.mt_plate"), gv_num(w / 208.0), gv_num(hh / 72.0) };
+        gfx_invoke(mv, "Receive_SetMovieClipPosition", NULL, pa, 3);
+        gfx_invoke(mv, "Receive_SetMovieClipScale", NULL, sa, 3);
+        gfx_setvar(mv, "_root.menu_btn.mt_plate._alpha", gv_num(g_plateAlpha));
+    } else if (gfx_exists(mv, "menu_btn.mt_plate")) gfx_set_visible(mv, "menu_btn.mt_plate", 0);   // Plate=0 while the game runs
 }
 static void clock_restyle(void) { g_clkMovie = NULL; }   // the next frame makes the fields again (same names and depths: replaced)
 static void clock_text(void *mv, const char *t) {
@@ -235,6 +266,7 @@ static void __thiscall hk_menu_upd(char *form, float dt) {
         g_clkShown = vis;
         gfx_setvar(mv, "_root.mt_clock._visible", gv_bool(vis));
         gfx_setvar(mv, "_root.mt_clock_sh._visible", gv_bool(vis && g_shadow));
+        if (g_plate) gfx_set_visible(mv, "menu_btn.mt_plate", vis);
     }
     if (!vis) return;
     DWORD s = mt_game_ms() / 1000; char t[24];
@@ -269,7 +301,7 @@ static int l_online(void) { return (session_flags() & ONLINE_MASK) != 0; }
 static int l_ticking(void) { return g_inMatch && g_ticks && !g_over; }                  // the match runs (past its loading screen)
 static DWORD l_game_ms(void) { return g_play; }
 static long l_ticks(void) { return g_ticks; }
-static float l_ms_per_tick(void) { return g_ticks > 20 && g_play ? (float)g_play / g_ticks : 100.0f; }   // ~100 ms, measured
+static float l_ms_per_tick(void) { return (float)TICK_MS; }   // exact: game time is ticks x TICK_MS
 static void l_add_draw(void *d, void *l, void *r) {
     (void)l; (void)r;
     if (d) logmsg("an older add-on of ours wants to draw through Direct3D: not any more, update it in the launcher");
