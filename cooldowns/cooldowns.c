@@ -132,6 +132,63 @@ static void cd_share(char *w, float p, unsigned key) {
 
 void *g_spTramp __asm__("cd_sp_tramp");
 void *g_vTramp __asm__("cd_v_tramp");
+// Trace=1 only: the engine's "go to frame" of a widget clip (0x686890: widget, clip path, frame, flag - all on the stack).
+// Who moves a global ability's sweep that comes through neither SetProgress nor 0x688CD0 (the bunker, siritos 02.11).
+void *g_fTramp __asm__("cd_f_tramp");
+#define SETFRAME_ADDR 0x00686890
+void cd_frame(char *w, const char *path, int frame, DWORD ret) __asm__("cd_frame");
+void cd_frame(char *w, const char *path, int frame, DWORD ret) {
+    (void)w;
+    if (!path || IsBadReadPtr(path, 48) || !memchr(path, 0, 48) || !strstr(path, "global_btn")) return;
+    static struct { DWORD ret; char path[48]; int frame; DWORD t; } seen[24]; static int n;
+    DWORD now = GetTickCount();
+    for (int i = 0; i < n; i++) if (seen[i].ret == ret && !strcmp(seen[i].path, path)) {
+        if (frame != seen[i].frame && now - seen[i].t > 2000) { seen[i].frame = frame; seen[i].t = now; logmsg("trace frame %d of %s from %08lX", frame, path, (unsigned long)ret); }
+        return;
+    }
+    if (n < 24) { seen[n].ret = ret; snprintf(seen[n].path, 48, "%s", path); seen[n].frame = frame; seen[n].t = now; n++; }
+    logmsg("trace frame %d of %s from %08lX (first)", frame, path, (unsigned long)ret);
+}
+// Trace=1 only: every call the engine makes into a HUD movie (GFxMovieView::Invoke, movie vtable +0x48) with a global
+// ability button in its first argument - method, path, the number after it (who draws the bunker's sweep)
+typedef char (__fastcall *Inv_t)(void *mv, void *edx, const char *method, GfxVal *res, const GfxVal *args, unsigned n);
+static Inv_t o_inv; static DWORD *g_invSlot;
+static char __fastcall hk_inv(void *mv, void *edx, const char *method, GfxVal *res, const GfxVal *args, unsigned n) {
+    if (method && args && n >= 1 && args[0].type == GV_STRING && args[0].v.s && !IsBadReadPtr(args[0].v.s, 8) && strstr(args[0].v.s, "global_btn")
+        && strncmp(args[0].v.s, "global_abilities.global_btn0", 28) /* ours: dotted */) {
+        static struct { char m[40], p[48]; DWORD t; double num; } seen[32]; static int cnt;
+        char m[40], p[48]; snprintf(m, sizeof m, "%s", method); snprintf(p, sizeof p, "%s", args[0].v.s);
+        double num = n >= 2 && args[1].type == GV_NUMBER ? args[1].v.num : -1;
+        int i; for (i = 0; i < cnt; i++) if (!strcmp(seen[i].m, m) && !strcmp(seen[i].p, p)) break;
+        DWORD now = GetTickCount();
+        if (i == cnt && cnt < 32) { cnt++; snprintf(seen[i].m, 40, "%s", m); snprintf(seen[i].p, 48, "%s", p); seen[i].t = 0; seen[i].num = -2; }
+        if (i < 32 && (num != seen[i].num) && now - seen[i].t > 2000) {
+            seen[i].t = now; seen[i].num = num;
+            logmsg("trace invoke %s(%s, %s%g) n=%u", m, p, n >= 2 ? (args[1].type == GV_NUMBER ? "" : "type ") : "", n >= 2 ? (args[1].type == GV_NUMBER ? num : (double)args[1].type) : 0.0, n);
+        }
+    }
+    return o_inv(mv, edx, method, res, args, n);
+}
+static void trace_invoke(void *mv) {                 // once, from the first movie we see
+    if (!g_trace || g_invSlot || !mv) return;
+    DWORD *slot = (DWORD *)(*(char **)mv + 0x48), old;
+    if (!VirtualProtect(slot, 4, PAGE_READWRITE, &old)) return;
+    o_inv = (Inv_t)*slot; *slot = (DWORD)hk_inv; g_invSlot = slot;
+    VirtualProtect(slot, 4, old, &old);
+    logmsg("trace: hooked movie Invoke (vtable slot %p)", (void *)slot);
+}
+__attribute__((naked)) static void hk_setframe(void) {
+    __asm__ volatile(
+        "pushal\n\t"
+        "pushl 32(%esp)\n\t"                         // the caller
+        "pushl 48(%esp)\n\t"                         // the frame  ([esp+12] at the call)
+        "pushl 48(%esp)\n\t"                         // the path   ([esp+8])
+        "pushl 48(%esp)\n\t"                         // the widget ([esp+4])
+        "call cd_frame\n\t"
+        "addl $16, %esp\n\t"
+        "popal\n\t"
+        "jmp *cd_f_tramp\n\t");
+}
 #define SETVALUE_ADDR 0x00688CD0
 static const unsigned char SETVALUE_PRO[6] = {0x55, 0x8B, 0xEC, 0x83, 0xE4, 0xF8};   // push ebp; mov ebp,esp; and esp,-8
 __attribute__((naked)) static void hk_setvalue(void) {
@@ -278,6 +335,7 @@ static void __fastcall hk_btnupd(char *btn, void *edx, char *ctx) {
     if (!g_on || !btn) return;
     char *w = *(char **)(btn + 0x28); int ability = *(int *)(btn + 0x74);
     if (!w) return;
+    if (g_trace && !g_invSlot) trace_invoke(gfx_movie_of_widget(w));
     if (w == w0 && g_capN) {
         // a recharge share in this update wins over the 0 of another reason after it (no energy...): the number stays, and
         // the game's own sweep too - its 0 is put back to the share (the ability stays unusable, the button dark as before)
@@ -355,7 +413,7 @@ static void install(void) {
     if (IsBadReadPtr(t, 9) || memcmp(t, SETPROGRESS_PRO, 9)) {
         logmsg("DOW2.exe differs at %08X: no cooldown numbers", SETPROGRESS_ADDR); g_on = 0; return;
     }
-    unsigned char *tr = VirtualAlloc(NULL, 32, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
+    unsigned char *tr = VirtualAlloc(NULL, 64, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
     memcpy(tr, SETPROGRESS_PRO, 9); tr[9] = 0xE9; *(DWORD *)(tr + 10) = (SETPROGRESS_ADDR + 9) - (DWORD)(tr + 14);
     g_spTramp = tr;
     DWORD old; VirtualProtect(t, 9, PAGE_EXECUTE_READWRITE, &old);
@@ -363,6 +421,7 @@ static void install(void) {
     VirtualProtect(t, 9, old, &old); FlushInstructionCache(GetCurrentProcess(), t, 9);
     logmsg("hooked button SetProgress at %08X", SETPROGRESS_ADDR);
     unsigned char *v = (unsigned char *)SETVALUE_ADDR;
+    if (!g_trace) return;                                         // the bunker: not solved, its probes only with Trace=1
     if (IsBadReadPtr(v, 6) || memcmp(v, SETVALUE_PRO, 6)) { logmsg("DOW2.exe differs at %08X: no numbers for reason-10 buttons (the bunker)", SETVALUE_ADDR); return; }
     unsigned char *tv = tr + 16;
     memcpy(tv, SETVALUE_PRO, 6); tv[6] = 0xE9; *(DWORD *)(tv + 7) = (SETVALUE_ADDR + 6) - (DWORD)(tv + 11);
@@ -371,6 +430,15 @@ static void install(void) {
     v[0] = 0xE9; *(DWORD *)(v + 1) = (DWORD)hk_setvalue - (DWORD)(v + 5); v[5] = 0x90;
     VirtualProtect(v, 6, old, &old); FlushInstructionCache(GetCurrentProcess(), v, 6);
     logmsg("hooked widget value at %08X (reason 10)", SETVALUE_ADDR);
+    unsigned char *f = (unsigned char *)SETFRAME_ADDR;            // same prologue as 0x688CD0
+    if (!g_trace || IsBadReadPtr(f, 6) || memcmp(f, SETVALUE_PRO, 6)) return;
+    unsigned char *tf = tr + 32;
+    memcpy(tf, SETVALUE_PRO, 6); tf[6] = 0xE9; *(DWORD *)(tf + 7) = (SETFRAME_ADDR + 6) - (DWORD)(tf + 11);
+    g_fTramp = tf;
+    VirtualProtect(f, 6, PAGE_EXECUTE_READWRITE, &old);
+    f[0] = 0xE9; *(DWORD *)(f + 1) = (DWORD)hk_setframe - (DWORD)(f + 5); f[5] = 0x90;
+    VirtualProtect(f, 6, old, &old); FlushInstructionCache(GetCurrentProcess(), f, 6);
+    logmsg("trace: hooked clip frames at %08X", SETFRAME_ADDR);
 }
 
 // called by LobbyStats once: dir = its folder (with a trailing backslash), ini = its ini file

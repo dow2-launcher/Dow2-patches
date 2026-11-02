@@ -50,7 +50,8 @@ static void logmsg(const char *fmt, ...) {
 // v5: the clock is text of the Menu button movie, so the v1-v4 keys of the Direct3D clock (Style, Font, MenuX, Anchor...) are gone
 static int g_enabled = 1, g_size = 22, g_shadow = 1, g_onlineOnly = 0;   // FontSize: in the movie's units (the "Menu" label is 20)
 static int g_plate = 1, g_plateAlpha = 85;                              // a plate under the clock: a copy of the Menu button's own background
-static int g_placeUnder = 1, g_gap = 2, g_width = 100, g_height = 28, g_offX = 0, g_offY = 0;   // where the clock is (MatchTimer.ini Place, Gap, Width, Height, OffsetX/Y)
+enum { PL_UNDER, PL_LEFT, PL_MENU };
+static int g_place = PL_UNDER, g_gap = 1, g_width = 100, g_height = 30, g_offX = 0, g_offY = 0;   // where the clock is (MatchTimer.ini Place=under|menu|left, Gap, Width, Height, OffsetX/Y)
 static DWORD g_color = 0xFFCAF9FF;                                      // the colour of the "Menu" label
 static FILETIME g_iniTime;
 static DWORD ini_color(const wchar_t *key, const wchar_t *def) {
@@ -65,15 +66,15 @@ static void load_ini(void) {
     WIN32_FILE_ATTRIBUTE_DATA a;
     if (GetFileAttributesExW(g_ini, GetFileExInfoStandard, &a)) g_iniTime = a.ftLastWriteTime;
     g_enabled    = ini_int(L"Enabled", 1, 0, 1);
-    g_size       = ini_int(L"FontSize", 18, 10, 40);
+    { wchar_t pl[16]; GetPrivateProfileStringW(L"MatchTimer", L"Place", L"under", pl, 16, g_ini); g_place = !_wcsicmp(pl, L"left") ? PL_LEFT : !_wcsicmp(pl, L"menu") ? PL_MENU : PL_UNDER; }
+    g_size       = ini_int(L"FontSize", g_place == PL_MENU ? 17 : g_place == PL_UNDER ? 18 : 20, 10, 40);
     g_shadow     = ini_int(L"Shadow", 1, 0, 1);
     g_onlineOnly = ini_int(L"OnlineOnly", 0, 0, 1);
     g_color      = ini_color(L"Color", L"CAF9FF");
     g_plate      = ini_int(L"Plate", 1, 0, 1);
-    { wchar_t pl[16]; GetPrivateProfileStringW(L"MatchTimer", L"Place", L"under", pl, 16, g_ini); g_placeUnder = _wcsicmp(pl, L"left") != 0; }
-    g_gap        = ini_int(L"Gap", g_placeUnder ? 2 : 6, -40, 200);
-    g_width      = ini_int(L"Width", g_placeUnder ? 100 : 184, 40, 400);
-    g_height     = ini_int(L"Height", g_placeUnder ? 28 : 48, 16, 100);
+    g_gap        = ini_int(L"Gap", g_place == PL_LEFT ? 6 : 1, -40, 200);
+    g_width      = ini_int(L"Width", g_place == PL_LEFT ? 184 : 100, 40, 400);
+    g_height     = ini_int(L"Height", g_place == PL_LEFT ? 48 : 30, 16, 100);
     g_offX       = ini_int(L"OffsetX", 0, -400, 400);
     g_offY       = ini_int(L"OffsetY", 0, -200, 200);
     g_plateAlpha = ini_int(L"PlateAlpha", 85, 0, 100);
@@ -211,7 +212,7 @@ static int iat_hook(DWORD slot, const char *dll, void *fn, void **orig) {
 #define NULLSUB_RET4  0x009AB7D0       // what the game has there: ret 4
 // The clock as a button of its own next to Menu (02.11.2026, siritos: as big as the Menu button, its padding and text size,
 // left of it; left of it the movie clips it - its stage starts at x 0 - so under it, 02.11). The Menu button's visible part on the stage: the menu_btn clip at 12.7,-9.6, its hit area at 15.25,5.6 in it,
-// 184 x 48 -> 27.95,-4 .. 211.95,44; its label (size 20) at 25,23 in the clip. MatchTimer.ini: Place=under|left, Gap, Height,
+// 184 x 48 -> 27.95,-4 .. 211.95,44; its label (size 20) at 25,23 in the clip. MatchTimer.ini: Place=under|menu|left, Gap, Height,
 // Width (of the visible plate, 184 = the Menu button), OffsetX / OffsetY - read again while the game runs.
 #define MB_X0 27.95                    // the Menu button's visible rectangle on the stage
 #define MB_Y0 -4.0
@@ -223,12 +224,37 @@ static int clock_visible(void); DWORD mt_game_ms(void);
 typedef void (__thiscall *MenuUpd_t)(char *form, float dt);
 static MenuUpd_t o_menuUpd;
 static void *g_clkMovie; static DWORD g_clkCheck; static int g_clkShown = -1; static char g_clkText[24];
+// Place=menu (siritos 02.11: "Menu (00:01)"): the time in brackets right after the button's own label. The label is an
+// unnamed text field of menu_btn (depth 7, 162 x 31 at 25,23, its text centred) - Flash names it "instanceN"; found by
+// asking for the names. It goes LABEL_SHIFT to the left so label and time together stay in the middle of the button.
+#define LABEL_X     25.0
+#define LABEL_SHIFT 30.0
+static char g_lbl[32];                 // "menu_btn.instanceN" of the current movie, "" = not found
+static void label_find(void *mv) {
+    g_lbl[0] = 0;
+    for (int n = 1; n <= 300; n++) {
+        char p[32]; snprintf(p, sizeof p, "menu_btn.instance%d", n);
+        if (gfx_exists(mv, p)) { strcpy(g_lbl, p); break; }
+    }
+    logmsg("Menu label: %s", g_lbl[0] ? g_lbl : "not found - the time goes right of it");
+}
+static void label_shift(void *mv, double x) {
+    if (!g_lbl[0]) return;
+    char p[64]; snprintf(p, sizeof p, "_root.%s._x", g_lbl); gfx_setvar(mv, p, gv_num(x));
+}
 static void clock_make(void *mv) {
     // the plate's visible rectangle on the stage: under Menu (default) or left of it
     double W = g_width, H = g_height;
-    double px = (g_placeUnder ? MB_X0 : MB_X0 - g_gap - W) + g_offX, py = (g_placeUnder ? MB_Y0 + MB_H + g_gap : MB_Y0) + g_offY;
+    double px = (g_place == PL_LEFT ? MB_X0 - g_gap - W : MB_X0) + g_offX, py = (g_place == PL_LEFT ? MB_Y0 : MB_Y0 + MB_H + g_gap) + g_offY;
     // the text like the Menu label: its field 31 high for size 20 sits 17.4 below the top of the button
-    double fh = 31.0 * g_size / 20.0, fy = py + (H - fh) / 2 + 2, h = fh;
+    double fh = 31.0 * g_size / 20.0, fy = py + (H - fh) / 2 + 1, h = fh;
+    label_find(mv);
+    if (g_place == PL_MENU) {                        // in the button, on the label's line, left-aligned after it
+        label_shift(mv, LABEL_X - LABEL_SHIFT);
+        // the label's centre (clip 25 + 81) moved, plus half of "Menu" and a space; without the label found: after it
+        px = 12.7 + (g_lbl[0] ? LABEL_X + 81 - LABEL_SHIFT + 25 : LABEL_X + 81 + 25) + g_offX;
+        W = 90; fy = -9.6 + 23 + (31.0 - fh) / 2 + g_offY; h = fh;   // on the label's middle line
+    } else label_shift(mv, LABEL_X);
     for (int k = 0; k < 2; k++) {                    // the shadow first: the text over it
         const char *nm = k ? "mt_clock" : "mt_clock_sh";
         char p[64];
@@ -244,7 +270,7 @@ static void clock_make(void *mv) {
     // holds "up" / "over" / "down", the button's own background (trans_btn_up, 208 x 72). Its copy "mt_plate" in the same clip
     // (Receive_DuplicateMovieClip, as the cooldown numbers copy the button's count) is scaled to the clock field and put under
     // it; the clock fields are on _root at depth 16000+, over the whole menu_btn clip. No mouse handlers: takes no clicks.
-    if (g_plate) {
+    if (g_plate && g_place != PL_MENU) {
         if (!gfx_exists(mv, "menu_btn.mt_plate")) {
             GfxVal a[2] = { gv_str("/menu_btn/up"), gv_str("mt_plate") }, r; memset(&r, 0, sizeof r);
             gfx_invoke(mv, "Receive_DuplicateMovieClip", &r, a, 2);
@@ -253,18 +279,20 @@ static void clock_make(void *mv) {
         // scaled so its visible part is W x H, placed so that part starts at px,py (menu_btn's own coordinates)
         double sx = W / MB_W, sy = H / MB_H, x = px - 12.7 - UP_PADX * sx, y = py + 9.6 - UP_PADY * sy;
         GfxVal pa[3] = { gv_str("menu_btn.mt_plate"), gv_num(x), gv_num(y) }, sa[3] = { gv_str("menu_btn.mt_plate"), gv_num(sx), gv_num(sy) };
-        logmsg("clock at %.1f,%.1f %gx%g on the stage (%s the Menu button), text size %d", px, py, W, H, g_placeUnder ? "under" : "left of", g_size);
+        logmsg("clock at %.1f,%.1f %gx%g on the stage (%s the Menu button), text size %d", px, py, W, H, g_place == PL_LEFT ? "left of" : "under", g_size);
         gfx_invoke(mv, "Receive_SetMovieClipPosition", NULL, pa, 3);
         gfx_invoke(mv, "Receive_SetMovieClipScale", NULL, sa, 3);
         gfx_setvar(mv, "_root.menu_btn.mt_plate._alpha", gv_num(g_plateAlpha));
-    } else if (gfx_exists(mv, "menu_btn.mt_plate")) gfx_set_visible(mv, "menu_btn.mt_plate", 0);   // Plate=0 while the game runs
+    } else if (gfx_exists(mv, "menu_btn.mt_plate")) gfx_set_visible(mv, "menu_btn.mt_plate", 0);   // Plate=0 / menu while the game runs
 }
+static int plate_on(void) { return g_plate && g_place != PL_MENU; }
 static void clock_restyle(void) { g_clkMovie = NULL; }   // the next frame makes the fields again (same names and depths: replaced)
-static void clock_text(void *mv, const char *t) {
-    char h[256];
-    snprintf(h, sizeof h, "<p align=\"center\"><font face=\"$TitleFont\" size=\"%d\" color=\"#000000\">%s</font></p>", g_size, t);
+static void clock_text(void *mv, const char *t0) {
+    char h[256], t[32]; const char *al = g_place == PL_MENU ? "left" : "center";
+    if (g_place == PL_MENU) snprintf(t, sizeof t, "(%s)", t0); else snprintf(t, sizeof t, "%s", t0);
+    snprintf(h, sizeof h, "<p align=\"%s\"><font face=\"$TitleFont\" size=\"%d\" color=\"#000000\">%s</font></p>", al, g_size, t);
     gfx_setvar(mv, "_root.mt_clock_sh.htmlText", gv_str(h));
-    snprintf(h, sizeof h, "<p align=\"center\"><font face=\"$TitleFont\" size=\"%d\" color=\"#%06lX\">%s</font></p>", g_size,
+    snprintf(h, sizeof h, "<p align=\"%s\"><font face=\"$TitleFont\" size=\"%d\" color=\"#%06lX\">%s</font></p>", al, g_size,
              (unsigned long)(g_color & 0xFFFFFF), t);
     gfx_setvar(mv, "_root.mt_clock.htmlText", gv_str(h));
 }
@@ -286,7 +314,8 @@ static void __thiscall hk_menu_upd(char *form, float dt) {
         g_clkShown = vis;
         gfx_setvar(mv, "_root.mt_clock._visible", gv_bool(vis));
         gfx_setvar(mv, "_root.mt_clock_sh._visible", gv_bool(vis && g_shadow));
-        if (g_plate) gfx_set_visible(mv, "menu_btn.mt_plate", vis);
+        if (plate_on()) gfx_set_visible(mv, "menu_btn.mt_plate", vis);
+        if (g_place == PL_MENU) label_shift(mv, vis ? LABEL_X - LABEL_SHIFT : LABEL_X);   // no time: the label back in the middle
     }
     if (!vis) return;
     DWORD s = mt_game_ms() / 1000; char t[24];
