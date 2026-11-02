@@ -45,6 +45,7 @@ typedef struct {
     volatile int ready;                              // the latest value said ready (0 or 1), or the button is hidden
     int exact; DWORD exactLeft, exactAt;             // global abilities: game ms left read from the engine at game ms exactAt
     void *uiMovie; char *uiW; int uiShown;           // UI thread: our copy of the count clip made in this movie on this button, seconds in it
+    int ab;                                          // the ability of the latest share (the button update's +0x74)
 } Slot;
 static Slot g_slot[SLOTS];
 static CRITICAL_SECTION g_cs;
@@ -70,6 +71,22 @@ static void cd_share(char *w, float p, unsigned key);
 static char *volatile g_capW;                        // the button whose update runs now (UI thread), NULL = none
 static float g_capMax, g_capLast; static int g_capN; static float g_capSeq[8];
 static int g_trace;                                  // Cooldowns.ini [Cooldowns] Trace=1: what each update did, in the log
+// Built-like global abilities (the Imperial Guard bunker, siritos 02.11): no recharge share through SetProgress - the
+// update's reason 10 asks the engine (vt+0xCC) and gives the value to another widget of the button (+0x40) through
+// 0x688CD0 (usercall: ESI = that widget, the value on the stack; it fills the widget 0..1). Caught for that widget while
+// the update runs (g_cap10*), turned into the share after it (see hk_btnupd).
+static char *volatile g_capW10; static float g_cap10 = -1;
+void cd_value(char *w, float v, DWORD ret) __asm__("cd_value");
+void cd_value(char *w, float v, DWORD ret) {
+    if (w && w == g_capW10) g_cap10 = v;
+    if (g_trace && w && v > 0.0f && v < 0.999f) {      // where the other fills come from (the bunker's sweep, siritos 02.11)
+        static char *seen[32]; static int n;
+        for (int i = 0; i < n; i++) if (seen[i] == w) return;
+        if (n < 32) seen[n++] = w;
+        const char *p = w + 8;
+        logmsg("trace value %.3f into widget %p \"%.60s\" from %08lX%s", v, (void *)w, !IsBadReadPtr(p, 64) && p[0] == '/' ? p : "?", (unsigned long)ret, w == g_capW10 ? " (reason 10)" : "");
+    }
+}
 void cd_progress(char *w, float p) __asm__("cd_progress");
 void cd_progress(char *w, float p) {
     if (w && w == g_capW) {
@@ -114,6 +131,20 @@ static void cd_share(char *w, float p, unsigned key) {
 }
 
 void *g_spTramp __asm__("cd_sp_tramp");
+void *g_vTramp __asm__("cd_v_tramp");
+#define SETVALUE_ADDR 0x00688CD0
+static const unsigned char SETVALUE_PRO[6] = {0x55, 0x8B, 0xEC, 0x83, 0xE4, 0xF8};   // push ebp; mov ebp,esp; and esp,-8
+__attribute__((naked)) static void hk_setvalue(void) {
+    __asm__ volatile(
+        "pushal\n\t"
+        "pushl 32(%esp)\n\t"                         // the caller
+        "pushl 40(%esp)\n\t"                         // the value (float, [esp+4] at the call)
+        "pushl %esi\n\t"                             // the widget
+        "call cd_value\n\t"
+        "addl $12, %esp\n\t"
+        "popal\n\t"
+        "jmp *cd_v_tramp\n\t");
+}
 __attribute__((naked)) static void hk_setprogress(void) {
     __asm__ volatile(
         "pushal\n\t"
@@ -142,7 +173,8 @@ static int cd_seconds(Slot *b, DWORD now, DWORD gt) {       // seconds left to s
     if (b->exact) left = (float)b->exactLeft - (float)(gt - b->exactAt);   // global ability: read, not guessed
     else {
         float rate = (b->p - b->p0) / (float)(b->t - b->t0);                 // share per sim tick
-        left = (1.0f - b->p) / rate * mt_ms_per_tick();
+        // from the latest share on: ticks without one (the squad busy, see cd_hold) count down too
+        left = ((1.0f - b->p) / rate - (float)((DWORD)mt_ticks() - b->t)) * mt_ms_per_tick();
     }
     if (left < 0) left = 0;
     int sec = (int)((left + 999.0f) / 1000.0f);
@@ -212,24 +244,52 @@ static void set_progress(char *w, float p) {
     __asm__ volatile("pushl %[p]\n\t call *%[f]\n\t"  // the callee takes it off (ret 4)
                      : "+a"(w) : [p] "g"(bits), [f] "c"(fn) : "edx", "memory", "cc");
 }
+// The ability of this share on its button: a share-less update later holds only for the same ability (cd_hold)
+static void cd_mark(char *w, int ability) {
+    const char *path = w + 0xDD0; int s;
+    if (IsBadReadPtr(path, 16) || path[0] != '/' || (s = slot_of(path)) < 0) return;
+    EnterCriticalSection(&g_cs); if (g_slot[s].w == w) g_slot[s].ab = ability; LeaveCriticalSection(&g_cs);
+}
+// Catachans (siritos 02.11): while the squad uses another ability (a volley after the smoke) the game lists no recharge
+// reason for any of its buttons - only 0s, the number and the game's own sweep went on every button. A recharge we follow
+// on this button for this ability goes on: counted from its rate (cd_seconds), and the sweep put back. 1 = held.
+static int cd_hold(char *w, int ability) {
+    const char *path = w + 0xDD0; int s;
+    if (!ability || !mt_ticking() || IsBadReadPtr(path, 16) || path[0] != '/' || (s = slot_of(path)) < 0) return 0;
+    float p = -1; DWORD now = GetTickCount();
+    EnterCriticalSection(&g_cs);
+    Slot *b = &g_slot[s];
+    if (b->w == w && b->ab == ability && !b->ready && !b->exact && now - b->seen < 1000 && b->t > b->t0 && b->p > b->p0) {
+        float rate = (b->p - b->p0) / (float)(b->t - b->t0);
+        p = b->p + rate * (float)((DWORD)mt_ticks() - b->t);
+        if (p < 0.999f) b->seen = now; else p = -1;
+    }
+    LeaveCriticalSection(&g_cs);
+    if (p < 0) return 0;
+    set_progress(w, p);
+    return 1;
+}
 static void __fastcall hk_btnupd(char *btn, void *edx, char *ctx) {
     char *w0 = btn ? *(char **)(btn + 0x28) : NULL;
     g_capMax = 0; g_capLast = -1; g_capN = 0; g_capW = g_on ? w0 : NULL;
+    g_cap10 = -1; g_capW10 = g_on && btn ? *(char **)(btn + 0x40) : NULL;
     o_btnupd(btn, edx, ctx);
-    g_capW = NULL;
+    g_capW = NULL; g_capW10 = NULL;
     if (!g_on || !btn) return;
     char *w = *(char **)(btn + 0x28); int ability = *(int *)(btn + 0x74);
     if (!w) return;
     if (w == w0 && g_capN) {
         // a recharge share in this update wins over the 0 of another reason after it (no energy...): the number stays, and
         // the game's own sweep too - its 0 is put back to the share (the ability stays unusable, the button dark as before)
-        if (g_capMax > 0) { cd_share(w, g_capMax, 0); if (g_capLast != g_capMax) set_progress(w, g_capMax); }
-        else cd_share(w, g_capLast, 0);
+        int held = 0;
+        if (g_capMax > 0) { cd_share(w, g_capMax, 0); cd_mark(w, ability); if (g_capLast != g_capMax) set_progress(w, g_capMax); }
+        else if (g_cap10 > 0.0f && g_cap10 < 0.999f) { cd_share(w, g_cap10, 0); cd_mark(w, ability); }   // reason 10 (the bunker)
+        else if (!(held = cd_hold(w, ability))) cd_share(w, g_capLast, 0);
         if (g_trace) {
             static char last[SLOTS][64]; const char *path = w + 0xDD0; int s = !IsBadReadPtr(path, 16) && path[0] == '/' ? slot_of(path) : -1;
-            char seq[64] = ""; int n = g_capN < 8 ? g_capN : 8;
+            char seq[64] = ""; if (g_cap10 >= 0) snprintf(seq, sizeof seq, "v%.2f:", g_cap10); int n = g_capN < 8 ? g_capN : 8;
             for (int i = 0; i < n; i++) snprintf(seq + strlen(seq), sizeof seq - strlen(seq), "%s%s", i ? "," : "", g_capSeq[i] <= 0 ? "0" : g_capSeq[i] >= 0.999f ? "1" : "s");
-            if (s >= 0 && strcmp(last[s], seq)) { strcpy(last[s], seq); logmsg("trace %s ability %p: SetProgress %s (largest share %.3f)%s", path, (void *)(UINT_PTR)ability, seq, g_capMax, g_capMax > 0 && g_capLast != g_capMax ? " - share put back" : ""); }
+            if (s >= 0 && strcmp(last[s], seq)) { strcpy(last[s], seq); logmsg("trace %s ability %p: SetProgress %s (largest share %.3f)%s%s", path, (void *)(UINT_PTR)ability, seq, g_capMax, g_capMax > 0 && g_capLast != g_capMax ? " - share put back" : "", held ? " - held" : ""); }
         }
     }
     if (!ability || *(w + 0x209) != 1) cd_progress(w, 0.0f);         // no ability or the button is hidden: no number
@@ -302,6 +362,15 @@ static void install(void) {
     t[0] = 0xE9; *(DWORD *)(t + 1) = (DWORD)hk_setprogress - (DWORD)(t + 5); t[5] = t[6] = t[7] = t[8] = 0x90;
     VirtualProtect(t, 9, old, &old); FlushInstructionCache(GetCurrentProcess(), t, 9);
     logmsg("hooked button SetProgress at %08X", SETPROGRESS_ADDR);
+    unsigned char *v = (unsigned char *)SETVALUE_ADDR;
+    if (IsBadReadPtr(v, 6) || memcmp(v, SETVALUE_PRO, 6)) { logmsg("DOW2.exe differs at %08X: no numbers for reason-10 buttons (the bunker)", SETVALUE_ADDR); return; }
+    unsigned char *tv = tr + 16;
+    memcpy(tv, SETVALUE_PRO, 6); tv[6] = 0xE9; *(DWORD *)(tv + 7) = (SETVALUE_ADDR + 6) - (DWORD)(tv + 11);
+    g_vTramp = tv;
+    VirtualProtect(v, 6, PAGE_EXECUTE_READWRITE, &old);
+    v[0] = 0xE9; *(DWORD *)(v + 1) = (DWORD)hk_setvalue - (DWORD)(v + 5); v[5] = 0x90;
+    VirtualProtect(v, 6, old, &old); FlushInstructionCache(GetCurrentProcess(), v, 6);
+    logmsg("hooked widget value at %08X (reason 10)", SETVALUE_ADDR);
 }
 
 // called by LobbyStats once: dir = its folder (with a trailing backslash), ini = its ini file
@@ -317,7 +386,7 @@ void cd_start(const wchar_t *dir, const wchar_t *ini) {
     wchar_t c[16]; GetPrivateProfileStringW(L"Cooldowns", L"Color", L"FFFFFF", c, 16, ini);
     g_color = wcstoul(c, NULL, 16) & 0xFFFFFF;
     g_trace = GetPrivateProfileIntW(L"Cooldowns", L"Trace", 0, ini);
-    logmsg("Cooldowns 4 (%s): the numbers in the game's own button movie, no Direct3D; a recharge share wins over the 0 of another reason%s",
+    logmsg("Cooldowns 5 (%s): the numbers in the game's own button movie, no Direct3D; a recharge share wins over the 0 of another reason%s",
            g_on ? "on" : "off, [Cooldowns] Enabled=0", g_trace ? "; Trace=1" : "");
     if (!g_on) return;
     InitializeCriticalSection(&g_cs);
