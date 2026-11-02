@@ -16,13 +16,18 @@
 // It only reads the lobby: no kicking, no chat commands, no extra menus.
 //
 // Works only with DOW2.exe 3.19 (Steam): the prologue bytes are checked before installing.
-// One source, two add-ons (owner 30.10.2026: every feature its own DLL and its own launcher tick):
-//   LobbyStats.dll      - the lobby: rating after the names, the stats tooltip, the main menu tooltip, the join sound
+// One source, three add-ons (owner 30.10.2026: every feature its own DLL and its own launcher tick):
+//   LobbyStats.dll      - the lobby: rating after the names, the stats tooltip, the main menu tooltip
 //   LoadingRatings.dll  - built with -DLS_LOADING: only the rating after the names on the loading screen (reads the lobby's
 //                         roster, changes nothing in the lobby)
+//   JoinSound.dll       - built with -DLS_JOINSOUND (02.11.2026, owner: players said the sound was too loud; its own tick, a
+//                         soft or a sharp sound, no tick = no sound): only the sound when someone comes into the lobby -
+//                         reads the roster, changes nothing, asks no server. LobbyStats has no sound since 0.11.0.
 // The match clock (MatchTimer.dll) and the cooldown numbers (Cooldowns.dll) are add-ons of their own again.
 #ifdef LS_LOADING
 #define LS_NAME "LoadingRatings"
+#elif defined(LS_JOINSOUND)
+#define LS_NAME "JoinSound"
 #else
 #define LS_NAME "LobbyStats"
 #endif
@@ -30,6 +35,7 @@
 #define LS_W(x) LS_W_(x)
 #include <windows.h>
 #include <mmsystem.h>
+#include <math.h>
 #include <winhttp.h>
 #include <psapi.h>
 #include <stdio.h>
@@ -222,6 +228,29 @@ static BOOL CALLBACK find_game_wnd(HWND w, LPARAM out) {
 // or a cleared Notification sound the alias was silent; the alias is only the fallback now. [Lobby] SoundFile = own .wav
 #include "join_sound.h"
 static wchar_t g_soundFile[MAX_PATH];
+#ifdef LS_JOINSOUND
+// JoinSound.ini [JoinSound] Sound=soft|sharp (the launcher's pick), When=background (default)|always.
+// soft: a short quiet two-note chime (E6 then B6, 0.55 s, 18% volume, soft attack and decay) made here at load;
+// sharp: the game's own UI alert (join_sound.h), as LobbyStats played it up to 0.10.2.
+static int g_soft = 1;
+static unsigned char *g_softWav;
+static void make_soft(void) {
+    enum { RATE = 22050, LEN = RATE * 55 / 100 };
+    unsigned size = 44 + LEN * 2; unsigned char *w = (unsigned char *)malloc(size); if (!w) return;
+    unsigned v; memcpy(w, "RIFF", 4); v = size - 8; memcpy(w + 4, &v, 4); memcpy(w + 8, "WAVEfmt ", 8);
+    v = 16; memcpy(w + 16, &v, 4); unsigned short fmt[2] = {1, 1}; memcpy(w + 20, fmt, 4);
+    v = RATE; memcpy(w + 24, &v, 4); v = RATE * 2; memcpy(w + 28, &v, 4); unsigned short ba[2] = {2, 16}; memcpy(w + 32, ba, 4);
+    memcpy(w + 36, "data", 4); v = LEN * 2; memcpy(w + 40, &v, 4);
+    short *d = (short *)(w + 44);
+    for (int i = 0; i < LEN; i++) {
+        double t = (double)i / RATE, f = t < 0.16 ? 1318.5 : 1975.5, t0 = t < 0.16 ? t : t - 0.16;
+        double env = (t0 < 0.008 ? t0 / 0.008 : 1.0) * exp(-t0 * (t < 0.16 ? 9.0 : 6.5));
+        double x = 0.18 * env * (sin(2 * 3.14159265358979 * f * t) + 0.25 * sin(4 * 3.14159265358979 * f * t)) / 1.25;
+        d[i] = (short)(x * 32767);
+    }
+    g_softWav = w;
+}
+#endif
 static void join_alert(const wchar_t *who) {
     HWND fg = GetForegroundWindow(); DWORD pid = 0; if (fg) GetWindowThreadProcessId(fg, &pid);
     int behind = pid != GetCurrentProcessId();
@@ -234,6 +263,9 @@ static void join_alert(const wchar_t *who) {
     last = now;
     const char *how = "game alert sound";
     if (g_soundFile[0] && PlaySoundW(g_soundFile, NULL, SND_FILENAME | SND_ASYNC | SND_NODEFAULT)) how = "SoundFile";
+#ifdef LS_JOINSOUND
+    else if (g_soft && g_softWav && PlaySoundW((LPCWSTR)g_softWav, NULL, SND_MEMORY | SND_ASYNC | SND_NODEFAULT)) how = "soft chime";
+#endif
     else if (!PlaySoundW((LPCWSTR)JOIN_WAV, NULL, SND_MEMORY | SND_ASYNC | SND_NODEFAULT)) {
         how = "Windows notification sound";
         if (!PlaySoundW(L"Notification.Default", NULL, SND_ALIAS | SND_ASYNC | SND_NODEFAULT) &&
@@ -305,6 +337,9 @@ static void decorate(GFxValue *args, unsigned count) {
             sn->id = id;
             sn->st = st; sn->pos = si; sn->obs = observer;
         }
+#ifdef LS_JOINSOUND
+        continue;                                         // JoinSound: only who is there, no stats, nothing changed
+#endif
         Entry *e = find(key);
         DWORD now = GetTickCount();
         if (!e || !e->fetched || now - e->fetched > 10 * 60 * 1000) {          // no data or older than 10 minutes
@@ -343,8 +378,10 @@ static void decorate(GFxValue *args, unsigned count) {
                 int was = 0; for (int j = 0; j < g_nprev; j++) if (!wcscmp(g_prevKey[j], g_seen[k].key)) { was = 1; break; }
                 if (!was) { joined = g_seen[k].name; break; }
             }
-#ifndef LS_LOADING
-            if (joined) join_alert(joined);
+#ifdef LS_JOINSOUND
+            if (joined) join_alert(joined);                // 0.11.0: only JoinSound.dll makes a sound
+#else
+            (void)joined;
 #endif
             g_nprev = 0; for (int k = 0; k < g_nseen && k < 16; k++) { wcsncpy(g_prevKey[g_nprev], g_seen[k].key, 63); g_prevKey[g_nprev++][63] = 0; }
             logmsg("lobby: host=%d, max players=%d, my id=%llu, people=%d", isHost, g_maxPlayers, g_localId, g_nseen);
@@ -770,11 +807,24 @@ BOOL WINAPI DllMain(HINSTANCE h, DWORD reason, LPVOID _) {
     _snwprintf(g_probeLog, MAX_PATH, L"%lsLobbyStats_invoke.log", g_dir);
     InitializeCriticalSection(&g_lock); InitializeCriticalSection(&g_probeLock); g_wake = CreateEventW(NULL, FALSE, FALSE, NULL);
     g_probeLast = GetTickCount();
-    logmsg(LS_NAME " v0.10.2, join sound %d%s", g_joinSound, g_probe ? ", UI probe on (LobbyStats_invoke.log)" : "");
+#ifdef LS_JOINSOUND
+    { wchar_t snd[16], when[16];
+      GetPrivateProfileStringW(L"JoinSound", L"Sound", L"soft", snd, 16, ini); g_soft = _wcsicmp(snd, L"sharp") != 0;
+      GetPrivateProfileStringW(L"JoinSound", L"When", L"background", when, 16, ini); g_joinSound = _wcsicmp(when, L"always") ? 1 : 2;
+      GetPrivateProfileStringW(L"JoinSound", L"SoundFile", L"", g_soundFile, MAX_PATH, ini);
+      if (g_soundFile[0] && !wcschr(g_soundFile, L':')) { wchar_t t[MAX_PATH]; _snwprintf(t, MAX_PATH - 1, L"%ls%ls", g_dir, g_soundFile); t[MAX_PATH - 1] = 0; wcscpy(g_soundFile, t); }
+      g_stats = 0; g_showInName = 0; if (g_soft) make_soft(); }
+    logmsg(LS_NAME " 1 (from LobbyStats 0.11.0's source): %s sound, %s", g_soft ? "soft" : "sharp", g_joinSound == 2 ? "always" : "when the game is in the background");
+#else
+    g_joinSound = 0;                                       // 0.11.0: the join sound is JoinSound.dll's (its own tick)
+    logmsg(LS_NAME " v0.11.0%s", g_probe ? ", UI probe on (LobbyStats_invoke.log)" : "");
+#endif
     if (already_loaded(LS_NAME)) { logmsg("another " LS_NAME " copy is already active in this game, this one stays idle"); return TRUE; }
     g_gameTip = GetPrivateProfileIntW(L"MenuTooltip", L"Game", 1, ini);
     { wchar_t w[128]; GetPrivateProfileStringW(L"MenuTooltip", L"Instance", L"" TIP_INST, w, 128, ini); WideCharToMultiByte(CP_ACP, 0, w, -1, g_tipInst, sizeof g_tipInst, NULL, NULL); }
-#ifdef LS_LOADING
+#if defined(LS_JOINSOUND)
+    install();                                           // the roster hook only: no cache, no server, no menu hooks
+#elif defined(LS_LOADING)
     { void mt_start_nodevice(const wchar_t *dir, const wchar_t *ini);
       load_cache(); install(); install_wset();
       CloseHandle(CreateThread(NULL, 0, worker, NULL, 0, NULL));
@@ -787,5 +837,9 @@ BOOL WINAPI DllMain(HINSTANCE h, DWORD reason, LPVOID _) {
     return TRUE;
 }
 
+#ifdef LS_JOINSOUND
+// for testing outside the game: the soft chime as a WAV (size in *n)
+__declspec(dllexport) const unsigned char *JoinSound_SoftWav(unsigned *n) { if (!g_softWav) make_soft(); if (n) memcpy(n, g_softWav + 4, 4), *n += 8; return g_softWav; }
+#endif
 // for testing outside the game: run the substitution on a fake argument set
 __declspec(dllexport) int LobbyStats_Test(GFxValue *args, unsigned count) { decorate(args, count); return g_ncache; }
