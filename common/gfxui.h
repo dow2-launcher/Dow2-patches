@@ -1,5 +1,9 @@
 // gfxui.h - our text inside the game's own HUD movies (Scaleform GFx 2.x in DOW2.exe 3.19), no Direct3D (owner 02.11.2026:
 // "встроиться в существующие элементы" - no drawing over the game through the video driver).
+// Why this and not an overlay: the game's whole HUD is Scaleform, so text put into its movies gets the game's own font,
+// scale, layout, tooltips and z-order at any resolution; a Direct3D hook (EndScene/Reset + ID3DXFont, as MatchTimer v1-v4
+// and Cooldowns 1-2 did) sits in the driver's hot path, races device resets, collides with DXVK/ReShade/OBS/overlays and
+// crashed players. The rule and its history: docs/UI_RULES.md.
 //
 // How the engine itself talks to a HUD movie (seen in the widget code, 0x686080 = a text widget's SetText):
 //   widget + 4 = its form (one per HUD movie), widget + 8 = the widget's clip path ("/ability_btn01");

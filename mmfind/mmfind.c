@@ -314,6 +314,53 @@ static int http_post1(const wchar_t *host, const wchar_t *path, const char *body
     if (r) WinHttpCloseHandle(r); if (c) WinHttpCloseHandle(c); WinHttpCloseHandle(s);
     return answered && got > 0;
 }
+// 0.36 (02.11.2026): the game servers from the ladder into Relay.ini [Relay] Nodes= (Relay 16 adds them to its ping set, so
+// the matchmaker can pick a mirror added on the ladder without a client update). Sources: the "relays" field of mm/join and
+// mm/poll ("relays": ["ip", ...]) and, at the start, GET /ladder/api/relays ({"relays":[{"ip":...}, ...]}) - both over HTTPS
+// from our hosts. Only IPv4 addresses are taken, 8 at most; written only when the list changed.
+static void nodes_from_json(const char *j) {
+    const char *r = strstr(j, "\"relays\""); if (!r) return;
+    const char *end = strchr(r, ']'); if (!end) return;
+    char list[160] = ""; int L = 0, n = 0;
+    for (const char *p = r + 8; p < end && n < 8; p++) {
+        if (*p != '"') continue;
+        const char *q = strchr(p + 1, '"'); if (!q || q > end) break;
+        int len = (int)(q - p - 1), a, b, c, d; char tail;
+        if (len > 6 && len < 16) {
+            char ip[16]; memcpy(ip, p + 1, len); ip[len] = 0;
+            if (sscanf(ip, "%d.%d.%d.%d%c", &a, &b, &c, &d, &tail) == 4 && a > 0 && a < 256 && b >= 0 && b < 256 && c >= 0 && c < 256 && d >= 0 && d < 256) {
+                L += snprintf(list + L, sizeof list - L, "%s%s", n ? ";" : "", ip); n++;
+            }
+        }
+        p = q;
+    }
+    if (!n) return;
+    wchar_t ini[MAX_PATH], cur[200], want[200]; _snwprintf(ini, MAX_PATH, L"%lsRelay.ini", g_dir);
+    MultiByteToWideChar(CP_UTF8, 0, list, -1, want, 200);
+    GetPrivateProfileStringW(L"Relay", L"Nodes", L"", cur, 200, ini);
+    if (!wcscmp(cur, want)) return;
+    if (WritePrivateProfileStringW(L"Relay", L"Nodes", want, ini)) logmsg("game servers from the ladder: %s (Relay.ini Nodes=)", list);
+}
+static DWORD WINAPI nodes_fetch(LPVOID _) {               // once at the start, before the player can search
+    char out[4096];
+    for (int k = 0; k < g_nHosts; k++) {
+        out[0] = 0; int got = 0;
+        HINTERNET s = WinHttpOpen(L"MMFind/0.36", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, NULL, NULL, 0); if (!s) return 0;
+        WinHttpSetTimeouts(s, 4000, 4000, 4000, 4000);
+        HINTERNET c = WinHttpConnect(s, g_hosts[k], INTERNET_DEFAULT_HTTPS_PORT, 0);
+        HINTERNET r = c ? WinHttpOpenRequest(c, L"GET", L"/ladder/api/relays", NULL, NULL, NULL, WINHTTP_FLAG_SECURE) : NULL;
+        DWORD code = 0, sz = sizeof code;
+        if (r && WinHttpSendRequest(r, NULL, 0, NULL, 0, 0, 0) && WinHttpReceiveResponse(r, NULL)) {
+            WinHttpQueryHeaders(r, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER, NULL, &code, &sz, NULL);
+            DWORD n; while (got < (int)sizeof out - 1 && WinHttpReadData(r, out + got, sizeof out - 1 - got, &n) && n) got += n;
+        }
+        out[got] = 0;
+        if (r) WinHttpCloseHandle(r); if (c) WinHttpCloseHandle(c); WinHttpCloseHandle(s);
+        if (code == 200 && strstr(out, "\"relays\"")) { nodes_from_json(out); return 0; }
+    }
+    logmsg("game servers from the ladder: not reachable now (Relay.ini Nodes= stays)");
+    return 0;
+}
 static int http_post(const wchar_t *ep, const char *body, char *out, int cap) {
     wchar_t path[128]; _snwprintf(path, 128, L"%ls%ls", MM_PATH, ep);
     static const int TMO[2] = {1000, 4000};                          // first round quick (1 s per step), then a patient one (4 s)
@@ -322,6 +369,7 @@ static int http_post(const wchar_t *ep, const char *body, char *out, int cap) {
             int h = (g_curHost + k) % g_nHosts;
             if (http_post1(g_hosts[h], path, body, out, cap, TMO[round])) {
                 if (h != g_curHost) { logmsg("server: %ls is not reachable, now using %ls", g_hosts[g_curHost], g_hosts[h]); g_curHost = h; }
+                nodes_from_json(out);                                  // 0.36: mm/join and mm/poll carry the game servers
                 return 1;
             }
         }
@@ -1667,8 +1715,8 @@ BOOL WINAPI DllMain(HINSTANCE h, DWORD r, LPVOID _) {
     g_mySteam = my_steam();
     { wchar_t p[MAX_PATH], o[MAX_PATH]; _snwprintf(p, MAX_PATH, L"%lsMMFind.log", g_dir); _snwprintf(o, MAX_PATH, L"%lsMMFind.log.old", g_dir);
       WIN32_FILE_ATTRIBUTE_DATA a; if (GetFileAttributesExW(p, GetFileExInfoStandard, &a) && (a.nFileSizeHigh || a.nFileSizeLow > (1u << 20))) MoveFileExW(p, o, MOVEFILE_REPLACE_EXISTING); }
-    logmsg("MMFind 0.35 start, steam=%llu server=%ls%s", g_mySteam, g_server, g_direct ? ", fast automatch (experiment) on" : "");
+    logmsg("MMFind 0.36 start, steam=%llu server=%ls%s", g_mySteam, g_server, g_direct ? ", fast automatch (experiment) on" : "");
     { char n[64]; wsprintfA(n, "Local\\dow2patch_MMFind_%lu", GetCurrentProcessId());          // one copy per game (launcher + dow2-patches)
       HANDLE mx = CreateMutexA(NULL, FALSE, n); if (mx && GetLastError() == ERROR_ALREADY_EXISTS) { logmsg("another MMFind copy is active, this one stays idle"); return TRUE; } }
-    install(); return TRUE;
+    install(); CloseHandle(CreateThread(NULL, 0, nodes_fetch, NULL, 0, NULL)); return TRUE;
 }

@@ -14,6 +14,12 @@
 //   Fallback=0 - compatibility off: every online game on our servers; the matchmaker pairs such a player only with players
 //                who have our servers on (since 30.10.2026), a custom lobby with Relic players can't play (error, game closes).
 //
+// Relay 16 (02.11.2026): the game servers are a list on our ladder, not in this DLL. [Relay] Nodes=ip;ip;... (written by
+//   MMFind from the ladder: /ladder/api/relays at its start, the "relays" field of mm/join|mm/poll) is added to the ping set
+//   after the built-in ones - deduplicated, 8 at most, re-read when Relay.ini changes (pinged again at once). Only the PING
+//   set: Nodes never makes a hand pick (g_handHosts stays as Hosts= set it - with it the client would stop following the
+//   matchmaker's DOW2_RELAY_HOST and the players of one match would end up on different servers) and never goes into the
+//   bridge list. A new mirror = an entry in the ladder's relays.json, no client update.
 // Relay 15 (01.11.2026, owner: «несколько новых галочек на все случаи»):
 //   Mode=compat|strict|bridge (the launcher's list; without it Fallback=1/0 means compat/strict as before)
 //     bridge - "every game through our server, with anybody": an automatch where everyone has the add-on is hosted on our
@@ -147,6 +153,26 @@ static int tcp_rtt(struct in_addr ip, unsigned short port, int ms) {
     if (!tcp_ok(ip, port, ms)) return -1;
     QueryPerformanceCounter(&b); return (int)((b.QuadPart - a.QuadPart) * 1000 / f.QuadPart);
 }
+// Relay 16: [Relay] Nodes= into the ping set (see the top). Returns how many were added. Appends only: the element is
+// written before the count grows, so the threads that read g_hosts never see a half-made entry.
+static FILETIME g_iniTime;
+static int merge_nodes(void) {
+    wchar_t w[512]; GetPrivateProfileStringW(L"Relay", L"Nodes", L"", w, 512, g_ini);
+    char hs[512]; WideCharToMultiByte(CP_ACP, 0, w, -1, hs, sizeof hs, NULL, NULL);
+    int added = 0; char *ctx = NULL;
+    for (char *t = strtok_s(hs, ";, ", &ctx); t && g_nHosts < 8; t = strtok_s(NULL, ";, ", &ctx)) {
+        struct in_addr ip; ip.s_addr = inet_addr(t); if (ip.s_addr == INADDR_NONE || ip.s_addr == 0) continue;
+        int have = 0; for (int i = 0; i < g_nHosts; i++) if (g_hosts[i].s_addr == ip.s_addr) have = 1;
+        if (have) continue;
+        g_hosts[g_nHosts] = ip; MemoryBarrier(); g_nHosts++; added++;
+    }
+    return added;
+}
+static int ini_changed(void) {
+    WIN32_FILE_ATTRIBUTE_DATA a; if (!GetFileAttributesExW(g_ini, GetFileExInfoStandard, &a)) return 0;
+    if (CompareFileTime(&a.ftLastWriteTime, &g_iniTime) == 0) return 0;
+    g_iniTime = a.ftLastWriteTime; return 1;
+}
 static DWORD WINAPI ping_loop(LPVOID _) {
     WSADATA w; WSAStartup(MAKEWORD(2, 2), &w); char last[256] = "";
     for (;;) {
@@ -167,7 +193,11 @@ static DWORD WINAPI ping_loop(LPVOID _) {
                         static char lastb[128]; if (strcmp(bl, lastb)) { logmsg("relay: bridge servers %s", bl); strcpy(lastb, bl); } }
         SetEnvironmentVariableA("DOW2_RELAY_PING", env);
         if (strcmp(env, last)) { logmsg("relay: ping %s", env); strcpy(last, env); }
-        Sleep(300000);
+        // every 5 minutes, at once when MMFind wrote new Nodes= (Relay 16)
+        for (int k = 0; k < 60; k++) {
+            Sleep(5000);
+            if (ini_changed()) { int a = merge_nodes(); if (a) { logmsg("relay: %d node(s) from the ladder added, %d server(s) to ping", a, g_nHosts); break; } }
+        }
     }
     return 0;
 }
@@ -427,6 +457,7 @@ static void load_hosts(void) {                                  // from DllMain:
     g_relayIp = g_hosts[0]; g_relayOn = 1;                      // from the very first connect: ours, never Relic directly
     if (g_handHosts) for (int i = 0; i < g_nHosts && g_nBridge < 4; i++) g_bridgeHosts[g_nBridge++] = g_hosts[i];   // bridge: the hand pick
     else { const char *bh[] = {"15.220.68.107", "116.202.106.150", "83.217.192.34"}; for (int i = 0; i < 3; i++) g_bridgeHosts[g_nBridge++].s_addr = inet_addr(bh[i]); }
+    merge_nodes(); ini_changed();                               // Relay 16: the ladder's list, after the bridge list is made
 }
 
 static DWORD WINAPI first_check(LPVOID _) {                     // early warning in the log; the hard check is at connect time
@@ -460,7 +491,7 @@ BOOL WINAPI DllMain(HINSTANCE h, DWORD reason, LPVOID _) {
       WIN32_FILE_ATTRIBUTE_DATA a; if (GetFileAttributesExW(p, GetFileExInfoStandard, &a) && (a.nFileSizeHigh || a.nFileSizeLow > (1u << 20))) MoveFileExW(p, o, MOVEFILE_REPLACE_EXISTING); }
     load_hosts();
     SetEnvironmentVariableA("DOW2_RELAY", g_fallback ? "9c" : "9");   // for MMFind: the matchmaker may mix us with Relic players
-    logmsg("Relay 15 start (%d server(s), mode %s%s), connect hooked in %d import(s), send %d, WSASend %d, recv %d%s", g_nHosts,
+    logmsg("Relay 16 start (%d server(s), mode %s%s), connect hooked in %d import(s), send %d, WSASend %d, recv %d%s", g_nHosts,
            g_bridge ? "bridge" : g_fallback ? "compatible" : "strict", g_udp ? ", UDP to our server" : "", n, ns, nw, nr, n ? "" : " - another add-on (automatch) already routes the relay, staying idle");
     if (n && g_relayOn) { CloseHandle(CreateThread(NULL, 0, first_check, NULL, 0, NULL)); CloseHandle(CreateThread(NULL, 0, ping_loop, NULL, 0, NULL)); }
     return TRUE;
