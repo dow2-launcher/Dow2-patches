@@ -62,11 +62,13 @@ static int ini_int(const wchar_t *key, int def, int lo, int hi) {
     int v = GetPrivateProfileIntW(L"MatchTimer", key, def, g_ini);
     return v < lo ? lo : v > hi ? hi : v;
 }
-static void load_ini(void) {
+static int g_topFallback;                         // Place=top in a match without the victory point counter: under Menu
+static void load_ini_as(int forced) {
     WIN32_FILE_ATTRIBUTE_DATA a;
     if (GetFileAttributesExW(g_ini, GetFileExInfoStandard, &a)) g_iniTime = a.ftLastWriteTime;
     g_enabled    = ini_int(L"Enabled", 1, 0, 1);
     { wchar_t pl[16]; GetPrivateProfileStringW(L"MatchTimer", L"Place", L"top", pl, 16, g_ini); g_place = !_wcsicmp(pl, L"left") ? PL_LEFT : !_wcsicmp(pl, L"menu") ? PL_MENU : !_wcsicmp(pl, L"under") ? PL_UNDER : PL_TOP; }
+    if (forced >= 0) g_place = forced;
     g_size       = ini_int(L"FontSize", g_place == PL_MENU ? 17 : g_place == PL_LEFT ? 20 : 18, 10, 40);
     g_shadow     = ini_int(L"Shadow", 1, 0, 1);
     g_onlineOnly = ini_int(L"OnlineOnly", 0, 0, 1);
@@ -81,6 +83,7 @@ static void load_ini(void) {
     g_textY      = ini_int(L"TextY", 3, -30, 30);
     g_plateAlpha = ini_int(L"PlateAlpha", 85, 0, 100);
 }
+static void load_ini(void) { load_ini_as(g_topFallback ? PL_UNDER : -1); }
 static void clock_restyle(void);
 static void reload_ini(DWORD now) {
     static DWORD last;
@@ -322,11 +325,18 @@ static void clock_text(void *mv, const char *t0) {
 }
 // one clock: in the Menu button movie (host 0) or the victory point movie (host 1, Place=top); the other host takes its
 // own off when the place changes while the game runs
+static volatile DWORD g_vpSeen;                   // the victory point panel's last per-frame update (GetTickCount)
 static void clock_frame(char *form, int host) {
     void *mv = gfx_movie_of_form(form);
     if (!mv) return;
     DWORD now = GetTickCount();
     reload_ini(now);
+    // Place=top needs the victory point counter; a match without one (annihilation) gets the clock under the Menu button
+    // (02.11.2026: in such a match there was no clock at all). The next match tries the top again (see "clock hidden").
+    if (!host && g_place == PL_TOP && !g_topFallback && g_enabled && clock_visible() && mt_game_ms() > 4000 && now - g_vpSeen > 3000) {
+        g_topFallback = 1; load_ini(); clock_restyle();
+        logmsg("no victory point counter in this match: the clock under the Menu button");
+    }
     if (host != (g_place == PL_TOP)) {
         if (mv == g_clkMovie) {                      // the clock was here: off, the Menu button as the game has it
             gfx_setvar(mv, "_root.mt_clock._visible", gv_bool(0));
@@ -348,7 +358,10 @@ static void clock_frame(char *form, int host) {
     if (vis != g_clkShown) {
         DWORD run = mt_game_ms();
         if (vis) logmsg("clock shown");
-        else if (g_clkShown == 1) logmsg("clock hidden: match %lu:%02lu of game time", run / 60000, run / 1000 % 60);
+        else if (g_clkShown == 1) {
+            logmsg("clock hidden: match %lu:%02lu of game time", run / 60000, run / 1000 % 60);
+            if (g_topFallback) { g_topFallback = 0; load_ini(); }      // the next match: the top again, if it has the counter
+        }
         g_clkShown = vis;
         gfx_setvar(mv, "_root.mt_clock._visible", gv_bool(vis));
         gfx_setvar(mv, "_root.mt_clock_sh._visible", gv_bool(vis && g_shadow));
@@ -363,7 +376,7 @@ static void clock_frame(char *form, int host) {
 }
 static void __thiscall hk_menu_upd(char *form, float dt) { o_menuUpd(form, dt); clock_frame(form, 0); }
 static MenuUpd_t o_vpUpd;
-static void __thiscall hk_vp_upd(char *form, float dt) { o_vpUpd(form, dt); clock_frame(form, 1); }
+static void __thiscall hk_vp_upd(char *form, float dt) { o_vpUpd(form, dt); g_vpSeen = GetTickCount(); clock_frame(form, 1); }
 static void clock_install(void) {
     static volatile LONG done;
     if (InterlockedExchange(&done, 1)) return;
