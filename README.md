@@ -50,19 +50,23 @@ ownlobby/
     The add-on ships OwnLobby.dll into Elite_DLLs and winmm.dll next to DOW2.exe (Wine/Proton: winmm=n,b).
 
 cooldowns/
-    Cooldown numbers (inside LobbyStats.dll): seconds left on recharging abilities and global abilities in the middle of
-    the button, over the game's own sweep, in the game's font. Only reads: the share the HUD shows, the engine's own
-    recharge query and, for global abilities, the sim ticks left - no desync. LobbyStats.ini [Cooldowns]: Enabled,
-    Size (px at 1440), Color.
+    Cooldown numbers, Cooldowns.dll (Cooldowns 5): seconds left on recharging abilities and global abilities in the
+    middle of the button, as the button's own count text (Scaleform). Only reads the share the HUD gets through
+    SetProgress - no desync, no engine queries. A recharge share wins over the 0 of another reason (no energy), and the
+    end of each ability's recharge is remembered, so no energy / a busy squad don't take the number off.
+    Cooldowns.ini [Cooldowns]: Enabled, DigitSize, Color, Trace (what each update sent, in Cooldowns.log).
 
 frameprobe/
     The diagnostics DLL I used to find the observer lag: frame times, sim ticks, a stack sampler on the
     game thread, a probe on the post-game Continue button.
 
 matchtimer/
-    Match clock, MatchTimer.dll. MM:SS of game time since the match started (pauses not counted), as text of the
-    game's own Menu button movie (Scaleform, common/gfxui.h - nothing drawn over the game, see docs/UI_RULES.md);
-    off as soon as the match ends. OnlineOnly=1 keeps it to live multiplayer.
+    Match clock, MatchTimer.dll. MM:SS of game time since the match started (sim ticks x 100 ms, pauses not counted),
+    as text in the game's own HUD movies (Scaleform, common/gfxui.h - nothing drawn over the game, see
+    docs/UI_RULES.md); off as soon as the match ends. MatchTimer.ini, read again while the game runs:
+    Place=top (default: under the victory point counter) | under (a plate under the Menu button) | menu
+    ("Menu (00:18)"); FontSize, Color, OffsetX / OffsetY; under: Raise, Height, TextY. OnlineOnly=1 keeps it to live
+    multiplayer.
 
 eliteai/
     The new AI (launcher add-on "New AI (test, skirmish only)"). EliteAI.dll hooks lua_load in LuaConfig.dll and puts

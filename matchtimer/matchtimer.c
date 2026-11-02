@@ -36,7 +36,8 @@
 static const unsigned char LOADSCREEN_PRO[5] = {0xB8, 0x71, 0x69, 0xEF, 0x00};   // mov eax, 0xEF6971
 #define G_SESSION       0x01335678   // *(*G_SESSION + 4) & 0x558: the session is online (live MP), see docs/OBSERVER_LAG.md
 #define ONLINE_MASK     0x558
-#define PAUSE_MS        1000         // a longer gap between two ticks is a pause or a lag: not game time
+#define PAUSE_MS        1000         // a longer gap between two ticks is a pause or a lag (only logged now)
+#define TICK_MS         100          // one sim tick = 100 ms of game time (measured 02.11.2026: 99.4-99.9 ms per tick)
 
 static wchar_t g_log[MAX_PATH], g_ini[MAX_PATH];
 static void logmsg(const char *fmt, ...) {
@@ -48,6 +49,9 @@ static void logmsg(const char *fmt, ...) {
 // ---------- settings: MatchTimer.ini, re-read while the game runs when the file changes ----------
 // v5: the clock is text of the Menu button movie, so the v1-v4 keys of the Direct3D clock (Style, Font, MenuX, Anchor...) are gone
 static int g_enabled = 1, g_size = 22, g_shadow = 1, g_onlineOnly = 0;   // FontSize: in the movie's units (the "Menu" label is 20)
+static int g_plate = 1, g_plateAlpha = 85;                              // a plate under the clock: a copy of the Menu button's own background
+enum { PL_UNDER, PL_LEFT, PL_MENU, PL_TOP };
+static int g_place = PL_TOP, g_gap = 1, g_width = 100, g_height = 30, g_offX = 0, g_offY = 0, g_raise = 8, g_textY = 3;   // where the clock is (MatchTimer.ini Place=under|menu|left, Gap, Width, Height, OffsetX/Y, TextY: the digits down in the plate (a Flash field keeps room under the line), Raise: the Menu button up by this, room under it - the movie clips below its stage, y 75)
 static DWORD g_color = 0xFFCAF9FF;                                      // the colour of the "Menu" label
 static FILETIME g_iniTime;
 static DWORD ini_color(const wchar_t *key, const wchar_t *def) {
@@ -58,15 +62,28 @@ static int ini_int(const wchar_t *key, int def, int lo, int hi) {
     int v = GetPrivateProfileIntW(L"MatchTimer", key, def, g_ini);
     return v < lo ? lo : v > hi ? hi : v;
 }
-static void load_ini(void) {
+static int g_topFallback;                         // Place=top in a match without the victory point counter: under Menu
+static void load_ini_as(int forced) {
     WIN32_FILE_ATTRIBUTE_DATA a;
     if (GetFileAttributesExW(g_ini, GetFileExInfoStandard, &a)) g_iniTime = a.ftLastWriteTime;
     g_enabled    = ini_int(L"Enabled", 1, 0, 1);
-    g_size       = ini_int(L"FontSize", 22, 10, 40);
+    { wchar_t pl[16]; GetPrivateProfileStringW(L"MatchTimer", L"Place", L"top", pl, 16, g_ini); g_place = !_wcsicmp(pl, L"left") ? PL_LEFT : !_wcsicmp(pl, L"menu") ? PL_MENU : !_wcsicmp(pl, L"under") ? PL_UNDER : PL_TOP; }
+    if (forced >= 0) g_place = forced;
+    g_size       = ini_int(L"FontSize", g_place == PL_MENU ? 17 : g_place == PL_LEFT ? 20 : 18, 10, 40);
     g_shadow     = ini_int(L"Shadow", 1, 0, 1);
     g_onlineOnly = ini_int(L"OnlineOnly", 0, 0, 1);
-    g_color      = ini_color(L"Color", L"CAF9FF");
+    g_color      = ini_color(L"Color", g_place == PL_TOP ? L"FFFFFF" : L"CAF9FF");   // top: white like the score
+    g_plate      = ini_int(L"Plate", 1, 0, 1);
+    g_gap        = ini_int(L"Gap", g_place == PL_LEFT ? 6 : 2, -40, 200);
+    g_width      = ini_int(L"Width", g_place == PL_LEFT ? 184 : 100, 40, 400);
+    g_height     = ini_int(L"Height", g_place == PL_LEFT ? 48 : 34, 16, 100);
+    g_offX       = ini_int(L"OffsetX", g_place == PL_TOP ? -7 : 0, -400, 400);
+    g_offY       = ini_int(L"OffsetY", g_place == PL_TOP ? 6 : 0, -200, 200);
+    g_raise      = ini_int(L"Raise", g_place == PL_UNDER ? 8 : 0, 0, 20);
+    g_textY      = ini_int(L"TextY", 3, -30, 30);
+    g_plateAlpha = ini_int(L"PlateAlpha", 85, 0, 100);
 }
+static void load_ini(void) { load_ini_as(g_topFallback ? PL_UNDER : -1); }
 static void clock_restyle(void);
 static void reload_ini(DWORD now) {
     static DWORD last;
@@ -87,6 +104,7 @@ static void *volatile g_world;                  // World of the current match
 static volatile int g_inMatch;                  // between SimulatePre and SimulatePost
 static volatile DWORD g_play, g_lastTick;       // game time of the match in ms, GetTickCount() at the last sim tick
 static volatile LONG g_ticks;                   // sim ticks in this match
+static volatile DWORD g_wall0;                  // GetTickCount() at the first sim tick (the log at the end: ms per tick)
 static volatile int g_over;                     // the match ended (SetGameOver / EndScript): no clock, no cooldown numbers
 
 static DWORD session_flags(void) {
@@ -96,7 +114,14 @@ static DWORD session_flags(void) {
 }
 static void match_start(void *world, const char *why) {
     logmsg("match start (%s): World %p, previous %p, session flags %lX", why, world, g_world, session_flags());
-    g_world = world; g_play = 0; g_lastTick = 0; g_ticks = 0; g_inMatch = 1; g_over = 0;
+    g_world = world; g_play = 0; g_lastTick = 0; g_ticks = 0; g_inMatch = 1; g_over = 0; g_wall0 = 0;
+}
+// how long a sim tick is (02.11.2026): game time counted, ticks, wall time since the first tick - to see whether the game
+// time can be ticks x a fixed tick (a replay played fast, lags) instead of the wall-clock gaps between ticks
+static void log_tick_rate(const char *when) {
+    DWORD wall = g_wall0 ? GetTickCount() - g_wall0 : 0;
+    logmsg("tick rate (%s): %lu ms of game time in %ld ticks = %.1f ms per tick; %lu ms of wall time since the first tick = %.1f ms per tick",
+           when, g_play, g_ticks, g_ticks ? (double)g_play / g_ticks : 0.0, wall, g_ticks ? (double)wall / g_ticks : 0.0);
 }
 static void __fastcall hk_pre(void *self, void *edx) {
     match_start(self, "SimulatePre");
@@ -109,11 +134,11 @@ static void __fastcall hk_post(void *self, void *edx) {
 }
 static ThisFn o_over; typedef char (__fastcall *BoolThisFn)(void *, void *); static BoolThisFn o_endscript;
 static void __fastcall hk_over(void *self, void *edx) {
-    if (!g_over && g_inMatch) logmsg("game over (SetGameOver): %lu:%02lu of game time, clock off", g_play / 60000, g_play / 1000 % 60);
+    if (!g_over && g_inMatch) { logmsg("game over (SetGameOver): %lu:%02lu of game time, clock off", g_play / 60000, g_play / 1000 % 60); log_tick_rate("game over"); }
     g_over = 1; o_over(self, edx);
 }
 static char __fastcall hk_endscript(void *self, void *edx) {
-    if (!g_over && g_inMatch) logmsg("match scripts end (EndScript): %lu:%02lu of game time, clock off", g_play / 60000, g_play / 1000 % 60);
+    if (!g_over && g_inMatch) { logmsg("match scripts end (EndScript): %lu:%02lu of game time, clock off", g_play / 60000, g_play / 1000 % 60); log_tick_rate("end of scripts"); }
     if (g_inMatch) g_over = 1;
     return o_endscript(self, edx);
 }
@@ -138,9 +163,12 @@ static void hook_loadscreen(void) {
 static void __fastcall hk_sim(void *self, void *edx) {
     DWORD now = GetTickCount(), gap = now - g_lastTick;
     if (self != g_world) match_start(self, "first tick of a new World");    // e.g. the DLL came in mid-match
-    else if (g_lastTick && gap <= PAUSE_MS) g_play += gap;
     else if (g_lastTick && gap > 3000) logmsg("sim stood still for %lu s (pause or lag), the clock waited", gap / 1000);
-    g_lastTick = now; g_ticks++;
+    if (!g_wall0) g_wall0 = now;
+    // game time = sim ticks x TICK_MS (02.11.2026): the same for every player of a match, in a replay at any speed, with
+    // lags - it was the wall-clock gaps between ticks (a replay played fast counted wall time, a lagging clock drifted)
+    g_lastTick = now; g_ticks++; g_play = (DWORD)g_ticks * TICK_MS;
+    if (g_ticks % 480 == 0) log_tick_rate("every 480 ticks");   // a minute or so: the rate also mid-match (and in a replay sped up)
     o_sim(self, edx);
 }
 
@@ -187,19 +215,58 @@ static int iat_hook(DWORD slot, const char *dll, void *fn, void **orig) {
 // Shown and hidden with _visible; created again if the HUD comes with a new movie (a new match).
 #define MENU_VT_UPD   0x0110C55C       // menu button form vtable 0x0110C54C, slot 4
 #define NULLSUB_RET4  0x009AB7D0       // what the game has there: ret 4
-#define CLK_X 12.0                     // the field in the movie's units: under the left part of the button
-#define CLK_W 106.0
-#define CLK_Y 40.0
+// The clock as a button of its own next to Menu (02.11.2026, siritos: as big as the Menu button, its padding and text size,
+// left of it; left of it the movie clips it - its stage starts at x 0 - so under it, 02.11). The Menu button's visible part on the stage: the menu_btn clip at 12.7,-9.6, its hit area at 15.25,5.6 in it,
+// 184 x 48 -> 27.95,-4 .. 211.95,44; its label (size 20) at 25,23 in the clip. MatchTimer.ini: Place=under|menu|left, Gap, Height,
+// Width (of the visible plate, 184 = the Menu button), OffsetX / OffsetY - read again while the game runs.
+#define MB_X0 27.95                    // the Menu button's visible rectangle on the stage
+#define MB_Y0 -4.0
+#define MB_W  184.0
+#define MB_H  48.0
+#define UP_PADX 15.25                  // where the visible part starts inside "up" (208 x 72) and menu_btn
+#define UP_PADY 5.6
 static int clock_visible(void); DWORD mt_game_ms(void);
 typedef void (__thiscall *MenuUpd_t)(char *form, float dt);
 static MenuUpd_t o_menuUpd;
 static void *g_clkMovie; static DWORD g_clkCheck; static int g_clkShown = -1; static char g_clkText[24];
+// Place=menu (siritos 02.11: "Menu (00:01)"): the time in brackets right after the button's own label. The label is an
+// unnamed text field of menu_btn (depth 7, 162 x 31 at 25,23, its text centred) - Flash names it "instanceN"; found by
+// asking for the names. It goes LABEL_SHIFT to the left so label and time together stay in the middle of the button.
+#define LABEL_X     25.0
+#define LABEL_SHIFT 30.0
+static char g_lbl[32];                 // "menu_btn.instanceN" of the current movie, "" = not found
+static void label_find(void *mv) {
+    g_lbl[0] = 0;
+    for (int n = 1; n <= 300; n++) {
+        char p[32]; snprintf(p, sizeof p, "menu_btn.instance%d", n);
+        if (gfx_exists(mv, p)) { strcpy(g_lbl, p); break; }
+    }
+    logmsg("Menu label: %s", g_lbl[0] ? g_lbl : "not found - the time goes right of it");
+}
+static void label_shift(void *mv, double x) {
+    if (!g_lbl[0]) return;
+    char p[64]; snprintf(p, sizeof p, "_root.%s._x", g_lbl); gfx_setvar(mv, p, gv_num(x));
+}
 static void clock_make(void *mv) {
-    double h = g_size * 1.7;
+    // the plate's visible rectangle on the stage: under Menu (default) or left of it
+    double W = g_width, H = g_height;
+    // the Menu button (menu_btn at 12.7,-9.6) up by Raise: everything of ours goes with it
+    double R = g_place == PL_UNDER ? g_raise : 0, mby = -9.6 - R;
+    gfx_setvar(mv, "_root.menu_btn._y", gv_num(mby));
+    double px = (g_place == PL_LEFT ? MB_X0 - g_gap - W : MB_X0) + g_offX, py = (g_place == PL_LEFT ? MB_Y0 : MB_Y0 + MB_H + g_gap) - R + g_offY;
+    // the text like the Menu label: its field 31 high for size 20 sits 17.4 below the top of the button
+    double fh = 31.0 * g_size / 20.0, fy = py + (H - fh) / 2 + g_textY, h = fh;
+    label_find(mv);
+    if (g_place == PL_MENU) {                        // in the button, on the label's line, left-aligned after it
+        label_shift(mv, LABEL_X - LABEL_SHIFT);
+        // the label's centre (clip 25 + 81) moved, plus half of "Menu" and a space; without the label found: after it
+        px = 12.7 + (g_lbl[0] ? LABEL_X + 81 - LABEL_SHIFT + 25 : LABEL_X + 81 + 25) + g_offX;
+        W = 90; fy = mby + 23 + (31.0 - fh) / 2 + g_offY; h = fh;   // on the label's middle line
+    } else label_shift(mv, LABEL_X);
     for (int k = 0; k < 2; k++) {                    // the shadow first: the text over it
         const char *nm = k ? "mt_clock" : "mt_clock_sh";
         char p[64];
-        GfxVal a[6] = { gv_str(nm), gv_num(16000 + k), gv_num(CLK_X + (k ? 0 : 1.5)), gv_num(CLK_Y + (k ? 0 : 2)), gv_num(CLK_W), gv_num(h) };
+        GfxVal a[6] = { gv_str(nm), gv_num(16000 + k), gv_num(px + (k ? 0 : 1.5)), gv_num(fy + (k ? 0 : 2)), gv_num(W), gv_num(h) };
         int ok = gfx_invoke(mv, "_root.createTextField", NULL, a, 6);
         snprintf(p, sizeof p, "_root.%s.html", nm); gfx_setvar(mv, p, gv_bool(1));
         snprintf(p, sizeof p, "_root.%s.selectable", nm); gfx_setvar(mv, p, gv_bool(0));
@@ -207,34 +274,99 @@ static void clock_make(void *mv) {
         if (!ok) logmsg("Menu button movie %p: createTextField %s failed", mv, nm);
     }
     logmsg("clock made in the Menu button movie %p: %s", mv, gfx_exists(mv, "mt_clock") ? "ok" : "NOT THERE - no clock");
+    // the plate (02.11.2026, siritos: the game's own interface under the digits): the movie's "menu_btn" clip (stage 12.7,-9.6)
+    // holds "up" / "over" / "down", the button's own background (trans_btn_up, 208 x 72). Its copy "mt_plate" in the same clip
+    // (Receive_DuplicateMovieClip, as the cooldown numbers copy the button's count) is scaled to the clock field and put under
+    // it; the clock fields are on _root at depth 16000+, over the whole menu_btn clip. No mouse handlers: takes no clicks.
+    if (g_plate && g_place != PL_MENU) {
+        if (!gfx_exists(mv, "menu_btn.mt_plate")) {
+            GfxVal a[2] = { gv_str("/menu_btn/up"), gv_str("mt_plate") }, r; memset(&r, 0, sizeof r);
+            gfx_invoke(mv, "Receive_DuplicateMovieClip", &r, a, 2);
+            logmsg("plate: copy of the Menu button's background %s", r.type == GV_BOOL && r.v.b ? "made" : "NOT made");
+        }
+        // scaled so its visible part is W x H, placed so that part starts at px,py (menu_btn's own coordinates)
+        double sx = W / MB_W, sy = H / MB_H, x = px - 12.7 - UP_PADX * sx, y = py - mby - UP_PADY * sy;
+        GfxVal pa[3] = { gv_str("menu_btn.mt_plate"), gv_num(x), gv_num(y) }, sa[3] = { gv_str("menu_btn.mt_plate"), gv_num(sx), gv_num(sy) };
+        logmsg("clock at %.1f,%.1f %gx%g on the stage (%s the Menu button), text size %d", px, py, W, H, g_place == PL_LEFT ? "left of" : "under", g_size);
+        gfx_invoke(mv, "Receive_SetMovieClipPosition", NULL, pa, 3);
+        gfx_invoke(mv, "Receive_SetMovieClipScale", NULL, sa, 3);
+        gfx_setvar(mv, "_root.menu_btn.mt_plate._alpha", gv_num(g_plateAlpha));
+    } else if (gfx_exists(mv, "menu_btn.mt_plate")) gfx_set_visible(mv, "menu_btn.mt_plate", 0);   // Plate=0 / menu while the game runs
 }
+// Place=top (experimental, siritos 02.11): under the victory point counter at the top centre. That panel is a form of its own
+// too (vtable 0x0111174C, made in 0xB18850 with ui\movies\hud\victory_point_panel; slot 4 the same empty "ret 4"); its stage
+// is 436 x 115, the bar and the stars in its upper part. The fields are centred on the stage at x 218; OffsetX / OffsetY move
+// them (read again while the game runs). No plate: the counter has none either.
+#define VP_VT_UPD 0x0111175C
+static void clock_make_top(void *mv) {
+    double W = g_width, fh = 31.0 * g_size / 20.0, px = 218 - W / 2 + g_offX, fy = 115 - fh - 2 + g_offY;
+    for (int k = 0; k < 2; k++) {
+        const char *nm = k ? "mt_clock" : "mt_clock_sh";
+        char p[64];
+        GfxVal a[6] = { gv_str(nm), gv_num(16000 + k), gv_num(px + (k ? 0 : 1.5)), gv_num(fy + (k ? 0 : 2)), gv_num(W), gv_num(fh) };
+        int ok = gfx_invoke(mv, "_root.createTextField", NULL, a, 6);
+        snprintf(p, sizeof p, "_root.%s.html", nm); gfx_setvar(mv, p, gv_bool(1));
+        snprintf(p, sizeof p, "_root.%s.selectable", nm); gfx_setvar(mv, p, gv_bool(0));
+        if (!k) { snprintf(p, sizeof p, "_root.%s._alpha", nm); gfx_setvar(mv, p, gv_num(g_shadow ? 70 : 0)); }
+        if (!ok) logmsg("victory point movie %p: createTextField %s failed", mv, nm);
+    }
+    logmsg("clock made in the victory point movie %p at %.1f,%.1f %gx%.1f: %s", mv, px, fy, W, fh, gfx_exists(mv, "mt_clock") ? "ok" : "NOT THERE - no clock");
+}
+static int plate_on(void) { return g_plate && g_place != PL_MENU && g_place != PL_TOP; }
 static void clock_restyle(void) { g_clkMovie = NULL; }   // the next frame makes the fields again (same names and depths: replaced)
-static void clock_text(void *mv, const char *t) {
-    char h[256];
-    snprintf(h, sizeof h, "<p align=\"center\"><font face=\"$TitleFont\" size=\"%d\" color=\"#000000\">%s</font></p>", g_size, t);
+static void clock_text(void *mv, const char *t0) {
+    char h[256], t[32]; const char *al = g_place == PL_MENU ? "left" : "center";
+    if (g_place == PL_MENU) snprintf(t, sizeof t, "(%s)", t0); else snprintf(t, sizeof t, "%s", t0);
+    snprintf(h, sizeof h, "<p align=\"%s\"><font face=\"$TitleFont\" size=\"%d\" color=\"#000000\">%s</font></p>", al, g_size, t);
     gfx_setvar(mv, "_root.mt_clock_sh.htmlText", gv_str(h));
-    snprintf(h, sizeof h, "<p align=\"center\"><font face=\"$TitleFont\" size=\"%d\" color=\"#%06lX\">%s</font></p>", g_size,
+    snprintf(h, sizeof h, "<p align=\"%s\"><font face=\"$TitleFont\" size=\"%d\" color=\"#%06lX\">%s</font></p>", al, g_size,
              (unsigned long)(g_color & 0xFFFFFF), t);
     gfx_setvar(mv, "_root.mt_clock.htmlText", gv_str(h));
 }
-static void __thiscall hk_menu_upd(char *form, float dt) {
-    o_menuUpd(form, dt);
+// one clock: in the Menu button movie (host 0) or the victory point movie (host 1, Place=top); the other host takes its
+// own off when the place changes while the game runs
+static volatile DWORD g_vpSeen;                   // the victory point panel's last per-frame update (GetTickCount)
+static void clock_frame(char *form, int host) {
     void *mv = gfx_movie_of_form(form);
     if (!mv) return;
     DWORD now = GetTickCount();
     reload_ini(now);
+    // Place=top needs the victory point counter; a match without one (annihilation) gets the clock under the Menu button
+    // (02.11.2026: in such a match there was no clock at all). The next match tries the top again (see "clock hidden").
+    if (!host && g_place == PL_TOP && !g_topFallback && g_enabled && clock_visible() && mt_game_ms() > 4000 && now - g_vpSeen > 3000) {
+        g_topFallback = 1; load_ini(); clock_restyle();
+        logmsg("no victory point counter in this match: the clock under the Menu button");
+    }
+    if (host != (g_place == PL_TOP)) {
+        if (mv == g_clkMovie) {                      // the clock was here: off, the Menu button as the game has it
+            gfx_setvar(mv, "_root.mt_clock._visible", gv_bool(0));
+            gfx_setvar(mv, "_root.mt_clock_sh._visible", gv_bool(0));
+            if (!host) {
+                if (gfx_exists(mv, "menu_btn.mt_plate")) gfx_set_visible(mv, "menu_btn.mt_plate", 0);
+                gfx_setvar(mv, "_root.menu_btn._y", gv_num(-9.6));
+                label_shift(mv, LABEL_X);
+            }
+            g_clkMovie = NULL;
+        }
+        return;
+    }
     int vis = g_enabled && clock_visible();
     if (mv != g_clkMovie || (now - g_clkCheck > 3000 && (g_clkCheck = now, !gfx_exists(mv, "mt_clock")))) {
         g_clkMovie = mv; g_clkCheck = now; g_clkShown = -1; g_clkText[0] = 0;
-        clock_make(mv);
+        if (host) clock_make_top(mv); else clock_make(mv);
     }
     if (vis != g_clkShown) {
         DWORD run = mt_game_ms();
         if (vis) logmsg("clock shown");
-        else if (g_clkShown == 1) logmsg("clock hidden: match %lu:%02lu of game time", run / 60000, run / 1000 % 60);
+        else if (g_clkShown == 1) {
+            logmsg("clock hidden: match %lu:%02lu of game time", run / 60000, run / 1000 % 60);
+            if (g_topFallback) { g_topFallback = 0; load_ini(); }      // the next match: the top again, if it has the counter
+        }
         g_clkShown = vis;
         gfx_setvar(mv, "_root.mt_clock._visible", gv_bool(vis));
         gfx_setvar(mv, "_root.mt_clock_sh._visible", gv_bool(vis && g_shadow));
+        if (plate_on()) gfx_set_visible(mv, "menu_btn.mt_plate", vis);
+        if (g_place == PL_MENU) label_shift(mv, vis ? LABEL_X - LABEL_SHIFT : LABEL_X);   // no time: the label back in the middle
     }
     if (!vis) return;
     DWORD s = mt_game_ms() / 1000; char t[24];
@@ -242,6 +374,9 @@ static void __thiscall hk_menu_upd(char *form, float dt) {
     else snprintf(t, sizeof t, "%02lu:%02lu", s / 60, s % 60);
     if (strcmp(t, g_clkText)) { strcpy(g_clkText, t); clock_text(mv, t); }
 }
+static void __thiscall hk_menu_upd(char *form, float dt) { o_menuUpd(form, dt); clock_frame(form, 0); }
+static MenuUpd_t o_vpUpd;
+static void __thiscall hk_vp_upd(char *form, float dt) { o_vpUpd(form, dt); g_vpSeen = GetTickCount(); clock_frame(form, 1); }
 static void clock_install(void) {
     static volatile LONG done;
     if (InterlockedExchange(&done, 1)) return;
@@ -249,6 +384,9 @@ static void clock_install(void) {
     if (gfx_patch_slot(MENU_VT_UPD, NULLSUB_RET4, (void *)hk_menu_upd)) logmsg("clock: in the game's own Menu button movie (its form's per-frame update)");
     else logmsg("Menu button form not as in DOW2.exe 3.19 (slot %08X = %08lX) - no clock", MENU_VT_UPD,
                 IsBadReadPtr((void *)MENU_VT_UPD, 4) ? 0UL : (unsigned long)*(DWORD *)MENU_VT_UPD);
+    o_vpUpd = (MenuUpd_t)NULLSUB_RET4;
+    if (gfx_patch_slot(VP_VT_UPD, NULLSUB_RET4, (void *)hk_vp_upd)) logmsg("clock: Place=top ready (the victory point panel's per-frame update)");
+    else logmsg("victory point panel form not as in DOW2.exe 3.19 - no Place=top");
 }
 
 // ---------- one match core per game (01.11.2026) ----------
@@ -269,7 +407,7 @@ static int l_online(void) { return (session_flags() & ONLINE_MASK) != 0; }
 static int l_ticking(void) { return g_inMatch && g_ticks && !g_over; }                  // the match runs (past its loading screen)
 static DWORD l_game_ms(void) { return g_play; }
 static long l_ticks(void) { return g_ticks; }
-static float l_ms_per_tick(void) { return g_ticks > 20 && g_play ? (float)g_play / g_ticks : 100.0f; }   // ~100 ms, measured
+static float l_ms_per_tick(void) { return (float)TICK_MS; }   // exact: game time is ticks x TICK_MS
 static void l_add_draw(void *d, void *l, void *r) {
     (void)l; (void)r;
     if (d) logmsg("an older add-on of ours wants to draw through Direct3D: not any more, update it in the launcher");

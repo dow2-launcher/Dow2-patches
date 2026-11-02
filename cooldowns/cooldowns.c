@@ -45,6 +45,7 @@ typedef struct {
     volatile int ready;                              // the latest value said ready (0 or 1), or the button is hidden
     int exact; DWORD exactLeft, exactAt;             // global abilities: game ms left read from the engine at game ms exactAt
     void *uiMovie; char *uiW; int uiShown;           // UI thread: our copy of the count clip made in this movie on this button, seconds in it
+    int ab;                                          // the ability of the latest share (the button update's +0x74)
 } Slot;
 static Slot g_slot[SLOTS];
 static CRITICAL_SECTION g_cs;
@@ -63,8 +64,40 @@ static int slot_of(const char *path) {
 typedef struct { unsigned key; float p0, p; DWORD t0; } Seen;
 static Seen g_seen[64]; static int g_nseen;
 static void cd_share(char *w, float p, unsigned key);
+// One ability button update (0xB9AF80) calls SetProgress once per reason the ability can't be used: the share for a
+// recharge (reasons 0xD / 0xE) and 0 for every other reason - so an ability recharging while its squad lacks the energy
+// got its share and then a 0 in the same frame, and the number (and the game's own dark sweep) went (siritos 02.11).
+// While that update runs the values are only collected (g_cap*); after it the largest share wins (see hk_btnupd).
+static char *volatile g_capW;                        // the button whose update runs now (UI thread), NULL = none
+static float g_capMax, g_capLast; static int g_capN; static float g_capSeq[8];
+static int g_trace;                                  // Cooldowns.ini [Cooldowns] Trace=1: what each update did, in the log
+// Built-like global abilities (the Imperial Guard bunker, siritos 02.11): no recharge share through SetProgress - the
+// update's reason 10 asks the engine (vt+0xCC) and gives the value to another widget of the button (+0x40) through
+// 0x688CD0 (usercall: ESI = that widget, the value on the stack; it fills the widget 0..1). Caught for that widget while
+// the update runs (g_cap10*), turned into the share after it (see hk_btnupd).
+static char *volatile g_capW10; static float g_cap10 = -1;
+void cd_value(char *w, float v, DWORD ret) __asm__("cd_value");
+void cd_value(char *w, float v, DWORD ret) {
+    if (w && w == g_capW10) g_cap10 = v;
+    if (g_trace && w && v > 0.0f && v < 0.999f) {      // where the other fills come from (the bunker's sweep, siritos 02.11)
+        static char *seen[32]; static int n;
+        for (int i = 0; i < n; i++) if (seen[i] == w) return;
+        if (n < 32) seen[n++] = w;
+        const char *p = w + 8;
+        logmsg("trace value %.3f into widget %p \"%.60s\" from %08lX%s", v, (void *)w, !IsBadReadPtr(p, 64) && p[0] == '/' ? p : "?", (unsigned long)ret, w == g_capW10 ? " (reason 10)" : "");
+    }
+}
 void cd_progress(char *w, float p) __asm__("cd_progress");
-void cd_progress(char *w, float p) { cd_share(w, p, 0); }
+void cd_progress(char *w, float p) {
+    if (w && w == g_capW) {
+        if (p > 0.0f && p < 0.999f && p > g_capMax) g_capMax = p;
+        g_capLast = p;
+        if (g_capN < 8) g_capSeq[g_capN] = p;
+        g_capN++;
+        return;
+    }
+    cd_share(w, p, 0);
+}
 static void cd_share(char *w, float p, unsigned key) {
     if (!g_on || !w || !mt_ticking()) return;
     const char *path = w + 0xDD0;
@@ -98,6 +131,77 @@ static void cd_share(char *w, float p, unsigned key) {
 }
 
 void *g_spTramp __asm__("cd_sp_tramp");
+void *g_vTramp __asm__("cd_v_tramp");
+// Trace=1 only: the engine's "go to frame" of a widget clip (0x686890: widget, clip path, frame, flag - all on the stack).
+// Who moves a global ability's sweep that comes through neither SetProgress nor 0x688CD0 (the bunker, siritos 02.11).
+void *g_fTramp __asm__("cd_f_tramp");
+#define SETFRAME_ADDR 0x00686890
+void cd_frame(char *w, const char *path, int frame, DWORD ret) __asm__("cd_frame");
+void cd_frame(char *w, const char *path, int frame, DWORD ret) {
+    (void)w;
+    if (!path || IsBadReadPtr(path, 48) || !memchr(path, 0, 48) || !strstr(path, "global_btn")) return;
+    static struct { DWORD ret; char path[48]; int frame; DWORD t; } seen[24]; static int n;
+    DWORD now = GetTickCount();
+    for (int i = 0; i < n; i++) if (seen[i].ret == ret && !strcmp(seen[i].path, path)) {
+        if (frame != seen[i].frame && now - seen[i].t > 2000) { seen[i].frame = frame; seen[i].t = now; logmsg("trace frame %d of %s from %08lX", frame, path, (unsigned long)ret); }
+        return;
+    }
+    if (n < 24) { seen[n].ret = ret; snprintf(seen[n].path, 48, "%s", path); seen[n].frame = frame; seen[n].t = now; n++; }
+    logmsg("trace frame %d of %s from %08lX (first)", frame, path, (unsigned long)ret);
+}
+// Trace=1 only: every call the engine makes into a HUD movie (GFxMovieView::Invoke, movie vtable +0x48) with a global
+// ability button in its first argument - method, path, the number after it (who draws the bunker's sweep)
+typedef char (__fastcall *Inv_t)(void *mv, void *edx, const char *method, GfxVal *res, const GfxVal *args, unsigned n);
+static Inv_t o_inv; static DWORD *g_invSlot;
+static char __fastcall hk_inv(void *mv, void *edx, const char *method, GfxVal *res, const GfxVal *args, unsigned n) {
+    if (method && args && n >= 1 && args[0].type == GV_STRING && args[0].v.s && !IsBadReadPtr(args[0].v.s, 8) && strstr(args[0].v.s, "global_btn")
+        && strncmp(args[0].v.s, "global_abilities.global_btn0", 28) /* ours: dotted */) {
+        static struct { char m[40], p[48]; DWORD t; double num; } seen[32]; static int cnt;
+        char m[40], p[48]; snprintf(m, sizeof m, "%s", method); snprintf(p, sizeof p, "%s", args[0].v.s);
+        double num = n >= 2 && args[1].type == GV_NUMBER ? args[1].v.num : -1;
+        int i; for (i = 0; i < cnt; i++) if (!strcmp(seen[i].m, m) && !strcmp(seen[i].p, p)) break;
+        DWORD now = GetTickCount();
+        if (i == cnt && cnt < 32) { cnt++; snprintf(seen[i].m, 40, "%s", m); snprintf(seen[i].p, 48, "%s", p); seen[i].t = 0; seen[i].num = -2; }
+        if (i < 32 && (num != seen[i].num) && now - seen[i].t > 2000) {
+            seen[i].t = now; seen[i].num = num;
+            logmsg("trace invoke %s(%s, %s%g) n=%u", m, p, n >= 2 ? (args[1].type == GV_NUMBER ? "" : "type ") : "", n >= 2 ? (args[1].type == GV_NUMBER ? num : (double)args[1].type) : 0.0, n);
+        }
+    }
+    return o_inv(mv, edx, method, res, args, n);
+}
+static void trace_invoke(void *mv) {                 // once, from the first movie we see
+    if (!g_trace || g_invSlot || !mv) return;
+    DWORD *slot = (DWORD *)(*(char **)mv + 0x48), old;
+    if (!VirtualProtect(slot, 4, PAGE_READWRITE, &old)) return;
+    o_inv = (Inv_t)*slot; *slot = (DWORD)hk_inv; g_invSlot = slot;
+    VirtualProtect(slot, 4, old, &old);
+    logmsg("trace: hooked movie Invoke (vtable slot %p)", (void *)slot);
+}
+__attribute__((naked)) static void hk_setframe(void) {
+    __asm__ volatile(
+        "pushal\n\t"
+        "pushl 32(%esp)\n\t"                         // the caller
+        "pushl 48(%esp)\n\t"                         // the frame  ([esp+12] at the call)
+        "pushl 48(%esp)\n\t"                         // the path   ([esp+8])
+        "pushl 48(%esp)\n\t"                         // the widget ([esp+4])
+        "call cd_frame\n\t"
+        "addl $16, %esp\n\t"
+        "popal\n\t"
+        "jmp *cd_f_tramp\n\t");
+}
+#define SETVALUE_ADDR 0x00688CD0
+static const unsigned char SETVALUE_PRO[6] = {0x55, 0x8B, 0xEC, 0x83, 0xE4, 0xF8};   // push ebp; mov ebp,esp; and esp,-8
+__attribute__((naked)) static void hk_setvalue(void) {
+    __asm__ volatile(
+        "pushal\n\t"
+        "pushl 32(%esp)\n\t"                         // the caller
+        "pushl 40(%esp)\n\t"                         // the value (float, [esp+4] at the call)
+        "pushl %esi\n\t"                             // the widget
+        "call cd_value\n\t"
+        "addl $12, %esp\n\t"
+        "popal\n\t"
+        "jmp *cd_v_tramp\n\t");
+}
 __attribute__((naked)) static void hk_setprogress(void) {
     __asm__ volatile(
         "pushal\n\t"
@@ -126,7 +230,8 @@ static int cd_seconds(Slot *b, DWORD now, DWORD gt) {       // seconds left to s
     if (b->exact) left = (float)b->exactLeft - (float)(gt - b->exactAt);   // global ability: read, not guessed
     else {
         float rate = (b->p - b->p0) / (float)(b->t - b->t0);                 // share per sim tick
-        left = (1.0f - b->p) / rate * mt_ms_per_tick();
+        // from the latest share on: ticks without one (the squad busy, see cd_hold) count down too
+        left = ((1.0f - b->p) / rate - (float)((DWORD)mt_ticks() - b->t)) * mt_ms_per_tick();
     }
     if (left < 0) left = 0;
     int sec = (int)((left + 999.0f) / 1000.0f);
@@ -188,11 +293,84 @@ static void cd_show(int s, char *w) {
 #define BTNUPD_FN   0x00B9AF80
 typedef void (__fastcall *BtnUpd_t)(char *btn, void *edx, char *ctx);
 static BtnUpd_t o_btnupd;
+// The game's own SetProgress (usercall: EAX = the button, the share on the stack, ret 4 - as the game calls it at
+// 0x6886E0), through our trampoline: the original code, not our hook
+static void set_progress(char *w, float p) {
+    void *fn = g_spTramp; if (!fn || !w) return;
+    DWORD bits; memcpy(&bits, &p, 4);                 // the float as it lies on the stack
+    __asm__ volatile("pushl %[p]\n\t call *%[f]\n\t"  // the callee takes it off (ret 4)
+                     : "+a"(w) : [p] "g"(bits), [f] "c"(fn) : "edx", "memory", "cc");
+}
+// The end of each ability's recharge as we last saw it (siritos 02.11): the game sends only 0s for a recharging ability while
+// another reason stands (no energy, the squad busy) - no share, its own sweep gone too. The 0s don't end the recharge here:
+// it ends at the tick worked out from the shares seen. Kept per ability, so another squad's button in between (a hidden
+// button, another selection) doesn't lose it either. Nothing is asked of the game: only what came through SetProgress.
+typedef struct { int ab; float end, total; } Mem;  // sim ticks: when it ends, how long the whole recharge is
+static Mem g_mem[32]; static int g_nmem;
+static Mem *mem_of(int ability, int make) {
+    for (int i = 0; i < g_nmem; i++) if (g_mem[i].ab == ability) return &g_mem[i];
+    if (!make) return NULL;
+    Mem *m = &g_mem[g_nmem < 32 ? g_nmem++ : (unsigned)ability % 32]; m->ab = ability; m->end = m->total = 0; return m;
+}
+// a share came: this button follows it again (not the remembered end), and the end of the recharge is remembered
+static void cd_mark(char *w, int ability) {
+    const char *path = w + 0xDD0; int s;
+    if (!ability || IsBadReadPtr(path, 16) || path[0] != '/' || (s = slot_of(path)) < 0) return;
+    EnterCriticalSection(&g_cs);
+    Slot *b = &g_slot[s];
+    if (b->w == w) {
+        b->ab = ability; b->exact = 0;
+        if (b->t > b->t0 && b->p > b->p0) {
+            float rate = (b->p - b->p0) / (float)(b->t - b->t0);
+            Mem *m = mem_of(ability, 1); m->end = (float)b->t + (1.0f - b->p) / rate; m->total = 1.0f / rate;
+        }
+    }
+    LeaveCriticalSection(&g_cs);
+}
+// only 0s in this update: a remembered recharge of this ability that isn't over yet goes on - seconds from its end, the
+// game's sweep put back. 1 = held.
+static int cd_hold(char *w, int ability) {
+    const char *path = w + 0xDD0; int s;
+    if (!ability || !mt_ticking() || IsBadReadPtr(path, 16) || path[0] != '/' || (s = slot_of(path)) < 0) return 0;
+    float now = (float)mt_ticks(), p = -1;
+    EnterCriticalSection(&g_cs);
+    Mem *m = mem_of(ability, 0);
+    if (m && m->total > 0 && m->end > now) {
+        Slot *b = &g_slot[s];
+        if (b->w != w) { b->w = w; b->shown = 0; }
+        b->ready = 0; b->exact = 1; b->seen = GetTickCount(); b->ab = ability;
+        b->exactLeft = (DWORD)((m->end - now) * mt_ms_per_tick()); b->exactAt = mt_game_ms();
+        p = 1.0f - (m->end - now) / m->total;
+    }
+    LeaveCriticalSection(&g_cs);
+    if (p < 0) return 0;
+    set_progress(w, p < 0.001f ? 0.001f : p);
+    return 1;
+}
 static void __fastcall hk_btnupd(char *btn, void *edx, char *ctx) {
+    char *w0 = btn ? *(char **)(btn + 0x28) : NULL;
+    g_capMax = 0; g_capLast = -1; g_capN = 0; g_capW = g_on ? w0 : NULL;
+    g_cap10 = -1; g_capW10 = g_on && btn ? *(char **)(btn + 0x40) : NULL;
     o_btnupd(btn, edx, ctx);
+    g_capW = NULL; g_capW10 = NULL;
     if (!g_on || !btn) return;
     char *w = *(char **)(btn + 0x28); int ability = *(int *)(btn + 0x74);
     if (!w) return;
+    if (g_trace && !g_invSlot) trace_invoke(gfx_movie_of_widget(w));
+    if (w == w0 && g_capN) {
+        // a recharge share in this update wins over the 0 of another reason after it (no energy...): the number stays, and
+        // the game's own sweep too - its 0 is put back to the share (the ability stays unusable, the button dark as before)
+        int held = 0;
+        if (g_capMax > 0) { cd_share(w, g_capMax, 0); cd_mark(w, ability); if (g_capLast != g_capMax) set_progress(w, g_capMax); }
+        else if (g_cap10 > 0.0f && g_cap10 < 0.999f) { cd_share(w, g_cap10, 0); cd_mark(w, ability); }   // reason 10 (the bunker)
+        else if (!(held = cd_hold(w, ability))) cd_share(w, g_capLast, 0);
+        if (g_trace) {
+            static char last[SLOTS][64]; const char *path = w + 0xDD0; int s = !IsBadReadPtr(path, 16) && path[0] == '/' ? slot_of(path) : -1;
+            char seq[64] = ""; if (g_cap10 >= 0) snprintf(seq, sizeof seq, "v%.2f:", g_cap10); int n = g_capN < 8 ? g_capN : 8;
+            for (int i = 0; i < n; i++) snprintf(seq + strlen(seq), sizeof seq - strlen(seq), "%s%s", i ? "," : "", g_capSeq[i] <= 0 ? "0" : g_capSeq[i] >= 0.999f ? "1" : "s");
+            if (s >= 0 && strcmp(last[s], seq)) { strcpy(last[s], seq); logmsg("trace %s ability %p: SetProgress %s (largest share %.3f)%s%s", path, (void *)(UINT_PTR)ability, seq, g_capMax, g_capMax > 0 && g_capLast != g_capMax ? " - share put back" : "", held ? " - held" : ""); }
+        }
+    }
     if (!ability || *(w + 0x209) != 1) cd_progress(w, 0.0f);         // no ability or the button is hidden: no number
     // after the match (no sim ticks) cd_show takes a number still there off
     const char *path = w + 0xDD0; int s;
@@ -218,6 +396,14 @@ static void __fastcall hk_globupd(char *btn, void *edx, char *ctx) {
     char *ent = ctx && mt_ticking() ? *(char **)(ctx + 0x10) : NULL;
     void *ec = ent ? *(void **)(ent + 0x3C) : NULL; QI_t qi = *(QI_t *)IAT_QI;
     char *ext = ec && qi ? qi(ec, 1) : NULL;
+    if (g_trace && ent) {                            // the drop bunker (siritos 02.11): where its recharge is, if anywhere
+        static void *lastEnt[SLOTS]; static int lastLeft[SLOTS];
+        int left = ext ? *(int *)(ext + 0x14) : -1;
+        if (lastEnt[s] != ent || (left > 0) != (lastLeft[s] > 0)) {
+            lastEnt[s] = ent; lastLeft[s] = left;
+            logmsg("trace %s: entity %p controller %p extension 1 %p, ticks left %d", path, (void *)ent, ec, (void *)ext, left);
+        }
+    }
     if (ext) {
         int left = *(int *)(ext + 0x14);
         EnterCriticalSection(&g_cs);
@@ -248,13 +434,32 @@ static void install(void) {
     if (IsBadReadPtr(t, 9) || memcmp(t, SETPROGRESS_PRO, 9)) {
         logmsg("DOW2.exe differs at %08X: no cooldown numbers", SETPROGRESS_ADDR); g_on = 0; return;
     }
-    unsigned char *tr = VirtualAlloc(NULL, 32, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
+    unsigned char *tr = VirtualAlloc(NULL, 64, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
     memcpy(tr, SETPROGRESS_PRO, 9); tr[9] = 0xE9; *(DWORD *)(tr + 10) = (SETPROGRESS_ADDR + 9) - (DWORD)(tr + 14);
     g_spTramp = tr;
     DWORD old; VirtualProtect(t, 9, PAGE_EXECUTE_READWRITE, &old);
     t[0] = 0xE9; *(DWORD *)(t + 1) = (DWORD)hk_setprogress - (DWORD)(t + 5); t[5] = t[6] = t[7] = t[8] = 0x90;
     VirtualProtect(t, 9, old, &old); FlushInstructionCache(GetCurrentProcess(), t, 9);
     logmsg("hooked button SetProgress at %08X", SETPROGRESS_ADDR);
+    unsigned char *v = (unsigned char *)SETVALUE_ADDR;
+    if (!g_trace) return;                                         // the bunker: not solved, its probes only with Trace=1
+    if (IsBadReadPtr(v, 6) || memcmp(v, SETVALUE_PRO, 6)) { logmsg("DOW2.exe differs at %08X: no numbers for reason-10 buttons (the bunker)", SETVALUE_ADDR); return; }
+    unsigned char *tv = tr + 16;
+    memcpy(tv, SETVALUE_PRO, 6); tv[6] = 0xE9; *(DWORD *)(tv + 7) = (SETVALUE_ADDR + 6) - (DWORD)(tv + 11);
+    g_vTramp = tv;
+    VirtualProtect(v, 6, PAGE_EXECUTE_READWRITE, &old);
+    v[0] = 0xE9; *(DWORD *)(v + 1) = (DWORD)hk_setvalue - (DWORD)(v + 5); v[5] = 0x90;
+    VirtualProtect(v, 6, old, &old); FlushInstructionCache(GetCurrentProcess(), v, 6);
+    logmsg("hooked widget value at %08X (reason 10)", SETVALUE_ADDR);
+    unsigned char *f = (unsigned char *)SETFRAME_ADDR;            // same prologue as 0x688CD0
+    if (!g_trace || IsBadReadPtr(f, 6) || memcmp(f, SETVALUE_PRO, 6)) return;
+    unsigned char *tf = tr + 32;
+    memcpy(tf, SETVALUE_PRO, 6); tf[6] = 0xE9; *(DWORD *)(tf + 7) = (SETFRAME_ADDR + 6) - (DWORD)(tf + 11);
+    g_fTramp = tf;
+    VirtualProtect(f, 6, PAGE_EXECUTE_READWRITE, &old);
+    f[0] = 0xE9; *(DWORD *)(f + 1) = (DWORD)hk_setframe - (DWORD)(f + 5); f[5] = 0x90;
+    VirtualProtect(f, 6, old, &old); FlushInstructionCache(GetCurrentProcess(), f, 6);
+    logmsg("trace: hooked clip frames at %08X", SETFRAME_ADDR);
 }
 
 // called by LobbyStats once: dir = its folder (with a trailing backslash), ini = its ini file
@@ -269,7 +474,9 @@ void cd_start(const wchar_t *dir, const wchar_t *ini) {
     if (g_size < 12) g_size = 12; if (g_size > 40) g_size = 40;
     wchar_t c[16]; GetPrivateProfileStringW(L"Cooldowns", L"Color", L"FFFFFF", c, 16, ini);
     g_color = wcstoul(c, NULL, 16) & 0xFFFFFF;
-    logmsg("Cooldowns 3 (%s): the numbers in the game's own button movie, no Direct3D", g_on ? "on" : "off, [Cooldowns] Enabled=0");
+    g_trace = GetPrivateProfileIntW(L"Cooldowns", L"Trace", 0, ini);
+    logmsg("Cooldowns 5 (%s): the numbers in the game's own button movie, no Direct3D; a recharge share wins over the 0 of another reason%s",
+           g_on ? "on" : "off, [Cooldowns] Enabled=0", g_trace ? "; Trace=1" : "");
     if (!g_on) return;
     InitializeCriticalSection(&g_cs);
     install(); if (g_on) install_btnupd();
