@@ -70,13 +70,13 @@ static void load_ini(void) {
     g_size       = ini_int(L"FontSize", g_place == PL_MENU ? 17 : g_place == PL_UNDER ? 18 : 20, 10, 40);
     g_shadow     = ini_int(L"Shadow", 1, 0, 1);
     g_onlineOnly = ini_int(L"OnlineOnly", 0, 0, 1);
-    g_color      = ini_color(L"Color", L"CAF9FF");
+    g_color      = ini_color(L"Color", g_place == PL_TOP ? L"FFFFFF" : L"CAF9FF");   // top: white like the score
     g_plate      = ini_int(L"Plate", 1, 0, 1);
     g_gap        = ini_int(L"Gap", g_place == PL_LEFT ? 6 : 2, -40, 200);
     g_width      = ini_int(L"Width", g_place == PL_LEFT ? 184 : 100, 40, 400);
     g_height     = ini_int(L"Height", g_place == PL_LEFT ? 48 : 34, 16, 100);
-    g_offX       = ini_int(L"OffsetX", 0, -400, 400);
-    g_offY       = ini_int(L"OffsetY", 0, -200, 200);
+    g_offX       = ini_int(L"OffsetX", g_place == PL_TOP ? -2 : 0, -400, 400);
+    g_offY       = ini_int(L"OffsetY", g_place == PL_TOP ? 3 : 0, -200, 200);
     g_raise      = ini_int(L"Raise", g_place == PL_UNDER ? 8 : 0, 0, 20);
     g_textY      = ini_int(L"TextY", 3, -30, 30);
     g_plateAlpha = ini_int(L"PlateAlpha", 85, 0, 100);
