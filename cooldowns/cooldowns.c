@@ -1,5 +1,6 @@
 // cooldowns.c - seconds left on recharging abilities and global abilities, in the middle of the button over the game's
-// own dark recharge sweep. Built into LobbyStats.dll (it owns the one Direct3D hook, matchtimer.c with MT_EMBED).
+// own dark recharge sweep. Cooldowns.dll (cooldowns_main.c; the match state from matchtimer.c with MT_EMBED).
+// cooldowns-3 (02.11.2026): the number is the button's own text in the game's own movie, no Direct3D (see "the number").
 //
 // How the game shows a recharge (found with a probe on 2026-10-29, DOW2.exe 3.19 + Elite 3.2):
 //   the HUD buttons (ability_btn00..06 of the selection panel 0xB9AF80, global_abilities/global_btn00.. of 0xB5B850) are
@@ -9,12 +10,9 @@
 //   global abilities: 1 - ticks left / recharge ticks, 1 = ready.
 // We only read: a detour on SetProgress keeps the latest share of each button and the game time it came at (game ms of
 // matchtimer.c, pauses not counted); the share grows evenly with game time, so two samples give the rate and the rate
-// the seconds left. The button's place on the screen comes from the game's GetBounds 0x6859E0 (widget, clip path,
-// float out[4] = x0 x1 y0 y1, 2 = window pixels), asked on the UI thread inside the detour, once a second per button.
+// the seconds left.
 // Nothing in the simulation is touched: no desync, the other players don't need it.
-#define COBJMACROS
 #include <windows.h>
-#include <d3d9.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdarg.h>
@@ -22,11 +20,9 @@
 
 #define SETPROGRESS_ADDR 0x00688620
 static const unsigned char SETPROGRESS_PRO[9] = {0x51, 0xF3, 0x0F, 0x10, 0x05, 0x98, 0xDF, 0x07, 0x01};   // push ecx; movss xmm0,[0x0107DF98]
-#define GETBOUNDS_ADDR   0x006859E0
-static const unsigned char GETBOUNDS_PRO[2] = {0x6A, 0xFF};                                               // push -1
-typedef int (__stdcall *GetBounds_t)(void *widget, const char *path, float *out, int mode);   // callee pops its 4 arguments (ret 0x10): declared __cdecl (0.9.0) it shifted our stack by 16 bytes - the crash when a button first showed a recharge
 
 DWORD mt_game_ms(void); int mt_ticking(void); float mt_ms_per_tick(void); long mt_ticks(void);
+#include "../common/gfxui.h"
 
 static wchar_t g_log[MAX_PATH];
 static void logmsg(const char *fmt, ...) {
@@ -35,9 +31,9 @@ static void logmsg(const char *fmt, ...) {
     va_list a; va_start(a, fmt); vfprintf(f, fmt, a); va_end(a); fputc('\n', f); fclose(f);
 }
 
-// ---------- settings: LobbyStats.ini, [Cooldowns] ----------
-static int g_on = 1, g_size = 29;                   // Size: height of the digits' line in px at 1440 (scaled by the screen height)
-static DWORD g_color = 0xFFFFF8F0;                   // the clock's colour
+// ---------- settings: Cooldowns.ini, [Cooldowns] ----------
+static int g_on = 1, g_size = 26;                   // DigitSize: height of the digits in the button's own units (it is 64; the game's count is 16)
+static DWORD g_color = 0xFFFFFF;                     // RRGGBB; white = the game's own colour of the count, left as it is
 
 // ---------- per button: the latest share and the rate ----------
 #define SLOTS 24                                     // 0..15 ability_btnNN, 16..23 global_btnNN
@@ -48,7 +44,7 @@ typedef struct {
     int shown;                                       // seconds on the screen: within one recharge they only go down
     volatile int ready;                              // the latest value said ready (0 or 1), or the button is hidden
     int exact; DWORD exactLeft, exactAt;             // global abilities: game ms left read from the engine at game ms exactAt
-    DWORD boundsAt; float x0, x1, y0, y1; int haveBounds;
+    void *uiMovie; char *uiW; int uiShown;           // UI thread: our copy of the count clip made in this movie on this button, seconds in it
 } Slot;
 static Slot g_slot[SLOTS];
 static CRITICAL_SECTION g_cs;
@@ -99,14 +95,6 @@ static void cd_share(char *w, float p, unsigned key) {
     }
     b->p = p; b->t = gt; b->seen = now;
     LeaveCriticalSection(&g_cs);
-    if (!b->haveBounds || now - b->boundsAt > 1000) {                           // place of the button, UI thread
-        float o[4] = {0, 0, 0, 0};
-        int ok = ((GetBounds_t)GETBOUNDS_ADDR)(w, path, o, 2);
-        EnterCriticalSection(&g_cs);
-        b->boundsAt = now;
-        if (ok && o[1] > o[0] + 4 && o[3] > o[2] + 4) { b->x0 = o[0]; b->x1 = o[1]; b->y0 = o[2]; b->y1 = o[3]; b->haveBounds = 1; }
-        LeaveCriticalSection(&g_cs);
-    }
 }
 
 void *g_spTramp __asm__("cd_sp_tramp");
@@ -121,21 +109,94 @@ __attribute__((naked)) static void hk_setprogress(void) {
         "jmp *cd_sp_tramp\n\t");
 }
 
+// ---------- the number: the button's own "count" clip, copied (cooldowns-3, 02.11.2026: no Direct3D) ----------
+// Every ability and global ability button of selection_panel.gfx has a "count" clip with a text field "count_text" (the
+// game's 16 px digits with their shadow, bottom right; the game uses it for charges). On the first number of a button we
+// ask the movie itself (Receive_DuplicateMovieClip) for a copy of it, "mt_cd", inside the same button and over the rest
+// of it, then move it to the middle and scale it (Receive_SetMovieClipPosition/Scale); its text field is centred
+// (autoSize). The seconds go in with Receive_SetText, away with Receive_SetVisible - the same calls the game makes.
+// A clip without mouse handlers takes no clicks: the button and its tooltip work as before. All of it from the button
+// updates below, on the game's UI thread; widget + 8 is the button's path ("/ability_btn01",
+// "/global_abilities/global_btn00"), the movie comes from its form (common/gfxui.h).
+static int cd_seconds(Slot *b, DWORD now, DWORD gt) {       // seconds left to show, 0 = none (under g_cs)
+    if (!b->w || b->ready || now - b->seen > GONE_MS) return 0;
+    if (IsBadReadPtr((char *)b->w + 0x209, 1) || *((char *)b->w + 0x209) != 1) return 0;   // the button is not on the screen
+    if (!b->exact && (b->t - b->t0 < 1 || b->p <= b->p0)) return 0;                        // the rate isn't known yet (one sim tick)
+    float left;
+    if (b->exact) left = (float)b->exactLeft - (float)(gt - b->exactAt);   // global ability: read, not guessed
+    else {
+        float rate = (b->p - b->p0) / (float)(b->t - b->t0);                 // share per sim tick
+        left = (1.0f - b->p) / rate * mt_ms_per_tick();
+    }
+    if (left < 0) left = 0;
+    int sec = (int)((left + 999.0f) / 1000.0f);
+    if (sec <= 0 || sec > 3600) return 0;
+    if (!b->shown || sec < b->shown || sec > b->shown + 2) b->shown = sec;    // no jumping back and forth by a second
+    return b->shown;
+}
+static void cd_show(int s, char *w) {
+    Slot *b = &g_slot[s];
+    DWORD now = GetTickCount();
+    EnterCriticalSection(&g_cs);
+    int sec = b->w == w && mt_ticking() ? cd_seconds(b, now, mt_game_ms()) : 0;
+    LeaveCriticalSection(&g_cs);
+    if (!sec && (b->uiW != w || !b->uiShown)) return;          // nothing on this button and nothing to take off
+    void *mv = gfx_movie_of_widget(w);
+    const char *wp = w + 8;
+    if (!mv || IsBadReadPtr(wp, 48) || wp[0] != '/' || !memchr(wp, 0, 48)) return;
+    char dot[64], p[96];                                       // "/global_abilities/global_btn00" -> "global_abilities.global_btn00"
+    snprintf(dot, sizeof dot, "%s", wp + 1);
+    for (char *c = dot; *c; c++) if (*c == '/') *c = '.';
+    if (b->uiMovie != mv || b->uiW != w) {                     // first number on this button (in this HUD): the copy
+        if (!sec) return;
+        b->uiMovie = mv; b->uiW = w; b->uiShown = 0;
+        snprintf(p, sizeof p, "%s.mt_cd", dot);
+        if (!gfx_exists(mv, p)) {
+            char src[96]; snprintf(src, sizeof src, "%s/count", wp);
+            GfxVal a[2] = { gv_str(src), gv_str("mt_cd") }, r; memset(&r, 0, sizeof r);
+            gfx_invoke(mv, "Receive_DuplicateMovieClip", &r, a, 2);
+            if (r.type != GV_BOOL || !r.v.b) { logmsg("%s: no count clip to copy - no number on this button", wp); b->uiMovie = NULL; return; }
+            // count_text sits in its clip at -24.5..0 x -17.5..7.9: its centre, scaled, onto the button's (64 x 64)
+            double k = g_size / 16.0;
+            GfxVal pa[3] = { gv_str(p), gv_num(32 + 12.2 * k), gv_num(32 + 4.8 * k) }, sa[3] = { gv_str(p), gv_num(k), gv_num(k) };
+            gfx_invoke(mv, "Receive_SetMovieClipPosition", NULL, pa, 3);
+            gfx_invoke(mv, "Receive_SetMovieClipScale", NULL, sa, 3);
+            snprintf(p, sizeof p, "_root.%s.mt_cd.count_text.autoSize", dot); gfx_setvar(mv, p, gv_str("center"));
+            if (g_color != 0xFFFFFF) {
+                snprintf(p, sizeof p, "%s.mt_cd.count_text", dot);
+                GfxVal ca[2] = { gv_str(p), gv_num(g_color) }; gfx_invoke(mv, "Receive_SetTextColor", NULL, ca, 2);
+            }
+            logmsg("%s: number in the button's own count clip (copied as mt_cd)", wp);
+        }
+    }
+    if (sec == b->uiShown) return;
+    char t[16];
+    if (sec < 100) snprintf(t, sizeof t, "%d", sec); else snprintf(t, sizeof t, "%d:%02d", sec / 60, sec % 60);
+    if (sec) { snprintf(p, sizeof p, "%s.mt_cd.count_text", dot); gfx_set_text(mv, p, t); }
+    if (!sec != !b->uiShown) { snprintf(p, sizeof p, "%s.mt_cd", dot); gfx_set_visible(mv, p, sec != 0); }
+    b->uiShown = sec;
+}
+
 // The selection panel's ability button update (virtual, slot 0x0111AFBC = 0xB9AF80; this = the button's slot struct,
 // +0x28 the button widget, +0x74 the ability). The panel works out the owner and the reasons the ability can't be used
 // itself (0xB9DA80) and asks for the share done only for a recharge (reasons 0xD/0xE); that share reaches us through
 // SetProgress above. We ask the engine nothing here: 0.9.0 asked vt+0xB4 for the share of every button with the owner
 // cached in the button (+0x2A8) and crashed the game on abilities without a recharge (the cultists' prayer on W); asking
-// vt+0xB0 with that owner crashed it too. After the update we only take the number off a hidden or empty button.
+// vt+0xB0 with that owner crashed it too. After the update we take the number off a hidden or empty button and put the
+// seconds into the button (cd_show).
 #define BTNUPD_SLOT 0x0111AFBC
 #define BTNUPD_FN   0x00B9AF80
 typedef void (__fastcall *BtnUpd_t)(char *btn, void *edx, char *ctx);
 static BtnUpd_t o_btnupd;
 static void __fastcall hk_btnupd(char *btn, void *edx, char *ctx) {
     o_btnupd(btn, edx, ctx);
-    if (!g_on || !btn || !mt_ticking()) return;
+    if (!g_on || !btn) return;
     char *w = *(char **)(btn + 0x28); int ability = *(int *)(btn + 0x74);
-    if (w && (!ability || *(w + 0x209) != 1)) cd_progress(w, 0.0f);   // no ability or the button is hidden: no number
+    if (!w) return;
+    if (!ability || *(w + 0x209) != 1) cd_progress(w, 0.0f);         // no ability or the button is hidden: no number
+    // after the match (no sim ticks) cd_show takes a number still there off
+    const char *path = w + 0xDD0; int s;
+    if (!IsBadReadPtr(path, 16) && path[0] == '/' && (s = slot_of(path)) >= 0) cd_show(s, w);
 }
 // Global abilities: their panel's button update (virtual, slot 0x01118B4C = 0xB5B850; this = the button's slot struct,
 // +0x28 the widget, arg +0x10 the ability's entity) takes the entity's extension 1 (EntityController::QI through the import
@@ -148,20 +209,24 @@ typedef void *(__thiscall *QI_t)(void *controller, unsigned id);
 static BtnUpd_t o_globupd;
 static void __fastcall hk_globupd(char *btn, void *edx, char *ctx) {
     o_globupd(btn, edx, ctx);
-    if (!g_on || !btn || !ctx || !mt_ticking()) return;
-    char *w = *(char **)(btn + 0x28), *ent = *(char **)(ctx + 0x10);
-    if (!w || !ent) return;
-    void *ec = *(void **)(ent + 0x3C); QI_t qi = *(QI_t *)IAT_QI;
-    char *ext = ec && qi ? qi(ec, 1) : NULL;
-    if (!ext) return;
+    if (!g_on || !btn) return;
+    char *w = *(char **)(btn + 0x28);
+    if (!w) return;
     const char *path = w + 0xDD0;
     if (IsBadReadPtr(path, 16) || path[0] != '/') return;
-    int s = slot_of(path), left = *(int *)(ext + 0x14); if (s < 0) return;
-    EnterCriticalSection(&g_cs);
-    Slot *b = &g_slot[s];
-    if (left > 0) { b->exact = 1; b->exactLeft = (DWORD)(left * mt_ms_per_tick()); b->exactAt = mt_game_ms(); }
-    else b->exact = 0;
-    LeaveCriticalSection(&g_cs);
+    int s = slot_of(path); if (s < 0) return;
+    char *ent = ctx && mt_ticking() ? *(char **)(ctx + 0x10) : NULL;
+    void *ec = ent ? *(void **)(ent + 0x3C) : NULL; QI_t qi = *(QI_t *)IAT_QI;
+    char *ext = ec && qi ? qi(ec, 1) : NULL;
+    if (ext) {
+        int left = *(int *)(ext + 0x14);
+        EnterCriticalSection(&g_cs);
+        Slot *b = &g_slot[s];
+        if (left > 0) { b->exact = 1; b->exactLeft = (DWORD)(left * mt_ms_per_tick()); b->exactAt = mt_game_ms(); }
+        else b->exact = 0;
+        LeaveCriticalSection(&g_cs);
+    }
+    cd_show(s, w);
 }
 static void install_btnupd(void) {
     DWORD *gs = (DWORD *)GLOBUPD_SLOT, go;
@@ -178,168 +243,10 @@ static void install_btnupd(void) {
     logmsg("hooked ability button update (vtable %08X): hidden buttons cleared, no engine queries", BTNUPD_SLOT);
 }
 
-// ---------- drawing (EndScene of matchtimer.c, through LobbyStats' ls_draw) ----------
-typedef struct ID3DXSprite ID3DXSprite;
-typedef struct {
-    HRESULT (WINAPI *QueryInterface)(ID3DXSprite *, REFIID, void **);
-    ULONG   (WINAPI *AddRef)(ID3DXSprite *);
-    ULONG   (WINAPI *Release)(ID3DXSprite *);
-    void *GetDevice, *GetTransform, *SetTransform, *SetWorldViewRH, *SetWorldViewLH;
-    HRESULT (WINAPI *Begin)(ID3DXSprite *, DWORD flags);
-    HRESULT (WINAPI *Draw)(ID3DXSprite *, IDirect3DTexture9 *, const RECT *src, const float *center, const float *pos, D3DCOLOR);
-    void *Flush;
-    HRESULT (WINAPI *End)(ID3DXSprite *);
-    HRESULT (WINAPI *OnLostDevice)(ID3DXSprite *);
-    HRESULT (WINAPI *OnResetDevice)(ID3DXSprite *);
-} ID3DXSpriteVtbl;
-struct ID3DXSprite { ID3DXSpriteVtbl *lpVtbl; };
-typedef struct ID3DXFont ID3DXFont;
-typedef struct {
-    HRESULT (WINAPI *QueryInterface)(ID3DXFont *, REFIID, void **);
-    ULONG   (WINAPI *AddRef)(ID3DXFont *);
-    ULONG   (WINAPI *Release)(ID3DXFont *);
-    void *GetDevice, *GetDescA, *GetDescW, *GetTextMetricsA, *GetTextMetricsW, *GetDC, *GetGlyphData;
-    void *PreloadCharacters, *PreloadGlyphs, *PreloadTextA, *PreloadTextW;
-    INT     (WINAPI *DrawTextA)(ID3DXFont *, ID3DXSprite *, const char *, INT, RECT *, DWORD format, D3DCOLOR);
-    void *DrawTextW;
-    HRESULT (WINAPI *OnLostDevice)(ID3DXFont *);
-    HRESULT (WINAPI *OnResetDevice)(ID3DXFont *);
-} ID3DXFontVtbl;
-struct ID3DXFont { ID3DXFontVtbl *lpVtbl; };
-typedef HRESULT (WINAPI *D3DXCreateFontA_t)(IDirect3DDevice9 *, INT height, UINT width, UINT weight, UINT miplevels, BOOL italic,
-    DWORD charset, DWORD prec, DWORD quality, DWORD pitchfam, const char *face, ID3DXFont **out);
-typedef HRESULT (WINAPI *D3DXCreateSprite_t)(IDirect3DDevice9 *, ID3DXSprite **out);
-static D3DXCreateFontA_t p_CreateFont; static D3DXCreateSprite_t p_CreateSprite;
-#define D3DXSPRITE_ALPHABLEND 0x10
-#include "../common/gamefont.h"
-static GameFont g_gf = { "0123456789:" };            // the digits in the game's Caslon Antique New
-static volatile int g_ready;
-static ID3DXSprite *g_sprite; static ID3DXFont *g_font; static IDirect3DDevice9 *g_dev; static int g_fontPx, g_lost;
-
-static int on_back_buffer(IDirect3DDevice9 *dev, int *w, int *h) {
-    IDirect3DSurface9 *bb = NULL, *rt = NULL; D3DSURFACE_DESC d; int ok = 0;
-    if (SUCCEEDED(IDirect3DDevice9_GetBackBuffer(dev, 0, 0, D3DBACKBUFFER_TYPE_MONO, &bb)) && bb) {
-        if (SUCCEEDED(IDirect3DDevice9_GetRenderTarget(dev, 0, &rt)) && rt) {
-            if (rt == bb && SUCCEEDED(IDirect3DSurface9_GetDesc(bb, &d))) { *w = d.Width; *h = d.Height; ok = 1; }
-            IDirect3DSurface9_Release(rt);
-        }
-        IDirect3DSurface9_Release(bb);
-    }
-    return ok;
-}
-static int ensure(IDirect3DDevice9 *dev, int px) {
-    if (g_dev != dev) {
-        if (g_sprite) { g_sprite->lpVtbl->Release(g_sprite); g_sprite = NULL; }
-        if (g_font) { g_font->lpVtbl->Release(g_font); g_font = NULL; }
-        g_dev = dev; g_fontPx = 0;
-        if (FAILED(p_CreateSprite(dev, &g_sprite))) { g_sprite = NULL; logmsg("sprite failed"); }
-    }
-    if (!g_sprite) return 0;
-    if (gf_ready(&g_gf, dev, px)) return 1;
-    if (g_fontPx != px) {                            // no game font: Windows Book Antiqua, bold
-        if (g_font) { g_font->lpVtbl->Release(g_font); g_font = NULL; }
-        g_fontPx = px;
-        if (FAILED(p_CreateFont(dev, px, 0, FW_BOLD, 1, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, ANTIALIASED_QUALITY,
-                                DEFAULT_PITCH | FF_DONTCARE, "Book Antiqua", &g_font))) g_font = NULL;
-    }
-    return g_font != NULL;
-}
-static void text(const char *t, RECT *r, DWORD c, int game) {
-    if (game) gf_draw(&g_gf, g_sprite, t, r, DT_CENTER | DT_VCENTER, c);
-    else g_font->lpVtbl->DrawTextA(g_font, g_sprite, t, -1, r, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOCLIP, c);
-}
-void cd_draw(IDirect3DDevice9 *dev) {
-    if (!g_on || !g_ready || g_lost || !mt_ticking()) return;
-    int W, H; if (!on_back_buffer(dev, &W, &H)) return;
-    D3DDEVICE_CREATION_PARAMETERS cp; RECT cr;
-    float sx = 1, sy = 1;                            // window pixels (GetBounds) -> back buffer pixels
-    if (SUCCEEDED(IDirect3DDevice9_GetCreationParameters(dev, &cp)) && cp.hFocusWindow && GetClientRect(cp.hFocusWindow, &cr) && cr.right > 0 && cr.bottom > 0) {
-        sx = (float)W / cr.right; sy = (float)H / cr.bottom;
-    }
-    struct { RECT r; char t[8]; } item[SLOTS]; int n = 0;
-    DWORD gt = mt_game_ms();
-    DWORD now = GetTickCount();
-    EnterCriticalSection(&g_cs);
-    for (int s = 0; s < SLOTS; s++) {
-        Slot *b = &g_slot[s];
-        if (!b->w || !b->haveBounds || b->ready || now - b->seen > GONE_MS) continue;
-        // the game hides a button with no ability for the new selection and stops updating it: gone in this frame
-        if (IsBadReadPtr((char *)b->w + 0x209, 1) || *((char *)b->w + 0x209) != 1) continue;      // not recharging or not on screen now
-        if (!b->exact && (b->t - b->t0 < 1 || b->p <= b->p0)) continue;          // the rate isn't known yet (one sim tick)
-        float left;
-        if (b->exact) left = (float)b->exactLeft - (float)(gt - b->exactAt);   // global ability: read, not guessed
-        else {
-            float rate = (b->p - b->p0) / (float)(b->t - b->t0);                 // share per sim tick
-            left = (1.0f - b->p) / rate * mt_ms_per_tick();
-        }
-        if (left < 0) left = 0;
-        int sec = (int)((left + 999.0f) / 1000.0f);
-        if (sec <= 0 || sec > 3600) continue;
-        if (!b->shown || sec < b->shown || sec > b->shown + 2) b->shown = sec;    // no jumping back and forth by a second
-        sec = b->shown;
-        if (sec < 100) sprintf(item[n].t, "%d", sec); else sprintf(item[n].t, "%d:%02d", sec / 60, sec % 60);
-        item[n].r.left = (LONG)(b->x0 * sx); item[n].r.right = (LONG)(b->x1 * sx);
-        item[n].r.top = (LONG)(b->y0 * sy); item[n].r.bottom = (LONG)(b->y1 * sy);
-        n++;
-    }
-    LeaveCriticalSection(&g_cs);
-    if (!n) return;
-    int px = H * g_size / 1440;                     // one fixed size (a new size rasterizes the digits again) if (px < 10) px = 10; if (px > 64) px = 64;
-    if (!ensure(dev, px)) return;
-    int game = g_gf.ok && g_gf.tex && g_gf.px == px;
-    D3DVIEWPORT9 vp, full = { 0, 0, (DWORD)W, (DWORD)H, 0.0f, 1.0f };
-    int haveVp = SUCCEEDED(IDirect3DDevice9_GetViewport(dev, &vp));
-    IDirect3DDevice9_SetViewport(dev, &full);
-    if (SUCCEEDED(g_sprite->lpVtbl->Begin(g_sprite, D3DXSPRITE_ALPHABLEND))) {
-        // no outline: the game's own text shadow, as the match clock without its box (matchtimer.c): 2 px down and a bit
-        // right, a light blur around it
-        int sx = H >= 1620 ? 2 : 1, sy = 2 * H / 1080 > 2 ? 2 * H / 1080 : 2;
-        static const int bx[4] = {-1, 1, 0, 0}, by[4] = {0, 0, -1, 1};
-        for (int i = 0; i < n; i++) {
-            for (int k = 0; k < 5; k++) {
-                RECT q = item[i].r; OffsetRect(&q, sx, sy);
-                DWORD c = 0xC0000000;
-                if (k < 4) { OffsetRect(&q, bx[k], by[k]); c = 0x30000000; }
-                text(item[i].t, &q, c, game);
-            }
-            text(item[i].t, &item[i].r, g_color, game);
-        }
-        g_sprite->lpVtbl->End(g_sprite);
-    }
-    if (haveVp) IDirect3DDevice9_SetViewport(dev, &vp);
-}
-// ID3DXSprite/ID3DXFont must let go of their video memory before a device Reset
-void cd_lost(IDirect3DDevice9 *dev) {
-    if (dev != g_dev || g_lost) return;
-    if (g_sprite) g_sprite->lpVtbl->OnLostDevice(g_sprite);
-    if (g_font) g_font->lpVtbl->OnLostDevice(g_font);
-    g_lost = 1;
-}
-void cd_reset(IDirect3DDevice9 *dev, HRESULT hr) {
-    (void)dev;
-    if (!g_lost || FAILED(hr)) return;
-    if (g_sprite) g_sprite->lpVtbl->OnResetDevice(g_sprite);
-    if (g_font) g_font->lpVtbl->OnResetDevice(g_font);
-    g_lost = 0;
-}
-
-static DWORD WINAPI cd_worker(LPVOID _) {
-    gf_load(&g_gf, "Caslon Antique New", NULL);
-    const char *vers[] = { "d3dx9_43.dll", "d3dx9_42.dll", "d3dx9_41.dll", "d3dx9_40.dll", "d3dx9_38.dll", "d3dx9_35.dll", "d3dx9_34.dll", "d3dx9_31.dll", "d3dx9_30.dll", NULL };
-    for (int i = 0; vers[i]; i++) {
-        HMODULE h = LoadLibraryA(vers[i]); if (!h) continue;
-        p_CreateFont = (D3DXCreateFontA_t)GetProcAddress(h, "D3DXCreateFontA");
-        p_CreateSprite = (D3DXCreateSprite_t)GetProcAddress(h, "D3DXCreateSprite");
-        if (p_CreateFont && p_CreateSprite) break;
-    }
-    if (!p_CreateFont || !p_CreateSprite) { logmsg("no d3dx9_*.dll: no cooldown numbers"); return 0; }
-    g_ready = 1;
-    return 0;
-}
 static void install(void) {
-    unsigned char *t = (unsigned char *)SETPROGRESS_ADDR, *gb = (unsigned char *)GETBOUNDS_ADDR;
-    if (IsBadReadPtr(t, 9) || memcmp(t, SETPROGRESS_PRO, 9) || IsBadReadPtr(gb, 2) || memcmp(gb, GETBOUNDS_PRO, 2)) {
-        logmsg("DOW2.exe differs at %08X/%08X: no cooldown numbers", SETPROGRESS_ADDR, GETBOUNDS_ADDR); g_on = 0; return;
+    unsigned char *t = (unsigned char *)SETPROGRESS_ADDR;
+    if (IsBadReadPtr(t, 9) || memcmp(t, SETPROGRESS_PRO, 9)) {
+        logmsg("DOW2.exe differs at %08X: no cooldown numbers", SETPROGRESS_ADDR); g_on = 0; return;
     }
     unsigned char *tr = VirtualAlloc(NULL, 32, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
     memcpy(tr, SETPROGRESS_PRO, 9); tr[9] = 0xE9; *(DWORD *)(tr + 10) = (SETPROGRESS_ADDR + 9) - (DWORD)(tr + 14);
@@ -358,13 +265,12 @@ void cd_start(const wchar_t *dir, const wchar_t *ini) {
 #else
     g_on = GetPrivateProfileIntW(L"Cooldowns", L"Enabled", 0, ini);
 #endif
-    g_size = GetPrivateProfileIntW(L"Cooldowns", L"Size", g_size, ini);
-    if (g_size < 12) g_size = 12; if (g_size > 64) g_size = 64;
-    wchar_t c[16]; GetPrivateProfileStringW(L"Cooldowns", L"Color", L"FFF8F0", c, 16, ini);
-    g_color = 0xFF000000 | (wcstoul(c, NULL, 16) & 0xFFFFFF);
-    logmsg("Cooldowns 1 (%s)", g_on ? "on" : "off, [Cooldowns] Enabled=0");
+    g_size = GetPrivateProfileIntW(L"Cooldowns", L"DigitSize", g_size, ini);   // not "Size": that was pixels of the Direct3D digits
+    if (g_size < 12) g_size = 12; if (g_size > 40) g_size = 40;
+    wchar_t c[16]; GetPrivateProfileStringW(L"Cooldowns", L"Color", L"FFFFFF", c, 16, ini);
+    g_color = wcstoul(c, NULL, 16) & 0xFFFFFF;
+    logmsg("Cooldowns 3 (%s): the numbers in the game's own button movie, no Direct3D", g_on ? "on" : "off, [Cooldowns] Enabled=0");
     if (!g_on) return;
     InitializeCriticalSection(&g_cs);
     install(); if (g_on) install_btnupd();
-    if (g_on) CloseHandle(CreateThread(NULL, 0, cd_worker, NULL, 0, NULL));
 }
