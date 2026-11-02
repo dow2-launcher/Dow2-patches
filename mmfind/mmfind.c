@@ -132,8 +132,8 @@ static void as_setn(void *movie, const char *path, double d) { GFxValue v; memse
 static void as_setb(void *movie, const char *path, int b) { GFxValue v; memset(&v, 0, sizeof v); v.type = GFX_BOOL; v.v.b = b; as_set(movie, path, &v); }
 
 // ---------------- matchmaking state ----------------
-enum { S_IDLE, S_SEARCH, S_GO_MAIN, S_GO_LIST, S_HOST_DIALOG, S_HOST_NAME, S_SETUP_HERO, S_HOST_WAIT, S_GUEST_NAME, S_GUEST_FIND, S_GUEST_JOINED, S_PLACE, S_DONE, S_FAIL };
-static const char *SN[] = {"idle","search","go_main","go_list","host_dialog","host_name","setup_hero","host_wait","guest_name","guest_find","guest_joined","place","done","fail"};
+enum { S_IDLE, S_SEARCH, S_GO_MAIN, S_GO_LIST, S_HOST_DIALOG, S_HOST_NAME, S_SETUP_HERO, S_HOST_OPEN, S_HOST_WAIT, S_GUEST_NAME, S_GUEST_DJOIN, S_GUEST_FIND, S_GUEST_JOINED, S_PLACE, S_DONE, S_FAIL };
+static const char *SN[] = {"idle","search","go_main","go_list","host_dialog","host_name","setup_hero","host_open","host_wait","guest_name","guest_djoin","guest_find","guest_joined","place","done","fail"};
 static volatile int g_state;
 static volatile int g_role;               // 1 host, 2 guest
 static DWORD g_stateTick, g_searchTick;
@@ -176,7 +176,11 @@ static void parse_roster(const char *res) {
 }
 unsigned long long g_mySteam;
 static volatile int g_wantJoin, g_wantLeave, g_wantHost, g_hostReported, g_wantStarted, g_wantEnded; static char g_ruined[48]; static volatile int g_loading;
-static int g_maxDiff, g_testBots, g_aiDiff, g_manual, g_autoSwap = 1, g_autoSwapCfg = 1; static char g_group[32]; static char g_game[24] = "elite";   // Manual=1: no automation in the lobby (tests)   // TestBots: 1 = me vs computers, 2 = computers vs computers, I watch (AI tests)
+static int g_maxDiff, g_testBots, g_aiDiff, g_manual, g_autoSwap = 1, g_autoSwapCfg = 1; static char g_group[32]; static char g_game[24] = "elite";
+// 0.34 EXPERIMENT (owner 02.11.2026, launcher tick "fast automatch"): DirectStart=1 - the host opens a PRIVATE room, the guests
+// join it by its id (no game browser), their screen goes to the lobby by itself, the host starts at once (OnClickStart: no
+// "ready" and no countdown). Paired only with players who have it too (the ladder keeps them in their own queue).
+static int g_direct, g_matchDirect, g_djDebug; static volatile unsigned long long g_room; static volatile int g_roomReady;   // Manual=1: no automation in the lobby (tests)   // TestBots: 1 = me vs computers, 2 = computers vs computers, I watch (AI tests)
 // 0.33: vanilla and Elite players never share a queue (the ladder keeps one queue per game). Every Elite start has "-modname Elite"
 // on the command line (players' warnings.txt: RUN OPTIONS); a start without it is vanilla even when an Elite copy of this DLL got
 // loaded (Elite's own Profiler.dll replaces the game's one and is loaded in vanilla too - not a sign of Elite).
@@ -359,11 +363,13 @@ static DWORD WINAPI net_worker(LPVOID _) {
             snprintf(body, sizeof body, "{\"steam\":\"%llu\",\"game\":\"%s\",\"mode\":\"%s\",\"name\":\"%s\",\"race\":\"%s\",\"hero\":\"%d\",\"maps\":[%s],\"max_diff\":%d%s%s%s,\"group\":\"%s\"}",
                      g_mySteam, g_game, MODE_KEY[g_mode], nm, (g_random ? "random" : g_race >= 0 && g_race < 9 ? RACES[g_race] : ""), g_hero, maps, g_maxDiff, g_testBots ? ",\"bots\":true" : "",
                      own ? (compat ? ",\"own_server\":true,\"relay_compat\":true" : ",\"own_server\":true") : "", rp, g_group);
-            http_post(L"join", body, res, sizeof res); logmsg("join (%s) -> %s", g_game, res);
+            if (g_direct && !g_testBots) { size_t bl = strlen(body); if (bl > 1 && bl + 20 < sizeof body) strcpy(body + bl - 1, ",\"direct\":true}"); }
+            http_post(L"join", body, res, sizeof res); logmsg("join (%s%s) -> %s", g_game, g_direct && !g_testBots ? ", direct" : "", res);
             g_queue = jint(res, MODE_KEY[g_mode], -1);
         }
         if (g_wantHost && !g_hostReported) {
-            snprintf(body, sizeof body, "{\"steam\":\"%llu\",\"lobby\":\"%s\",\"map\":\"%s\"}", g_mySteam, g_gameName, g_hostMap);
+            if (g_room) snprintf(body, sizeof body, "{\"steam\":\"%llu\",\"lobby\":\"%s\",\"map\":\"%s\",\"room\":\"%llu\"}", g_mySteam, g_gameName, g_hostMap, (unsigned long long)g_room);
+            else snprintf(body, sizeof body, "{\"steam\":\"%llu\",\"lobby\":\"%s\",\"map\":\"%s\"}", g_mySteam, g_gameName, g_hostMap);
             if (http_post(L"host", body, res, sizeof res)) { g_hostReported = 1; logmsg("host %s -> %s", g_gameName, res); }
         }
         if (g_wantStarted) { g_wantStarted = 0; snprintf(body, sizeof body, "{\"steam\":\"%llu\"}", g_mySteam); http_post(L"started", body, res, sizeof res); logmsg("started -> %s", res); }
@@ -410,6 +416,7 @@ static DWORD WINAPI net_worker(LPVOID _) {
                 const char *e = strstr(res, "\"enemies\""); if (e) jstr(e, "name", en, sizeof en);
                 MultiByteToWideChar(CP_UTF8, 0, en, -1, g_oppName, 64);
                 parse_roster(res);
+                if (st == S_SEARCH) g_matchDirect = (strstr(res, "\"direct\": true") || strstr(res, "\"direct\":true")) && !g_bots;
                 // Relay 8 in its compatible mode uses our game server only for this: an automatch where everyone has it
                 SetEnvironmentVariableA("DOW2_RELAY_USE", strstr(res, "\"own_server\": true") || strstr(res, "\"own_server\":true") ? "1" : "0");
                 { char rh[32] = ""; SetEnvironmentVariableA("DOW2_RELAY_HOST", jstr(res, "relay_host", rh, sizeof rh) && rh[0] ? rh : NULL); }   // best ping for all
@@ -423,6 +430,10 @@ static DWORD WINAPI net_worker(LPVOID _) {
                     }
                     _snwprintf(g_coverLine, 159, L"Opponent: %ls. Connecting", g_oppName[0] ? g_oppName : L"player"); g_coverWant = 1;
                     g_state = S_GO_MAIN; g_stateTick = GetTickCount();
+                } else if (g_matchDirect) {                  // 0.34: the room id, no name and no browser
+                    char rm[32] = ""; jstr(res, "room", rm, sizeof rm);
+                    unsigned long long r = parse_u64(rm);
+                    if (r) { g_room = r; logmsg("guest: host room %llu (direct)", r); g_state = S_GUEST_DJOIN; g_stateTick = GetTickCount(); }
                 } else if (jstr(res, "lobby", lobby, sizeof lobby) && lobby[0]) {
                     strncpy(g_gameName, lobby, sizeof g_gameName - 1); logmsg("guest: host game is %s", g_gameName);
                     g_state = S_GO_LIST; g_stateTick = GetTickCount();
@@ -436,6 +447,7 @@ static DWORD WINAPI net_worker(LPVOID _) {
 // ---------------- UI commands ----------------
 static void fs(const char *rel, const char *args) {          // rel: ".OnClickHost" relative to the panel, or a full path
     if (!g_fsSelf || !g_fsMovie) { logmsg("fs %s: no handler yet", rel); return; }
+    if (g_loading) { logmsg("fs %s skipped: the match is loading (the menu is going away)", rel); return; }   // 0.34: a lobby command then crashed the game
     char cmd[300]; if (rel[0] == '.') snprintf(cmd, sizeof cmd, "%s%s", g_panel, rel); else snprintf(cmd, sizeof cmd, "%s", rel);
     logmsg("-> fscommand %s '%s'", cmd, args ? args : "");
     g_sending++; g_fsOrig(g_fsSelf, NULL, g_fsMovie, cmd, args ? args : ""); g_sending--;
@@ -933,6 +945,8 @@ static void __fastcall fs_hook(void *self, void *edx, void *movie, const char *c
         }
         if (movie == g_fsMovie) g_lastFsTick = GetTickCount();
         if (!strcmp(cmd, "OnLoadMovieComplete") && args && !strncmp(args, "/mp_mc", 6) && !g_loading) {
+            // 0.34: the host starts at once - the match may load while a guest is still on the hero or taking the slot
+            if (g_matchDirect && g_state >= S_SETUP_HERO && g_state < S_DONE) { logmsg("direct: loading while %s - done", SN[g_state]); g_state = S_DONE; g_stateTick = GetTickCount(); }
             g_loading = 1; g_recHumans = g_humans; g_recBots = g_bots && g_state == S_DONE; GetSystemTimeAsFileTime(&g_recStart);
             if (g_state == S_DONE && !strncmp(g_gameName, "MM-", 3) && !g_bots) { marker_set(g_gameName); g_loadTick = GetTickCount(); }
             if (g_gameName[0] && g_state == S_DONE) strcpy(g_recName, g_gameName); else g_recName[0] = 0;
@@ -1029,6 +1043,8 @@ static void stage_line(void) {                 // what the cover says right now
         if (g_role == 1) _snwprintf(g_coverLine, 159, L"Opponent: %ls. Creating the game", opp);
         else _snwprintf(g_coverLine, 159, L"Opponent: %ls. Looking for the host's game", opp); break;
     case S_GUEST_NAME: _snwprintf(g_coverLine, 159, L"Opponent: %ls. Waiting for the host to create the game", opp); break;
+    case S_GUEST_DJOIN: _snwprintf(g_coverLine, 159, L"Opponent: %ls. Joining the game", opp); break;
+    case S_HOST_OPEN: wcscpy(g_coverLine, L"Game created. Opening the slots"); break;
     case S_GUEST_FIND: case S_GUEST_JOINED: _snwprintf(g_coverLine, 159, L"Opponent: %ls. Joining the game", opp); break;
     case S_SETUP_HERO: wcscpy(g_coverLine, L"In the lobby. Setting up your army"); break;
     case S_HOST_WAIT: wcscpy(g_coverLine, L"Game created. Players are taking their slots"); break;
@@ -1109,6 +1125,80 @@ static void host_step(DWORD now) {
     if (now - lastObs > 10000) { lastObs = now; slot_do(team_n(), CB_OPEN_OBS); }           // map changes close them again
 }
 
+
+// ---------------- 0.34 fast automatch: the engine's own calls (research 01.11.2026, research_direct/directjoin.c) ----------------
+// join by room id = the game browser's Join and the old Relic automatch: (*0x01335014)->vtbl[0x20]()->vtbl[0x34](this, midLo, midHi,
+// &joiners, -1, -1), joiners = vector of 0x30-byte entries {own Relic profile id, ...} (ctor 0x455BA9, push_back 0x458416, EDI = vector)
+#define FN_PROFBUF_CTOR 0x00537D40
+#define FN_PROFBUF_DTOR 0x00401DE9
+#define FN_JOINER_CTOR  0x00455BA9
+#define FN_VEC_PUSH     0x00458416
+#define FN_STR_CTOR     0x004132B2      // thiscall std::string(const char*, alloc*)
+#define FN_OP_NEW       0x00DAA9B6      // the game's operator new (the engine frees what it gets)
+#define FN_TO_SETUP     0x0047397D      // stdcall(flag, std::string*, data*): the guest's UI to the lobby, as after a browser join
+typedef void (__stdcall *DjFn1)(void *);
+typedef void *(__fastcall *DjObjFn)(void *self, void *edx);
+typedef char (__stdcall *DjInfoFn)(void *self, void *info);
+typedef void (__stdcall *DjProfFn)(void *self, void *buf);
+typedef void (__stdcall *DjJoinFn)(void *self, unsigned midLo, unsigned midHi, void *joiners, unsigned frLo, unsigned frHi);
+static void *dj_mgr(int off) {
+    void **m = *(void ***)0x01335014; if (!m || IsBadReadPtr(m, 4)) return NULL;
+    void **vt = *(void ***)m; if (IsBadReadPtr(vt, off + 4)) return NULL;
+    return ((DjObjFn)vt[off / 4])(m, NULL);
+}
+// the room we are in (GameInfo+0x8), and whether every occupied player slot has its army/hero picked (slot+0x6C != 255)
+static unsigned long long dj_room(int *heroesOk, int *people) {
+    unsigned long long room = 0; if (heroesOk) *heroesOk = 0; if (people) *people = 0;
+    void *m = dj_mgr(0x24); if (!m || IsBadReadPtr(m, 8)) return 0;
+    static __attribute__((aligned(16))) unsigned char info[0x2000];
+    memset(info, 0, sizeof info); ((DjFn1)0x0040172D)(info);
+    void **mvt = *(void ***)m;
+    if (!IsBadReadPtr(mvt, 8) && ((DjInfoFn)mvt[1])(m, info)) {
+        room = *(unsigned long long *)(info + 0x08);
+        unsigned char *base = *(unsigned char **)(info + 0x70); int n = *(int *)(info + 0x78), ok = 1, np = 0;
+        if (base && n > 0 && n <= 64 && !IsBadReadPtr(base, n * 0xC8)) {
+            for (int i = 0; i < n; i++) {
+                unsigned char *sl = base + i * 0xC8; unsigned long long id = *(unsigned long long *)(sl + 8); int pos = *(int *)(sl + 0x98);
+                if (!id || id == ~0ULL || is_obs_slot(pos)) continue;          // the slot's id: a Steam id or the Relic profile id
+                np++; if ((*(int *)(sl + 0x6C) & 0xFF) == 0xFF) ok = 0;
+                if (g_djDebug) logmsg("direct: slot pos %d id %llu faction %08x race %08x", pos, id, *(unsigned *)(sl + 0x6C), *(unsigned *)(sl + 0x70));
+            }
+        } else ok = 0;
+        if (heroesOk) *heroesOk = ok && np > 0; if (people) *people = np;
+    }
+    ((DjFn1)0x00401794)(info);
+    return room;
+}
+static int dj_join(unsigned long long room) {
+    static __attribute__((aligned(16))) unsigned char prof[0x400], entry[0x40]; static unsigned vec[4];
+    memset(prof, 0, sizeof prof); ((DjFn1)FN_PROFBUF_CTOR)(prof);
+    void *p4 = dj_mgr(0x4); if (!p4) { logmsg("direct join: no profile object"); return 0; }
+    ((DjProfFn)(*(void ***)p4)[0x54 / 4])(p4, prof);
+    unsigned pidLo = *(unsigned *)prof, pidHi = *(unsigned *)(prof + 4);
+    memset(entry, 0, sizeof entry); ((DjFn1)FN_JOINER_CTOR)(entry);
+    *(unsigned *)entry = pidLo; *(unsigned *)(entry + 4) = pidHi; *(unsigned *)(entry + 0x10) = 0; *(unsigned *)(entry + 0x14) = 0;
+    memset(vec, 0, sizeof vec);
+    void *e = entry, *v = vec;
+    __asm__ volatile("push %1\n\tcall *%2" : "+D"(v) : "r"(e), "r"((void *)FN_VEC_PUSH) : "eax", "ecx", "edx", "memory");   // EDI = vector
+    void *j = dj_mgr(0x20); if (!j) { logmsg("direct join: no join object"); ((DjFn1)FN_PROFBUF_DTOR)(prof); return 0; }
+    logmsg("direct join: room %llu (my profile %u)", room, pidLo);
+    ((DjJoinFn)(*(void ***)j)[0x34 / 4])(j, (unsigned)room, (unsigned)(room >> 32), vec, 0xffffffff, 0xffffffff);
+    ((DjFn1)FN_PROFBUF_DTOR)(prof);
+    return 1;
+}
+static void dj_to_lobby(void) {
+    static __attribute__((aligned(16))) unsigned char str[0x40]; static char alloc_dummy;
+    memset(str, 0, sizeof str);
+    void *sp = str; const char *name = "game_list_movie"; void *al = &alloc_dummy;
+    __asm__ volatile("push %2\n\tpush %1\n\tcall *%3" : "+c"(sp) : "r"(name), "r"(al), "r"((void *)FN_STR_CTOR) : "eax", "edx", "memory");
+    typedef void *(__cdecl *NewFn)(size_t);
+    unsigned *data = (unsigned *)((NewFn)FN_OP_NEW)(8); if (!data) { logmsg("direct: no memory"); return; }
+    data[0] = 0x010935FC; data[1] = 3;
+    logmsg("direct: guest screen to the lobby");
+    ((void (__stdcall *)(unsigned, void *, void *))FN_TO_SETUP)(0, str, data);
+}
+#define CB_OPEN_SLOT  0x0049326C      // "Open this slot" (a computer in it goes)
+
 static void msgbox_hide(int hide) {            // message boxes ("Connecting...") live in _level0.container of the message box movie
     static int cur = -1; static void *wrap; if (wrap != g_msgWrap) { wrap = g_msgWrap; cur = -1; }
     if (hide == cur || !g_msgWrap || (cur == -1 && !hide)) return;
@@ -1135,7 +1225,20 @@ static void tick(void) {
     { static LONG seen; if (g_swapCount != seen) { seen = g_swapCount; logmsg("swap request accepted (%ld so far)", seen); } }
     if (g_state == S_DONE && !g_loading && g_screen == SC_SETUP && in_state() < 180000) {
         static DWORD lastClick; if (in_state() < 300) lastClick = now;
-        if (g_role == 1) {                                            // host: start as soon as everyone is ready, and keep pressing every 5 s
+        if (g_role == 1 && g_matchDirect) {                           // 0.34: start at once - no "ready", no countdown
+            static unsigned long long sig; static DWORD still, lastStart, entered; static int starts;
+            if (entered != g_stateTick) { entered = g_stateTick; sig = 0; still = now; lastStart = 0; starts = 0; }
+            static DWORD lastDbg; g_djDebug = now - lastDbg > 3000; if (g_djDebug) lastDbg = now;
+            int ok = 0, np = 0; dj_room(&ok, &np); g_djDebug = 0;
+            if (now == lastDbg) logmsg("direct: heroes ok %d, players %d of %d, still %lu ms", ok, np, g_nR, now - still);
+            unsigned long long ids[8], s2 = 0; lobby_ids(ids); for (int i = 0; i < 8; i++) s2 = s2 * 1000003ULL + ids[i] + (unsigned)i;
+            s2 = s2 * 31 + ok;
+            if (s2 != sig) { sig = s2; still = now; }
+            if (ok && np >= g_nR && now - still > 1500 && (!lastStart || now - lastStart > 6000) && starts < 3) {
+                lastStart = now; starts++; logmsg("direct: start now (%d players with heroes, try %d)", np, starts); fs(".OnClickStart", "");
+            }
+            if (starts >= 3 && now - lastStart > 6000) { logmsg("direct: the start did not go - the usual Start"); g_matchDirect = 0; }
+        } else if (g_role == 1) {                                     // host: start as soon as everyone is ready, and keep pressing every 5 s
             static int wasReady; if (!g_allReady) wasReady = 0;
             // press only an enabled Start (any language: not the text it had while I was alone - "Start Skirmish");
             // a press starts a countdown ("Start Now!" / disabled) - pressing again then cancels it, so later presses need the same text
@@ -1176,6 +1279,12 @@ static void tick(void) {
         if (in_state() > 90000) set_state(S_FAIL);
         break;
     case S_GO_LIST:                                                   // main menu -> Public Games list
+        if (g_matchDirect && g_role == 1) {                           // 0.34: a private room, straight into its lobby (no list, no name)
+            if (g_screen == SC_MAIN && in_state() > 800) { fs(".OnClickPrivateMatch", ""); g_stateTick = now; }
+            if (g_screen == SC_SETUP) set_state(S_SETUP_HERO);
+            if (in_state() > 20000) { logmsg("direct: the private room did not open"); set_state(S_FAIL); }
+            break;
+        }
         if (g_screen == SC_MAIN && in_state() > 800) { fs(".OnClickPublicMatch", ""); g_stateTick = now; }
         if (g_screen == SC_LIST && (g_listSeen || g_role == 1)) set_state(g_role == 1 ? S_HOST_DIALOG : S_GUEST_FIND);
         if (in_state() > 20000 && g_screen != SC_LIST) set_state(S_FAIL);
@@ -1190,6 +1299,15 @@ static void tick(void) {
         if (g_screen == SC_SETUP) set_state(S_SETUP_HERO);
         if (in_state() > 15000) set_state(S_FAIL);
         break;
+    case S_GUEST_DJOIN: {                                             // 0.34: into the host's room by its id, then the lobby screen
+        static int tries; static DWORD lastTry, entered; if (entered != g_stateTick) { entered = g_stateTick; tries = 0; lastTry = 0; g_rowFound = -1; }
+        if (g_screen == SC_SETUP) { set_state(S_SETUP_HERO); break; }
+        unsigned long long in = dj_room(NULL, NULL);
+        if (in && in == g_room) { logmsg("direct: in the room %llu after %lu ms", in, in_state()); dj_to_lobby(); set_state(S_GUEST_JOINED); break; }
+        if (!in && g_screen != SC_SETUP && tries < 3 && (!lastTry || now - lastTry > 8000) && in_state() > 500) {
+            tries++; lastTry = now; if (!dj_join(g_room)) { set_state(S_FAIL); break; } }
+        if (in_state() > 30000) { logmsg("direct: could not get into the room %llu", (unsigned long long)g_room); set_state(S_FAIL); }
+        break; }
     case S_GUEST_FIND:
         if (g_rowFound >= 0 && in_state() > 200) {
             char r[8]; snprintf(r, sizeof r, "%d", g_rowFound);
@@ -1239,8 +1357,22 @@ static void tick(void) {
                 if (mi < 0) { logmsg("no %s map in the lobby list (%d maps) - cancelling the match", MODE_KEY[mm], nl); set_state(S_FAIL); break; }
                 { char a[16]; snprintf(a, sizeof a, "0;%d", mi); logmsg("map: %ls (lobby list %d)", lst[mi], g_nlmaps); fs(".game_options_panel_mc.OnSelectDropDownItem", a);
                   WideCharToMultiByte(CP_UTF8, 0, lst[mi], -1, g_hostMap, sizeof g_hostMap, NULL, NULL); }
+                if (g_matchDirect) { set_state(S_HOST_OPEN); break; }      // 0.34: the private room's slots hold computers - open them first
                 g_wantHost = 1; SetEvent(g_wake); cover(L"Waiting for the players to connect"); set_state(S_HOST_WAIT);
             } else { set_state(S_PLACE); }                            // guest / watcher: take the assigned slot, then ready
+        }
+        break; }
+    case S_HOST_OPEN: {                                               // 0.34: every player slot but mine open, then the room id to the ladder
+        static int next; static DWORD lastOpen, entered; if (entered != g_stateTick) { entered = g_stateTick; next = 0; lastOpen = now; }
+        int n = 2 * team_n();
+        unsigned long long ids[8]; if (lobby_ids(ids) < 0) break;
+        while (next < 8 && (is_obs_slot(next) || (next % 4) >= n / 2 || (ids[next] && is_me(ids[next])))) next++;
+        if (next < 8 && now - lastOpen > 600) { lastOpen = now; logmsg("direct: open slot %d", next); slot_do(next, CB_OPEN_SLOT); next++; break; }
+        if (next >= 8 && now - lastOpen > 800) {
+            unsigned long long r = dj_room(NULL, NULL);
+            if (!r) { if (in_state() > 15000) { logmsg("direct: no room id"); set_state(S_FAIL); } break; }
+            g_room = r; logmsg("direct: room %llu open for the players", r);
+            g_wantHost = 1; SetEvent(g_wake); cover(L"Waiting for the players to connect"); set_state(S_HOST_WAIT);
         }
         break; }
     case S_HOST_WAIT: {                                               // open observer slots, kick strangers, start when everyone is in place
@@ -1377,6 +1509,7 @@ BOOL WINAPI DllMain(HINSTANCE h, DWORD r, LPVOID _) {
     parse_hosts();
     g_mode = GetPrivateProfileIntW(L"Choice", L"Mode", 0, ini); if (g_mode < 0 || g_mode > 3) g_mode = 0;
     g_maxDiff = GetPrivateProfileIntW(L"MMFind", L"MaxRatingDiff", 0, ini);
+    g_direct = GetPrivateProfileIntW(L"MMFind", L"DirectStart", 0, ini);       // 0.34 experiment, see g_direct
     g_testBots = GetPrivateProfileIntW(L"MMFind", L"TestBots", 0, ini);
     g_aiDiff = GetPrivateProfileIntW(L"MMFind", L"AIDifficulty", 1, ini);    // 0 Easy, 1 Normal, 2 Hard, 3 Expert
     g_readyIdx = GetPrivateProfileIntW(L"MMFind", L"ReadyField", 12, ini);     // PopulatePlayerList slot field 12 = "ready" (seen 26.10)
@@ -1390,7 +1523,7 @@ BOOL WINAPI DllMain(HINSTANCE h, DWORD r, LPVOID _) {
     g_mySteam = my_steam();
     { wchar_t p[MAX_PATH], o[MAX_PATH]; _snwprintf(p, MAX_PATH, L"%lsMMFind.log", g_dir); _snwprintf(o, MAX_PATH, L"%lsMMFind.log.old", g_dir);
       WIN32_FILE_ATTRIBUTE_DATA a; if (GetFileAttributesExW(p, GetFileExInfoStandard, &a) && (a.nFileSizeHigh || a.nFileSizeLow > (1u << 20))) MoveFileExW(p, o, MOVEFILE_REPLACE_EXISTING); }
-    logmsg("MMFind 0.33 start, steam=%llu server=%ls", g_mySteam, g_server);
+    logmsg("MMFind 0.34 start, steam=%llu server=%ls%s", g_mySteam, g_server, g_direct ? ", fast automatch (experiment) on" : "");
     { char n[64]; wsprintfA(n, "Local\\dow2patch_MMFind_%lu", GetCurrentProcessId());          // one copy per game (launcher + dow2-patches)
       HANDLE mx = CreateMutexA(NULL, FALSE, n); if (mx && GetLastError() == ERROR_ALREADY_EXISTS) { logmsg("another MMFind copy is active, this one stays idle"); return TRUE; } }
     install(); return TRUE;
