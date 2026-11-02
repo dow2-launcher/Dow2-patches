@@ -1,5 +1,6 @@
 # Dow2-patches
 
+**Add-on rule:** one feature - one DLL - one tick in the launcher, never several features in one DLL — [docs/ADDON_RULES.md](docs/ADDON_RULES.md).
 **UI rule:** add-ons show things only inside the game's own interface (its Scaleform movies), never drawn over the
 frame through Direct3D — why and how: [docs/UI_RULES.md](docs/UI_RULES.md).
 
