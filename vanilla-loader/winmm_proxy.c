@@ -1,5 +1,6 @@
 // winmm.dll - shim for VANILLA DoW2: Retribution. All calls are forwarded to the system winmm.dll,
 // and it also loads every patch DLL from <game>\dow2-patches\ (and the older LobbyStats\LobbyStats.dll), in vanilla and in Elite.
+// Since 02.11.2026 also the launcher's early add-ons from Elite_DLLs (OwnLobby.dll), which Elite's injector would load too late.
 // Game files are not modified: Steam leaves an extra file in the folder alone. If Elite already loaded the same patch from
 // Elite_DLLs, the second copy notices it and stays idle.
 #include <windows.h>
@@ -213,6 +214,13 @@ static DWORD WINAPI load_stats(LPVOID _) {
     wchar_t *sl = wcsrchr(dir, L'\\'); if (!sl) return 0;
     if (_wcsicmp(sl + 1, L"DOW2.exe")) return 0;                     // only the game itself
     sl[1] = 0;
+    // early launcher add-ons in Elite_DLLs: they must be in before the game starts its network (Elite's injector loads
+    // Elite_DLLs ~9 s after the start - too late for them). The launcher keeps such a DLL there only while its tick is on.
+    static const wchar_t *EARLY[] = {L"OwnLobby.dll"};          // 02.11.2026: our lobby server (experiment)
+    for (int i = 0; i < (int)(sizeof EARLY / sizeof *EARLY); i++) {
+        wchar_t e[MAX_PATH]; _snwprintf(e, MAX_PATH, L"%lsElite_DLLs\\%ls", dir, EARLY[i]);
+        if (GetFileAttributesW(e) != INVALID_FILE_ATTRIBUTES) LoadLibraryW(e);
+    }
     // every *.dll in <game>\dow2-patches\ (ObsFix, LobbyStats, ...)
     wchar_t pat[MAX_PATH], p[MAX_PATH]; WIN32_FIND_DATAW fd;
     _snwprintf(pat, MAX_PATH, L"%lsdow2-patches\\*.dll", dir);

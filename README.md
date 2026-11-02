@@ -33,7 +33,18 @@ reinforcefix/
 vanilla-loader/
     winmm.dll loader. Forwards everything to the real winmm.dll and loads every *.dll from
     <game>\dow2-patches\, in vanilla and in Elite. Each patch refuses to load twice, so having the same
-    DLL in Elite_DLLs as well is fine.
+    DLL in Elite_DLLs as well is fine. It also loads the launcher's early add-ons from Elite_DLLs (OwnLobby.dll):
+    Elite's injector loads Elite_DLLs ~9 s after the start, too late for them.
+
+ownlobby/
+    EXPERIMENT (launcher add-on "ownlobby", off by default): the game's lobby service (RLink, HTTPS to
+    dow2r-lobby.reliclink.com) goes to our lobby server (dow2-ladder repo, lobby/own_lobby.py, rts.fintebtc.de:47443).
+    It passes everything on to Relic and hosts the private rooms of the fast automatch itself: our room ids, our game
+    server as their relay, the result into our ladder. The DLL adds our CA (ownlobby/ca.pem; its key is only on the
+    server) as a second trusted root next to Relic's - before RLink starts, so it needs the winmm.dll loader (loaded later
+    it does nothing) - and sends DOW2.exe's connects to Relic's lobby addresses on port 443 to our server while it
+    answers; otherwise straight to Relic as without it. OwnLobby.ini [OwnLobby] Servers=host:port;host:port.
+    The add-on ships OwnLobby.dll into Elite_DLLs and winmm.dll next to DOW2.exe (Wine/Proton: winmm=n,b).
 
 cooldowns/
     Cooldown numbers (inside LobbyStats.dll): seconds left on recharging abilities and global abilities in the middle of

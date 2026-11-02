@@ -50,3 +50,11 @@ $(OUT)/Relay.dll: relay/relay.c | $(OUT)
 # experiment: what passes from a player to our game servers (no hooks; NetProbe.log goes with "Send logs")
 $(OUT)/NetProbe.dll: netprobe/netprobe.c | $(OUT)
 	$(CC) $(CFLAGS) -shared -o $@ $< -lws2_32 -lwinhttp -static-libgcc -Wl,--exclude-all-symbols
+
+# experiment: our own lobby server instead of Relic's for the automatch rooms (launcher add-on ownlobby; loaded early by winmm.dll)
+$(OUT)/OwnLobby.dll: ownlobby/ownlobby.c ownlobby/ca_pem.h | $(OUT)
+	$(CC) $(CFLAGS) -shared -o $@ ownlobby/ownlobby.c -lws2_32 -static-libgcc -Wl,--exclude-all-symbols
+
+# the loader for vanilla (and the early add-ons of the launcher): forwards everything to the system winmm.dll
+$(OUT)/winmm.dll: vanilla-loader/winmm_proxy.c vanilla-loader/winmm.def | $(OUT)
+	$(CC) $(CFLAGS) -shared -o $@ vanilla-loader/winmm_proxy.c vanilla-loader/winmm.def -static-libgcc

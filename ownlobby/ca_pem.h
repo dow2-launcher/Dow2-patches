@@ -1,0 +1,23 @@
+// generated from ca.pem (our lobby CA, public part) - make ownlobby/ca_pem.h after a new CA
+static const char CA_PEM[] =
+    "-----BEGIN CERTIFICATE-----\n"
+    "MIIDPzCCAiegAwIBAgIUU3sEOb+UPDYC7nolfDCmWxxkPpkwDQYJKoZIhvcNAQEL\n"
+    "BQAwNjEcMBoGA1UEAwwTRG9XMiBFbGl0ZSBMb2JieSBDQTEWMBQGA1UECgwNZG93\n"
+    "Mi1sYXVuY2hlcjAeFw0yNjExMDIwNzE5MzNaFw00NjEwMjgwNzE5MzNaMDYxHDAa\n"
+    "BgNVBAMME0RvVzIgRWxpdGUgTG9iYnkgQ0ExFjAUBgNVBAoMDWRvdzItbGF1bmNo\n"
+    "ZXIwggEiMA0GCSqGSIb3DQEBAQUAA4IBDwAwggEKAoIBAQDMzYwUXWNfKfVDSAi0\n"
+    "hktnaSJrId6TeG2lah6tzp0IeCAvt8qYU1dvLdq87sPm1qtMKx608EZs2PbiPce3\n"
+    "+GU/CbctuywIdL3gfJhQBT6iF0ivCzUpfsEOqNiCVlAaWgXnzHtXdR4/rOB729bn\n"
+    "ITdvwcY28AxWwjJ49sEYswaF39mHY8Wp1J3ap0OXCDoXAj/huMqzgjHUs/RlSQ47\n"
+    "/vn9x2soaIDGLzVyvDlg3S+pVHuOclWpjYRT9hMSD3PUtdfhSxPfpPKjYq90bwZz\n"
+    "1N+k6Oq+7AzSzCX5I9x5+SyCD1BmHD4N2SZpBZgryGSM6PguWsGQf26S4qh7W4LE\n"
+    "sjDXAgMBAAGjRTBDMBIGA1UdEwEB/wQIMAYBAf8CAQAwDgYDVR0PAQH/BAQDAgEG\n"
+    "MB0GA1UdDgQWBBQuyj/piDbNppBicYDe269tbwk0gjANBgkqhkiG9w0BAQsFAAOC\n"
+    "AQEARWXfOZzxJuqjLf/AgMZQT/2sf2yqmV/miDEv9aozqfdxuCQBvNJPSWZOQ5na\n"
+    "1Q3X9llR3KZBHHHBa6bC8Qf3eR94DribVp7BU/NuTCFI9vj9sV5BsUt2oY+DJl93\n"
+    "lJvsYtpsguL+qQvYsjMqC0qaUiaIKIkHIVmFOsHM2sL0mEgX2Z4BKm19XqVdhw1r\n"
+    "TVTOIIfv2t8giYyEIOKyGQNCI5ZfrZrDHpvQ2g8RAveWCq11QLpkIFOx/8CPAe1t\n"
+    "958dNJN8sFXB3L1n8VmhR91vb/UrZfEoDlG4VuDzwxaG8DpLMaABR6Z4X/xRIYEJ\n"
+    "nAhdnp5AKmHkx4gP2NoQqdB0CQ==\n"
+    "-----END CERTIFICATE-----\n"
+;
