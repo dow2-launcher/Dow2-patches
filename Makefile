@@ -56,3 +56,9 @@ $(OUT)/OwnLobby.dll: ownlobby/ownlobby.c ownlobby/ca_pem.h | $(OUT)
 # the loader for vanilla (and the early add-ons of the launcher): forwards everything to the system winmm.dll
 $(OUT)/winmm.dll: vanilla-loader/winmm_proxy.c vanilla-loader/winmm.def | $(OUT)
 	$(CC) $(CFLAGS) -shared -o $@ vanilla-loader/winmm_proxy.c vanilla-loader/winmm.def -static-libgcc
+
+$(OUT)/FrameProbe.dll: frameprobe/frameprobe.c | $(OUT)
+	$(CC) $(CFLAGS) -Wno-unused-variable -shared -o $@ $< -lpsapi -lwinmm -static-libgcc
+
+$(OUT)/ReinforceFix.dll: reinforcefix/reinforcefix.c | $(OUT)
+	$(CC) $(CFLAGS) -shared -o $@ $< -static-libgcc
