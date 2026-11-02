@@ -301,29 +301,50 @@ static void set_progress(char *w, float p) {
     __asm__ volatile("pushl %[p]\n\t call *%[f]\n\t"  // the callee takes it off (ret 4)
                      : "+a"(w) : [p] "g"(bits), [f] "c"(fn) : "edx", "memory", "cc");
 }
-// The ability of this share on its button: a share-less update later holds only for the same ability (cd_hold)
+// The end of each ability's recharge as we last saw it (siritos 02.11): the game sends only 0s for a recharging ability while
+// another reason stands (no energy, the squad busy) - no share, its own sweep gone too. The 0s don't end the recharge here:
+// it ends at the tick worked out from the shares seen. Kept per ability, so another squad's button in between (a hidden
+// button, another selection) doesn't lose it either. Nothing is asked of the game: only what came through SetProgress.
+typedef struct { int ab; float end, total; } Mem;  // sim ticks: when it ends, how long the whole recharge is
+static Mem g_mem[32]; static int g_nmem;
+static Mem *mem_of(int ability, int make) {
+    for (int i = 0; i < g_nmem; i++) if (g_mem[i].ab == ability) return &g_mem[i];
+    if (!make) return NULL;
+    Mem *m = &g_mem[g_nmem < 32 ? g_nmem++ : (unsigned)ability % 32]; m->ab = ability; m->end = m->total = 0; return m;
+}
+// a share came: this button follows it again (not the remembered end), and the end of the recharge is remembered
 static void cd_mark(char *w, int ability) {
     const char *path = w + 0xDD0; int s;
-    if (IsBadReadPtr(path, 16) || path[0] != '/' || (s = slot_of(path)) < 0) return;
-    EnterCriticalSection(&g_cs); if (g_slot[s].w == w) g_slot[s].ab = ability; LeaveCriticalSection(&g_cs);
+    if (!ability || IsBadReadPtr(path, 16) || path[0] != '/' || (s = slot_of(path)) < 0) return;
+    EnterCriticalSection(&g_cs);
+    Slot *b = &g_slot[s];
+    if (b->w == w) {
+        b->ab = ability; b->exact = 0;
+        if (b->t > b->t0 && b->p > b->p0) {
+            float rate = (b->p - b->p0) / (float)(b->t - b->t0);
+            Mem *m = mem_of(ability, 1); m->end = (float)b->t + (1.0f - b->p) / rate; m->total = 1.0f / rate;
+        }
+    }
+    LeaveCriticalSection(&g_cs);
 }
-// Catachans (siritos 02.11): while the squad uses another ability (a volley after the smoke) the game lists no recharge
-// reason for any of its buttons - only 0s, the number and the game's own sweep went on every button. A recharge we follow
-// on this button for this ability goes on: counted from its rate (cd_seconds), and the sweep put back. 1 = held.
+// only 0s in this update: a remembered recharge of this ability that isn't over yet goes on - seconds from its end, the
+// game's sweep put back. 1 = held.
 static int cd_hold(char *w, int ability) {
     const char *path = w + 0xDD0; int s;
     if (!ability || !mt_ticking() || IsBadReadPtr(path, 16) || path[0] != '/' || (s = slot_of(path)) < 0) return 0;
-    float p = -1; DWORD now = GetTickCount();
+    float now = (float)mt_ticks(), p = -1;
     EnterCriticalSection(&g_cs);
-    Slot *b = &g_slot[s];
-    if (b->w == w && b->ab == ability && !b->ready && !b->exact && now - b->seen < 1000 && b->t > b->t0 && b->p > b->p0) {
-        float rate = (b->p - b->p0) / (float)(b->t - b->t0);
-        p = b->p + rate * (float)((DWORD)mt_ticks() - b->t);
-        if (p < 0.999f) b->seen = now; else p = -1;
+    Mem *m = mem_of(ability, 0);
+    if (m && m->total > 0 && m->end > now) {
+        Slot *b = &g_slot[s];
+        if (b->w != w) { b->w = w; b->shown = 0; }
+        b->ready = 0; b->exact = 1; b->seen = GetTickCount(); b->ab = ability;
+        b->exactLeft = (DWORD)((m->end - now) * mt_ms_per_tick()); b->exactAt = mt_game_ms();
+        p = 1.0f - (m->end - now) / m->total;
     }
     LeaveCriticalSection(&g_cs);
     if (p < 0) return 0;
-    set_progress(w, p);
+    set_progress(w, p < 0.001f ? 0.001f : p);
     return 1;
 }
 static void __fastcall hk_btnupd(char *btn, void *edx, char *ctx) {
