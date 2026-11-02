@@ -50,8 +50,8 @@ static void logmsg(const char *fmt, ...) {
 // v5: the clock is text of the Menu button movie, so the v1-v4 keys of the Direct3D clock (Style, Font, MenuX, Anchor...) are gone
 static int g_enabled = 1, g_size = 22, g_shadow = 1, g_onlineOnly = 0;   // FontSize: in the movie's units (the "Menu" label is 20)
 static int g_plate = 1, g_plateAlpha = 85;                              // a plate under the clock: a copy of the Menu button's own background
-enum { PL_UNDER, PL_LEFT, PL_MENU };
-static int g_place = PL_UNDER, g_gap = 1, g_width = 100, g_height = 30, g_offX = 0, g_offY = 0;   // where the clock is (MatchTimer.ini Place=under|menu|left, Gap, Width, Height, OffsetX/Y)
+enum { PL_UNDER, PL_LEFT, PL_MENU, PL_TOP };
+static int g_place = PL_UNDER, g_gap = 1, g_width = 100, g_height = 30, g_offX = 0, g_offY = 0, g_raise = 8;   // where the clock is (MatchTimer.ini Place=under|menu|left, Gap, Width, Height, OffsetX/Y, Raise: the Menu button up by this, room under it - the movie clips below its stage, y 75)
 static DWORD g_color = 0xFFCAF9FF;                                      // the colour of the "Menu" label
 static FILETIME g_iniTime;
 static DWORD ini_color(const wchar_t *key, const wchar_t *def) {
@@ -66,17 +66,18 @@ static void load_ini(void) {
     WIN32_FILE_ATTRIBUTE_DATA a;
     if (GetFileAttributesExW(g_ini, GetFileExInfoStandard, &a)) g_iniTime = a.ftLastWriteTime;
     g_enabled    = ini_int(L"Enabled", 1, 0, 1);
-    { wchar_t pl[16]; GetPrivateProfileStringW(L"MatchTimer", L"Place", L"under", pl, 16, g_ini); g_place = !_wcsicmp(pl, L"left") ? PL_LEFT : !_wcsicmp(pl, L"menu") ? PL_MENU : PL_UNDER; }
+    { wchar_t pl[16]; GetPrivateProfileStringW(L"MatchTimer", L"Place", L"under", pl, 16, g_ini); g_place = !_wcsicmp(pl, L"left") ? PL_LEFT : !_wcsicmp(pl, L"menu") ? PL_MENU : !_wcsicmp(pl, L"top") ? PL_TOP : PL_UNDER; }
     g_size       = ini_int(L"FontSize", g_place == PL_MENU ? 17 : g_place == PL_UNDER ? 18 : 20, 10, 40);
     g_shadow     = ini_int(L"Shadow", 1, 0, 1);
     g_onlineOnly = ini_int(L"OnlineOnly", 0, 0, 1);
     g_color      = ini_color(L"Color", L"CAF9FF");
     g_plate      = ini_int(L"Plate", 1, 0, 1);
-    g_gap        = ini_int(L"Gap", g_place == PL_LEFT ? 6 : 1, -40, 200);
+    g_gap        = ini_int(L"Gap", g_place == PL_LEFT ? 6 : 2, -40, 200);
     g_width      = ini_int(L"Width", g_place == PL_LEFT ? 184 : 100, 40, 400);
-    g_height     = ini_int(L"Height", g_place == PL_LEFT ? 48 : 30, 16, 100);
+    g_height     = ini_int(L"Height", g_place == PL_LEFT ? 48 : 34, 16, 100);
     g_offX       = ini_int(L"OffsetX", 0, -400, 400);
     g_offY       = ini_int(L"OffsetY", 0, -200, 200);
+    g_raise      = ini_int(L"Raise", g_place == PL_UNDER ? 8 : 0, 0, 20);
     g_plateAlpha = ini_int(L"PlateAlpha", 85, 0, 100);
 }
 static void clock_restyle(void);
@@ -245,7 +246,10 @@ static void label_shift(void *mv, double x) {
 static void clock_make(void *mv) {
     // the plate's visible rectangle on the stage: under Menu (default) or left of it
     double W = g_width, H = g_height;
-    double px = (g_place == PL_LEFT ? MB_X0 - g_gap - W : MB_X0) + g_offX, py = (g_place == PL_LEFT ? MB_Y0 : MB_Y0 + MB_H + g_gap) + g_offY;
+    // the Menu button (menu_btn at 12.7,-9.6) up by Raise: everything of ours goes with it
+    double R = g_place == PL_UNDER ? g_raise : 0, mby = -9.6 - R;
+    gfx_setvar(mv, "_root.menu_btn._y", gv_num(mby));
+    double px = (g_place == PL_LEFT ? MB_X0 - g_gap - W : MB_X0) + g_offX, py = (g_place == PL_LEFT ? MB_Y0 : MB_Y0 + MB_H + g_gap) - R + g_offY;
     // the text like the Menu label: its field 31 high for size 20 sits 17.4 below the top of the button
     double fh = 31.0 * g_size / 20.0, fy = py + (H - fh) / 2 + 1, h = fh;
     label_find(mv);
@@ -253,7 +257,7 @@ static void clock_make(void *mv) {
         label_shift(mv, LABEL_X - LABEL_SHIFT);
         // the label's centre (clip 25 + 81) moved, plus half of "Menu" and a space; without the label found: after it
         px = 12.7 + (g_lbl[0] ? LABEL_X + 81 - LABEL_SHIFT + 25 : LABEL_X + 81 + 25) + g_offX;
-        W = 90; fy = -9.6 + 23 + (31.0 - fh) / 2 + g_offY; h = fh;   // on the label's middle line
+        W = 90; fy = mby + 23 + (31.0 - fh) / 2 + g_offY; h = fh;   // on the label's middle line
     } else label_shift(mv, LABEL_X);
     for (int k = 0; k < 2; k++) {                    // the shadow first: the text over it
         const char *nm = k ? "mt_clock" : "mt_clock_sh";
@@ -277,7 +281,7 @@ static void clock_make(void *mv) {
             logmsg("plate: copy of the Menu button's background %s", r.type == GV_BOOL && r.v.b ? "made" : "NOT made");
         }
         // scaled so its visible part is W x H, placed so that part starts at px,py (menu_btn's own coordinates)
-        double sx = W / MB_W, sy = H / MB_H, x = px - 12.7 - UP_PADX * sx, y = py + 9.6 - UP_PADY * sy;
+        double sx = W / MB_W, sy = H / MB_H, x = px - 12.7 - UP_PADX * sx, y = py - mby - UP_PADY * sy;
         GfxVal pa[3] = { gv_str("menu_btn.mt_plate"), gv_num(x), gv_num(y) }, sa[3] = { gv_str("menu_btn.mt_plate"), gv_num(sx), gv_num(sy) };
         logmsg("clock at %.1f,%.1f %gx%g on the stage (%s the Menu button), text size %d", px, py, W, H, g_place == PL_LEFT ? "left of" : "under", g_size);
         gfx_invoke(mv, "Receive_SetMovieClipPosition", NULL, pa, 3);
@@ -285,7 +289,26 @@ static void clock_make(void *mv) {
         gfx_setvar(mv, "_root.menu_btn.mt_plate._alpha", gv_num(g_plateAlpha));
     } else if (gfx_exists(mv, "menu_btn.mt_plate")) gfx_set_visible(mv, "menu_btn.mt_plate", 0);   // Plate=0 / menu while the game runs
 }
-static int plate_on(void) { return g_plate && g_place != PL_MENU; }
+// Place=top (experimental, siritos 02.11): under the victory point counter at the top centre. That panel is a form of its own
+// too (vtable 0x0111174C, made in 0xB18850 with ui\movies\hud\victory_point_panel; slot 4 the same empty "ret 4"); its stage
+// is 436 x 115, the bar and the stars in its upper part. The fields are centred on the stage at x 218; OffsetX / OffsetY move
+// them (read again while the game runs). No plate: the counter has none either.
+#define VP_VT_UPD 0x0111175C
+static void clock_make_top(void *mv) {
+    double W = g_width, fh = 31.0 * g_size / 20.0, px = 218 - W / 2 + g_offX, fy = 115 - fh - 2 + g_offY;
+    for (int k = 0; k < 2; k++) {
+        const char *nm = k ? "mt_clock" : "mt_clock_sh";
+        char p[64];
+        GfxVal a[6] = { gv_str(nm), gv_num(16000 + k), gv_num(px + (k ? 0 : 1.5)), gv_num(fy + (k ? 0 : 2)), gv_num(W), gv_num(fh) };
+        int ok = gfx_invoke(mv, "_root.createTextField", NULL, a, 6);
+        snprintf(p, sizeof p, "_root.%s.html", nm); gfx_setvar(mv, p, gv_bool(1));
+        snprintf(p, sizeof p, "_root.%s.selectable", nm); gfx_setvar(mv, p, gv_bool(0));
+        if (!k) { snprintf(p, sizeof p, "_root.%s._alpha", nm); gfx_setvar(mv, p, gv_num(g_shadow ? 70 : 0)); }
+        if (!ok) logmsg("victory point movie %p: createTextField %s failed", mv, nm);
+    }
+    logmsg("clock made in the victory point movie %p at %.1f,%.1f %gx%.1f: %s", mv, px, fy, W, fh, gfx_exists(mv, "mt_clock") ? "ok" : "NOT THERE - no clock");
+}
+static int plate_on(void) { return g_plate && g_place != PL_MENU && g_place != PL_TOP; }
 static void clock_restyle(void) { g_clkMovie = NULL; }   // the next frame makes the fields again (same names and depths: replaced)
 static void clock_text(void *mv, const char *t0) {
     char h[256], t[32]; const char *al = g_place == PL_MENU ? "left" : "center";
@@ -296,16 +319,30 @@ static void clock_text(void *mv, const char *t0) {
              (unsigned long)(g_color & 0xFFFFFF), t);
     gfx_setvar(mv, "_root.mt_clock.htmlText", gv_str(h));
 }
-static void __thiscall hk_menu_upd(char *form, float dt) {
-    o_menuUpd(form, dt);
+// one clock: in the Menu button movie (host 0) or the victory point movie (host 1, Place=top); the other host takes its
+// own off when the place changes while the game runs
+static void clock_frame(char *form, int host) {
     void *mv = gfx_movie_of_form(form);
     if (!mv) return;
     DWORD now = GetTickCount();
     reload_ini(now);
+    if (host != (g_place == PL_TOP)) {
+        if (mv == g_clkMovie) {                      // the clock was here: off, the Menu button as the game has it
+            gfx_setvar(mv, "_root.mt_clock._visible", gv_bool(0));
+            gfx_setvar(mv, "_root.mt_clock_sh._visible", gv_bool(0));
+            if (!host) {
+                if (gfx_exists(mv, "menu_btn.mt_plate")) gfx_set_visible(mv, "menu_btn.mt_plate", 0);
+                gfx_setvar(mv, "_root.menu_btn._y", gv_num(-9.6));
+                label_shift(mv, LABEL_X);
+            }
+            g_clkMovie = NULL;
+        }
+        return;
+    }
     int vis = g_enabled && clock_visible();
     if (mv != g_clkMovie || (now - g_clkCheck > 3000 && (g_clkCheck = now, !gfx_exists(mv, "mt_clock")))) {
         g_clkMovie = mv; g_clkCheck = now; g_clkShown = -1; g_clkText[0] = 0;
-        clock_make(mv);
+        if (host) clock_make_top(mv); else clock_make(mv);
     }
     if (vis != g_clkShown) {
         DWORD run = mt_game_ms();
@@ -323,6 +360,9 @@ static void __thiscall hk_menu_upd(char *form, float dt) {
     else snprintf(t, sizeof t, "%02lu:%02lu", s / 60, s % 60);
     if (strcmp(t, g_clkText)) { strcpy(g_clkText, t); clock_text(mv, t); }
 }
+static void __thiscall hk_menu_upd(char *form, float dt) { o_menuUpd(form, dt); clock_frame(form, 0); }
+static MenuUpd_t o_vpUpd;
+static void __thiscall hk_vp_upd(char *form, float dt) { o_vpUpd(form, dt); clock_frame(form, 1); }
 static void clock_install(void) {
     static volatile LONG done;
     if (InterlockedExchange(&done, 1)) return;
@@ -330,6 +370,9 @@ static void clock_install(void) {
     if (gfx_patch_slot(MENU_VT_UPD, NULLSUB_RET4, (void *)hk_menu_upd)) logmsg("clock: in the game's own Menu button movie (its form's per-frame update)");
     else logmsg("Menu button form not as in DOW2.exe 3.19 (slot %08X = %08lX) - no clock", MENU_VT_UPD,
                 IsBadReadPtr((void *)MENU_VT_UPD, 4) ? 0UL : (unsigned long)*(DWORD *)MENU_VT_UPD);
+    o_vpUpd = (MenuUpd_t)NULLSUB_RET4;
+    if (gfx_patch_slot(VP_VT_UPD, NULLSUB_RET4, (void *)hk_vp_upd)) logmsg("clock: Place=top ready (the victory point panel's per-frame update)");
+    else logmsg("victory point panel form not as in DOW2.exe 3.19 - no Place=top");
 }
 
 // ---------- one match core per game (01.11.2026) ----------
