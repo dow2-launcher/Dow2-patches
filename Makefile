@@ -45,9 +45,13 @@ $(OUT)/Reverse.dll: reverse/reverse.c | $(OUT)
 $(OUT)/MMFind.dll: mmfind/mmfind.c | $(OUT)
 	$(CC) $(CFLAGS) -shared -o $@ $< -lwinhttp -lpsapi -lshell32 -lole32 -static-libgcc
 
-# our own game servers instead of the Relic battle server relays (launcher add-on relay_r2)
+# Relay 17: two add-ons from one source, two ticks (docs/ADDON_RULES.md): our servers for games (relay_r2) and the
+# forwarding servers for all other games (relay_fwd); whichever loads first carries the connections for both
 $(OUT)/Relay.dll: relay/relay.c | $(OUT)
 	$(CC) $(CFLAGS) -shared -o $@ $< -lws2_32 -lpsapi -static-libgcc
+
+$(OUT)/RelayForward.dll: relay/relay.c | $(OUT)
+	$(CC) $(CFLAGS) -DRELAY_FWD -shared -o $@ $< -lws2_32 -lpsapi -static-libgcc
 
 # experiment: what passes from a player to our game servers (no hooks; NetProbe.log goes with "Send logs")
 $(OUT)/NetProbe.dll: netprobe/netprobe.c | $(OUT)
