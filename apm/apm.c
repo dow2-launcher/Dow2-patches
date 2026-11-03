@@ -44,7 +44,7 @@ static void load_ini(void) {
     wchar_t s[32];
     g_enabled = ini_int(L"Enabled", 1, 0, 1);
     GetPrivateProfileStringW(L"APM", L"Place", L"top", s, 32, g_ini); g_place = !_wcsicmp(s, L"left") ? AP_LEFT : !_wcsicmp(s, L"minimap") ? AP_MINIMAP : AP_RIGHT;   // top / right = right of the clock at the top
-    g_size = ini_int(L"FontSize", 18, 10, 40);
+    g_size = ini_int(L"FontSize", 0, 0, 40);   // 0 = the place's own: 18 at the top, 24 at the minimap
     g_shadow = ini_int(L"Shadow", 1, 0, 1);
     g_offX = ini_int(L"OffsetX", 0, -800, 800);
     g_offY = ini_int(L"OffsetY", 0, -800, 800);   // 03.11: +-200 cut the minimap corner short (330 read as 200)
@@ -52,12 +52,15 @@ static void load_ini(void) {
     g_window = ini_int(L"Window", 60, 0, 600);
     g_onlineOnly = ini_int(L"OnlineOnly", 0, 0, 1);
     GetPrivateProfileStringW(L"APM", L"Color", L"FFFFFF", s, 32, g_ini); g_color = wcstoul(s, NULL, 16) & 0xFFFFFF;
-    g_labelSize = ini_int(L"LabelSize", 13, 8, 40);
+    g_labelSize = ini_int(L"LabelSize", 0, 0, 40);   // 0 = 13 at the top, 17 at the minimap
     g_fallbackOn = ini_int(L"Fallback", 1, 0, 1);   // no victory point counter (annihilation): above the minimap
     GetPrivateProfileStringW(L"APM", L"Label", L"apm", s, 16, g_ini);
     WideCharToMultiByte(CP_UTF8, 0, s, -1, g_label, sizeof g_label, NULL, NULL);
 }
 static void restyle(void);
+static int g_host = -1;
+static int fsize(void) { return g_size ? g_size : g_host == 2 ? 24 : 18; }
+static int lsize(void) { return g_labelSize ? g_labelSize : g_host == 2 ? 17 : 13; }
 static void reload_ini(DWORD now) {
     static DWORD last;
     if (now - last < 1000) return;
@@ -129,7 +132,7 @@ static Upd_t o_menuUpd, o_vpUpd, o_mmUpd;
 #define MM_UPD_FN 0x00B3F6E0
 static volatile DWORD g_vpSeen; static volatile LONG g_menuSinceVp;   // as in matchtimer.c: alt-tab is not annihilation
 static void *g_hostMv[3];
-static void *g_mv; static int g_host = -1, g_shown = -1, g_lastVal = -1; static DWORD g_check;
+static void *g_mv; static int g_shown = -1, g_lastVal = -1; static DWORD g_check;
 static void restyle(void) { g_mv = NULL; }
 static void fields(void *mv, double x, double y, double w, double h) {
     for (int k = 0; k < 2; k++) {
@@ -150,7 +153,7 @@ static void fields(void *mv, double x, double y, double w, double h) {
 static void make_top(void *mv) {
     // on the match clock's line (siritos 03.11: on the stars' line a captured star covered it): the clock is a 100 wide
     // field centred on 218 - 7 at 115 - its height - 2 + 6 (matchtimer.c, Place=top defaults); "00:00" is ~46 wide
-    double W = 90, fh = 31.0 * g_size / 20.0, y = 115 - fh - 2 + 6 + g_offY;
+    double W = 90, fh = 31.0 * fsize() / 20.0, y = 115 - fh - 2 + 6 + g_offY;
     double x = g_place == AP_LEFT ? 211 - 28 - W - g_gap + g_offX : 211 + 28 + g_gap + g_offX;
     fields(mv, x, y, W, fh);
     logmsg("APM in the victory point movie %p at %.1f,%.1f (%s of the counter): %s", mv, x, y, g_place == AP_LEFT ? "left" : "right", gfx_exists(mv, "mt_apm") ? "ok" : "NOT THERE");
@@ -159,23 +162,25 @@ static void make_top(void *mv) {
 static int g_withClock;                            // made right of the clock (it can come a frame later: made again then)
 static void make_menu(void *mv) {
     int clock = g_withClock = gfx_exists(mv, "mt_clock");
-    double fh = 31.0 * g_size / 20.0, W = clock ? 80 : 184, x = (clock ? 27.95 + 104 : 27.95) + g_offX, y = -4.0 + 48 + 2 + (34 - fh) / 2 + 3 - (clock ? 8 : 0) + g_offY;   // the clock lifts the Menu button by 8 (Raise)
+    double fh = 31.0 * fsize() / 20.0, W = clock ? 80 : 184, x = (clock ? 27.95 + 104 : 27.95) + g_offX, y = -4.0 + 48 + 2 + (34 - fh) / 2 + 3 - (clock ? 8 : 0) + g_offY;   // the clock lifts the Menu button by 8 (Raise)
     fields(mv, x, y, W, fh);
     logmsg("APM in the Menu button movie %p at %.1f,%.1f (under the button%s): %s", mv, x, y, clock ? ", right of the clock" : "", gfx_exists(mv, "mt_apm") ? "ok" : "NOT THERE");
 }
 static void make_mini(void *mv) {
     // above the minimap; the match clock there too (MatchTimer Place=minimap): right of it on its line
     int clock = g_withClock = gfx_exists(mv, "mt_clock");
-    double W = 140, fh = 31.0 * g_size / 20.0, x = 4 + (clock ? 60 : 0) + g_offX, y = -fh - 4 + g_offY;
+    // the bottom left corner of the frame (set in the game with siritos 03.11, 2560 x 1440: size 24, x 6, the line ending at 326;
+    // the movie shows nothing outside the frame)
+    double W = 140, fh = 31.0 * fsize() / 20.0, x = 6 + (clock ? 60 : 0) + g_offX, y = 326 - fh + g_offY;
     fields(mv, x, y, W, fh);
     logmsg("APM in the minimap movie %p at %.1f,%.1f: %s", mv, x, y, gfx_exists(mv, "mt_apm") ? "ok" : "NOT THERE");
 }
 static void set_text(void *mv, int v) {
     char h[320], t[96]; const char *al = g_host == 0 ? "center" : g_host == 1 && g_place == AP_LEFT ? "right" : "left";
-    snprintf(t, sizeof t, "<font size=\"%d\">%s</font> %d", g_labelSize, g_label, v);   // the label small (siritos 03.11: "apm" in small letters)
-    snprintf(h, sizeof h, "<p align=\"%s\"><font face=\"$TitleFont\" size=\"%d\" color=\"#000000\">%s</font></p>", al, g_size, t);
+    snprintf(t, sizeof t, "<font size=\"%d\">%s</font> %d", lsize(), g_label, v);   // the label small (siritos 03.11: "apm" in small letters)
+    snprintf(h, sizeof h, "<p align=\"%s\"><font face=\"$TitleFont\" size=\"%d\" color=\"#000000\">%s</font></p>", al, fsize(), t);
     gfx_setvar(mv, "_root.mt_apm_sh.htmlText", gv_str(h));
-    snprintf(h, sizeof h, "<p align=\"%s\"><font face=\"$TitleFont\" size=\"%d\" color=\"#%06lX\">%s</font></p>", al, g_size, (unsigned long)g_color, t);
+    snprintf(h, sizeof h, "<p align=\"%s\"><font face=\"$TitleFont\" size=\"%d\" color=\"#%06lX\">%s</font></p>", al, fsize(), (unsigned long)g_color, t);
     gfx_setvar(mv, "_root.mt_apm.htmlText", gv_str(h));
 }
 static void frame(char *form, int host) {
