@@ -1,4 +1,4 @@
-// SteamKeep.dll - the match goes on when Steam goes away (Dawn of War II: Retribution 3.19, Elite).
+// SteamKeep.dll v2 - the match goes on when Steam goes away, for the whole match (Dawn of War II: Retribution 3.19, Elite).
 //
 // What the game does when Steam drops (DOW2.exe 3.19):
 //  - Steam callbacks of Net::SteamLoginService: SteamServersDisconnected_t 0x004F6940 and SteamServerConnectFailure_t
@@ -18,8 +18,14 @@
 // The simulation does not need Steam: the match runs over the relay (BattleServer) and the game's own network session.
 // SteamKeep, only while a game is running (not in the menus, not in replays):
 //  1. at 0x0041FB0E the Steam events 0x0C / 1 / 2 are not turned into an end reason - the player stays in the match;
-//  2. a close request of the game window that comes together with Steam going away (within CloseWindowSec) is dropped.
-// After the match the game is as usual: when Steam is back the game logs in again by itself (SetConnected(true)).
+//  2. a close request of the game window from outside (a bare WM_CLOSE - what the Steam client sends) is dropped for the rest
+//     of the match once Steam has gone away in it (or while Steam is not logged on). The player's own ways out still work:
+//     the game's Alt+F4 and menu Quit (the game's own path, OnQuitFinal), the window's close button / taskbar Close
+//     (WM_SYSCOMMAND SC_CLOSE, seen by our window procedure), Windows shutting down (WM_QUERYENDSESSION / WM_ENDSESSION).
+// v2 (owner 03.11.2026: Steam's servers can be away for an hour): no time limit - any number of drops and returns, the
+// every-frame "logged on?" check included, never end the match. After the match the game is NOT closed even if Steam asked
+// during it (the result and the replay go out as usual); when Steam is back the game logs in again by itself.
+// Stats: ReportStats / the Steam stats calls (0x004F7B70, 0x007AA570) are asynchronous Steam / RLink calls, no waits.
 // Nothing in the simulation changes (no sync impact): only the local "leave the match" reaction is not taken.
 // Not covered: a match over Steam P2P (no relay) - its connections close with Steam; a dead internet connection.
 #include <windows.h>
@@ -37,9 +43,12 @@ static const unsigned char EVT_ORIG[20] = {0xA1,0x78,0x5A,0x33,0x01, 0x83,0xB8,0
 
 static wchar_t g_log[MAX_PATH];
 static int g_mp = 1, g_sp = 1;
-static DWORD g_close_ms = 30000;
+static int g_keep_close = 1;
 static volatile DWORD g_lost_at; static volatile int g_lost, g_kept;
 static DWORD g_req_at, g_poll_at;
+static int g_live, g_lost_match, g_asked, g_logged_on = 1;           // per match: Steam gone at least once / asked us to close
+static volatile int g_close_kind;                                    // 1 = the player / Windows, 2 = a bare WM_CLOSE from outside
+static volatile DWORD g_sc_at; static WNDPROC g_oldproc; static HWND g_hwnd;
 static unsigned char *g_srflag;
 typedef unsigned char (__stdcall *SRFn)(void);
 static SRFn g_sr;
@@ -74,7 +83,7 @@ __attribute__((used)) int __cdecl sk_decide(unsigned char *self, unsigned char *
     else if (type == 1) would = 0x12;
     else if (type == 2 && *(unsigned char *)(ev + 0x0C) == 0) would = 4;
     if (!would) return 0;
-    g_lost_at = GetTickCount(); g_lost = 1; g_kept++;
+    g_lost_at = GetTickCount(); g_lost = 1; g_kept++; g_lost_match = 1;
     logmsg("Steam went away during the %s game (event %d: %s) - the game would leave the match (end reason %d); "
            "staying in the match", (fl & FL_MP) ? "online" : "offline", type, evt_name(type), would);
     return 1;
@@ -87,30 +96,60 @@ __asm__(".globl _sk_evt_hook\n_sk_evt_hook:\n"
         "1:\n  ret $4\n");
 extern void sk_evt_hook(void);
 
-static void steam_poll(void) {                                       // log when Steam is back
+static void steam_poll(void) {                                       // Steam logged on? (once a second); log when it is back
     DWORD now = GetTickCount();
-    if (!g_lost || !g_steamuser || now - g_poll_at < 1000) return;
+    if (!g_steamuser || now - g_poll_at < 1000) return;
     g_poll_at = now;
-    void *u = g_steamuser(); if (!u) return;
-    BLoggedOnFn on = (BLoggedOnFn)(*(void ***)u)[1];
-    if (on(u)) { logmsg("Steam is back (%lu s after it went away)", (now - g_lost_at) / 1000); g_lost = 0; }
+    void *u = g_steamuser(); int on = 0;
+    if (u) { BLoggedOnFn f = (BLoggedOnFn)(*(void ***)u)[1]; on = f(u) != 0; }
+    g_logged_on = on;
+    if (!on) { if (!g_lost) { g_lost = 1; g_lost_at = now; } g_lost_match = 1; return; }
+    if (g_lost) { logmsg("Steam is back (%lu s after it went away)", (now - g_lost_at) / 1000); g_lost = 0; }
 }
-// Plat::Window::ShutdownRequested for GameApp::Loop: the window's close request that comes with Steam going away is dropped
+// the game window's procedure in front of the game's own: tells the player's close from a bare WM_CLOSE sent from outside
+static LRESULT CALLBACK sk_wndproc(HWND h, UINT m, WPARAM w, LPARAM l) {
+    if (m == WM_SYSCOMMAND && (w & 0xFFF0) == SC_CLOSE) { g_sc_at = GetTickCount(); g_close_kind = 1; }
+    else if (m == WM_CLOSE) {
+        int keys = (GetAsyncKeyState(VK_F4) & 0x8000) != 0;      // Alt+F4 held (not Alt alone: the game uses it)
+        g_close_kind = (keys || (g_sc_at && GetTickCount() - g_sc_at < 2000)) ? 1 : 2;
+    } else if (m == WM_QUERYENDSESSION || m == WM_ENDSESSION) g_close_kind = 1;
+    return CallWindowProcW(g_oldproc, h, m, w, l);
+}
+static BOOL CALLBACK find_win(HWND h, LPARAM _) {
+    DWORD pid = 0; GetWindowThreadProcessId(h, &pid);
+    if (pid != GetCurrentProcessId() || GetWindow(h, GW_OWNER) || !IsWindowVisible(h)) return TRUE;
+    wchar_t c[64]; GetClassNameW(h, c, 64); if (!wcscmp(c, L"ConsoleWindowClass")) return TRUE;
+    g_hwnd = h; return FALSE;
+}
+static DWORD WINAPI subclass_later(LPVOID _) {                       // the game makes its window a few seconds after the start
+    for (int i = 0; i < 1200 && !g_hwnd; i++) { Sleep(250); EnumWindows(find_win, 0); }
+    if (!g_hwnd) { logmsg("window: the game window was not found - every outside close request counts as Steam's"); return 0; }
+    g_oldproc = (WNDPROC)SetWindowLongPtrW(g_hwnd, GWLP_WNDPROC, (LONG_PTR)sk_wndproc);
+    logmsg("window: %p subclassed (the player's close button / Alt+F4 / menu work as usual)", (void *)g_hwnd);
+    return 0;
+}
+// Plat::Window::ShutdownRequested for GameApp::Loop: Steam's close request is dropped for the rest of the match
 static unsigned char __stdcall sk_shutdown_requested(void) {
     unsigned char r = g_sr();
     int live = live_game(NULL);
+    if (live && !g_live) { g_lost_match = 0; g_asked = 0; g_close_kind = 0; g_req_at = 0; }        // a new match
+    if (!live && g_live && g_asked)
+        logmsg("match over: Steam asked the game to close during it - the game stays open (result and replay go out as usual)");
+    g_live = live;
     if (live) steam_poll();
     if (!r || !live) { g_req_at = 0; return r; }
+    if (g_close_kind == 1) { logmsg("the player closes the game window - closing"); g_close_kind = 0; g_req_at = 0; return r; }
     DWORD now = GetTickCount();
-    if (g_kept && now - g_lost_at < g_close_ms) {
-        *g_srflag = 0; g_req_at = 0;
-        logmsg("the game window was asked to close %lu ms after Steam went away - ignored, the match goes on "
-               "(close it from the game menu, or Alt+F4 again after %lu s)", now - g_lost_at, g_close_ms / 1000);
+    if (g_keep_close && (g_lost_match || !g_logged_on)) {
+        *g_srflag = 0; g_req_at = 0; g_close_kind = 0;
+        if (!g_asked++ || g_asked % 10 == 0)
+            logmsg("close request from outside (Steam) during the match, Steam %s - ignored, the match goes on (#%d)",
+                   g_logged_on ? "went away in this match" : "is not logged on", g_asked);
         return 0;
     }
     if (!g_req_at) { g_req_at = now ? now : 1; return 0; }          // Steam's own event may come a moment after its close request
-    if (now - g_req_at < 1500) return 0;
-    g_req_at = 0; return r;
+    if (now - g_req_at < 3000) return 0;
+    logmsg("close request from outside with Steam fine - closing"); g_req_at = 0; g_close_kind = 0; return r;
 }
 // the window close check is the game's import of Plat::Window::ShutdownRequested (one call, GameApp::Loop 0x0040E28A)
 static int hook_close(void) {
@@ -136,12 +175,14 @@ static void install(void) {
     DWORD old; VirtualProtect(t, 5, PAGE_EXECUTE_READWRITE, &old);
     t[0] = 0xE9; *(DWORD *)(t + 1) = (DWORD)sk_evt_hook - (DWORD)(t + 5);
     VirtualProtect(t, 5, old, &old); FlushInstructionCache(GetCurrentProcess(), t, 5);
-    const char *close = g_close_ms ? (hook_close() ? "yes" : "waiting for the game's imports") : "no";
-    if (g_close_ms && strcmp(close, "yes")) CloseHandle(CreateThread(NULL, 0, close_later, NULL, 0, NULL));
+    const char *close = hook_close() ? "yes" : "waiting for the game's imports";
+    if (strcmp(close, "yes")) CloseHandle(CreateThread(NULL, 0, close_later, NULL, 0, NULL));
+    CloseHandle(CreateThread(NULL, 0, subclass_later, NULL, 0, NULL));
     HMODULE sa = GetModuleHandleA("steam_api.dll");
     g_steamuser = sa ? (SteamUserFn)GetProcAddress(sa, "SteamUser") : NULL;
-    logmsg("SteamKeep 1: the match goes on when Steam goes away (patched %08X; online %s, offline %s; "
-           "close request with Steam: %s, %lu s)", FN_STEAM_EVT, g_mp ? "yes" : "no", g_sp ? "yes" : "no", close, g_close_ms / 1000);
+    logmsg("SteamKeep 2: the match goes on when Steam goes away, the whole match (patched %08X; online %s, offline %s; "
+           "Steam's close request ignored in the match: %s, hook %s)", FN_STEAM_EVT, g_mp ? "yes" : "no", g_sp ? "yes" : "no",
+           g_keep_close ? "yes" : "no", close);
 }
 // one copy per game process: a patch can come both from Elite_DLLs (launcher) and from dow2-patches\ (winmm loader)
 static int already_loaded(const char *name) {
@@ -158,7 +199,7 @@ BOOL WINAPI DllMain(HINSTANCE h, DWORD reason, LPVOID _) {
     if (!GetPrivateProfileIntW(L"SteamKeep", L"Enabled", 1, ini)) { logmsg("disabled in SteamKeep.ini"); return TRUE; }
     g_mp = GetPrivateProfileIntW(L"SteamKeep", L"Online", 1, ini) != 0;
     g_sp = GetPrivateProfileIntW(L"SteamKeep", L"Offline", 1, ini) != 0;
-    g_close_ms = GetPrivateProfileIntW(L"SteamKeep", L"CloseWindowSec", 30, ini) * 1000;
+    g_keep_close = GetPrivateProfileIntW(L"SteamKeep", L"IgnoreSteamClose", 1, ini) != 0;
     install();
     return TRUE;
 }
