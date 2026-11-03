@@ -452,7 +452,7 @@ static DWORD WINAPI nodes_fetch(LPVOID _) {               // once at the start, 
     char out[4096];
     for (int k = 0; k < g_nHosts; k++) {
         out[0] = 0; int got = 0;
-        HINTERNET s = WinHttpOpen(L"MMFind/0.40", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, NULL, NULL, 0); if (!s) return 0;
+        HINTERNET s = WinHttpOpen(L"MMFind/0.41", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, NULL, NULL, 0); if (!s) return 0;
         WinHttpSetTimeouts(s, 4000, 4000, 4000, 4000);
         HINTERNET c = WinHttpConnect(s, g_hosts[k], INTERNET_DEFAULT_HTTPS_PORT, 0);
         HINTERNET r = c ? WinHttpOpenRequest(c, L"GET", L"/ladder/api/relays", NULL, NULL, NULL, WINHTTP_FLAG_SECURE) : NULL;
@@ -994,7 +994,7 @@ static int send_rec(const char *buf, DWORD size, const char *fname, const char *
     char out[512];
     for (int k = 0; k < g_nHosts; k++) {                              // the analysis runs while we wait: long receive timeout
         int h = (g_curHost + k) % g_nHosts; out[0] = 0; int n = 0; DWORD code = 0, sz = sizeof code;
-        HINTERNET s = WinHttpOpen(L"MMFind/0.40", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, NULL, NULL, 0); if (!s) break;
+        HINTERNET s = WinHttpOpen(L"MMFind/0.41", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, NULL, NULL, 0); if (!s) break;
         WinHttpSetTimeouts(s, 4000, 8000, 60000, 300000);
         HINTERNET c = WinHttpConnect(s, g_hosts[h], INTERNET_DEFAULT_HTTPS_PORT, 0);
         HINTERNET r = c ? WinHttpOpenRequest(c, L"POST", L"/replay/api/upload", NULL, NULL, NULL, WINHTTP_FLAG_SECURE) : NULL;
@@ -1988,7 +1988,7 @@ BOOL WINAPI DllMain(HINSTANCE h, DWORD r, LPVOID _) {
     g_mySteam = my_steam();
     { wchar_t p[MAX_PATH], o[MAX_PATH]; _snwprintf(p, MAX_PATH, L"%lsMMFind.log", g_dir); _snwprintf(o, MAX_PATH, L"%lsMMFind.log.old", g_dir);
       WIN32_FILE_ATTRIBUTE_DATA a; if (GetFileAttributesExW(p, GetFileExInfoStandard, &a) && (a.nFileSizeHigh || a.nFileSizeLow > (1u << 20))) MoveFileExW(p, o, MOVEFILE_REPLACE_EXISTING); }
-    logmsg("MMFind 0.40 start, steam=%llu server=%ls%s%s%s", g_mySteam, g_server, g_direct ? ", fast automatch (experiment) on" : "", g_fast ? ", fast steps (public room, direct join)" : "",
+    logmsg("MMFind 0.41 start, steam=%llu server=%ls%s%s%s", g_mySteam, g_server, g_direct ? ", fast automatch (experiment) on" : "", g_fast ? ", fast steps (public room, direct join)" : "",
            g_nativeCfg ? ", native search when on our lobby server" : ", native off");
     if (g_tlHost[0]) logmsg("TEST LADDER: every ladder API call goes to http://%ls:%u (TestLadder=)", g_tlHost, (unsigned)g_tlPort);
     { char n[64]; wsprintfA(n, "Local\\dow2patch_MMFind_%lu", GetCurrentProcessId());          // one copy per game (launcher + dow2-patches)
