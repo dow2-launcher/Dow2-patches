@@ -521,8 +521,10 @@ static DWORD WINAPI net_worker(LPVOID _) {
                     static char lastSt[48]; char cur[48]; snprintf(cur, sizeof cur, "%s%s %s", nat ? "native " : "", state, mid);
                     if (strcmp(cur, lastSt)) { strcpy(lastSt, cur); logmsg("native: the ladder says %s", res); }
                     if (good) { g_natGood = GetTickCount(); g_natSeen = 1; if (jstr(res, "lobby", lob, sizeof lob) && lob[0]) strcpy(g_natLobby, lob); }
-                    else if (!strcmp(state, "cancelled") && mid[0] && !g_natCancelled && strcmp(mid, g_natLastCancel)) {   // our match called off by the server - it had
-                        strcpy(g_natLastCancel, mid); g_natSeen = 1;   // the search; a match handled before (the ladder repeats "cancelled" for 5 min) is not news g_natGood = GetTickCount(); g_natAgain = jtrue(res, "again"); g_natCancelled = 1; }   // (even when this is the first answer)
+                    // our match called off by the server: it had the search (even when this is the first answer - a match that formed and
+                    // failed within 2 s); a match id handled before is not news (the ladder repeats "cancelled" for 5 min)
+                    else if (!strcmp(state, "cancelled") && mid[0] && !g_natCancelled && strcmp(mid, g_natLastCancel)) {
+                        strcpy(g_natLastCancel, mid); g_natSeen = 1; g_natGood = GetTickCount(); g_natAgain = jtrue(res, "again"); g_natCancelled = 1; }
                 } }
         }
         int st = g_state;
