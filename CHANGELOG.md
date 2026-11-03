@@ -14,6 +14,11 @@ The version of the set lives only in `VERSION`; each DLL still writes its own ve
   stopped (the same Start button) and the classic 0.37 flow runs. No OwnLobby.dll, `Native=0`, Manual / TestBots / DirectStart,
   Watch a match, or the ladder saying no -> the classic 0.37 flow as before. After a native match: ended and the replay
   upload as usual (lobby NM-<room>), no ruined-loading marker.
+  A native match the server calls off while the game sets it up (the game ends its own search and goes back to Find a Game):
+  the ladder answers mm/poll `{"state":"cancelled","again":true}` to everyone who was not the reason - MMFind presses Start
+  Searching again by itself (the native path) once the game is on Find a Game with its search off (a notice box is answered
+  with OK after 3 s, or ignored after 10 s), at most once per 30 s and 3 times in a row. Test option `[MMFind] TestLadder=host:port`:
+  every ladder API call over plain HTTP to that place, no mirrors (the TEST ladder through an ssh tunnel).
 
 ## 0.1.6 — 2026-10-30
 - MMFind 0.29 (outside addons.json, released by hand): placement by team. The ladder lobby uses random start positions (the game

@@ -199,6 +199,10 @@ static volatile DWORD g_natPass, g_natGood; static volatile int g_natSeen, g_nat
 static volatile int g_engSearch = -1;       // the engine's own search state (Receive_ShowSearchingAnimation as the engine sends it), -1 unknown
 static DWORD g_natStopAt; static int g_natStops;   // fallback: Stop Searching sent to the engine (checked once more)
 static char g_natLobby[48], g_natWhy[96];
+// a native match called off by the server while the game was setting it up (host never came, a guest never joined, ...): the game
+// ends its own search and goes back to Find a Game; the ladder says {"state":"cancelled","again":true} to everyone who was not the
+// reason - MMFind presses Start Searching again for them (the native path), at most once per 30 s and 3 times in a row
+static volatile int g_natAgain, g_reWant, g_reBoxOk; static volatile DWORD g_natWatchUntil; static DWORD g_reSince, g_reLast; static int g_reRow;
 #define QUICK (g_matchDirect || g_fast)
 // 0.35 (owner 02.11.2026: faster): the first one in the queue makes his private room while searching - player slots open, hero
 // accepted - and gives the ladder its id; the ladder makes him the host and his guests get the id with "matched" and join at once.
@@ -316,12 +320,15 @@ static void parse_hosts(void) {
     for (wchar_t *t = wcstok(b, L";, "); t && g_nHosts < 4; t = wcstok(NULL, L";, ")) wcsncpy(g_hosts[g_nHosts++], t, 63);
     if (!g_nHosts) { wcscpy(g_hosts[0], L"rts.fintebtc.de"); g_nHosts = 1; }
 }
-static int http_post1(const wchar_t *host, const wchar_t *path, const char *body, char *out, int cap, int tmo) {
+// 0.38 test option [MMFind] TestLadder=host:port: every ladder API call (/ladder/api/mm/...) goes there over plain HTTP, no
+// mirrors (the TEST ladder listens on 127.0.0.1 only, reached through an ssh tunnel); the replay upload and the relay list stay
+static wchar_t g_tlHost[64]; static INTERNET_PORT g_tlPort;
+static int http_post1x(const wchar_t *host, INTERNET_PORT port, int secure, const wchar_t *path, const char *body, char *out, int cap, int tmo) {
     out[0] = 0; int got = 0, answered = 0;
     HINTERNET s = WinHttpOpen(L"MMFind/0.1", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, NULL, NULL, 0); if (!s) return 0;
     WinHttpSetTimeouts(s, tmo, tmo, tmo, tmo);
-    HINTERNET c = WinHttpConnect(s, host, INTERNET_DEFAULT_HTTPS_PORT, 0);
-    HINTERNET r = c ? WinHttpOpenRequest(c, L"POST", path, NULL, NULL, NULL, WINHTTP_FLAG_SECURE) : NULL;
+    HINTERNET c = WinHttpConnect(s, host, port, 0);
+    HINTERNET r = c ? WinHttpOpenRequest(c, L"POST", path, NULL, NULL, NULL, secure ? WINHTTP_FLAG_SECURE : 0) : NULL;
     if (r && WinHttpSendRequest(r, L"Content-Type: application/json\r\n", (DWORD)-1, (void *)body, (DWORD)strlen(body), (DWORD)strlen(body), 0)
           && WinHttpReceiveResponse(r, NULL)) {
         DWORD code = 0, sz = sizeof code; WinHttpQueryHeaders(r, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER, NULL, &code, &sz, NULL);
@@ -331,6 +338,9 @@ static int http_post1(const wchar_t *host, const wchar_t *path, const char *body
     out[got] = 0;
     if (r) WinHttpCloseHandle(r); if (c) WinHttpCloseHandle(c); WinHttpCloseHandle(s);
     return answered && got > 0;
+}
+static int http_post1(const wchar_t *host, const wchar_t *path, const char *body, char *out, int cap, int tmo) {
+    return http_post1x(host, INTERNET_DEFAULT_HTTPS_PORT, 1, path, body, out, cap, tmo);
 }
 // 0.36 (02.11.2026): the game servers from the ladder into Relay.ini [Relay] Nodes= (Relay 16 adds them to its ping set, so
 // the matchmaker can pick a mirror added on the ladder without a client update). Sources: the "relays" field of mm/join and
@@ -381,6 +391,9 @@ static DWORD WINAPI nodes_fetch(LPVOID _) {               // once at the start, 
 }
 static int http_post(const wchar_t *ep, const char *body, char *out, int cap) {
     wchar_t path[128]; _snwprintf(path, 128, L"%ls%ls", MM_PATH, ep);
+    if (g_tlHost[0]) {                                                 // test ladder: plain HTTP, one place
+        if (http_post1x(g_tlHost, g_tlPort, 0, path, body, out, cap, 4000)) { nodes_from_json(out); return 1; }
+        out[0] = 0; return 0; }
     static const int TMO[2] = {1000, 4000};                          // first round quick (1 s per step), then a patient one (4 s)
     for (int round = 0; round < 2; round++)
         for (int k = 0; k < g_nHosts; k++) {
@@ -397,6 +410,9 @@ static int http_post(const wchar_t *ep, const char *body, char *out, int cap) {
 static int http_quick(const wchar_t *ep, const char *body, char *out, int cap, DWORD budget) {
     wchar_t path[128]; _snwprintf(path, 128, L"%ls%ls", MM_PATH, ep);
     DWORD t0 = GetTickCount();
+    if (g_tlHost[0]) {                                                 // test ladder: plain HTTP, one place
+        if (http_post1x(g_tlHost, g_tlPort, 0, path, body, out, cap, (int)budget / 2)) { nodes_from_json(out); return 1; }
+        out[0] = 0; return 0; }
     for (int k = 0; k < g_nHosts; k++) {
         DWORD used = GetTickCount() - t0; if (used + 150 > budget) break;
         int h = (g_curHost + k) % g_nHosts, tmo = (int)(budget - used) / 2;   // WinHttp's timeout is per step (connect, send, receive)
@@ -496,7 +512,7 @@ static DWORD WINAPI net_worker(LPVOID _) {
                    g_natAnswer = 2; }
             logmsg("native: mm/native -> %s (%lu ms): %s", g_natAnswer == 1 ? "yes" : "no", GetTickCount() - t0, ok ? res : "-");
         }
-        if (g_state == S_NATIVE && !g_loading) {                          // 0.38: the native search as the ladder sees it, every 2 s
+        if ((g_state == S_NATIVE || (g_state == S_IDLE && g_natWatchUntil && (int)(g_natWatchUntil - GetTickCount()) > 0)) && !g_loading) {   // 0.38: the native search as the ladder sees it, every 2 s
             static DWORD lastn; if (GetTickCount() - lastn >= 2000) { lastn = GetTickCount();
                 snprintf(body, sizeof body, "{\"steam\":\"%llu\"}", g_mySteam);
                 if (http_quick(L"poll", body, res, sizeof res, 1500)) {
@@ -505,7 +521,7 @@ static DWORD WINAPI net_worker(LPVOID _) {
                     static char lastSt[48]; char cur[48]; snprintf(cur, sizeof cur, "%s%s %s", nat ? "native " : "", state, mid);
                     if (strcmp(cur, lastSt)) { strcpy(lastSt, cur); logmsg("native: the ladder says %s", res); }
                     if (good) { g_natGood = GetTickCount(); g_natSeen = 1; if (jstr(res, "lobby", lob, sizeof lob) && lob[0]) strcpy(g_natLobby, lob); }
-                    else if (!strcmp(state, "cancelled") && mid[0] && g_natSeen) g_natCancelled = 1;   // our match called off by the server
+                    else if (!strcmp(state, "cancelled") && mid[0] && g_natSeen && !g_natCancelled) { g_natAgain = jtrue(res, "again"); g_natCancelled = 1; }   // our match called off by the server
                 } }
         }
         int st = g_state;
@@ -1100,6 +1116,16 @@ static const char *native_no(void) {
     if (!GetModuleHandleW(L"OwnLobby.dll")) return "no OwnLobby.dll in the game";
     return NULL;
 }
+// Start Searching on Find a Game (the player's click, or 0.38's search again after a cancelled native match)
+static void search_click(void) {
+    if (g_curRace >= 0 && !g_random) { g_race = g_curRace; g_chapter = g_curChapter; if (g_curHero >= 0) g_hero = g_curHero; save_choice();
+        logmsg("search with race %d chapter %d hero %d (as shown on Find a Game)", g_race, g_chapter, g_hero); }
+    g_noticeUntil = 0; g_coverWant = 0; g_searchTick = GetTickCount(); g_queue = -1; g_lobbyRace = -1; g_role = 0; g_gameName[0] = 0; g_hostMap[0] = 0; g_oppName[0] = 0; g_hostReported = 0; g_wantHost = 0;
+    g_matchMode = g_mode < 3 ? g_mode : 0; g_backToMM = 0;                   // 0.35: my room's player slots follow the searched mode
+    const char *no = native_no();
+    if (!no) { g_natAnswer = 0; g_natSeen = g_natCancelled = 0; g_natLobby[0] = 0; g_natStopAt = 0; g_natWatchUntil = 0; set_state(S_NASK); SetEvent(g_wake); }   // 0.38: ask the ladder
+    else { logmsg("native: not tried (%s) - classic flow", no); set_state(S_SEARCH); g_wantJoin = 1; SetEvent(g_wake); }
+}
 static int ends_with(const char *s, const char *t) { size_t a = strlen(s), b = strlen(t); return a >= b && !strcmp(s + a - b, t); }
 static void __fastcall fs_hook(void *self, void *edx, void *movie, const char *cmd, const char *args) {
     if (cmd && !IsBadReadPtr(cmd, 1)) {
@@ -1116,7 +1142,7 @@ static void __fastcall fs_hook(void *self, void *edx, void *movie, const char *c
         if (!strcmp(cmd, "OnLoadMovieComplete") && args && !strncmp(args, "/mp_mc", 6) && !g_loading) {
             if (g_state == S_NATIVE || g_state == S_NASK) {             // 0.38: the game's own automatch got here by itself
                 logmsg("native: loading %lu ms after Start Searching (lobby %s)", GetTickCount() - g_searchTick, g_natLobby[0] ? g_natLobby : "-");
-                strcpy(g_gameName, g_natLobby); g_state = S_DONE; g_stateTick = GetTickCount();      // after the match: ended + replay as usual (no ruin marker: not MM-)
+                strcpy(g_gameName, g_natLobby); g_state = S_DONE; g_stateTick = GetTickCount(); g_reRow = 0; g_natWatchUntil = 0;      // after the match: ended + replay as usual (no ruin marker: not MM-)
             }
             // 0.34: the host starts at once - the match may load while a guest is still on the hero or taking the slot
             if (g_matchDirect && g_state >= S_SETUP_HERO && g_state < S_DONE) { logmsg("direct: loading while %s - done", SN[g_state]); g_state = S_DONE; g_stateTick = GetTickCount(); }
@@ -1194,17 +1220,10 @@ static void __fastcall fs_hook(void *self, void *edx, void *movie, const char *c
                 g_fsOrig(self, edx, movie, cmd, args); return;
             }
             if (g_state == S_NASK) { logmsg("native: cancelled by the player before the answer"); set_state(S_IDLE); return; }
-            if (g_state == S_IDLE || g_state == S_DONE || g_state == S_FAIL) {
-                if (g_curRace >= 0 && !g_random) { g_race = g_curRace; g_chapter = g_curChapter; if (g_curHero >= 0) g_hero = g_curHero; save_choice();
-                    logmsg("search with race %d chapter %d hero %d (as shown on Find a Game)", g_race, g_chapter, g_hero); }
-                g_noticeUntil = 0; g_coverWant = 0; g_searchTick = GetTickCount(); g_queue = -1; g_lobbyRace = -1; g_role = 0; g_gameName[0] = 0; g_hostMap[0] = 0; g_oppName[0] = 0; g_hostReported = 0; g_wantHost = 0;
-                g_matchMode = g_mode < 3 ? g_mode : 0; g_backToMM = 0;                   // 0.35: my room's player slots follow the searched mode
-                const char *no = native_no();
-                if (!no) { g_natAnswer = 0; g_natSeen = g_natCancelled = 0; g_natLobby[0] = 0; g_natStopAt = 0; set_state(S_NASK); SetEvent(g_wake); }   // 0.38: ask the ladder
-                else { logmsg("native: not tried (%s) - classic flow", no); set_state(S_SEARCH); g_wantJoin = 1; SetEvent(g_wake); }
-            } else if (g_state == S_SEARCH) { set_state(S_IDLE); g_wantLeave = 1; SetEvent(g_wake); }
+            if (g_state == S_IDLE || g_state == S_DONE || g_state == S_FAIL) { g_reWant = 0; g_reRow = 0; search_click(); }   // the player's own click else if (g_state == S_SEARCH) { set_state(S_IDLE); g_wantLeave = 1; SetEvent(g_wake); }
             return;                                                   // never start Relic's own search
         }
+        if (g_screen == SC_MM && ends_with(cmd, ".OnClickBack") && g_reWant) { g_reWant = 0; logmsg("native: the player left Find a Game - not searching again"); }
         if (g_screen == SC_MM && ends_with(cmd, ".OnClickBack") && (g_state == S_SEARCH || g_state == S_NATIVE || g_state == S_NASK)) { set_state(S_IDLE); g_wantLeave = 1; SetEvent(g_wake); }
     }
     g_fsOrig(self, edx, movie, cmd, args);
@@ -1447,6 +1466,23 @@ static void pre_step(DWORD now) {                // runs while searching (S_SEAR
         break;
     }
 }
+// 0.38: the message boxes that are up (visible) - count, and press the first button (OK of a notice) on them
+static int msgbox_scan(int press) {
+    void *w = g_msgWrap && !IsBadReadPtr(g_msgWrap, 0x1C) ? g_msgWrap : NULL;
+    void *m = w ? *(void **)((char *)w + 4) : g_mbMovie;               // the newest message box movie first (as msgbox_hide)
+    void *h = w ? *(void **)((char *)w + 0x18) : g_mbFsSelf;
+    if (h && IsBadReadPtr(h, 0x20)) h = NULL;
+    if (!m || IsBadReadPtr(m, 8)) return 0;
+    int n = 0;
+    for (int k = 0; k < 8; k++) {
+        char path[64], vis[80]; GFxValue v; snprintf(path, sizeof path, "_level0.container.message_box_%d", k); snprintf(vis, sizeof vis, "%s._visible", path);
+        if (!as_get(m, vis, &v) || v.type != GFX_BOOL || !v.v.b) continue;
+        n++; if (press && h) { logmsg("message box %d: OK (native: searching again)", k); g_sending++; g_fsOrig(h, NULL, m, "OnButton1", path); g_sending--; }
+    }
+    return n;
+}
+static int msgbox_up(void) { return msgbox_scan(0); }
+static void msgbox_ok(void) { if (!msgbox_scan(1)) logmsg("message box: none up to press"); }
 static void leave_lobby(DWORD now) {             // 0.35: Back, and Yes on "Are you sure?" if it comes
     static DWORD lb, sess; static int yes, n;        // the box is not seen from here: still in the lobby 0.4 s after Back = it asks
     if (sess != g_stateTick) { sess = g_stateTick; n = 0; lb = 0; }
@@ -1539,6 +1575,26 @@ static void tick(void) {
         if (g_engSearch == 1 && g_screen == SC_MM && g_natStops < 2) { g_natStops++; g_natStopAt = now; logmsg("native: the game still searches - Stop Searching again"); fs(".OnClickStart", ""); }
         else { if (g_engSearch == 1) logmsg("native: the game's own search did not stop"); g_natStopAt = 0; }
     }
+    if (g_natCancelled) {                                             // 0.38: the server called our native match off
+        g_natCancelled = 0;
+        if (g_state == S_NATIVE || (g_state == S_IDLE && g_natWatchUntil)) {
+            g_natWatchUntil = 0;
+            if (!g_natAgain) logmsg("native: the match was cancelled by the server (I was the reason) - idle");
+            else if (g_reRow >= 3) logmsg("native: the match was cancelled by the server - %d searches again in a row already, not once more", g_reRow);
+            else { g_reWant = 1; g_reBoxOk = 0; g_reSince = now; logmsg("native: the match was cancelled by the server, not because of me - searching again when the game is back on Find a Game"); }
+            if (g_state == S_NATIVE) set_state(S_IDLE);
+        }
+    }
+    if (g_reWant && (g_state != S_IDLE || g_loading)) g_reWant = 0;      // something else is going on (the player searched himself)
+    if (g_reWant) {
+        int box = msgbox_up();
+        if (box && !g_reBoxOk && now - g_reSince > 3000) { g_reBoxOk = 1; msgbox_ok(); }      // the notice ("Countdown was stopped") away
+        int engOff = g_engSearch == 0 || (g_engSearch < 0 && now - g_scrTick > 3000);
+        if (now - g_reSince > 45000) { logmsg("native: not searching again - the game was not back on Find a Game with its search off in 45 s"); g_reWant = 0; }
+        else if (g_screen == SC_MM && engOff && now - g_scrTick > 1000 && (!box || now - g_reSince > 10000) && (!g_reLast || now - g_reLast >= 30000)) {
+            g_reWant = 0; g_reLast = now; g_reRow++; logmsg("native: Start Searching again by itself (%d in a row)", g_reRow); search_click();
+        }
+    }
     switch (g_state) {
     case S_NASK:                                                      // 0.38: waiting for the ladder's word (net_worker, <= 1.5 s)
         if (g_screen != SC_MM) { logmsg("native: left Find a Game while asking"); set_state(S_IDLE); break; }
@@ -1554,12 +1610,10 @@ static void tick(void) {
         }
         break;
     case S_NATIVE: {                                                  // 0.38: the game searches by itself; we only watch the ladder
-        if (g_natCancelled) {                                         // the server called our match off: the game shows it, we are done
-            g_natCancelled = 0; logmsg("native: the match was cancelled by the server - idle"); set_state(S_IDLE); break; }
         DWORD quiet = g_natSeen && (int)(g_natGood - g_natPass) > 0 ? now - g_natGood : now - g_natPass;
         if (quiet <= 10000) break;
         const char *why = g_natSeen ? "the ladder lost the native search" : "the ladder never saw the native search";
-        if (g_screen != SC_MM) { logmsg("native: %s (%lu ms) and not on Find a Game - idle (the game goes on by itself)", why, quiet); set_state(S_IDLE); break; }   // no leave: it would call off a match the game may still be setting up
+        if (g_screen != SC_MM) { logmsg("native: %s (%lu ms) and not on Find a Game - idle (the game goes on by itself)", why, quiet); set_state(S_IDLE); g_natWatchUntil = now + 30000; break; }   // no leave: it would call off a match the game may still be setting up
         logmsg("native: FALLBACK - %s (%lu ms quiet), the game's own search %s - classic flow", why, quiet, g_engSearch == 1 ? "on: stopping it" : g_engSearch == 0 ? "off" : "unknown");
         if (g_engSearch == 1) { fs(".OnClickStart", ""); g_natStopAt = now; g_natStops = 0; }   // Stop Searching (the same button)
         g_queue = -1; set_state(S_SEARCH); g_wantJoin = 1; SetEvent(g_wake);
@@ -1818,6 +1872,8 @@ BOOL WINAPI DllMain(HINSTANCE h, DWORD r, LPVOID _) {
     g_direct = GetPrivateProfileIntW(L"MMFind", L"DirectStart", 0, ini);       // 0.34 experiment, see g_direct
     g_fast = GetPrivateProfileIntW(L"MMFind", L"Fast", 1, ini) != 0;           // 0.37, see g_fast
     g_nativeCfg = GetPrivateProfileIntW(L"MMFind", L"Native", 1, ini) != 0;    // 0.38, see g_nativeCfg
+    { wchar_t t[80]; GetPrivateProfileStringW(L"MMFind", L"TestLadder", L"", t, 80, ini); wchar_t *c = wcsrchr(t, L':');   // 0.38 tests, see g_tlHost
+      if (t[0] && c && _wtoi(c + 1) > 0 && _wtoi(c + 1) < 65536) { *c = 0; wcsncpy(g_tlHost, t, 63); g_tlPort = (INTERNET_PORT)_wtoi(c + 1); } }
     g_testBots = GetPrivateProfileIntW(L"MMFind", L"TestBots", 0, ini);
     g_aiDiff = GetPrivateProfileIntW(L"MMFind", L"AIDifficulty", 1, ini);    // 0 Easy, 1 Normal, 2 Hard, 3 Expert
     g_readyIdx = GetPrivateProfileIntW(L"MMFind", L"ReadyField", 12, ini);     // PopulatePlayerList slot field 12 = "ready" (seen 26.10)
@@ -1833,6 +1889,7 @@ BOOL WINAPI DllMain(HINSTANCE h, DWORD r, LPVOID _) {
       WIN32_FILE_ATTRIBUTE_DATA a; if (GetFileAttributesExW(p, GetFileExInfoStandard, &a) && (a.nFileSizeHigh || a.nFileSizeLow > (1u << 20))) MoveFileExW(p, o, MOVEFILE_REPLACE_EXISTING); }
     logmsg("MMFind 0.38 start, steam=%llu server=%ls%s%s%s", g_mySteam, g_server, g_direct ? ", fast automatch (experiment) on" : "", g_fast ? ", fast steps (public room, direct join)" : "",
            g_nativeCfg ? ", native search when on our lobby server" : ", native off");
+    if (g_tlHost[0]) logmsg("TEST LADDER: every ladder API call goes to http://%ls:%u (TestLadder=)", g_tlHost, (unsigned)g_tlPort);
     { char n[64]; wsprintfA(n, "Local\\dow2patch_MMFind_%lu", GetCurrentProcessId());          // one copy per game (launcher + dow2-patches)
       HANDLE mx = CreateMutexA(NULL, FALSE, n); if (mx && GetLastError() == ERROR_ALREADY_EXISTS) { logmsg("another MMFind copy is active, this one stays idle"); return TRUE; } }
     install(); CloseHandle(CreateThread(NULL, 0, nodes_fetch, NULL, 0, NULL)); return TRUE;
