@@ -4,6 +4,15 @@ Every version gets an entry here before it reaches `main`. CI then tags `vX.Y.Z`
 version (`X.Y.0`) it also publishes a GitHub Release with the DLLs and the entries since the previous `X.Y.0`.
 The version of the set lives only in `VERSION`; each DLL still writes its own version to its log.
 
+## Unreleased (branch feature/steamkeep)
+- SteamKeep 1 (new add-on, not in the launcher catalog yet): the match goes on when Steam goes away. DOW2.exe turns a Steam
+  drop (SteamLoginService SetConnected(false) 0x004F6F20 -> bus events 0x0C / 1 / 2) into an end reason in GameObj
+  (0x0041FB0E) and leaves the match (GameQuitForSteamInternal 0x00426D9C); a close request that the Steam client sends
+  with it (players' logs: SteamServerShutdown -> "GameApp::Loop - shutdown requested") quits the game. SteamKeep skips
+  both while a game is running (not menus, not replays); no simulation change. Stand 1 (skirmish vs AI, Steam CM sockets
+  destroyed for 60 s + WM_CLOSE to the window): without it the game left the match (end reason 4) and quit; with it the
+  match went on (clock 1:55, Steam back after 44 s), a later plain WM_CLOSE still closed the game.
+
 ## Unreleased (branch fix/cooldowns-6-timer-apm)
 - Cooldowns 6 (siritos 03.11.2026: on Catachans one ability's recharge reset another's number, and with no energy the number
   went; the bunker stratagem never got one). Cooldowns 4-5 kept the recharge per button number and its end per ability
