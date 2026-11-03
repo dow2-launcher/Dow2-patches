@@ -51,11 +51,13 @@ ownlobby/
     The add-on ships OwnLobby.dll into Elite_DLLs and winmm.dll next to DOW2.exe (Wine/Proton: winmm=n,b).
 
 cooldowns/
-    Cooldown numbers, Cooldowns.dll (Cooldowns 5): seconds left on recharging abilities and global abilities in the
-    middle of the button, as the button's own count text (Scaleform). Only reads the share the HUD gets through
-    SetProgress - no desync, no engine queries. A recharge share wins over the 0 of another reason (no energy), and the
-    end of each ability's recharge is remembered, so no energy / a busy squad don't take the number off.
-    Cooldowns.ini [Cooldowns]: Enabled, DigitSize, Color, Trace (what each update sent, in Cooldowns.log).
+    Cooldown numbers, Cooldowns.dll (Cooldowns 6): seconds left on recharging abilities, global abilities and
+    stratagems in the middle of the button, as the button's own count text (Scaleform). Each recharge is kept per squad
+    and ability; after the panel's own button update the engine is asked the same read-only question the panel asks
+    (iface vt+0xB4: the share done, with the owner and ability the panel just worked out), so no energy, a busy squad,
+    another ability or another squad of the kind don't touch the number. The call is guarded (a fault stops the queries
+    for that game). Read-only: no desync.
+    Cooldowns.ini [Cooldowns]: Enabled, DigitSize, Color, Ask (0 = shares only), Trace (each update, in Cooldowns.log).
 
 frameprobe/
     The diagnostics DLL I used to find the observer lag: frame times, sim ticks, a stack sampler on the
@@ -65,9 +67,19 @@ matchtimer/
     Match clock, MatchTimer.dll. MM:SS of game time since the match started (sim ticks x 100 ms, pauses not counted),
     as text in the game's own HUD movies (Scaleform, common/gfxui.h - nothing drawn over the game, see
     docs/UI_RULES.md); off as soon as the match ends. MatchTimer.ini, read again while the game runs:
-    Place=top (default: under the victory point counter) | under (a plate under the Menu button) | menu
-    ("Menu (00:18)"); FontSize, Color, OffsetX / OffsetY; under: Raise, Height, TextY. OnlineOnly=1 keeps it to live
-    multiplayer.
+    Place=top (default: under the victory point counter; a match without it - annihilation - under the Menu button,
+    TopFallback=0: nowhere) | under (a plate under the Menu button) | menu ("Menu (00:18)"); FontSize, Color,
+    OffsetX / OffsetY; under: Height, Gap, TextY, Raise (0: the Menu button stays where the game has it). OnlineOnly=1
+    keeps it to live multiplayer.
+
+apm/
+    APM.dll: actions per minute - presses of mouse buttons and keys (no auto-repeat, no Shift/Ctrl/Alt alone) while a
+    match runs and the game is in front, over the last 60 s of game time (Window=, 0 = the whole match). Read with
+    GetAsyncKeyState once a frame; nothing goes to the game. "apm N" in the game's own HUD movies: Place=top (right of
+    the match clock, on its line; left = left of it) | minimap (the bottom left corner of the minimap frame); a match
+    without the victory point counter puts it in the minimap corner (Fallback=0: nowhere). APM.ini, read again while
+    the game runs. The per-frame form updates (Menu button, counter, minimap) are chained with MatchTimer
+    (common/gfxui.h gfx_hook_slot).
 
 eliteai/
     The new AI (launcher add-on "New AI (test, skirmish only)"). EliteAI.dll hooks lua_load in LuaConfig.dll and puts

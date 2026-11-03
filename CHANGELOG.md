@@ -4,6 +4,22 @@ Every version gets an entry here before it reaches `main`. CI then tags `vX.Y.Z`
 version (`X.Y.0`) it also publishes a GitHub Release with the DLLs and the entries since the previous `X.Y.0`.
 The version of the set lives only in `VERSION`; each DLL still writes its own version to its log.
 
+## Unreleased (branch fix/cooldowns-6-timer-apm)
+- Cooldowns 6 (siritos 03.11.2026: on Catachans one ability's recharge reset another's number, and with no energy the number
+  went; the bunker stratagem never got one). Cooldowns 4-5 kept the recharge per button number and its end per ability
+  blueprint (the same for every squad of a kind), and right after a cast the squad often lacks the energy, when the game
+  sends only 0s. Now every recharge is kept per squad + ability (+0x2A8 owner, +0x74 ability) and asked from the engine after
+  each button update (iface vt+0xB4, as LobbyStats 0.9.0 - its crash was GetBounds, not this call), guarded by a vectored
+  handler. Stratagems (global_btnNN updated by the ability panel) are asked even with no reasons: the bunker has none 10 s
+  after the cast while its 120 s recharge runs. Tested in the game (IG vs AI): Catachan W (30 s) and E (10 s) at once, the
+  game sent only 0s for W (no energy) - engine 0.447, the number kept; both ended on time; two squads apart.
+- MatchTimer: no second clock after alt-tab (the fallback under Menu fired on restore and the top field was never hidden);
+  three places - top, under (the default fallback: annihilation has no victory point counter at all), menu; under set in the
+  game: the Menu button stays where the game has it, plate 30 high, Gap 0, TextY 5; menu: the time 3 up, size 18.
+- APM 1 (new add-on APM.dll, launcher entry apm): see README apm/. Place=top (right of the clock) | left | minimap (the
+  bottom left corner of the minimap frame, also the fallback in annihilation); "apm" small.
+- Launcher catalog entries with the Place picks: docs/launcher-catalog-timer-apm.json (matchtimer-8, apm-1, cooldowns-6).
+
 ## Unreleased (branch feature/mmfind-0.39 only, not released)
 - MMFind 0.39: the game's own automatch faster (owner 03.11.2026: "the ~12 s polling - make it 1 second; cut the 5 s countdown to
   2 s"). `[MMFind] NativeFast=1` (default; 0 = off): only while a native search runs (Start Searching passed to the game until the

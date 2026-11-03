@@ -1,0 +1,145 @@
+{
+  "_readme": "Entries for the launcher's launcher.json (components), in the form JoinSound uses (options with choices). MatchTimer and Cooldowns are not in addons.json (managed by hand), so these go into the catalog by hand. Each pick writes Place= into the add-on's own ini; the DLL reads it again while the game runs. Cooldowns: only its version changes (cooldowns_r2: cooldowns-5 -> cooldowns-6), no options.",
+  "components": [
+    {
+      "id": "matchtimer_r2",
+      "version": "matchtimer-8",
+      "inject": "MatchTimer.dll",
+      "default": false,
+      "category": "interface",
+      "name": {
+        "en": "Match timer",
+        "ru": "Таймер матча",
+        "es": "Cronómetro",
+        "fr": "Chrono de partie",
+        "de": "Spieluhr"
+      },
+      "description": {
+        "en": "Match time (minutes:seconds of game time) in the game's own interface: at the top under the victory point counter, under the Menu button, or in the Menu button. A match without the counter (annihilation) shows it under the Menu button.",
+        "ru": "Время матча (минуты:секунды игрового времени) в интерфейсе самой игры: сверху под счётчиком очков, под кнопкой Menu или в самой кнопке Menu. В матче без счётчика (аннигиляция) — под кнопкой Menu.",
+        "es": "Tiempo de partida en la interfaz del juego: arriba bajo el contador de puntos, bajo el botón Menú o en el botón Menú.",
+        "fr": "Durée de la partie dans l'interface du jeu : en haut sous le compteur de points, sous le bouton Menu ou dans le bouton Menu.",
+        "de": "Spielzeit in der Oberfläche des Spiels: oben unter dem Punktezähler, unter der Menü-Taste oder in der Menü-Taste."
+      },
+      "options": [
+        {
+          "id": "place",
+          "name": {
+            "en": "Place",
+            "ru": "Где",
+            "es": "Posición",
+            "fr": "Position",
+            "de": "Position"
+          },
+          "ini": "Elite_DLLs/MatchTimer.ini",
+          "section": "MatchTimer",
+          "key": "Place",
+          "default": true,
+          "choices": [
+            {
+              "value": "top",
+              "name": {
+                "en": "Top, under the score",
+                "ru": "Сверху, под счётом",
+                "es": "Arriba, bajo los puntos",
+                "fr": "En haut, sous le score",
+                "de": "Oben, unter dem Punktestand"
+              }
+            },
+            {
+              "value": "under",
+              "name": {
+                "en": "Under the Menu button",
+                "ru": "Под кнопкой Menu",
+                "es": "Bajo el botón Menú",
+                "fr": "Sous le bouton Menu",
+                "de": "Unter der Menü-Taste"
+              }
+            },
+            {
+              "value": "menu",
+              "name": {
+                "en": "In the Menu button",
+                "ru": "В кнопке Menu",
+                "es": "En el botón Menú",
+                "fr": "Dans le bouton Menu",
+                "de": "In der Menü-Taste"
+              }
+            }
+          ],
+          "default_value": "top"
+        }
+      ]
+    },
+    {
+      "id": "apm",
+      "version": "apm-1",
+      "inject": "APM.dll",
+      "default": false,
+      "category": "interface",
+      "name": {
+        "en": "APM (actions per minute)",
+        "ru": "APM (действий в минуту)",
+        "es": "APM (acciones por minuto)",
+        "fr": "APM (actions par minute)",
+        "de": "APM (Aktionen pro Minute)"
+      },
+      "description": {
+        "en": "Your clicks and key presses per minute over the last minute of the match, in the game's own interface: at the top next to the match timer, or in the bottom left corner of the minimap. Only you see it; nothing is sent to the game.",
+        "ru": "Ваши клики и нажатия клавиш в минуту за последнюю минуту матча, в интерфейсе самой игры: сверху рядом с таймером матча или в левом нижнем углу миникарты. Видите только вы, в игру ничего не отправляется.",
+        "es": "Tus clics y teclas por minuto en el último minuto de la partida: arriba junto al cronómetro o en la esquina inferior izquierda del minimapa.",
+        "fr": "Vos clics et touches par minute sur la dernière minute : en haut à côté du chrono ou dans le coin inférieur gauche de la minicarte.",
+        "de": "Deine Klicks und Tasten pro Minute in der letzten Spielminute: oben neben der Spieluhr oder unten links an der Minikarte."
+      },
+      "options": [
+        {
+          "id": "place",
+          "name": {
+            "en": "Place",
+            "ru": "Где",
+            "es": "Posición",
+            "fr": "Position",
+            "de": "Position"
+          },
+          "ini": "Elite_DLLs/APM.ini",
+          "section": "APM",
+          "key": "Place",
+          "default": true,
+          "choices": [
+            {
+              "value": "top",
+              "name": {
+                "en": "Top, right of the timer",
+                "ru": "Сверху, справа от таймера",
+                "es": "Arriba, a la derecha del cronómetro",
+                "fr": "En haut, à droite du chrono",
+                "de": "Oben, rechts der Spieluhr"
+              }
+            },
+            {
+              "value": "left",
+              "name": {
+                "en": "Top, left of the timer",
+                "ru": "Сверху, слева от таймера",
+                "es": "Arriba, a la izquierda del cronómetro",
+                "fr": "En haut, à gauche du chrono",
+                "de": "Oben, links der Spieluhr"
+              }
+            },
+            {
+              "value": "minimap",
+              "name": {
+                "en": "Minimap corner",
+                "ru": "Угол миникарты",
+                "es": "Esquina del minimapa",
+                "fr": "Coin de la minicarte",
+                "de": "Ecke der Minikarte"
+              }
+            }
+          ],
+          "default_value": "top"
+        }
+      ]
+    }
+  ]
+}
