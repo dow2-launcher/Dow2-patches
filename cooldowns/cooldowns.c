@@ -387,18 +387,18 @@ static LONG CALLBACK cd_veh(EXCEPTION_POINTERS *e) {
     return EXCEPTION_CONTINUE_EXECUTION;
 }
 static int g_query = 1;                              // Cooldowns.ini [Cooldowns] Ask=0: no engine query (shares only)
-static float ask_share(char *ctx, char *btn, int ability) {   // the engine's share, -1 = none
+static float ask_vt(char *ctx, char *btn, int ability, int off) {   // the engine's answer of iface vt+off, -1 = none
     if (!g_query || g_qOff || !ctx || IsBadReadPtr(ctx + 0xC, 4)) return -1;
     void **iface = *(void ***)(ctx + 0xC);
-    if (!iface || IsBadReadPtr(iface, 4) || IsBadReadPtr(*iface, 0xB8)) return -1;
-    void *fn = (*(void ***)iface)[0xB4 / 4];
+    if (!iface || IsBadReadPtr(iface, 4) || IsBadReadPtr(*iface, 0xD0)) return -1;
+    void *fn = (*(void ***)iface)[off / 4];
     static HMODULE exe; static MODULEINFO mi;
     if (!exe) { exe = GetModuleHandleA(NULL); GetModuleInformation(GetCurrentProcess(), exe, &mi, sizeof mi); }
     if ((DWORD)fn < (DWORD)mi.lpBaseOfDll || (DWORD)fn >= (DWORD)mi.lpBaseOfDll + mi.SizeOfImage) {
-        g_qOff = 1; logmsg("engine query: vt+0xB4 = %p is not in DOW2.exe - shares only", fn); return -1;
+        g_qOff = 1; logmsg("engine query: vt+0x%X = %p is not in DOW2.exe - shares only", off, fn); return -1;
     }
-    static int said;
-    if (!said) { said = 1; logmsg("engine query: iface %p, vtable %p, vt+0xB4 = %p (the share of a recharge, asked for every ability button)", (void *)iface, *iface, fn); }
+    static unsigned said;
+    if (!(said & 1u << (off / 4 % 32))) { said |= 1u << (off / 4 % 32); logmsg("engine query: iface %p, vtable %p, vt+0x%X = %p (%s)", (void *)iface, *iface, off, fn, off == 0xB4 ? "the share of a recharge, every ability button" : "reason 10 value, stratagem buttons"); }
     g_qThread = GetCurrentThreadId();
     float p = cd_q_call(fn, iface, btn + 0x2A8, ability);
     if (!g_qThread) {                                  // the handler took us out
@@ -423,9 +423,15 @@ static void __fastcall hk_btnupd(char *btn, void *edx, char *ctx) {
     const char *path = w + 0xDD0;
     int s = !IsBadReadPtr(path, 16) && path[0] == '/' ? slot_of(path) : -1;
     int vis = *(w + 0x209) == 1;
-    if (s >= 0 && s < 16 && w == w0 && ability && vis && mt_ticking()) {
+    if (s >= 0 && w == w0 && ability && vis && mt_ticking()) {
         // reasons came (SetProgress was called): ask the engine; none: the ability can be used - no recharge
-        float q = g_capN ? ask_share(ctx, btn, ability) : -1;
+        // stratagems: asked even with no reasons - the bunker (siritos 03.11) has none 10 s after the cast (the drop is down) while
+        // the engine's 120 s recharge still runs; the number ended there
+        float q = g_capN || s >= 16 ? ask_vt(ctx, btn, ability, 0xB4) : -1;
+        // stratagems (the player's global abilities in this panel, global_btnNN; siritos 03.11: the bunker never got a number):
+        // with no recharge share the game asks vt+0xCC for reason 10 and fills another widget (+0x40) with it - take that
+        float q10 = -1;
+        if (s >= 16 && g_capN && !(q > 0.0f && q < 0.999f)) { q10 = ask_vt(ctx, btn, ability, 0xCC); if (q10 > 0.0f && q10 < 0.999f) q = q10; }
         float p = q >= 0 ? q : g_capMax > 0 ? g_capMax : g_cap10 > 0.0f && g_cap10 < 0.999f ? g_cap10 : -1;
         int rech = p > 0.0f && p < 0.999f;
         unsigned key = rec_key(btn, ability);
@@ -434,7 +440,7 @@ static void __fastcall hk_btnupd(char *btn, void *edx, char *ctx) {
         EnterCriticalSection(&g_cs);
         Rec *r = rec_of(key, ability, rech);
         if (r) {
-            if (!g_capN || (q >= 0 && !rech)) r->p = 0;     // usable, or the engine says no recharge: over
+            if ((!g_capN && !rech) || (q >= 0 && !rech)) r->p = 0;   // usable, or the engine says no recharge: over
             else if (rech) rec_share(r, p, gt);
             left = rec_left(r, gt);                          // only 0s and no answer: the remembered recharge goes on
         }
@@ -448,14 +454,14 @@ static void __fastcall hk_btnupd(char *btn, void *edx, char *ctx) {
         } else { b->ready = 1; b->exact = 0; b->key = key; }
         LeaveCriticalSection(&g_cs);
         // the game's own sweep: its last value of this update is a 0 of another reason (no energy, busy) - put the share back
-        if (sweep > 0 && g_capN && (g_capLast < sweep - 0.002f || g_capLast > sweep + 0.002f)) set_progress(w, sweep < 0.001f ? 0.001f : sweep > 0.998f ? 0.998f : sweep);
+        if (sweep > 0 && (g_capN || s >= 16) && (g_capLast < sweep - 0.002f || g_capLast > sweep + 0.002f)) set_progress(w, sweep < 0.001f ? 0.001f : sweep > 0.998f ? 0.998f : sweep);
         if (g_trace) {
-            static unsigned last[16]; static int lastSec[16];
+            static unsigned last[SLOTS]; static int lastSec[SLOTS];
             int sec = left > 0 ? (int)((left * mt_ms_per_tick() + 999) / 1000) : 0;
             if (last[s] != key || (lastSec[s] > 0) != (sec > 0) || (sec && sec % 10 == 0 && sec != lastSec[s])) {
                 last[s] = key; lastSec[s] = sec;
-                logmsg("trace %.40s ability %p key %08X: reasons %d, engine %.3f, captured %.3f/%.3f -> %s %d s (length %.0f ticks)", path, (void *)(UINT_PTR)ability, key,
-                       g_capN, q, g_capMax, g_capLast, sec ? "recharging" : "ready", sec, r ? (r->total > 0 ? r->total : ab_len(ability)) : 0.0f);
+                logmsg("trace %.40s ability %p key %08X: reasons %d, engine %.3f (cc %.3f), captured %.3f/%.3f -> %s %d s (length %.0f ticks)", path, (void *)(UINT_PTR)ability, key,
+                       g_capN, q, q10, g_capMax, g_capLast, sec ? "recharging" : "ready", sec, r ? (r->total > 0 ? r->total : ab_len(ability)) : 0.0f);
             }
         }
     } else if (!ability || !vis) cd_progress(w, 0.0f);         // no ability or the button is hidden: no number

@@ -33,9 +33,9 @@ static void logmsg(const char *fmt, ...) {
 }
 
 // ---------- settings: APM.ini [APM] ----------
-enum { AP_RIGHT, AP_LEFT };
+enum { AP_RIGHT, AP_LEFT, AP_MINIMAP };
 static int g_enabled = 1, g_place = AP_RIGHT, g_size = 18, g_shadow = 1, g_offX = 0, g_offY = 0, g_gap = 0, g_window = 60, g_onlineOnly = 0;
-static DWORD g_color = 0xFFFFFF; static char g_label[16] = "apm"; static int g_labelSize = 13, g_fallbackOn = 0;
+static DWORD g_color = 0xFFFFFF; static char g_label[16] = "apm"; static int g_labelSize = 13, g_fallbackOn = 1;
 static FILETIME g_iniTime;
 static int ini_int(const wchar_t *k, int def, int lo, int hi) { int v = GetPrivateProfileIntW(L"APM", k, def, g_ini); return v < lo ? lo : v > hi ? hi : v; }
 static void load_ini(void) {
@@ -43,7 +43,7 @@ static void load_ini(void) {
     if (GetFileAttributesExW(g_ini, GetFileExInfoStandard, &a)) g_iniTime = a.ftLastWriteTime;
     wchar_t s[32];
     g_enabled = ini_int(L"Enabled", 1, 0, 1);
-    GetPrivateProfileStringW(L"APM", L"Place", L"right", s, 32, g_ini); g_place = !_wcsicmp(s, L"left") ? AP_LEFT : AP_RIGHT;
+    GetPrivateProfileStringW(L"APM", L"Place", L"top", s, 32, g_ini); g_place = !_wcsicmp(s, L"left") ? AP_LEFT : !_wcsicmp(s, L"minimap") ? AP_MINIMAP : AP_RIGHT;   // top / right = right of the clock at the top
     g_size = ini_int(L"FontSize", 18, 10, 40);
     g_shadow = ini_int(L"Shadow", 1, 0, 1);
     g_offX = ini_int(L"OffsetX", 0, -400, 400);
@@ -53,7 +53,7 @@ static void load_ini(void) {
     g_onlineOnly = ini_int(L"OnlineOnly", 0, 0, 1);
     GetPrivateProfileStringW(L"APM", L"Color", L"FFFFFF", s, 32, g_ini); g_color = wcstoul(s, NULL, 16) & 0xFFFFFF;
     g_labelSize = ini_int(L"LabelSize", 13, 8, 40);
-    g_fallbackOn = ini_int(L"MenuFallback", 0, 0, 1);
+    g_fallbackOn = ini_int(L"Fallback", 1, 0, 1);   // no victory point counter (annihilation): above the minimap
     GetPrivateProfileStringW(L"APM", L"Label", L"apm", s, 16, g_ini);
     WideCharToMultiByte(CP_UTF8, 0, s, -1, g_label, sizeof g_label, NULL, NULL);
 }
@@ -121,9 +121,14 @@ static int apm_now(void) {
 #define VP_VT_UPD     0x0111175C      // victory point panel form, slot 4
 #define NULLSUB_RET4  0x009AB7D0
 typedef void (__thiscall *Upd_t)(char *form, float dt);
-static Upd_t o_menuUpd, o_vpUpd;
+static Upd_t o_menuUpd, o_vpUpd, o_mmUpd;
+// the minimap panel (03.11.2026, experiment: siritos - "a little above the minimap"): a form of its own too (vtable 0x011160D8,
+// made in 0xB3EE30 with uimovieshudminimap_panel); its slot 4 is its own per-frame update 0xB3F6E0 (not the empty
+// ret 4 of the Menu button and the counter) - chained: the game's first, then ours
+#define MM_VT_UPD 0x011160E8
+#define MM_UPD_FN 0x00B3F6E0
 static volatile DWORD g_vpSeen; static volatile LONG g_menuSinceVp;   // as in matchtimer.c: alt-tab is not annihilation
-static void *g_hostMv[2];
+static void *g_hostMv[3];
 static void *g_mv; static int g_host = -1, g_shown = -1, g_lastVal = -1; static DWORD g_check;
 static void restyle(void) { g_mv = NULL; }
 static void fields(void *mv, double x, double y, double w, double h) {
@@ -143,20 +148,30 @@ static void fields(void *mv, double x, double y, double w, double h) {
 // left (under yours) - beside the block of the stars and the clock, not under it. Seen in the game at 1920 x 1080.
 #define VP_W 436.0
 static void make_top(void *mv) {
-    double W = 110, fh = 31.0 * g_size / 20.0, y = 54 + g_offY;
-    double x = g_place == AP_LEFT ? 10 - g_gap + g_offX : VP_W - W - 10 + g_gap + g_offX;
+    // on the match clock's line (siritos 03.11: on the stars' line a captured star covered it): the clock is a 100 wide
+    // field centred on 218 - 7 at 115 - its height - 2 + 6 (matchtimer.c, Place=top defaults); "00:00" is ~46 wide
+    double W = 90, fh = 31.0 * g_size / 20.0, y = 115 - fh - 2 + 6 + g_offY;
+    double x = g_place == AP_LEFT ? 211 - 28 - W - g_gap + g_offX : 211 + 28 + g_gap + g_offX;
     fields(mv, x, y, W, fh);
     logmsg("APM in the victory point movie %p at %.1f,%.1f (%s of the counter): %s", mv, x, y, g_place == AP_LEFT ? "left" : "right", gfx_exists(mv, "mt_apm") ? "ok" : "NOT THERE");
 }
 // the Menu button movie (a match without the counter): under the button; right of the clock's plate when it is there
+static int g_withClock;                            // made right of the clock (it can come a frame later: made again then)
 static void make_menu(void *mv) {
-    int clock = gfx_exists(mv, "mt_clock");
-    double fh = 31.0 * g_size / 20.0, W = clock ? 80 : 184, x = (clock ? 27.95 + 104 : 27.95) + g_offX, y = -4.0 + 48 + 2 + (34 - fh) / 2 + 3 + g_offY;
+    int clock = g_withClock = gfx_exists(mv, "mt_clock");
+    double fh = 31.0 * g_size / 20.0, W = clock ? 80 : 184, x = (clock ? 27.95 + 104 : 27.95) + g_offX, y = -4.0 + 48 + 2 + (34 - fh) / 2 + 3 - (clock ? 8 : 0) + g_offY;   // the clock lifts the Menu button by 8 (Raise)
     fields(mv, x, y, W, fh);
     logmsg("APM in the Menu button movie %p at %.1f,%.1f (under the button%s): %s", mv, x, y, clock ? ", right of the clock" : "", gfx_exists(mv, "mt_apm") ? "ok" : "NOT THERE");
 }
+static void make_mini(void *mv) {
+    // above the minimap; the match clock there too (MatchTimer Place=minimap): right of it on its line
+    int clock = g_withClock = gfx_exists(mv, "mt_clock");
+    double W = 140, fh = 31.0 * g_size / 20.0, x = 4 + (clock ? 60 : 0) + g_offX, y = -fh - 4 + g_offY;
+    fields(mv, x, y, W, fh);
+    logmsg("APM in the minimap movie %p at %.1f,%.1f: %s", mv, x, y, gfx_exists(mv, "mt_apm") ? "ok" : "NOT THERE");
+}
 static void set_text(void *mv, int v) {
-    char h[320], t[96]; const char *al = g_host == 0 ? "center" : g_place == AP_LEFT ? "right" : "left";
+    char h[320], t[96]; const char *al = g_host == 0 ? "center" : g_host == 1 && g_place == AP_LEFT ? "right" : "left";
     snprintf(t, sizeof t, "<font size=\"%d\">%s</font> %d", g_labelSize, g_label, v);   // the label small (siritos 03.11: "apm" in small letters)
     snprintf(h, sizeof h, "<p align=\"%s\"><font face=\"$TitleFont\" size=\"%d\" color=\"#000000\">%s</font></p>", al, g_size, t);
     gfx_setvar(mv, "_root.mt_apm_sh.htmlText", gv_str(h));
@@ -171,16 +186,17 @@ static void frame(char *form, int host) {
     count_frame();
     // where it goes: the victory point movie while that panel updates, else (annihilation) the Menu button movie
     static int want = 1;
-    if (now - g_vpSeen < 1000) want = 1; else if (g_fallbackOn && now - g_vpSeen > 3000 && g_menuSinceVp > 120) want = 0;
+    if (g_place == AP_MINIMAP) want = 2;
+    else if (now - g_vpSeen < 1000) want = 1; else if (g_fallbackOn && now - g_vpSeen > 3000 && g_menuSinceVp > 120) want = 2;
     if (host != want) {
         if (mv == g_hostMv[host]) { gfx_setvar(mv, "_root.mt_apm._visible", gv_bool(0)); gfx_setvar(mv, "_root.mt_apm_sh._visible", gv_bool(0)); g_hostMv[host] = NULL; if (mv == g_mv) g_mv = NULL; }
         return;
     }
     int vis = g_enabled && mt_ticking() && (!g_onlineOnly || mt_online());
-    if (mv != g_mv || g_host != host || (now - g_check > 3000 && (g_check = now, !gfx_exists(mv, "mt_apm")))) {
+    if (mv != g_mv || g_host != host || (now - g_check > 1000 && (g_check = now, !gfx_exists(mv, "mt_apm") || (host != 1 && gfx_exists(mv, "mt_clock") != g_withClock)))) {
         if (!vis) return;                                // made when there is something to show (the clock may come first)
         g_mv = mv; g_hostMv[host] = mv; g_host = host; g_check = now; g_shown = -1; g_lastVal = -1;
-        if (host) make_top(mv); else make_menu(mv);
+        if (host == 2) make_mini(mv); else if (host) make_top(mv); else make_menu(mv);
     }
     if (vis != g_shown) {
         g_shown = vis;
@@ -193,6 +209,7 @@ static void frame(char *form, int host) {
     if (v != g_lastVal) { g_lastVal = v; set_text(mv, v); }
 }
 static void __thiscall hk_menu_upd(char *form, float dt) { o_menuUpd(form, dt); InterlockedIncrement(&g_menuSinceVp); frame(form, 0); }
+static void __thiscall hk_mm_upd(char *form, float dt) { o_mmUpd(form, dt); frame(form, 2); }
 static void __thiscall hk_vp_upd(char *form, float dt) { o_vpUpd(form, dt); g_vpSeen = GetTickCount(); g_menuSinceVp = 0; frame(form, 1); }
 
 static int already_loaded(void) {
@@ -214,6 +231,8 @@ BOOL WINAPI DllMain(HINSTANCE h, DWORD reason, LPVOID _) {
     else { logmsg("Menu button form not as in DOW2.exe 3.19 - no APM"); return TRUE; }
     if (gfx_hook_slot(VP_VT_UPD, NULLSUB_RET4, (void *)hk_vp_upd, (void **)&o_vpUpd)) logmsg("hooked the victory point panel's per-frame update%s", (DWORD)o_vpUpd != NULLSUB_RET4 ? " (after another add-on)" : "");
     else logmsg("victory point panel form not as in DOW2.exe 3.19 - APM only under the Menu button");
+    if (gfx_hook_slot(MM_VT_UPD, MM_UPD_FN, (void *)hk_mm_upd, (void **)&o_mmUpd)) logmsg("hooked the minimap panel's per-frame update%s (Place=minimap)", (DWORD)o_mmUpd != MM_UPD_FN ? " (after another add-on)" : "");
+    else logmsg("minimap panel form not as in DOW2.exe 3.19 - no Place=minimap");
     mt_start_for(dir, g_ini, "APM");
     return TRUE;
 }
