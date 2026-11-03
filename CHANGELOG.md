@@ -28,6 +28,67 @@ The version of the set lives only in `VERSION`; each DLL still writes its own ve
   Tested: Linux netns, netem 40 ms each way, the tunnel code of Relay 19 / 20 under Wine against the old / new gateway:
   loss 10% - p99 game->server 422 -> 141 ms, server->game 242 -> 140 ms (p95 138 -> 41); no loss - no change.
 
+## Continue 1 + MMFind 0.44 (branch feature/native-continue, staging continue-1 + mmfind-0.44, not released)
+- Continue 1 (new add-on, owner 03.11.2026: "the rematch is mostly a crutch - the game has this logic, the room is put together
+  again: the host presses Continue, the others have it greyed out, everyone goes straight into the room"). The game's own
+  path is all there (PostGameStatsForm::OnClickNext 0x480A71): the host sends PPMT_TransitionToGameSetup over the match
+  session (0x456976), every game goes to game_setup_movie of the SAME session (0x481880; the others get "You have been
+  pulled back to game setup by the host"), and the host puts the room back: SetMatchState 0, SetVisible 1. Why it never ran:
+  canContinue (0x47F7EF) returns false at once for match type 1 = custom game (settings+0xEAC, from GameInfo+0xC0 at the
+  start, 0x447538) - Continue was grey for everyone after every custom game. Continue.dll: canContinue for a custom game is
+  asked again with the type out of the way, only while the match session is connected (host + everybody on the post-game
+  screen, as for the other types); the SetVisible on Continue (0x480C79) keeps a private room private (the game would list
+  it). Guests need nothing (the move is the game's own message). Relic answers [4] to the host's advertisement/update of a
+  started custom room - the room is back for the players, only not in the list; dow2-ladder feature/native-continue
+  (own_lobby "reopen") then sends updateState 0 and the update again -> [0]. Test option `[Continue] KeepSoloSession=1`: a
+  match against computers keeps its session (0x46FE8E), so the host's path runs on one machine.
+  Stand 1 (Elite 3.2, OwnLobby -> a test lobby with reopen): Private Match vs computer, Exit Game, Continue enabled by
+  itself, pressed: game setup of the same room (same session, slots, map), "a private room - stays out of the list",
+  Relic: updateState 0 [0], update [0]; a second match started from that room and its Continue worked again. Without
+  reopen: the same, Relic [4] only logged (LogFailure WorldwideUpdateAdvertisementAsync). Not tested: a real second player.
+- MMFind 0.44: the 0.43 rematch (menus walked, a new room Rematch-xxxxxx) is off by default - `[MMFind] RematchMenus=1`
+  (the old `Rematch=` the launcher wrote is ignored), and it never runs while Continue.dll is in the game.
+
+## MMFind 0.43 (branch feature/mmfind-rematch, staging mmfind-0.43, not released)
+- MMFind 0.43: rematch on Continue (owner 03.11.2026: "Continue after a match from an ordinary lobby - a new lobby with the same
+  people"). The game's own post-game Continue only throws everyone to the main menu after a Custom Games match (Relic ~2016).
+  While a lobby that is NOT our automatch is up, MMFind keeps who sits where (room id, slots with Relic profile ids and names,
+  my slot, the map, my race / chapter / hero, whether I made the room: Host in the list or Private Match); when its match
+  loads that lobby is kept. On the post-game screen Continue is switched on (Receive_SetNextEnabled - the game had it off even
+  for the host) and its click (OnClickNext) is taken: the screen is left the way Back leaves it, and the ladder
+  (`mm/rematch`, needs dow2-ladder feature/mm-rematch; the key = the old room id, the same in every player's game) picks who
+  makes the new room: the old host if he pressed Continue within 6 s of the first press, else the first one who pressed (45 s
+  without a room = the next one). He opens a public Custom Games room "Rematch-xxxxxx" (the classic flow: Public Match, Host
+  without the name box), takes his old army, sets the old map if the lobby has another one, gives the ladder the room id; the
+  others get it in their poll and join it by the id (the list by name after 12 s), with their old army, and move to their old
+  slot (free: move; the one sitting there wants mine: a swap, the other MMFind says yes; after 20 s any free slot of the old
+  team). Nobody waits for anybody: no auto-start (the host starts as in any lobby), a later Continue (10 min) still gets in,
+  players without MMFind can find the room by its name; for 3 minutes the host kicks people who were not in the old lobby.
+  Cover "Rematch" with Cancel while the menus are walked; the saved Find a Game choice is back after. When the rematch itself
+  is played its key closes (a late Continue: "This rematch is over already") and a Continue after it makes the next rematch.
+  `[MMFind] Rematch=1` (default; the launcher's option "Rematch on Continue" under Automatch) / 0 = the game's own Continue.
+  `RematchTest=1`: one person is enough (a match against computers), a Private Match against a computer from the main menu.
+  Stand 1 (Elite 3.2, test ladder): Private Match vs computer, Exit Game, post-game Continue enabled and taken, a fake second
+  player pressed first (no old host flag -> he was picked, gave no room, after 45 s the stand took over), the stand made
+  "Rematch-2zcurm" on the old map in 1.7 s and the fake players' poll got its room id. Not tested: a real second player
+  joining (needs two stands), 2v2/3v3 slot moves.
+
+## MMFind 0.42 (branch feature/mmfind-0.42-mode, staging mmfind-0.42, not released)
+- MMFind 0.42: the kind of search shown on Find a Game (owner 03.11.2026: "when we press search, show right away which search
+  it is"; "change the search screen so it is clear it is a different one"). Two text fields of the game's own Find a Game panel
+  (Scaleform, docs/UI_RULES.md, no Direct3D), made right after the engine's per-frame call into the panel: right of the screen
+  title "ELITE: AUTOMATCH ON OUR SERVERS" / "ELITE: LADDER AUTOMATCH (CLASSIC)", and under "Your Party" "Automatch: our
+  servers" or "Automatch: classic (MMFind)" with why (not signed in through our lobby, players without OwnLobby are waiting,
+  switched off on the server, the lobby server is unreachable, OwnLobby is off, ...), "MMFind 0.42", and the queue of the
+  match type and who is online (mm/hello every 5 s), while searching "Searching... 0:12". Russian when the game's own texts are
+  Cyrillic (Localizer, as EliteAI; or the Start button). From the moment the screen opens: a peek at mm/native (`"peek":true`:
+  the ladder answers as for Start Searching and changes nothing; on entering, every 20 s and on a match type change, only
+  while idle); after the click by the path really taken. Hidden while the hero panel or Map Preferences is up.
+  `[MMFind] ShowMode=1` (default, 0 = off), `Lang=auto|ru|en`; HeadX/HeadY/HeadSize, ModeX/ModeY/ModeSize, ModeProbe=1 (a grid
+  of panel units) for placing. Needs dow2-ladder feature/mm-native-peek (peek without side effects, per-mode queue in mm/hello);
+  an older ladder answers a peek like a real ask, so no peek is sent while a native search or its search-again is pending.
+  Stand 1 (Elite 3.2, OwnLobby ownlobby-3, production ladder, test group): shown on entering, native search starts and stops.
+
 ## Unreleased (branch fix/cooldowns-6-timer-apm)
 - Cooldowns 6 (siritos 03.11.2026: on Catachans one ability's recharge reset another's number, and with no energy the number
   went; the bunker stratagem never got one). Cooldowns 4-5 kept the recharge per button number and its end per ability
