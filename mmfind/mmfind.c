@@ -198,7 +198,7 @@ static volatile int g_natAnswer;            // 0 waiting, 1 native, 2 not native
 static volatile DWORD g_natPass, g_natGood; static volatile int g_natSeen, g_natCancelled;   // pass-through time, last native answer of the ladder
 static volatile int g_engSearch = -1;       // the engine's own search state (Receive_ShowSearchingAnimation as the engine sends it), -1 unknown
 static DWORD g_natStopAt; static int g_natStops;   // fallback: Stop Searching sent to the engine (checked once more)
-static char g_natLobby[48], g_natWhy[96];
+static char g_natLobby[48], g_natWhy[96], g_natLastCancel[32];
 // a native match called off by the server while the game was setting it up (host never came, a guest never joined, ...): the game
 // ends its own search and goes back to Find a Game; the ladder says {"state":"cancelled","again":true} to everyone who was not the
 // reason - MMFind presses Start Searching again for them (the native path), at most once per 30 s and 3 times in a row
@@ -521,7 +521,8 @@ static DWORD WINAPI net_worker(LPVOID _) {
                     static char lastSt[48]; char cur[48]; snprintf(cur, sizeof cur, "%s%s %s", nat ? "native " : "", state, mid);
                     if (strcmp(cur, lastSt)) { strcpy(lastSt, cur); logmsg("native: the ladder says %s", res); }
                     if (good) { g_natGood = GetTickCount(); g_natSeen = 1; if (jstr(res, "lobby", lob, sizeof lob) && lob[0]) strcpy(g_natLobby, lob); }
-                    else if (!strcmp(state, "cancelled") && mid[0] && g_natSeen && !g_natCancelled) { g_natAgain = jtrue(res, "again"); g_natCancelled = 1; }   // our match called off by the server
+                    else if (!strcmp(state, "cancelled") && mid[0] && !g_natCancelled && strcmp(mid, g_natLastCancel)) {   // our match called off by the server - it had
+                        strcpy(g_natLastCancel, mid); g_natSeen = 1;   // the search; a match handled before (the ladder repeats "cancelled" for 5 min) is not news g_natGood = GetTickCount(); g_natAgain = jtrue(res, "again"); g_natCancelled = 1; }   // (even when this is the first answer)
                 } }
         }
         int st = g_state;

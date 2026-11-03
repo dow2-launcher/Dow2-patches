@@ -19,6 +19,8 @@ The version of the set lives only in `VERSION`; each DLL still writes its own ve
   Searching again by itself (the native path) once the game is on Find a Game with its search off (a notice box is answered
   with OK after 3 s, or ignored after 10 s), at most once per 30 s and 3 times in a row. Test option `[MMFind] TestLadder=host:port`:
   every ladder API call over plain HTTP to that place, no mirrors (the TEST ladder through an ssh tunnel).
+  A "cancelled" answer naming a match counts as the native search seen even when it is the first answer (a match that formed
+  and failed within 2 s): again:true searches again, otherwise idle - never the classic fallback; a match id already handled is ignored.
 
 ## 0.1.6 — 2026-10-30
 - MMFind 0.29 (outside addons.json, released by hand): placement by team. The ladder lobby uses random start positions (the game
