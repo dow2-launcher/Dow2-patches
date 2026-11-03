@@ -10,7 +10,12 @@
 //
 // Fix, client side only: remember the local player's own "ability at a point" order for the listed abilities; if the
 // squad falls out of that ability back to idle without the jump starting, and the player gave it no other order, send
-// the very same order again once he has landed (RetryDelayMs), at most MaxRetries times within WindowSec. The order is
+// the very same order again as soon as the squad can walk again (the ability's own check, 0x008645A0/0x00864670; at
+// most LandTimeoutMs after falling out), plus RetryDelayMs (0). An order the game still drops (sent while in the air)
+// shows as "no Ability state within TakeMs (250)" and is sent again; at most MaxRetries (3) within WindowSec (10).
+// Stand 1, 03.11.2026: v1 (a fixed 600 ms) jumped ~1000 ms after falling out; v2 ~400 ms (retry taken ~100 ms after
+// sending, the jump ~300 ms later), 1 retry in 3 of 4 trials, 3 in one (two sent too early, caught by TakeMs).
+// The order is
 // the game's own (CommandProxy, the same call the HUD makes): it goes through the normal command queue and is simulated
 // the same on every machine of the match - no desync, the other players don't need the DLL. Replays and observing
 // issue no orders of the local player, so nothing happens there.
@@ -21,7 +26,8 @@
 // through the same method; the DOW2.exe import slots of WorldDoCommandSquad /
 // WorldDoCommandSquads / WorldDoCommandEntity, only to see any other order the HUD (its code range) gives the squad,
 // which cancels the retry. A WM_TIMER on the game window (main thread, as Reverse.dll) watches the squads.
-// JumpRetry.ini [JumpRetry]: Enabled=1, MaxRetries=2 (1..5), WindowSec=10 (3..30), RetryDelayMs=600 (200..3000),
+// JumpRetry.ini [JumpRetry]: Enabled=1, MaxRetries=3 (1..5), WindowSec=10 (3..30), RetryDelayMs=0 (0..3000), LandTimeoutMs=600,
+// TakeMs=250,
 // Abilities=ability\pvp\race_eldar\autarch\eld_autarch_jump;... (';'-separated attribute names), Verbose=0; re-read on
 // every order (Enabled=0 then stops remembering new orders).
 #include <windows.h>
@@ -74,13 +80,13 @@ static I0_t p_otype, p_ttype; static P0_t p_osq; static V1_t p_octor, p_tctor; s
 static I0_t p_sqid; static Find_t p_find; static P0_t p_end; static Name_t p_byname; static Grp2_t p_byid; static Inst_t p_inst;
 
 static wchar_t g_dir[MAX_PATH], g_ini[MAX_PATH];
-static int g_max = 2, g_window = 10, g_delay = 600, g_verbose = 0, g_resend = 0;
+static int g_max = 3, g_window = 10, g_delay = 0, g_land = 600, g_take = 250, g_verbose = 0, g_resend = 0;
 #define MAXAB 16
 static char g_names[MAXAB][160]; static int g_nnames; static void *g_pbg[MAXAB]; static DWORD g_abid[MAXAB]; static int g_resolved;
 
 // one remembered order per squad (the player's own squads only)
 #define MAXP 8
-typedef struct { int used, slot, armed, tries; DWORD sq, abil, t0, ts, idleAt; void *proxy, *world; Vec3 pos, dir; } Pend;
+typedef struct { int used, slot, armed, tries, abSeen; DWORD sq, abil, t0, ts, idleAt, landAt, sentAt; void *proxy, *world; Vec3 pos, dir; } Pend;
 static Pend g_p[MAXP];
 
 static void logmsg(const char *fmt, ...) {
@@ -91,9 +97,11 @@ static void logmsg(const char *fmt, ...) {
 }
 
 static void load_ini(void) {
-    g_max = GetPrivateProfileIntW(L"JumpRetry", L"MaxRetries", 2, g_ini); if (g_max < 1) g_max = 1; if (g_max > 5) g_max = 5;
+    g_max = GetPrivateProfileIntW(L"JumpRetry", L"MaxRetries", 3, g_ini); if (g_max < 1) g_max = 1; if (g_max > 5) g_max = 5;
     g_window = GetPrivateProfileIntW(L"JumpRetry", L"WindowSec", 10, g_ini); if (g_window < 3) g_window = 3; if (g_window > 30) g_window = 30;
-    g_delay = GetPrivateProfileIntW(L"JumpRetry", L"RetryDelayMs", 600, g_ini); if (g_delay < 200) g_delay = 200; if (g_delay > 3000) g_delay = 3000;
+    g_delay = GetPrivateProfileIntW(L"JumpRetry", L"RetryDelayMs", 0, g_ini); if (g_delay < 0) g_delay = 0; if (g_delay > 3000) g_delay = 3000;
+    g_land = GetPrivateProfileIntW(L"JumpRetry", L"LandTimeoutMs", 600, g_ini); if (g_land < 100) g_land = 100; if (g_land > 3000) g_land = 3000;
+    g_take = GetPrivateProfileIntW(L"JumpRetry", L"TakeMs", 250, g_ini); if (g_take < 100) g_take = 100; if (g_take > 2000) g_take = 2000;
     g_verbose = GetPrivateProfileIntW(L"JumpRetry", L"Verbose", 0, g_ini);
     char buf[2048];
     { char inia[MAX_PATH]; WideCharToMultiByte(CP_ACP, 0, g_ini, -1, inia, MAX_PATH, NULL, NULL);
@@ -197,6 +205,16 @@ static void resend(Pend *p, void *sq) {
     g_resend = 0;
     for (int k = 0; k < 5; k++) p_tdtor(tgt + k * TGT_SIZE, NULL);
 }
+// "the squad can walk again" - the very check the ability state makes before walking on (SquadStateAbility STATE_DEFAULT
+// 0x00970890 -> 0x008645A0(1) && !0x00864670, both with the squad in EAX): false while a model is in the air of an obstacle
+// hop, so an order sent then is dropped the same way. Read-only queries, the HUD's thread as the HUD's own reads.
+static int squad_ready(void *sq) {
+    int a, b;
+    __asm__ volatile ("pushl $1\n\tcall *%2" : "=a"(a) : "a"(sq), "r"((DWORD)0x008645A0u) : "ecx", "edx", "memory", "cc");
+    if (!(a & 0xFF)) return 0;
+    __asm__ volatile ("call *%2" : "=a"(b) : "a"(sq), "r"((DWORD)0x00864670u) : "ecx", "edx", "memory", "cc");
+    return !(b & 0xFF);
+}
 static void CALLBACK tick(HWND w, UINT m, UINT_PTR id, DWORD now) {
     (void)w; (void)m; (void)id;
     now = GetTickCount();
@@ -206,15 +224,31 @@ static void CALLBACK tick(HWND w, UINT m, UINT_PTR id, DWORD now) {
         if (now - p->t0 > (DWORD)g_window * 1000) { drop(i, "window over"); continue; }
         void *sq = squad_by_id(p->sq); if (!sq) { drop(i, "squad gone"); continue; }
         int st = squad_state(sq);
-        if (st == ST_JUMP) { drop(i, p->tries ? "the jump went off after the retry" : "the jump went off"); continue; }
-        if (st == ST_ABILITY) { p->armed = 1; p->idleAt = 0; continue; }
+        if (st == ST_JUMP) {
+            if (p->tries) logmsg("squad %lu: the jump went off %lu ms after retry %d", (unsigned long)p->sq, (unsigned long)(now - p->sentAt), p->tries);
+            drop(i, p->tries ? "done (jumped after the retry)" : "the jump went off"); continue;
+        }
+        if (st == ST_ABILITY) {
+            if (p->tries && !p->abSeen) { p->abSeen = 1; logmsg("squad %lu: retry %d taken (ability again) %lu ms after it was sent", (unsigned long)p->sq, p->tries, (unsigned long)(now - p->sentAt)); }
+            p->armed = 1; p->idleAt = 0; p->landAt = 0; continue;
+        }
         if (st != ST_IDLE) { char b[48]; wsprintfA(b, "busy with something else (state %d) - no retry", st); drop(i, b); continue; }
-        if (!p->armed) { if (now - p->ts > 3000) drop(i, "the order never started - no retry"); continue; }
-        if (!p->idleAt) { p->idleAt = now; logmsg("squad %lu: fell out of the ability without jumping", (unsigned long)p->sq); continue; }
-        if (now - p->idleAt < (DWORD)g_delay) continue;                         // still in the air after the hop
+        if (!p->armed) {
+            if (!p->tries) { if (now - p->ts > 3000) drop(i, "the order never started - no retry"); continue; }
+            if (now - p->sentAt < (DWORD)g_take) continue;
+            logmsg("squad %lu: retry %d not taken within %d ms (sent too early?) - again", (unsigned long)p->sq, p->tries, g_take);
+            p->armed = 1; p->idleAt = now; p->landAt = 0;                  // falls through to "send again when it can walk"
+        }
+        if (!p->idleAt) { p->idleAt = now; p->landAt = 0; logmsg("squad %lu: fell out of the ability without jumping", (unsigned long)p->sq); }
+        int rd = squad_ready(sq);
+        if (rd && !p->landAt) p->landAt = now;
+        if (!rd && now - p->idleAt < (DWORD)g_land) continue;              // still in the air after the hop
+        if (now - p->idleAt < (DWORD)g_delay) continue;
         if (p->tries >= g_max) { drop(i, "no retries left"); continue; }
-        p->tries++; p->armed = 0; p->idleAt = 0; p->ts = now;
-        logmsg("squad %lu: retry %d/%d - the same order again to (%.1f, %.1f)", (unsigned long)p->sq, p->tries, g_max, p->pos.x, p->pos.z);
+        p->tries++; p->armed = 0; p->abSeen = 0; p->ts = p->sentAt = now;
+        logmsg("squad %lu: retry %d/%d to (%.1f, %.1f): %s %lu ms after falling out", (unsigned long)p->sq, p->tries, g_max, p->pos.x, p->pos.z,
+               rd ? "landed" : "landing not seen, timeout", (unsigned long)(now - p->idleAt));
+        p->idleAt = 0; p->landAt = 0;
         resend(p, sq);
     }
 }
@@ -233,7 +267,7 @@ static void remember(void *self, void *owner, DWORD abil, void *target, const Ve
     static UINT_PTR timer;
     if (!timer) {
         HWND w = GetActiveWindow(); if (!w) w = GetForegroundWindow();
-        timer = SetTimer(w, 0x4A52, 50, tick);
+        timer = SetTimer(w, 0x4A52, 30, tick);
         logmsg("timer %s (window %p)", timer ? "on" : "FAILED", (void *)w);
         if (!timer) return;
     }
@@ -323,8 +357,8 @@ static DWORD WINAPI worker(LPVOID _) {
         if (wsq && !IsBadReadPtr((void *)IAT_SQUAD, 4) && *(void **)IAT_SQUAD == wsq) break;
         Sleep(500);
     }
-    logmsg("JumpRetry 1 start: retry a jump order lost on an obstacle hop, up to %d time(s) within %d s, %d ms after landing, %d abilit%s - %s",
-           g_max, g_window, g_delay, g_nnames, g_nnames == 1 ? "y" : "ies", install() ? "installed" : "NOT installed");
+    logmsg("JumpRetry 2 start: retry a jump order lost on an obstacle hop, up to %d time(s) within %d s, on landing (+%d ms, timeout %d ms, re-sent if not taken in %d ms), %d abilit%s - %s",
+           g_max, g_window, g_delay, g_land, g_take, g_nnames, g_nnames == 1 ? "y" : "ies", install() ? "installed" : "NOT installed");
     return 0;
 }
 

@@ -5,6 +5,10 @@ version (`X.Y.0`) it also publishes a GitHub Release with the DLLs and the entri
 The version of the set lives only in `VERSION`; each DLL still writes its own version to its log.
 
 ## Unreleased (branch feature/jumpretry)
+- JumpRetry 2: the retry goes as soon as the squad can walk again (the ability's own check 0x008645A0/0x00864670, polled
+  every 30 ms; LandTimeoutMs 600 as a fallback) instead of a fixed 600 ms, and an order the game still drops (no Ability
+  state within TakeMs 250) is sent again; MaxRetries 3, RetryDelayMs 0. Stand 1: the jump starts ~400 ms after falling
+  out of the ability (v1 ~1000 ms).
 - JumpRetry 1 (new add-on, own tick): an Autarch jump ordered out of range is lost when he hops an obstacle on the way
   (the ability order ends while he is in the air, nothing spent). The local player's own order is remembered and sent
   again after the landing, at most MaxRetries (2) times within WindowSec (10); any other order from the HUD to the squad

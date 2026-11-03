@@ -38,7 +38,7 @@ jumpretry/
     The Autarch hops over low walls by himself while walking. Ordered to jump to a point out of range, he walks
     toward it inside the ability order, and a hop on the way ends that order: no jump, no energy spent, he idles.
     JumpRetry remembers your own jump order and, if the squad fell out of it without jumping and you gave it no
-    other order, sends the same order again after the landing (up to 2 times within 10 s). The order is the game's
+    other order, sends the same order again as soon as he has landed (up to 3 times within 10 s). The order is the game's
     own (the HUD's CommandProxy), so the match stays in sync and the other players don't need the DLL. The
     abilities are a list in JumpRetry.ini (Abilities=).
 
