@@ -4,6 +4,17 @@ Every version gets an entry here before it reaches `main`. CI then tags `vX.Y.Z`
 version (`X.Y.0`) it also publishes a GitHub Release with the DLLs and the entries since the previous `X.Y.0`.
 The version of the set lives only in `VERSION`; each DLL still writes its own version to its log.
 
+## Unreleased (branch feature/mmfind-native only, not released)
+- MMFind 0.38: "native" mode (owner 03.11.2026: Start Searching straight to the loading screen, fully on our servers).
+  `[MMFind] Native=1` (default): with OwnLobby.dll in the game, Start Searching first asks the ladder (`/ladder/api/mm/native`,
+  the same body as mm/join, about 1.5 s at most). If our lobby server can serve the game's own automatch, the click goes to the
+  game: its own Find a Game search (automatch/startpolling) runs on our lobby server, the ladder's matchmaker pairs the players,
+  and the game hosts / joins the AUTOMATCH room and starts by itself - MMFind walks no menus and draws no cover. MMFind watches
+  mm/poll every 2 s: no native search at the ladder for 10 s (our lobby server or the ladder away) -> the game's search is
+  stopped (the same Start button) and the classic 0.37 flow runs. No OwnLobby.dll, `Native=0`, Manual / TestBots / DirectStart,
+  Watch a match, or the ladder saying no -> the classic 0.37 flow as before. After a native match: ended and the replay
+  upload as usual (lobby NM-<room>), no ruined-loading marker.
+
 ## 0.1.6 — 2026-10-30
 - MMFind 0.29 (outside addons.json, released by hand): placement by team. The ladder lobby uses random start positions (the game
   shuffles them inside each team, checked on 6p maps), so only the team counts, not the slot. The top half goes to the team that

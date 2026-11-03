@@ -133,8 +133,8 @@ static void as_setn(void *movie, const char *path, double d) { GFxValue v; memse
 static void as_setb(void *movie, const char *path, int b) { GFxValue v; memset(&v, 0, sizeof v); v.type = GFX_BOOL; v.v.b = b; as_set(movie, path, &v); }
 
 // ---------------- matchmaking state ----------------
-enum { S_IDLE, S_SEARCH, S_GO_MAIN, S_GO_LIST, S_HOST_DIALOG, S_HOST_NAME, S_SETUP_HERO, S_HOST_OPEN, S_HOST_WAIT, S_GUEST_NAME, S_GUEST_DJOIN, S_GUEST_FIND, S_GUEST_JOINED, S_PLACE, S_DONE, S_FAIL };
-static const char *SN[] = {"idle","search","go_main","go_list","host_dialog","host_name","setup_hero","host_open","host_wait","guest_name","guest_djoin","guest_find","guest_joined","place","done","fail"};
+enum { S_IDLE, S_SEARCH, S_GO_MAIN, S_GO_LIST, S_HOST_DIALOG, S_HOST_NAME, S_SETUP_HERO, S_HOST_OPEN, S_HOST_WAIT, S_GUEST_NAME, S_GUEST_DJOIN, S_GUEST_FIND, S_GUEST_JOINED, S_PLACE, S_DONE, S_FAIL, S_NASK, S_NATIVE };
+static const char *SN[] = {"idle","search","go_main","go_list","host_dialog","host_name","setup_hero","host_open","host_wait","guest_name","guest_djoin","guest_find","guest_joined","place","done","fail","native_ask","native"};
 static volatile int g_state;
 static volatile int g_role;               // 1 host, 2 guest
 static DWORD g_stateTick, g_searchTick;
@@ -188,6 +188,17 @@ static int g_direct, g_matchDirect, g_djDebug;
 // stays as the fallback. Our lobby server (OwnLobby.dll + own_lobby.py v2) keeps such a room off Relic when everyone is there.
 static int g_fast = 1;
 static volatile unsigned long long g_room; static volatile int g_roomReady;
+// 0.38 (owner 03.11.2026: "Start Searching straight to the loading screen, fully on our servers"): Native=1 (default) - with
+// OwnLobby.dll in the game and our lobby server able to do it (the ladder says so: mm/native), Start Searching is NOT swallowed:
+// the game's own Find a Game search runs against our lobby server, which answers it from the ladder's matchmaker, and the game
+// hosts / joins the AUTOMATCH room and starts by itself - no menus walked, no cover. MMFind only watches the ladder: no native
+// search there for 10 s (our lobby server away, the ladder away) -> the engine's search is stopped and the classic flow takes over.
+static int g_nativeCfg = 1;
+static volatile int g_natAnswer;            // 0 waiting, 1 native, 2 not native (g_natWhy)
+static volatile DWORD g_natPass, g_natGood; static volatile int g_natSeen, g_natCancelled;   // pass-through time, last native answer of the ladder
+static volatile int g_engSearch = -1;       // the engine's own search state (Receive_ShowSearchingAnimation as the engine sends it), -1 unknown
+static DWORD g_natStopAt; static int g_natStops;   // fallback: Stop Searching sent to the engine (checked once more)
+static char g_natLobby[48], g_natWhy[96];
 #define QUICK (g_matchDirect || g_fast)
 // 0.35 (owner 02.11.2026: faster): the first one in the queue makes his private room while searching - player slots open, hero
 // accepted - and gives the ladder its id; the ladder makes him the host and his guests get the id with "matched" and join at once.
@@ -352,7 +363,7 @@ static DWORD WINAPI nodes_fetch(LPVOID _) {               // once at the start, 
     char out[4096];
     for (int k = 0; k < g_nHosts; k++) {
         out[0] = 0; int got = 0;
-        HINTERNET s = WinHttpOpen(L"MMFind/0.37", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, NULL, NULL, 0); if (!s) return 0;
+        HINTERNET s = WinHttpOpen(L"MMFind/0.38", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, NULL, NULL, 0); if (!s) return 0;
         WinHttpSetTimeouts(s, 4000, 4000, 4000, 4000);
         HINTERNET c = WinHttpConnect(s, g_hosts[k], INTERNET_DEFAULT_HTTPS_PORT, 0);
         HINTERNET r = c ? WinHttpOpenRequest(c, L"GET", L"/ladder/api/relays", NULL, NULL, NULL, WINHTTP_FLAG_SECURE) : NULL;
@@ -382,6 +393,21 @@ static int http_post(const wchar_t *ep, const char *body, char *out, int cap) {
         }
     out[0] = 0; return 0;
 }
+// 0.38: a quick call (the native decision, the native watch): the mirrors in turn within about `budget` ms in all
+static int http_quick(const wchar_t *ep, const char *body, char *out, int cap, DWORD budget) {
+    wchar_t path[128]; _snwprintf(path, 128, L"%ls%ls", MM_PATH, ep);
+    DWORD t0 = GetTickCount();
+    for (int k = 0; k < g_nHosts; k++) {
+        DWORD used = GetTickCount() - t0; if (used + 150 > budget) break;
+        int h = (g_curHost + k) % g_nHosts, tmo = (int)(budget - used) / 2;   // WinHttp's timeout is per step (connect, send, receive)
+        if (http_post1(g_hosts[h], path, body, out, cap, tmo < 300 ? 300 : tmo)) {
+            if (h != g_curHost) { logmsg("server: %ls is not reachable, now using %ls", g_hosts[g_curHost], g_hosts[h]); g_curHost = h; }
+            nodes_from_json(out); return 1;
+        }
+    }
+    out[0] = 0; return 0;
+}
+static int jtrue(const char *j, const char *key) { char a[64], b[64]; snprintf(a, sizeof a, "\"%s\":true", key); snprintf(b, sizeof b, "\"%s\": true", key); return strstr(j, a) || strstr(j, b); }
 static int jstr(const char *j, const char *key, char *out, int cap) {   // "key":"value" or "key":null
     char k[64]; snprintf(k, sizeof k, "\"%s\":", key); const char *p = strstr(j, k); out[0] = 0; if (!p) return 0;
     p += strlen(k); while (*p == ' ') p++;
@@ -394,6 +420,34 @@ static int jint(const char *j, const char *key, int def) {
 }
 static void name_utf8(char *o, int cap) { WideCharToMultiByte(CP_UTF8, 0, g_myName, -1, o, cap, NULL, NULL); }
 
+// the body of mm/join (0.38: mm/native gets exactly the same)
+static void join_body(char *body, int cap) {
+    char nm[128]; name_utf8(nm, sizeof nm);
+    extern int g_race, g_hero, g_random; static char maps[6000]; int L = 0; maps[0] = 0;
+    for (int i = 0; i < g_nmaps && L < 5800; i++) if (mode_map(i, g_mode) && !g_off[g_mode][i]) {
+        char m8[160]; WideCharToMultiByte(CP_UTF8, 0, g_maps[i], -1, m8, sizeof m8, NULL, NULL);
+        L += snprintf(maps + L, sizeof maps - L, "%s\"%s\"", L ? "," : "", m8); }
+    int own = GetModuleHandleA("Relay.dll") != NULL;      // our own game server: Relay 7 plays only with players who have it,
+    char rv[8] = ""; GetEnvironmentVariableA("DOW2_RELAY", rv, sizeof rv);   // Relay 8 "8c": compatible, any lobby (see ladder.py)
+    int compat = own && strchr(rv, 'c') != NULL;
+    // Relay 9 pings our servers: "ip:ms,ip:ms" (-1 = no answer) -> "relay_ping":{"ip":ms,...}, the matchmaker picks the best for all
+    char pg[256] = "", rp[320] = ""; int rl = 0;
+    if (own && GetEnvironmentVariableA("DOW2_RELAY_PING", pg, sizeof pg) && pg[0]) {
+        rl = snprintf(rp, sizeof rp, ",\"relay_ping\":{");
+        for (char *t = strtok(pg, ","), *first = t; t && rl < 280; t = strtok(NULL, ",")) {
+            char *c = strrchr(t, ':'); if (!c) continue; *c = 0;
+            rl += snprintf(rp + rl, sizeof rp - rl, "%s\"%s\":%d", t == first ? "" : ",", t, atoi(c + 1));
+        }
+        rl += snprintf(rp + rl, sizeof rp - rl, "}");
+    }
+    detect_game();
+    snprintf(body, cap, "{\"steam\":\"%llu\",\"game\":\"%s\",\"mode\":\"%s\",\"name\":\"%s\",\"race\":\"%s\",\"hero\":\"%d\",\"maps\":[%s],\"max_diff\":%d%s%s%s,\"group\":\"%s\"}",
+             g_mySteam, g_game, MODE_KEY[g_mode], nm, (g_random ? "random" : g_race >= 0 && g_race < 9 ? RACES[g_race] : ""), g_hero, maps, g_maxDiff, g_testBots ? ",\"bots\":true" : "",
+             own ? (compat ? ",\"own_server\":true,\"relay_compat\":true" : ",\"own_server\":true") : "", rp, g_group);
+    if (g_direct && !g_testBots) { size_t bl = strlen(body); if (bl > 1 && bl + 20 < (size_t)cap) strcpy(body + bl - 1, ",\"direct\":true}"); }
+    if (g_fast) { size_t bl = strlen(body); if (bl > 1 && bl + 20 < (size_t)cap) strcpy(body + bl - 1, ",\"fast\":true}"); }   // 0.37: the ladder may drop me after 20 s without a poll
+    if (g_direct && !g_testBots && g_preRoom) { size_t bl = strlen(body); if (bl > 1 && bl + 40 < (size_t)cap) snprintf(body + bl - 1, cap - bl + 1, ",\"room\":\"%llu\"}", (unsigned long long)g_preRoom); }
+}
 // 0.35: nobody else of my kind waits (the ladder's "alone": my own pool - same game, same mode, fast mode) - I will be the host:
 // my room now, while searching. An older ladder without "alone": the total queue of my mode
 static void pre_check(const char *res) {
@@ -402,7 +456,7 @@ static void pre_check(const char *res) {
     if (alone == 1 || (alone < 0 && g_queue >= 0 && g_queue <= 1)) { g_preWant = 1; logmsg("direct: first in the queue - making my room while searching"); }
 }
 static DWORD WINAPI net_worker(LPVOID _) {
-    static char body[8192]; char res[4096], nm[128];
+    static char body[8192]; char res[4096];
     for (;;) {
         WaitForSingleObject(g_wake, (g_direct || g_fast) && (g_state == S_SEARCH || g_state == S_GUEST_NAME) ? 300 : 2000);   // 0.35: the pair and the room id at once
         if (g_wantLeave) {
@@ -410,31 +464,7 @@ static DWORD WINAPI net_worker(LPVOID _) {
             http_post(L"leave", body, res, sizeof res); logmsg("leave -> %s", res);
         }
         if (g_wantJoin) {
-            g_wantJoin = 0; name_utf8(nm, sizeof nm);
-            extern int g_race, g_hero, g_random; static char maps[6000]; int L = 0; maps[0] = 0;
-            for (int i = 0; i < g_nmaps && L < 5800; i++) if (mode_map(i, g_mode) && !g_off[g_mode][i]) {
-                char m8[160]; WideCharToMultiByte(CP_UTF8, 0, g_maps[i], -1, m8, sizeof m8, NULL, NULL);
-                L += snprintf(maps + L, sizeof maps - L, "%s\"%s\"", L ? "," : "", m8); }
-            int own = GetModuleHandleA("Relay.dll") != NULL;      // our own game server: Relay 7 plays only with players who have it,
-            char rv[8] = ""; GetEnvironmentVariableA("DOW2_RELAY", rv, sizeof rv);   // Relay 8 "8c": compatible, any lobby (see ladder.py)
-            int compat = own && strchr(rv, 'c') != NULL;
-            // Relay 9 pings our servers: "ip:ms,ip:ms" (-1 = no answer) -> "relay_ping":{"ip":ms,...}, the matchmaker picks the best for all
-            char pg[256] = "", rp[320] = ""; int rl = 0;
-            if (own && GetEnvironmentVariableA("DOW2_RELAY_PING", pg, sizeof pg) && pg[0]) {
-                rl = snprintf(rp, sizeof rp, ",\"relay_ping\":{");
-                for (char *t = strtok(pg, ","), *first = t; t && rl < 280; t = strtok(NULL, ",")) {
-                    char *c = strrchr(t, ':'); if (!c) continue; *c = 0;
-                    rl += snprintf(rp + rl, sizeof rp - rl, "%s\"%s\":%d", t == first ? "" : ",", t, atoi(c + 1));
-                }
-                rl += snprintf(rp + rl, sizeof rp - rl, "}");
-            }
-            detect_game();
-            snprintf(body, sizeof body, "{\"steam\":\"%llu\",\"game\":\"%s\",\"mode\":\"%s\",\"name\":\"%s\",\"race\":\"%s\",\"hero\":\"%d\",\"maps\":[%s],\"max_diff\":%d%s%s%s,\"group\":\"%s\"}",
-                     g_mySteam, g_game, MODE_KEY[g_mode], nm, (g_random ? "random" : g_race >= 0 && g_race < 9 ? RACES[g_race] : ""), g_hero, maps, g_maxDiff, g_testBots ? ",\"bots\":true" : "",
-                     own ? (compat ? ",\"own_server\":true,\"relay_compat\":true" : ",\"own_server\":true") : "", rp, g_group);
-            if (g_direct && !g_testBots) { size_t bl = strlen(body); if (bl > 1 && bl + 20 < sizeof body) strcpy(body + bl - 1, ",\"direct\":true}"); }
-            if (g_fast) { size_t bl = strlen(body); if (bl > 1 && bl + 20 < sizeof body) strcpy(body + bl - 1, ",\"fast\":true}"); }   // 0.37: the ladder may drop me after 20 s without a poll
-            if (g_direct && !g_testBots && g_preRoom) { size_t bl = strlen(body); if (bl > 1 && bl + 40 < sizeof body) snprintf(body + bl - 1, sizeof body - bl + 1, ",\"room\":\"%llu\"}", (unsigned long long)g_preRoom); }
+            g_wantJoin = 0; join_body(body, sizeof body);
             http_post(L"join", body, res, sizeof res); logmsg("join (%s%s) -> %s", g_game, g_direct && !g_testBots ? ", direct" : "", res);
             g_queue = jint(res, MODE_KEY[g_mode], -1);
             pre_check(res);
@@ -457,6 +487,26 @@ static DWORD WINAPI net_worker(LPVOID _) {
         if (g_ruined[0]) {                                                // the game died while a ladder match was loading (found at start)
             snprintf(body, sizeof body, "{\"steam\":\"%llu\",\"lobby\":\"%s\"}", g_mySteam, g_ruined);
             if (http_post(L"ruined", body, res, sizeof res)) { logmsg("ruined loading %s -> %s", g_ruined, res); g_ruined[0] = 0; }
+        }
+        if (g_state == S_NASK && !g_natAnswer) {                          // 0.38: may the game's own search run on our lobby server?
+            join_body(body, sizeof body); DWORD t0 = GetTickCount();
+            int ok = http_quick(L"native", body, res, sizeof res, 1500);
+            if (ok && jtrue(res, "native")) { g_natWhy[0] = 0; g_natAnswer = 1; }
+            else { if (!ok) strcpy(g_natWhy, "the ladder did not answer in time"); else if (!jstr(res, "why", g_natWhy, sizeof g_natWhy)) snprintf(g_natWhy, sizeof g_natWhy, "%.90s", res);
+                   g_natAnswer = 2; }
+            logmsg("native: mm/native -> %s (%lu ms): %s", g_natAnswer == 1 ? "yes" : "no", GetTickCount() - t0, ok ? res : "-");
+        }
+        if (g_state == S_NATIVE && !g_loading) {                          // 0.38: the native search as the ladder sees it, every 2 s
+            static DWORD lastn; if (GetTickCount() - lastn >= 2000) { lastn = GetTickCount();
+                snprintf(body, sizeof body, "{\"steam\":\"%llu\"}", g_mySteam);
+                if (http_quick(L"poll", body, res, sizeof res, 1500)) {
+                    char state[32] = "", mid[32] = "", lob[48] = ""; jstr(res, "state", state, sizeof state); jstr(res, "match", mid, sizeof mid);
+                    int nat = jtrue(res, "native"), good = nat && (!strcmp(state, "searching") || !strcmp(state, "matched") || !strcmp(state, "playing"));
+                    static char lastSt[48]; char cur[48]; snprintf(cur, sizeof cur, "%s%s %s", nat ? "native " : "", state, mid);
+                    if (strcmp(cur, lastSt)) { strcpy(lastSt, cur); logmsg("native: the ladder says %s", res); }
+                    if (good) { g_natGood = GetTickCount(); g_natSeen = 1; if (jstr(res, "lobby", lob, sizeof lob) && lob[0]) strcpy(g_natLobby, lob); }
+                    else if (!strcmp(state, "cancelled") && mid[0] && g_natSeen) g_natCancelled = 1;   // our match called off by the server
+                } }
         }
         int st = g_state;
         if (g_role && st >= S_GO_MAIN && st <= S_DONE && st != S_GUEST_NAME && !g_loading && !g_remoteCancel) {
@@ -949,7 +999,11 @@ static char __fastcall inv_hook(void *self, void *edx, const char *method, int f
         static char last[700]; if (strcmp(b, last)) { strcpy(last, b); logmsg("%s", b); }
     }
     if (method && args && count < 4096 && !IsBadReadPtr(args, count * sizeof(GFxValue))) {
-        if (!strcmp(method, "Receive_ShowSearchingAnimation")) { g_mmSelf = self; g_mmFlags = flags; }
+        if (!strcmp(method, "Receive_ShowSearchingAnimation")) { g_mmSelf = self; g_mmFlags = flags;
+            if (count == 1 && (args[0].type == GFX_BOOL || args[0].type == GFX_NUMBER)) {      // 0.38: the engine's own search on / off
+                int on = args[0].type == GFX_BOOL ? args[0].v.b != 0 : args[0].v.num != 0;
+                if (on != g_engSearch && (g_state == S_NASK || g_state == S_NATIVE || g_natStopAt)) logmsg("native: the game's own search %s", on ? "ON" : "off");
+                g_engSearch = on; } }
         if (!strcmp(method, "Receive_CreateMessageBox")) { g_mbTick = GetTickCount(); logmsg("message box created (%u args%s)", count, count && args[0].type == GFX_NUMBER ? "" : ""); }
         if (!strcmp(method, "Receive_PopulateDropDownListEx") && count > 2 && args[0].type == GFX_NUMBER && args[0].v.num == 0) {
             int n = 0;                                                  // map list: name, enabled, name, enabled...
@@ -1038,6 +1092,14 @@ static char __fastcall inv_hook(void *self, void *edx, const char *method, int f
     }
     return rc;
 }
+// 0.38: why the game's own search is NOT tried (NULL = try it: ask the ladder)
+static const char *native_no(void) {
+    if (!g_nativeCfg) return "Native=0";
+    if (g_manual || g_testBots || g_direct) return g_manual ? "Manual=1" : g_testBots ? "TestBots" : "DirectStart";
+    if (g_mode < 0 || g_mode > 2) return "not a ladder mode (watch)";
+    if (!GetModuleHandleW(L"OwnLobby.dll")) return "no OwnLobby.dll in the game";
+    return NULL;
+}
 static int ends_with(const char *s, const char *t) { size_t a = strlen(s), b = strlen(t); return a >= b && !strcmp(s + a - b, t); }
 static void __fastcall fs_hook(void *self, void *edx, void *movie, const char *cmd, const char *args) {
     if (cmd && !IsBadReadPtr(cmd, 1)) {
@@ -1052,6 +1114,10 @@ static void __fastcall fs_hook(void *self, void *edx, void *movie, const char *c
             logmsg("message box button: movie %s (%p), handler %p (menu %p), wrapper %p movie %p", movie == g_fsMovie ? "= menu" : "other", movie, self, g_fsSelf, g_msgWrap,
                    g_msgWrap && !IsBadReadPtr(g_msgWrap, 8) ? *(void **)((char *)g_msgWrap + 4) : NULL); }
         if (!strcmp(cmd, "OnLoadMovieComplete") && args && !strncmp(args, "/mp_mc", 6) && !g_loading) {
+            if (g_state == S_NATIVE || g_state == S_NASK) {             // 0.38: the game's own automatch got here by itself
+                logmsg("native: loading %lu ms after Start Searching (lobby %s)", GetTickCount() - g_searchTick, g_natLobby[0] ? g_natLobby : "-");
+                strcpy(g_gameName, g_natLobby); g_state = S_DONE; g_stateTick = GetTickCount();      // after the match: ended + replay as usual (no ruin marker: not MM-)
+            }
             // 0.34: the host starts at once - the match may load while a guest is still on the hero or taking the slot
             if (g_matchDirect && g_state >= S_SETUP_HERO && g_state < S_DONE) { logmsg("direct: loading while %s - done", SN[g_state]); g_state = S_DONE; g_stateTick = GetTickCount(); }
             g_loading = 1; g_recHumans = g_humans; g_recBots = g_bots && g_state == S_DONE; GetSystemTimeAsFileTime(&g_recStart);
@@ -1067,7 +1133,7 @@ static void __fastcall fs_hook(void *self, void *edx, void *movie, const char *c
                 if (strstr(url, "main_menu.gfx")) sc = SC_MAIN; else if (strstr(url, "matchmaking.gfx")) sc = SC_MM;
                 else if (strstr(url, "game_list_movie.gfx")) sc = SC_LIST; else if (strstr(url, "game_setup_movie.gfx")) sc = SC_SETUP;
                 if (sc >= 0 && !strcmp(path + strlen(path) - 9, ".panel_mc")) {
-                    strcpy(g_panel, path); g_screen = sc; g_scrTick = GetTickCount(); if (sc != SC_MM) g_mmSelf = NULL; else g_mmApplied = 0; if (sc == SC_LIST) { g_listSeen = 0; g_rowFound = -1; }
+                    strcpy(g_panel, path); g_screen = sc; g_scrTick = GetTickCount(); g_engSearch = -1; if (sc != SC_MM) g_mmSelf = NULL; else g_mmApplied = 0; if (sc == SC_LIST) { g_listSeen = 0; g_rowFound = -1; }
                     logmsg("screen %d panel %s", sc, g_panel);
                 }
             }
@@ -1123,16 +1189,23 @@ static void __fastcall fs_hook(void *self, void *edx, void *movie, const char *c
         }
         // our button: "Start Searching" / "Cancel Searching" on the Find a Game screen
         if (g_screen == SC_MM && ends_with(cmd, ".OnClickStart")) {
+            if (g_state == S_NATIVE) {                                // 0.38: Stop Searching of the game's own search - the engine does it
+                logmsg("native: Stop Searching by the player"); set_state(S_IDLE); g_wantLeave = 1; SetEvent(g_wake);
+                g_fsOrig(self, edx, movie, cmd, args); return;
+            }
+            if (g_state == S_NASK) { logmsg("native: cancelled by the player before the answer"); set_state(S_IDLE); return; }
             if (g_state == S_IDLE || g_state == S_DONE || g_state == S_FAIL) {
                 if (g_curRace >= 0 && !g_random) { g_race = g_curRace; g_chapter = g_curChapter; if (g_curHero >= 0) g_hero = g_curHero; save_choice();
                     logmsg("search with race %d chapter %d hero %d (as shown on Find a Game)", g_race, g_chapter, g_hero); }
                 g_noticeUntil = 0; g_coverWant = 0; g_searchTick = GetTickCount(); g_queue = -1; g_lobbyRace = -1; g_role = 0; g_gameName[0] = 0; g_hostMap[0] = 0; g_oppName[0] = 0; g_hostReported = 0; g_wantHost = 0;
                 g_matchMode = g_mode < 3 ? g_mode : 0; g_backToMM = 0;                   // 0.35: my room's player slots follow the searched mode
-                set_state(S_SEARCH); g_wantJoin = 1; SetEvent(g_wake);
+                const char *no = native_no();
+                if (!no) { g_natAnswer = 0; g_natSeen = g_natCancelled = 0; g_natLobby[0] = 0; g_natStopAt = 0; set_state(S_NASK); SetEvent(g_wake); }   // 0.38: ask the ladder
+                else { logmsg("native: not tried (%s) - classic flow", no); set_state(S_SEARCH); g_wantJoin = 1; SetEvent(g_wake); }
             } else if (g_state == S_SEARCH) { set_state(S_IDLE); g_wantLeave = 1; SetEvent(g_wake); }
             return;                                                   // never start Relic's own search
         }
-        if (g_screen == SC_MM && ends_with(cmd, ".OnClickBack") && g_state == S_SEARCH) { set_state(S_IDLE); g_wantLeave = 1; SetEvent(g_wake); }
+        if (g_screen == SC_MM && ends_with(cmd, ".OnClickBack") && (g_state == S_SEARCH || g_state == S_NATIVE || g_state == S_NASK)) { set_state(S_IDLE); g_wantLeave = 1; SetEvent(g_wake); }
     }
     g_fsOrig(self, edx, movie, cmd, args);
 }
@@ -1462,7 +1535,35 @@ static void tick(void) {
     if (g_state == S_DONE && g_coverWant && !g_loading && g_screen == SC_SETUP && in_state() > 60000 && now - g_lastFsTick < 3000) {
         logmsg("the game did not start - cover off"); g_coverWant = 0; set_state(S_FAIL);      // the menu movie is alive (it still sends commands)
     }
+    if (g_natStopAt && now - g_natStopAt > 1500) {                  // 0.38 fallback: the engine's search must be off before ours runs
+        if (g_engSearch == 1 && g_screen == SC_MM && g_natStops < 2) { g_natStops++; g_natStopAt = now; logmsg("native: the game still searches - Stop Searching again"); fs(".OnClickStart", ""); }
+        else { if (g_engSearch == 1) logmsg("native: the game's own search did not stop"); g_natStopAt = 0; }
+    }
     switch (g_state) {
+    case S_NASK:                                                      // 0.38: waiting for the ladder's word (net_worker, <= 1.5 s)
+        if (g_screen != SC_MM) { logmsg("native: left Find a Game while asking"); set_state(S_IDLE); break; }
+        if (g_natAnswer == 1) {
+            g_natAnswer = 0; char a[8]; snprintf(a, sizeof a, "0;%d", g_mode);
+            fs(".OnSelectDropDownItem", a);                           // the engine's own match type = the one on screen (it resets it by itself)
+            fs(".OnClickStart", "");                                  // the game's own Start Searching -> automatch/startpolling on our server
+            g_natPass = now; logmsg("native: Start Searching passed to the game %lu ms after the click (%s)", now - g_searchTick, MODE_KEY[g_mode]);
+            set_state(S_NATIVE);
+        } else if (g_natAnswer == 2 || in_state() > 3000) {
+            logmsg("native: not used (%s) - classic flow", g_natAnswer == 2 ? g_natWhy : "no answer in 3 s"); g_natAnswer = 0;
+            set_state(S_SEARCH); g_wantJoin = 1; SetEvent(g_wake);
+        }
+        break;
+    case S_NATIVE: {                                                  // 0.38: the game searches by itself; we only watch the ladder
+        if (g_natCancelled) {                                         // the server called our match off: the game shows it, we are done
+            g_natCancelled = 0; logmsg("native: the match was cancelled by the server - idle"); set_state(S_IDLE); break; }
+        DWORD quiet = g_natSeen && (int)(g_natGood - g_natPass) > 0 ? now - g_natGood : now - g_natPass;
+        if (quiet <= 10000) break;
+        const char *why = g_natSeen ? "the ladder lost the native search" : "the ladder never saw the native search";
+        if (g_screen != SC_MM) { logmsg("native: %s (%lu ms) and not on Find a Game - idle (the game goes on by itself)", why, quiet); set_state(S_IDLE); break; }   // no leave: it would call off a match the game may still be setting up
+        logmsg("native: FALLBACK - %s (%lu ms quiet), the game's own search %s - classic flow", why, quiet, g_engSearch == 1 ? "on: stopping it" : g_engSearch == 0 ? "off" : "unknown");
+        if (g_engSearch == 1) { fs(".OnClickStart", ""); g_natStopAt = now; g_natStops = 0; }   // Stop Searching (the same button)
+        g_queue = -1; set_state(S_SEARCH); g_wantJoin = 1; SetEvent(g_wake);
+        break; }
     case S_GO_MAIN:                                                   // leave Find a Game -> main menu
         { static DWORD since, lastBack, entered; if (entered != g_stateTick) { entered = g_stateTick; since = now; lastBack = now - 800; }
           if ((g_screen == SC_MM || (g_screen == SC_SETUP && g_matchDirect)) && now - lastBack > 1500) { lastBack = now; fs(".OnClickBack", ""); }   // pressed again only if the screen did not change; 0.35: out of my own room
@@ -1716,6 +1817,7 @@ BOOL WINAPI DllMain(HINSTANCE h, DWORD r, LPVOID _) {
     g_maxDiff = GetPrivateProfileIntW(L"MMFind", L"MaxRatingDiff", 0, ini);
     g_direct = GetPrivateProfileIntW(L"MMFind", L"DirectStart", 0, ini);       // 0.34 experiment, see g_direct
     g_fast = GetPrivateProfileIntW(L"MMFind", L"Fast", 1, ini) != 0;           // 0.37, see g_fast
+    g_nativeCfg = GetPrivateProfileIntW(L"MMFind", L"Native", 1, ini) != 0;    // 0.38, see g_nativeCfg
     g_testBots = GetPrivateProfileIntW(L"MMFind", L"TestBots", 0, ini);
     g_aiDiff = GetPrivateProfileIntW(L"MMFind", L"AIDifficulty", 1, ini);    // 0 Easy, 1 Normal, 2 Hard, 3 Expert
     g_readyIdx = GetPrivateProfileIntW(L"MMFind", L"ReadyField", 12, ini);     // PopulatePlayerList slot field 12 = "ready" (seen 26.10)
@@ -1729,7 +1831,8 @@ BOOL WINAPI DllMain(HINSTANCE h, DWORD r, LPVOID _) {
     g_mySteam = my_steam();
     { wchar_t p[MAX_PATH], o[MAX_PATH]; _snwprintf(p, MAX_PATH, L"%lsMMFind.log", g_dir); _snwprintf(o, MAX_PATH, L"%lsMMFind.log.old", g_dir);
       WIN32_FILE_ATTRIBUTE_DATA a; if (GetFileAttributesExW(p, GetFileExInfoStandard, &a) && (a.nFileSizeHigh || a.nFileSizeLow > (1u << 20))) MoveFileExW(p, o, MOVEFILE_REPLACE_EXISTING); }
-    logmsg("MMFind 0.37 start, steam=%llu server=%ls%s%s", g_mySteam, g_server, g_direct ? ", fast automatch (experiment) on" : "", g_fast ? ", fast steps (public room, direct join)" : "");
+    logmsg("MMFind 0.38 start, steam=%llu server=%ls%s%s%s", g_mySteam, g_server, g_direct ? ", fast automatch (experiment) on" : "", g_fast ? ", fast steps (public room, direct join)" : "",
+           g_nativeCfg ? ", native search when on our lobby server" : ", native off");
     { char n[64]; wsprintfA(n, "Local\\dow2patch_MMFind_%lu", GetCurrentProcessId());          // one copy per game (launcher + dow2-patches)
       HANDLE mx = CreateMutexA(NULL, FALSE, n); if (mx && GetLastError() == ERROR_ALREADY_EXISTS) { logmsg("another MMFind copy is active, this one stays idle"); return TRUE; } }
     install(); CloseHandle(CreateThread(NULL, 0, nodes_fetch, NULL, 0, NULL)); return TRUE;
