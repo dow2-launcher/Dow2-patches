@@ -193,7 +193,7 @@ static void dj_to_lobby(void) {                                // the menu to th
 }
 
 // ---------------- the cover (as MMFind's "Match Found" screen) ----------------
-static int g_coverWant, g_coverOn; static wchar_t g_coverLine[160]; static double g_coverH = 1200; static DWORD g_coverTextTick;
+static int g_coverWant, g_coverOn; static wchar_t g_coverLine[160], g_coverTitle[64] = L"Joining the Game"; static DWORD g_noticeUntil; static int g_noticeList; static double g_coverH = 1200; static DWORD g_coverTextTick;
 static double g_btnX, g_btnY, g_btnW, g_btnH; static int g_btnHover, g_uiHidden;
 static void rj_cancel(void);
 static void cover_update(void) {
@@ -233,8 +233,8 @@ static void cover_update(void) {
         g_coverTextTick = GetTickCount();
         static int dots; dots = (dots + 1) % 4; wchar_t dd[5] = L"...."; dd[dots] = 0;
         wchar_t h[700]; int big = (int)(g_coverH * 0.07), small = (int)(g_coverH * 0.032);
-        _snwprintf(h, 699, L"<p align='center'><font face='$TitleFont' size='%d' color='#E2C36B'>Joining the Game</font></p>"
-                           L"<p align='center'><font face='$NormalFont' size='%d' color='#C9D6CF'>%ls%ls</font></p>", big, small, g_coverLine, dd);
+        _snwprintf(h, 699, L"<p align='center'><font face='$TitleFont' size='%d' color='#E2C36B'>%ls</font></p>"
+                           L"<p align='center'><font face='$NormalFont' size='%d' color='#C9D6CF'>%ls%ls</font></p>", big, g_coverTitle, small, g_coverLine, g_noticeUntil ? L"" : dd);
         as_setw(m, "_level0.rjcover.t1.htmlText", h);
     }
     // Cancel: hover look + a left click inside it (the game window in front)
@@ -249,12 +249,22 @@ static void cover_update(void) {
 
 // ---------------- the join ----------------
 enum { RJ_NONE, RJ_MENU, RJ_JOIN, RJ_LOBBY };
-static int g_rj; static unsigned long long g_rjRoom; static wchar_t g_rjName[64]; static DWORD g_rjAt, g_rjTry, g_rjCheck; static int g_rjTries;
+static int g_rj; static unsigned long long g_rjRoom; static wchar_t g_rjName[64];
+static void stage(const wchar_t *title, const wchar_t *what) {          // what the cover says now (siritos 03.11: what is going on)
+    wcsncpy(g_coverTitle, title, 63);
+    const wchar_t *n = g_rjName[0] ? g_rjName : L"the custom game";
+    _snwprintf(g_coverLine, 159, what, n); g_coverTextTick = 0;
+} static DWORD g_rjAt, g_rjTry, g_rjCheck; static int g_rjTries;
 static void rj_end(const char *res, int toList) {
     logmsg("%s (room %llu)%s", res, g_rjRoom, toList ? " - the public games list" : "");
     wchar_t p[MAX_PATH]; _snwprintf(p, MAX_PATH, L"%lsRoomJoin_result.txt", g_dir);
     FILE *f = _wfopen(p, L"w"); if (f) { fprintf(f, "%s %llu\n", res, g_rjRoom); fclose(f); }
-    g_rj = RJ_NONE; g_coverWant = 0;
+    g_rj = RJ_NONE;
+    if (toList && strcmp(res, "fail cancelled")) {               // a moment to read why, then the public games list
+        stage(L"Could Not Join", L"%ls did not let us in. Opening the public games list");
+        g_coverWant = 1; g_noticeUntil = GetTickCount() + 2500; g_noticeList = 1; return;
+    }
+    g_coverWant = 0;
     if (toList && g_screen == SC_MAIN) fs(".OnClickPublicMatch", "");
 }
 static void rj_cancel(void) { if (g_rj) { logmsg("Cancel pressed"); if (g_screen == SC_SETUP) fs(".OnClickBack", ""); rj_end("fail cancelled", g_screen == SC_MAIN); } }
@@ -283,7 +293,7 @@ static void rj_step(DWORD now) {
     switch (g_rj) {
     case RJ_MENU: {                                                   // the game may still be starting: up to 90 s
         static DWORD probed, known; if (now - g_rjAt < 50) { probed = 0; known = 0; }
-        if (g_fsMovie && !known) { known = now; if (g_rjName[0]) _snwprintf(g_coverLine, 159, L"%ls", g_rjName); else wcscpy(g_coverLine, L"Custom game"); g_coverWant = 1; }   // the cover at once
+        if (g_fsMovie && !known) { known = now; stage(L"Joining the Game", L"Opening the lobby: %ls"); g_coverWant = 1; }   // the cover at once
         if (g_screen == SC_OTHER && g_fsMovie && now - probed > 250) { probed = now; probe_screen(); }
         // still not told after 6 s with the menu movie known, no match loading, in no room: the main menu the game starts on
         if (g_screen == SC_OTHER && known && now - known > 6000 && !dj_room()) {
@@ -292,17 +302,18 @@ static void rj_step(DWORD now) {
             g_screen = SC_MAIN; logmsg("the screen not known after 6 s - taken as the main menu (panel %s)", g_panel[0] ? g_panel : "?");
         }
         if (g_screen == SC_MAIN && g_fsMovie) {
-            if (g_rjName[0]) _snwprintf(g_coverLine, 159, L"%ls", g_rjName); else wcscpy(g_coverLine, L"Custom game");
+            stage(L"Joining the Game", L"Opening the lobby: %ls");
             g_coverWant = 1; g_rj = RJ_JOIN; g_rjAt = now; g_rjTries = 0; g_rjTry = 0;
         } else if (now - g_rjAt > 90000) rj_end(g_fsMovie ? "fail no main menu" : "fail the menu movie never seen", 0);
         break; }
     case RJ_JOIN: {
         if (g_screen != SC_MAIN && g_screen != SC_SETUP) { rj_end("fail the player went elsewhere", 0); break; }   // e.g. Find a Game
         unsigned long long in = dj_room();
-        if (in && in == g_rjRoom) { logmsg("in the room after %lu ms", now - g_rjAt); dj_to_lobby(); g_rj = RJ_LOBBY; g_rjAt = now; break; }
+        if (in && in == g_rjRoom) { logmsg("in the room after %lu ms", now - g_rjAt); stage(L"Joining the Game", L"In %ls. Opening the lobby screen"); dj_to_lobby(); g_rj = RJ_LOBBY; g_rjAt = now; break; }
         if (in) { rj_end("fail in another room", 0); break; }
         if (g_screen == SC_MAIN && g_rjTries < 3 && (!g_rjTry || now - g_rjTry > 8000)) {          // 03.11: a join took 5 s - no second one on top
             g_rjTries++; g_rjTry = now;
+            stage(L"Joining the Game", g_rjTries == 1 ? L"Connecting to the game: %ls" : g_rjTries == 2 ? L"Connecting to the game: %ls (try 2 of 3)" : L"Connecting to the game: %ls (try 3 of 3)");
             if (!dj_join(g_rjRoom)) { rj_end("fail join call", 1); break; }
         }
         if (now - g_rjAt > 25000) rj_end("fail timeout", 1);
@@ -397,7 +408,12 @@ static void __stdcall upd_hook(float dt) {
     g_updOrig(dt);
     if (g_fsLater && !g_fsHooked) { g_fsHooked = hook_fscmd(); g_fsLater = 0; }
     DWORD now = GetTickCount();
-    if (g_fsHooked) rj_step(now);
+    if (g_noticeUntil && (int)(now - g_noticeUntil) > 0) {
+        g_noticeUntil = 0; g_coverWant = 0;
+        if (g_noticeList && g_screen == SC_MAIN) fs(".OnClickPublicMatch", "");
+        g_noticeList = 0;
+    }
+    if (g_fsHooked && !g_noticeUntil) rj_step(now);
     if (g_uiHidden && g_fsMovie && !g_loading && !(GetAsyncKeyState(VK_LBUTTON) & 0x8000)) {   // the Cancel click is over: the menu back
         static DWORD up; if (!up) up = now;
         if (now - up > 300) { as_setb(g_fsMovie, "_level0.display_item._visible", 1); g_uiHidden = 0; up = 0; }
@@ -425,7 +441,7 @@ BOOL WINAPI DllMain(HINSTANCE h, DWORD r, LPVOID _) {
     if (r != DLL_PROCESS_ATTACH) return TRUE;
     DisableThreadLibraryCalls(h); InitializeCriticalSection(&g_lk);
     GetModuleFileNameW(h, g_dir, MAX_PATH); wchar_t *s = wcsrchr(g_dir, L'\\'); if (s) s[1] = 0;
-    logmsg("RoomJoin 3 (experiment: joining a room from the launcher's Lobbies tab)");
+    logmsg("RoomJoin 4 (experiment: joining a room from the launcher's Lobbies tab)");
     { char n[64]; wsprintfA(n, "Local\\dow2patch_RoomJoin_%lu", GetCurrentProcessId());
       HANDLE mx = CreateMutexA(NULL, FALSE, n); if (mx && GetLastError() == ERROR_ALREADY_EXISTS) { logmsg("another RoomJoin copy is active, this one stays idle"); return TRUE; } }
     // MMFind checks the fscommand handler's own bytes when it starts: in the folder but not in the game yet -> hook on the first tick
