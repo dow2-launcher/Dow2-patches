@@ -126,10 +126,10 @@ static int probe_screen(void) {
         char u[200] = "";
         if (v.type == GFX_STRING && v.v.s && !IsBadReadPtr(v.v.s, 1)) snprintf(u, sizeof u, "%s", v.v.s);
         else if (v.type == GFX_WSTRING && v.v.ws && !IsBadReadPtr(v.v.ws, 2)) WideCharToMultiByte(CP_UTF8, 0, v.v.ws, -1, u, sizeof u, NULL, NULL);
+        for (char *c = u; (c = strstr(c, "%5F")) || (c = strstr(u, "%5f")); ) { *c = '_'; memmove(c + 1, c + 3, strlen(c + 3) + 1); }   // the URL comes encoded (main%5Fmenu.gfx)
         int sc = strstr(u, "main_menu.gfx") ? SC_MAIN : strstr(u, "matchmaking.gfx") ? SC_MM : strstr(u, "game_list_movie.gfx") ? SC_LIST
                : strstr(u, "game_setup_movie.gfx") ? SC_SETUP : -1;
-        logmsg("screen asked: %s = %s", pth, u[0] ? u : "?");
-        if (sc >= 0) { strcpy(g_panel, pth); g_screen = sc; return sc; }
+        if (sc >= 0) { strcpy(g_panel, pth); g_screen = sc; logmsg("screen asked: %s = %s", pth, u); return sc; }
     }
     return -1;
 }
@@ -283,8 +283,8 @@ static void rj_step(DWORD now) {
     switch (g_rj) {
     case RJ_MENU: {                                                   // the game may still be starting: up to 90 s
         static DWORD probed, known; if (now - g_rjAt < 50) { probed = 0; known = 0; }
-        if (g_fsMovie && !known) known = now;
-        if (g_screen == SC_OTHER && g_fsMovie && now - probed > 1000) { probed = now; probe_screen(); }
+        if (g_fsMovie && !known) { known = now; if (g_rjName[0]) _snwprintf(g_coverLine, 159, L"%ls", g_rjName); else wcscpy(g_coverLine, L"Custom game"); g_coverWant = 1; }   // the cover at once
+        if (g_screen == SC_OTHER && g_fsMovie && now - probed > 250) { probed = now; probe_screen(); }
         // still not told after 6 s with the menu movie known, no match loading, in no room: the main menu the game starts on
         if (g_screen == SC_OTHER && known && now - known > 6000 && !dj_room()) {
             for (int k = 1; k <= 3 && !g_panel[0]; k++) { char q[96]; GFxValue v; snprintf(q, sizeof q, "_level0.display_item.panel%d_mc.panel_mc._visible", k);
@@ -301,11 +301,11 @@ static void rj_step(DWORD now) {
         unsigned long long in = dj_room();
         if (in && in == g_rjRoom) { logmsg("in the room after %lu ms", now - g_rjAt); dj_to_lobby(); g_rj = RJ_LOBBY; g_rjAt = now; break; }
         if (in) { rj_end("fail in another room", 0); break; }
-        if (g_screen == SC_MAIN && g_rjTries < 3 && (!g_rjTry || now - g_rjTry > 4000)) {
+        if (g_screen == SC_MAIN && g_rjTries < 3 && (!g_rjTry || now - g_rjTry > 8000)) {          // 03.11: a join took 5 s - no second one on top
             g_rjTries++; g_rjTry = now;
             if (!dj_join(g_rjRoom)) { rj_end("fail join call", 1); break; }
         }
-        if (now - g_rjAt > 20000) rj_end("fail timeout", 1);
+        if (now - g_rjAt > 25000) rj_end("fail timeout", 1);
         break; }
     case RJ_LOBBY:
         if (g_screen == SC_SETUP) rj_end("ok", 0);
@@ -425,7 +425,7 @@ BOOL WINAPI DllMain(HINSTANCE h, DWORD r, LPVOID _) {
     if (r != DLL_PROCESS_ATTACH) return TRUE;
     DisableThreadLibraryCalls(h); InitializeCriticalSection(&g_lk);
     GetModuleFileNameW(h, g_dir, MAX_PATH); wchar_t *s = wcsrchr(g_dir, L'\\'); if (s) s[1] = 0;
-    logmsg("RoomJoin 2 (experiment: joining a room from the launcher's Lobbies tab)");
+    logmsg("RoomJoin 3 (experiment: joining a room from the launcher's Lobbies tab)");
     { char n[64]; wsprintfA(n, "Local\\dow2patch_RoomJoin_%lu", GetCurrentProcessId());
       HANDLE mx = CreateMutexA(NULL, FALSE, n); if (mx && GetLastError() == ERROR_ALREADY_EXISTS) { logmsg("another RoomJoin copy is active, this one stays idle"); return TRUE; } }
     // MMFind checks the fscommand handler's own bytes when it starts: in the folder but not in the game yet -> hook on the first tick
