@@ -20,6 +20,14 @@ The version of the set lives only in `VERSION`; each DLL still writes its own ve
   bottom left corner of the minimap frame, also the fallback in annihilation); "apm" small.
 - Launcher catalog entries with the Place picks: docs/launcher-catalog-timer-apm.json (matchtimer-8, apm-1, cooldowns-6).
 
+## Unreleased (branch feat/roomjoin)
+- RoomJoin 1 (new add-on, experiment, launcher 1.4.5+): Join on an Elite room without a password in the launcher's Lobbies tab -
+  the game starts (or comes to the front) and walks into the room by itself under a cover that says what goes on; a no from the
+  game (full, closed) is shown with its own text, then the public games list. MMFind is not touched (own DLL, own mutex, hooks
+  chained). Tested 03.11 vs live rooms: joined in 1.2-5 s from the game's start; with the game running - fixed after the tests
+  (the idle main menu sends nothing: mouse moves posted to it once it is in front; a second Join for the same room is dropped;
+  Cancel never leaves a room we got into).
+
 ## Unreleased (branch feature/mmfind-0.39 only, not released)
 - MMFind 0.39: the game's own automatch faster (owner 03.11.2026: "the ~12 s polling - make it 1 second; cut the 5 s countdown to
   2 s"). `[MMFind] NativeFast=1` (default; 0 = off): only while a native search runs (Start Searching passed to the game until the

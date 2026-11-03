@@ -299,6 +299,26 @@ static void rj_cancel(void) {                     // the cover's Cancel: our joi
     if (g_screen == SC_SETUP || dj_room()) { rj_end("ok", 0); return; }
     rj_end("fail cancelled", g_screen == SC_MAIN);
 }
+// The game was running in its main menu: that menu sends nothing while nobody touches it (03.11: 37 s to the cover, until the
+// player moved the mouse). Once the game's window is in front (the launcher brings it there on Join), a few mouse moves over
+// the right side of the window - where the menu's buttons are - are posted to it: the menu answers with its hover commands
+// and they tell us the movie. Only messages to the game's window: the real cursor does not move; the cover comes right after.
+static HWND game_window(void) {
+    HWND w = GetForegroundWindow(); DWORD pid = 0;
+    if (w) GetWindowThreadProcessId(w, &pid);
+    return pid == GetCurrentProcessId() ? w : NULL;
+}
+static void nudge_menu(DWORD now) {
+    static DWORD last; static int n;
+    if (g_fsMovie || now - last < 400) return;
+    HWND w = game_window(); if (!w) return;                           // not in front: nothing to show the cover on anyway
+    last = now; RECT r; if (!GetClientRect(w, &r) || r.right < 200 || r.bottom < 200) return;
+    int x = r.right - r.right / 8 - (n % 3) * (r.right / 20), y = r.bottom / 4 + (n % 7) * (r.bottom / 14);
+    PostMessageW(w, WM_MOUSEMOVE, 0, MAKELPARAM(x, y));
+    if (++n % 10 == 1) logmsg("the menu movie not known yet: mouse moves over the menu's buttons (%d)", n);
+    if (n % 21 == 20) {                                                // put the game's idea of the cursor back where the cursor is
+        POINT c; if (GetCursorPos(&c) && ScreenToClient(w, &c)) PostMessageW(w, WM_MOUSEMOVE, 0, MAKELPARAM(c.x, c.y)); }
+}
 static void rj_read(DWORD now) {
     if (now - g_rjCheck < 1000) return;
     g_rjCheck = now;
@@ -326,7 +346,10 @@ static void rj_step(DWORD now) {
     switch (g_rj) {
     case RJ_MENU: {                                                   // the game may still be starting: up to 90 s
         static DWORD probed, known; if (now - g_rjAt < 50) { probed = 0; known = 0; }
-        if (g_fsMovie && !known) { known = now; stage(L"Joining the Game", L"Opening the lobby: %ls"); g_coverWant = 1; }   // the cover at once
+        if (!g_fsMovie && now - g_rjAt > 800) nudge_menu(now);
+        if (g_fsMovie && !known) { known = now;
+            { HWND gw = game_window(); POINT c; if (gw && GetCursorPos(&c) && ScreenToClient(gw, &c)) PostMessageW(gw, WM_MOUSEMOVE, 0, MAKELPARAM(c.x, c.y)); }   // the game's cursor back
+            stage(L"Joining the Game", L"Opening the lobby: %ls"); g_coverWant = 1; }   // the cover at once
         if (g_screen == SC_OTHER && g_fsMovie && now - probed > 250) { probed = now; probe_screen(); }
         // still not told after 6 s with the menu movie known, no match loading, in no room: the main menu the game starts on
         if (g_screen == SC_OTHER && known && now - known > 6000 && !dj_room()) {
@@ -505,7 +528,7 @@ BOOL WINAPI DllMain(HINSTANCE h, DWORD r, LPVOID _) {
     if (r != DLL_PROCESS_ATTACH) return TRUE;
     DisableThreadLibraryCalls(h); InitializeCriticalSection(&g_lk);
     GetModuleFileNameW(h, g_dir, MAX_PATH); wchar_t *s = wcsrchr(g_dir, L'\\'); if (s) s[1] = 0;
-    logmsg("RoomJoin 6 (experiment: joining a room from the launcher's Lobbies tab)");
+    logmsg("RoomJoin 7 (experiment: joining a room from the launcher's Lobbies tab)");
     { char n[64]; wsprintfA(n, "Local\\dow2patch_RoomJoin_%lu", GetCurrentProcessId());
       HANDLE mx = CreateMutexA(NULL, FALSE, n); if (mx && GetLastError() == ERROR_ALREADY_EXISTS) { logmsg("another RoomJoin copy is active, this one stays idle"); return TRUE; } }
     // MMFind checks the fscommand handler's own bytes when it starts: in the folder but not in the game yet -> hook on the first tick
