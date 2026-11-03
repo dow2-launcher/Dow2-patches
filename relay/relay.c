@@ -32,7 +32,8 @@
 // WSASend of every socket of the process (the IAT of all modules is hooked) and on every connect - all the game's network
 // threads queued on it (players in Russia: "BattleServerRelay::Process - 177..325 ms between calls" with the add-on). Now a
 // socket is ours only when its preamble waits (marked lock-free at the redirect); every other send passes with one read.
-// Also: only TCP connects to 27000-27099 / our battle port are looked at (a UDP socket's connect is never redirected).
+// Also: only TCP connects to 27000-27099 / our battle port are looked at (a UDP socket's connect is never redirected), and
+// NetProbe.dll is never hooked (its TCP 27015 test to our nodes went into our UDP tunnel as if it were the game - stand 03.11).
 // Relay 20 (03.11.2026): copies of the unacknowledged packets inside each UDP data packet (see DATA2 below; agreed in the SYN,
 // an old gateway = no copies), and the native connections of our lobby server's rooms (the game connects to one of our nodes
 // on the battle port itself) over UDP too - before they went to the node over TCP, which DPI cuts in Russia after ~33 KB;
@@ -87,6 +88,8 @@ static int patch_imports(void *real, void *hook) {               // every loaded
     if (!EnumProcessModules(GetCurrentProcess(), mods, sizeof mods, &need)) return 0;
     for (DWORD m = 0; m < need / sizeof(HMODULE) && m < 512; m++) {
         unsigned char *b = (unsigned char *)mods[m]; IMAGE_DOS_HEADER *d = (IMAGE_DOS_HEADER *)b;
+        char nm[64];                                              // Relay 21: NetProbe measures the player's real way (TCP 27015 to our
+        if (GetModuleBaseNameA(GetCurrentProcess(), mods[m], nm, sizeof nm) && !lstrcmpiA(nm, "NetProbe.dll")) continue;   // nodes) - never ours
         if (IsBadReadPtr(d, sizeof *d) || d->e_magic != IMAGE_DOS_SIGNATURE) continue;
         IMAGE_NT_HEADERS *nt = (IMAGE_NT_HEADERS *)(b + d->e_lfanew);
         IMAGE_DATA_DIRECTORY dir = nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT];

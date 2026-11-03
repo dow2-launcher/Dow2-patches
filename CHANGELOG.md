@@ -11,6 +11,8 @@ The version of the set lives only in `VERSION`; each DLL still writes its own ve
   counter of waiting slots); every other send / WSASend / connect passes with one memory read, the lock is taken only when a
   preamble is really due. Only TCP connects to 27000-27099 and to our nodes' 47100 are looked at: a UDP socket that connect()s
   and everything else (launcher / ladder / lobby server API and chat, Relic's HTTPS lobby) pass untouched before any work.
+  NetProbe.dll is never hooked: its TCP 27015 test to our nodes went into our UDP tunnel as if it were the game (stand 03.11).
+  Stand 1: online Private custom game on Relic (relay_r2 on, forwarding off) - pass-through, no "ms between calls".
   Measured under Wine 11.20 (the send hook path, the original send a stub, 16 threads on their own sockets): Relay 20 mean
   6.2 us per call, 80% of calls over 1 us, 2.26 M calls/s; Relay 21 0.23 us, 0.007% over 1 us, 27.7 M calls/s; on 4 cores
   Relay 20 had 1935 calls over 1 ms, Relay 21 99 (the scheduler).
