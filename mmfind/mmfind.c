@@ -599,7 +599,8 @@ static DWORD WINAPI net_worker(LPVOID _) {
                     int nat = jtrue(res, "native"), good = nat && (!strcmp(state, "searching") || !strcmp(state, "matched") || !strcmp(state, "playing"));
                     static char lastSt[48]; char cur[48]; snprintf(cur, sizeof cur, "%s%s %s", nat ? "native " : "", state, mid);
                     if (strcmp(cur, lastSt)) { strcpy(lastSt, cur); logmsg("native: the ladder says %s", res); }
-                    if (good) { g_natGood = GetTickCount(); g_natSeen = 1; if (jstr(res, "lobby", lob, sizeof lob) && lob[0]) strcpy(g_natLobby, lob); }
+                    if (good) { g_natGood = GetTickCount(); g_natSeen = 1; if (jstr(res, "lobby", lob, sizeof lob) && lob[0]) strcpy(g_natLobby, lob);
+                                else { char rm[24] = ""; if (jstr(res, "room", rm, sizeof rm) && rm[0] >= '1' && rm[0] <= '9') snprintf(g_natLobby, sizeof g_natLobby, "NM-%s", rm); } }   // the ladder's lobby of a native match (mm_history) once the room is up: the replay finds its match
                     // our match called off by the server: it had the search (even when this is the first answer - a match that formed and
                     // failed within 2 s); a match id handled before is not news (the ladder repeats "cancelled" for 5 min)
                     else if (!strcmp(state, "cancelled") && mid[0] && !g_natCancelled && strcmp(mid, g_natLastCancel)) {
@@ -1233,14 +1234,18 @@ static void __fastcall fs_hook(void *self, void *edx, void *movie, const char *c
             logmsg("message box button: movie %s (%p), handler %p (menu %p), wrapper %p movie %p", movie == g_fsMovie ? "= menu" : "other", movie, self, g_fsSelf, g_msgWrap,
                    g_msgWrap && !IsBadReadPtr(g_msgWrap, 8) ? *(void **)((char *)g_msgWrap + 4) : NULL); }
         if (!strcmp(cmd, "OnLoadMovieComplete") && args && !strncmp(args, "/mp_mc", 6) && !g_loading) {
+            int natLoad = 0;
             if (g_state == S_NATIVE || g_state == S_NASK) {             // 0.38: the game's own automatch got here by itself
+                natLoad = 1;
                 logmsg("native: loading %lu ms after Start Searching (lobby %s)", GetTickCount() - g_searchTick, g_natLobby[0] ? g_natLobby : "-");
                 native_fast(0);                                       // 0.39: the game as it was (the countdown is over, nothing polls now)
                 strcpy(g_gameName, g_natLobby); g_state = S_DONE; g_stateTick = GetTickCount(); g_reRow = 0; g_natWatchUntil = 0;      // after the match: ended + replay as usual (no ruin marker: not MM-)
             }
             // 0.34: the host starts at once - the match may load while a guest is still on the hero or taking the slot
             if (g_matchDirect && g_state >= S_SETUP_HERO && g_state < S_DONE) { logmsg("direct: loading while %s - done", SN[g_state]); g_state = S_DONE; g_stateTick = GetTickCount(); }
-            g_loading = 1; g_recHumans = g_humans; g_recBots = g_bots && g_state == S_DONE; GetSystemTimeAsFileTime(&g_recStart);
+            // release gate 03.11.2026: the native automatch never shows the Custom Games lobby, so g_humans (counted from its player
+            // list) stayed 0 and replay_after_match() skipped every native match - no replay of a native match ever went out
+            g_loading = 1; g_recHumans = natLoad && g_humans < 2 ? 2 : g_humans; g_recBots = g_bots && g_state == S_DONE; GetSystemTimeAsFileTime(&g_recStart);
             if (g_state == S_DONE && !strncmp(g_gameName, "MM-", 3) && !g_bots) { marker_set(g_gameName); g_loadTick = GetTickCount(); }
             if (g_gameName[0] && g_state == S_DONE) strcpy(g_recName, g_gameName); else g_recName[0] = 0;
             logmsg("loading screen - hands off the menu (%d people in the lobby)", g_humans); }
