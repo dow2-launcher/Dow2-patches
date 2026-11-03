@@ -89,6 +89,24 @@ The version of the set lives only in `VERSION`; each DLL still writes its own ve
   an older ladder answers a peek like a real ask, so no peek is sent while a native search or its search-again is pending.
   Stand 1 (Elite 3.2, OwnLobby ownlobby-3, production ladder, test group): shown on entering, native search starts and stops.
 
+## Unreleased (branch feature/steamkeep, SteamKeep 2)
+- SteamKeep 2 (owner 03.11.2026: Steam's servers can be away for an hour - the match must be played to the end): no time
+  limit. Any number of drops and returns (and the every-frame "logged on?" check 0x4E5900) never end the match; Steam's close
+  request (a bare WM_CLOSE) is ignored for the rest of the match once Steam went away in it or while it is not logged on.
+  The player's own exits still work: the game's Alt+F4 / menu Quit (OnQuitFinal, untouched), the close button / taskbar
+  Close (WM_SYSCOMMAND SC_CLOSE, seen by a window procedure put in front of the game's), F4 held at WM_CLOSE, Windows
+  shutdown. After the match the game is not closed, so the result and the replay go out. ini: CloseWindowSec is gone,
+  IgnoreSteamClose=1.
+
+## Unreleased (branch feature/steamkeep)
+- SteamKeep 1 (new add-on, not in the launcher catalog yet): the match goes on when Steam goes away. DOW2.exe turns a Steam
+  drop (SteamLoginService SetConnected(false) 0x004F6F20 -> bus events 0x0C / 1 / 2) into an end reason in GameObj
+  (0x0041FB0E) and leaves the match (GameQuitForSteamInternal 0x00426D9C); a close request that the Steam client sends
+  with it (players' logs: SteamServerShutdown -> "GameApp::Loop - shutdown requested") quits the game. SteamKeep skips
+  both while a game is running (not menus, not replays); no simulation change. Stand 1 (skirmish vs AI, Steam CM sockets
+  destroyed for 60 s + WM_CLOSE to the window): without it the game left the match (end reason 4) and quit; with it the
+  match went on (clock 1:55, Steam back after 44 s), a later plain WM_CLOSE still closed the game.
+
 ## Unreleased (branch fix/cooldowns-6-timer-apm)
 - Cooldowns 6 (siritos 03.11.2026: on Catachans one ability's recharge reset another's number, and with no energy the number
   went; the bunker stratagem never got one). Cooldowns 4-5 kept the recharge per button number and its end per ability
