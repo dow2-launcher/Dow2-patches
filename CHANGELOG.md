@@ -4,6 +4,30 @@ Every version gets an entry here before it reaches `main`. CI then tags `vX.Y.Z`
 version (`X.Y.0`) it also publishes a GitHub Release with the DLLs and the entries since the previous `X.Y.0`.
 The version of the set lives only in `VERSION`; each DLL still writes its own version to its log.
 
+## MMFind 0.43 (branch feature/mmfind-rematch, staging mmfind-0.43, not released)
+- MMFind 0.43: rematch on Continue (owner 03.11.2026: "Continue after a match from an ordinary lobby - a new lobby with the same
+  people"). The game's own post-game Continue only throws everyone to the main menu after a Custom Games match (Relic ~2016).
+  While a lobby that is NOT our automatch is up, MMFind keeps who sits where (room id, slots with Relic profile ids and names,
+  my slot, the map, my race / chapter / hero, whether I made the room: Host in the list or Private Match); when its match
+  loads that lobby is kept. On the post-game screen Continue is switched on (Receive_SetNextEnabled - the game had it off even
+  for the host) and its click (OnClickNext) is taken: the screen is left the way Back leaves it, and the ladder
+  (`mm/rematch`, needs dow2-ladder feature/mm-rematch; the key = the old room id, the same in every player's game) picks who
+  makes the new room: the old host if he pressed Continue within 6 s of the first press, else the first one who pressed (45 s
+  without a room = the next one). He opens a public Custom Games room "Rematch-xxxxxx" (the classic flow: Public Match, Host
+  without the name box), takes his old army, sets the old map if the lobby has another one, gives the ladder the room id; the
+  others get it in their poll and join it by the id (the list by name after 12 s), with their old army, and move to their old
+  slot (free: move; the one sitting there wants mine: a swap, the other MMFind says yes; after 20 s any free slot of the old
+  team). Nobody waits for anybody: no auto-start (the host starts as in any lobby), a later Continue (10 min) still gets in,
+  players without MMFind can find the room by its name; for 3 minutes the host kicks people who were not in the old lobby.
+  Cover "Rematch" with Cancel while the menus are walked; the saved Find a Game choice is back after. When the rematch itself
+  is played its key closes (a late Continue: "This rematch is over already") and a Continue after it makes the next rematch.
+  `[MMFind] Rematch=1` (default; the launcher's option "Rematch on Continue" under Automatch) / 0 = the game's own Continue.
+  `RematchTest=1`: one person is enough (a match against computers), a Private Match against a computer from the main menu.
+  Stand 1 (Elite 3.2, test ladder): Private Match vs computer, Exit Game, post-game Continue enabled and taken, a fake second
+  player pressed first (no old host flag -> he was picked, gave no room, after 45 s the stand took over), the stand made
+  "Rematch-2zcurm" on the old map in 1.7 s and the fake players' poll got its room id. Not tested: a real second player
+  joining (needs two stands), 2v2/3v3 slot moves.
+
 ## MMFind 0.42 (branch feature/mmfind-0.42-mode, staging mmfind-0.42, not released)
 - MMFind 0.42: the kind of search shown on Find a Game (owner 03.11.2026: "when we press search, show right away which search
   it is"; "change the search screen so it is clear it is a different one"). Two text fields of the game's own Find a Game panel
