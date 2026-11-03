@@ -19,20 +19,24 @@
 #include <string.h>
 #include "ca_pem.h"
 
-#define VERSION        "1"
+#define VERSION        "2"
 #define RL_MANAGER     0x01335014      // the RLink manager (NULL until RLink starts)
 #define RELIC_PEM      0x010A8628      // "RelicLink Root CA"
 #define CFG_FILL       0x004C8C90      // RLink config filler (ESI = config): count +8, certs +0xC
 #define CFG_CALL       0x004C8E78      // its one call (E8 rel32), in the RLink start 0x4C8D00
 #define CFG_STORE      0x004C8CDE      // mov [esi+0xC], 0x010A8628 inside the filler (checked, not changed)
-#define DEFAULT_SERVERS L"rts.fintebtc.de:47443;37.27.234.236:47443"
+// 2 (03.11.2026): Moscow first - the mirror (83.217.192.34, TCP as is to rts) for players in Russia, whose streams to Europe stop
+// after ~33 KB (DPI): with OwnLobby 1 their lobby calls hung on rts and Find a Game did not open without a VPN
+#define DEFAULT_SERVERS L"83.217.192.34:47443;rts.fintebtc.de:47443"
+#define STREAM_NEED    60000          // a server is used only if its stream check (port + 2: 64 KB on connect) brings this much
 #define LOBBY_HOST     "dow2r-lobby.reliclink.com"
 
 typedef int (WSAAPI *ConnectFn)(SOCKET, const struct sockaddr *, int);
 static ConnectFn g_prev;
 static wchar_t g_dir[MAX_PATH];
 static CRITICAL_SECTION g_lk;
-static struct { char host[96]; unsigned short port; } g_srv[4]; static int g_nsrv;
+static struct { char host[96]; unsigned short port; DWORD checked; int ok; unsigned long ip; } g_srv[4]; static int g_nsrv;
+static int g_streamCheck = 1;               // OwnLobby.ini [OwnLobby] StreamCheck=0: a connect is enough (as OwnLobby 1)
 static volatile unsigned long g_target; static volatile unsigned short g_targetPort;   // the server that answered last (0 = none)
 static unsigned long g_relic[24]; static int g_nrelic;                                  // Relic's lobby addresses
 static HANDLE g_wake;
@@ -134,6 +138,27 @@ static int probe(unsigned long ip, unsigned short port, int ms) {
     }
     closesocket(s); return ok;
 }
+// the stream check (OwnLobby 2): connect to port + 2 of the lobby server, which sends 64 KB and closes; bytes that came in ms
+static int stream_bytes(unsigned long ip, unsigned short port, int ms) {
+    SOCKET s = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP); if (s == INVALID_SOCKET) return -1;
+    u_long nb = 1; ioctlsocket(s, FIONBIO, &nb);
+    struct sockaddr_in a; memset(&a, 0, sizeof a); a.sin_family = AF_INET; a.sin_addr.s_addr = ip; a.sin_port = htons(port);
+    int got = -1; DWORD t0 = GetTickCount();
+    if (connect(s, (struct sockaddr *)&a, sizeof a) == 0 || WSAGetLastError() == WSAEWOULDBLOCK) {
+        fd_set w, e; FD_ZERO(&w); FD_ZERO(&e); FD_SET(s, &w); FD_SET(s, &e); struct timeval tv = {2, 500000};
+        if (select(0, NULL, &w, &e, &tv) > 0 && FD_ISSET(s, &w)) {
+            got = 0; char buf[8192];
+            while (got < 65536) {
+                int left = ms - (int)(GetTickCount() - t0); if (left <= 0) break;
+                fd_set r; FD_ZERO(&r); FD_SET(s, &r); struct timeval tr = {left / 1000, (left % 1000) * 1000};
+                if (select(0, &r, NULL, NULL, &tr) <= 0) break;
+                int n = recv(s, buf, sizeof buf, 0); if (n <= 0) break;
+                got += n;
+            }
+        }
+    }
+    closesocket(s); return got;
+}
 static unsigned long resolve(const char *host) {
     unsigned long ip = inet_addr(host); if (ip != INADDR_NONE) return ip;
     struct hostent *h = gethostbyname(host); return h && h->h_addr_list[0] ? *(unsigned long *)h->h_addr_list[0] : 0;
@@ -149,7 +174,21 @@ static DWORD WINAPI watcher(LPVOID _) {
                 if (h) for (int i = 0; h->h_addr_list[i]; i++) add_relic(*(unsigned long *)h->h_addr_list[i]); }
         }
         unsigned long t = 0; unsigned short tp = 0; int which = -1;
-        for (int i = 0; i < g_nsrv && !t; i++) { unsigned long ip = resolve(g_srv[i].host); if (ip && probe(ip, g_srv[i].port, 2500)) { t = ip; tp = g_srv[i].port; which = i; } }
+        for (int i = 0; i < g_nsrv && !t; i++) {
+            unsigned long ip = resolve(g_srv[i].host);
+            if (!ip || !probe(ip, g_srv[i].port, 2500)) { g_srv[i].checked = 0; continue; }
+            if (g_streamCheck) {                         // the stream: again every 5 min while it passes, every 60 s while it does not
+                DWORD now = GetTickCount();
+                if (!g_srv[i].checked || ip != g_srv[i].ip || now - g_srv[i].checked > (g_srv[i].ok ? 300000u : 60000u)) {
+                    int got = stream_bytes(ip, (unsigned short)(g_srv[i].port + 2), 4000), ok = got >= STREAM_NEED;
+                    if (ok != g_srv[i].ok || !g_srv[i].checked) logmsg("lobby server %s:%u: stream check %d of 65536 bytes in 4 s - %s", g_srv[i].host, g_srv[i].port, got,
+                                                                     ok ? "usable" : got < 0 ? "no answer, not used" : "the stream stops (DPI?), not used");
+                    g_srv[i].checked = now ? now : 1; g_srv[i].ok = ok; g_srv[i].ip = ip;
+                }
+                if (!g_srv[i].ok) continue;
+            }
+            t = ip; tp = g_srv[i].port; which = i;
+        }
         g_targetPort = tp; g_target = t;
         if (t != was) { was = t; if (t) logmsg("lobby server %s:%u answers", g_srv[which].host, tp); else logmsg("no lobby server of ours answers - the game talks to Relic directly"); }
         WaitForSingleObject(g_wake, 20000);
@@ -180,11 +219,12 @@ BOOL WINAPI DllMain(HINSTANCE h, DWORD r, LPVOID _) {
         char *p = strrchr(t, ':'); int port = 47443; if (p) { *p = 0; port = atoi(p + 1); }
         if (*t && port > 0 && port < 65536) { snprintf(g_srv[g_nsrv].host, sizeof g_srv[0].host, "%s", t); g_srv[g_nsrv++].port = (unsigned short)port; }
     }
+    g_streamCheck = GetPrivateProfileIntW(L"OwnLobby", L"StreamCheck", 1, ini);
     static const char *known[] = {"100.56.91.69", "184.192.75.54", "44.194.141.226"};     // dow2r-lobby.reliclink.com, 02.11.2026
     for (int i = 0; i < 3; i++) add_relic(inet_addr(known[i]));
     int n = hook_exe_connect();
     g_wake = CreateEventW(NULL, FALSE, FALSE, NULL);
     CloseHandle(CreateThread(NULL, 0, watcher, NULL, 0, NULL));
-    logmsg("OwnLobby " VERSION ": loaded %u ms after the start (RLink not started yet) - our CA added next to Relic's, connect hooked in %d import(s), %d server(s)", ms, n, g_nsrv);
+    logmsg("OwnLobby " VERSION ": loaded %u ms after the start (RLink not started yet) - our CA added next to Relic's, connect hooked in %d import(s), %d server(s)%s", ms, n, g_nsrv, g_streamCheck ? ", each used only if its stream comes through" : ", StreamCheck=0");
     return TRUE;
 }
