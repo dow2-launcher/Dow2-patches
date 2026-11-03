@@ -134,6 +134,18 @@ static int probe_screen(void) {
     return -1;
 }
 
+static int is_menu_movie(void *mv) {
+    if (!mv || IsBadReadPtr(mv, 0x600)) return 0;
+    DWORD vt = *(DWORD *)mv;                                          // GFx is linked into DOW2.exe: its vtable is there
+    if (vt < 0x00F87000 || vt >= 0x0124F000 || IsBadReadPtr((void *)vt, 0x34)) return 0;
+    GFxValue v; return as_get(mv, "_level0.display_item._visible", &v) && v.type == GFX_BOOL;
+}
+static void menu_seen(void *mv, void *handler, const char *how) {   // the menu movie (and the handler its buttons use)
+    if (g_fsMovie == mv && (g_fsSelf || !handler)) return;
+    g_fsMovie = mv; if (handler) g_fsSelf = handler;
+    logmsg("the menu movie %p (handler %p) from %s", mv, g_fsSelf, how);
+}
+
 // ---------------- the game browser's join by room id (MMFind 0.34-0.37: research_direct/directjoin.c) ----------------
 // (*0x01335014)->vtbl[0x20]()->vtbl[0x34](this, midLo, midHi, &joiners, -1, -1), joiners = a vector of one 0x30-byte entry
 // {own Relic profile id, ...}; the room we are in: (*0x01335014)->vtbl[0x24]() -> GameInfo, +0x8 the room id
@@ -170,6 +182,7 @@ static int dj_join(unsigned long long room) {
     void *p4 = dj_mgr(0x4); if (!p4) { logmsg("join: no profile object"); return 0; }
     ((DjProfFn)(*(void ***)p4)[0x54 / 4])(p4, prof);
     unsigned pidLo = *(unsigned *)prof, pidHi = *(unsigned *)(prof + 4);
+    if (!pidLo || pidLo == 0xFFFFFFFFu) { ((DjFn1)FN_PROFBUF_DTOR)(prof); return -1; }       // not signed in to Relic yet: later
     memset(entry, 0, sizeof entry); ((DjFn1)FN_JOINER_CTOR)(entry);
     *(unsigned *)entry = pidLo; *(unsigned *)(entry + 4) = pidHi; *(unsigned *)(entry + 0x10) = 0; *(unsigned *)(entry + 0x14) = 0;
     memset(vec, 0, sizeof vec);
@@ -254,6 +267,7 @@ static int g_rj; static unsigned long long g_rjRoom; static wchar_t g_rjName[64]
 // The first one can be the game's "Connecting..." - a box after it, or one that is still up when the join gives up, is the
 // reason (the room is full, closed, a version mismatch...)
 static wchar_t g_mbText[200]; static volatile int g_mbCount; static DWORD g_mbAt;
+static unsigned long long g_okRoom; static DWORD g_okAt;             // the room joined last (a second Join for it is no new request)
 static void stage(const wchar_t *title, const wchar_t *what) {          // what the cover says now (siritos 03.11: what is going on)
     wcsncpy(g_coverTitle, title, 63);
     const wchar_t *n = g_rjName[0] ? g_rjName : L"the custom game";
@@ -269,6 +283,7 @@ static void rj_end(const char *res, int toList) {
     wchar_t p[MAX_PATH]; _snwprintf(p, MAX_PATH, L"%lsRoomJoin_result.txt", g_dir);
     FILE *f = _wfopen(p, L"w"); if (f) { fprintf(f, "%s %llu\n", res, g_rjRoom); fclose(f); }
     g_rj = RJ_NONE;
+    if (!strcmp(res, "ok")) { g_okRoom = g_rjRoom; g_okAt = GetTickCount(); }
     if (toList && strcmp(res, "fail cancelled")) {               // a moment to read why, then the public games list
         wchar_t w[200];
         if (g_mbText[0]) _snwprintf(w, 199, L"%ls", g_mbText);
@@ -278,7 +293,12 @@ static void rj_end(const char *res, int toList) {
     g_coverWant = 0;
     if (toList && g_screen == SC_MAIN) fs(".OnClickPublicMatch", "");
 }
-static void rj_cancel(void) { if (g_rj) { logmsg("Cancel pressed"); if (g_screen == SC_SETUP) fs(".OnClickBack", ""); rj_end("fail cancelled", g_screen == SC_MAIN); } }
+static void rj_cancel(void) {                     // the cover's Cancel: our join off; a lobby we are in already stays (03.11: Cancel took the player out)
+    if (!g_rj) return;
+    logmsg("Cancel pressed");
+    if (g_screen == SC_SETUP || dj_room()) { rj_end("ok", 0); return; }
+    rj_end("fail cancelled", g_screen == SC_MAIN);
+}
 static void rj_read(DWORD now) {
     if (now - g_rjCheck < 1000) return;
     g_rjCheck = now;
@@ -294,6 +314,8 @@ static void rj_read(DWORD now) {
     unsigned long long room = strtoull(l1, NULL, 10);
     if (!room) { logmsg("a request without a room id - dropped"); return; }
     if (age > 180) { logmsg("the request for room %llu is %llu s old - dropped", room, age); return; }
+    if (room == g_okRoom && now - g_okAt < 120000) { logmsg("room %llu was joined %lu s ago - this request dropped", room, (now - g_okAt) / 1000); return; }
+    if (g_screen == SC_SETUP && dj_room() == room) { logmsg("already in room %llu - nothing to do", room); g_rjRoom = room; rj_end("ok", 0); return; }
     g_rjRoom = room; MultiByteToWideChar(CP_UTF8, 0, l2, -1, g_rjName, 63);
     logmsg("request: room %llu \"%s\" (%llu s old) - waiting for the main menu", room, l2, age);
     g_rj = RJ_MENU; g_rjAt = now;
@@ -315,6 +337,7 @@ static void rj_step(DWORD now) {
         static DWORD lastBack;
         if ((g_screen == SC_LIST || g_screen == SC_MM) && g_fsMovie && now - lastBack > 1500) {   // the game was running: back to the main menu
             lastBack = now; logmsg("on screen %d - Back to the main menu", g_screen); fs(".OnClickBack", ""); }
+        if (g_screen == SC_SETUP && dj_room() == g_rjRoom) { rj_end("ok", 0); break; }
         if (g_screen == SC_SETUP && now - g_rjAt > 1500 && dj_room() != g_rjRoom) {
             logmsg("in another lobby - not leaving it"); g_rj = RJ_NONE;
             rj_fail_notice(L"You are in another lobby. Leave it first, then press Join again"); g_noticeList = 0; break; }
@@ -335,7 +358,9 @@ static void rj_step(DWORD now) {
         if (g_screen == SC_MAIN && !g_mbCount && g_rjTries < 3 && (!g_rjTry || now - g_rjTry > 8000)) {          // 03.11: a join took 5 s - no second one on top
             g_rjTries++; g_rjTry = now;
             stage(L"Joining the Game", g_rjTries == 1 ? L"Connecting to the game: %ls" : g_rjTries == 2 ? L"Connecting to the game: %ls (try 2 of 3)" : L"Connecting to the game: %ls (try 3 of 3)");
-            if (!dj_join(g_rjRoom)) { rj_end("fail join call", 1); break; }
+            int r = dj_join(g_rjRoom);
+            if (r < 0) { g_rjTries--; g_rjTry = now - 7000; break; }              // the profile not there yet: again in 1 s
+            if (!r) { rj_end("fail join call", 1); break; }
         }
         if (now - g_rjAt > 25000) rj_end("fail timeout", 1);
         break; }
@@ -351,7 +376,11 @@ static void __fastcall fs_hook(void *self, void *edx, void *movie, const char *c
     if (cmd && !IsBadReadPtr(cmd, 1)) {
         if (!strncmp(cmd, "_level0.display_item", 20) || (!strcmp(cmd, "OnLoadComplete") && args && !IsBadReadPtr(args, 1) && strstr(args, "name:=_level0.display_item"))) {
             if (movie != g_fsMovie && g_loading) { g_loading = 0; logmsg("back in the menu"); }
-            g_fsSelf = self; g_fsMovie = movie;
+            if (movie != g_fsMovie || g_fsSelf != self) menu_seen(movie, self, "a menu command");
+        } else if (movie != g_fsMovie && !g_loading) {
+            static void *tried[16]; static int nt; int seen = 0;
+            for (int i = 0; i < nt; i++) if (tried[i] == movie) seen = 1;
+            if (!seen) { if (nt < 16) tried[nt++] = movie; if (is_menu_movie(movie)) menu_seen(movie, self, cmd); }
         }
         if (!strcmp(cmd, "OnLoadMovieComplete") && args && !IsBadReadPtr(args, 6) && !strncmp(args, "/mp_mc", 6) && !g_loading) { g_loading = 1; g_coverWant = 0; }
         if (!strcmp(cmd, "OnLoadComplete") && args && !IsBadReadPtr(args, 1)) {     // which full-screen panel is up
@@ -389,12 +418,11 @@ static char __fastcall inv_hook(void *self, void *edx, const char *method, int f
         void *mv = *(void **)((char *)self + 4), *h = *(void **)((char *)self + 0x18);
         static void *tried[16]; static int nt; int seen = 0;
         for (int i = 0; i < nt; i++) if (tried[i] == mv) seen = 1;
-        DWORD vt = mv && !IsBadReadPtr(mv, 4) ? *(DWORD *)mv : 0;          // a live GFx movie: its vtable in DOW2.exe (GFx is linked in)
-        if (!seen && mv && h && vt >= 0x00F87000 && vt < 0x0124F000 && !IsBadReadPtr((void *)vt, 0x34) && !IsBadReadPtr(mv, 0x600) && !IsBadReadPtr(h, 0x20)) {
-            if (nt < 16) tried[nt++] = mv;
-            GFxValue v; if (as_get(mv, "_level0.display_item._visible", &v) && v.type == GFX_BOOL) {
-                g_fsMovie = mv; g_fsSelf = h; logmsg("the menu movie %p (handler %p) from the engine's calls", mv, h);
-            }
+        if (!seen && nt < 16) {
+            tried[nt++] = mv;
+            int menu = is_menu_movie(mv);
+            if (g_rj || nt <= 6) logmsg("engine call %s: object %p movie %p - %s", method && !IsBadReadPtr(method, 8) ? method : "?", self, mv, menu ? "the menu" : "not the menu");
+            if (menu) menu_seen(mv, h && !IsBadReadPtr(h, 0x20) ? h : NULL, "the engine's calls");
         }
     }
     return g_invOrig(self, edx, method, flags, args, count);
@@ -477,7 +505,7 @@ BOOL WINAPI DllMain(HINSTANCE h, DWORD r, LPVOID _) {
     if (r != DLL_PROCESS_ATTACH) return TRUE;
     DisableThreadLibraryCalls(h); InitializeCriticalSection(&g_lk);
     GetModuleFileNameW(h, g_dir, MAX_PATH); wchar_t *s = wcsrchr(g_dir, L'\\'); if (s) s[1] = 0;
-    logmsg("RoomJoin 5 (experiment: joining a room from the launcher's Lobbies tab)");
+    logmsg("RoomJoin 6 (experiment: joining a room from the launcher's Lobbies tab)");
     { char n[64]; wsprintfA(n, "Local\\dow2patch_RoomJoin_%lu", GetCurrentProcessId());
       HANDLE mx = CreateMutexA(NULL, FALSE, n); if (mx && GetLastError() == ERROR_ALREADY_EXISTS) { logmsg("another RoomJoin copy is active, this one stays idle"); return TRUE; } }
     // MMFind checks the fscommand handler's own bytes when it starts: in the folder but not in the game yet -> hook on the first tick
