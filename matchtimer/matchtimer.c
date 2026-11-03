@@ -68,20 +68,20 @@ static void load_ini_as(int forced) {
     WIN32_FILE_ATTRIBUTE_DATA a;
     if (GetFileAttributesExW(g_ini, GetFileExInfoStandard, &a)) g_iniTime = a.ftLastWriteTime;
     g_enabled    = ini_int(L"Enabled", 1, 0, 1);
-    { wchar_t pl[16]; GetPrivateProfileStringW(L"MatchTimer", L"Place", L"top", pl, 16, g_ini); g_place = !_wcsicmp(pl, L"left") ? PL_LEFT : !_wcsicmp(pl, L"menu") ? PL_MENU : !_wcsicmp(pl, L"under") ? PL_UNDER : !_wcsicmp(pl, L"minimap") ? PL_MINI : PL_TOP; }
+    { wchar_t pl[16]; GetPrivateProfileStringW(L"MatchTimer", L"Place", L"top", pl, 16, g_ini); g_place = !_wcsicmp(pl, L"left") ? PL_LEFT : !_wcsicmp(pl, L"menu") ? PL_MENU : !_wcsicmp(pl, L"under") ? PL_UNDER : PL_TOP; }   // three places (siritos 03.11): top, under (also the fallback), menu
     if (forced >= 0) g_place = forced;
     g_size       = ini_int(L"FontSize", g_place == PL_MENU ? 17 : g_place == PL_LEFT ? 20 : 18, 10, 40);
     g_shadow     = ini_int(L"Shadow", 1, 0, 1);
     g_onlineOnly = ini_int(L"OnlineOnly", 0, 0, 1);
     g_color      = ini_color(L"Color", g_place == PL_TOP || g_place == PL_MINI ? L"FFFFFF" : L"CAF9FF");   // top / minimap: white like the score; under / menu: the Menu label's colour
     g_plate      = ini_int(L"Plate", 1, 0, 1);
-    g_gap        = ini_int(L"Gap", g_place == PL_LEFT ? 6 : 2, -40, 200);
+    g_gap        = ini_int(L"Gap", g_place == PL_LEFT ? 6 : 0, -40, 200);
     g_width      = ini_int(L"Width", g_place == PL_LEFT ? 184 : 100, 40, 400);
-    g_height     = ini_int(L"Height", g_place == PL_LEFT ? 48 : 34, 16, 100);
+    g_height     = ini_int(L"Height", g_place == PL_LEFT ? 48 : 30, 16, 100);
     g_offX       = ini_int(L"OffsetX", g_place == PL_TOP ? -7 : 0, -400, 400);
     g_offY       = ini_int(L"OffsetY", g_place == PL_TOP ? 6 : 0, -200, 200);
-    g_raise      = ini_int(L"Raise", g_place == PL_UNDER ? 8 : 0, 0, 20);
-    g_textY      = ini_int(L"TextY", -1, -30, 30);   // 03.11: 3 sat the digits low in the plate
+    g_raise      = ini_int(L"Raise", 0, 0, 20);   // 03.11: the Menu button stays where the game has it
+    g_textY      = ini_int(L"TextY", 5, -30, 30);   // under: Raise 0, Height 30 (the movie clips below y 75), Gap 0, TextY 5 - set in the game with siritos 03.11 (the plate whole, the digits in its middle)
     g_plateAlpha = ini_int(L"PlateAlpha", 85, 0, 100);
     g_fallbackOn = ini_int(L"TopFallback", 1, 0, 1);
 }

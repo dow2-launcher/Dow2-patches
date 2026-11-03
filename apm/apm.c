@@ -46,8 +46,8 @@ static void load_ini(void) {
     GetPrivateProfileStringW(L"APM", L"Place", L"top", s, 32, g_ini); g_place = !_wcsicmp(s, L"left") ? AP_LEFT : !_wcsicmp(s, L"minimap") ? AP_MINIMAP : AP_RIGHT;   // top / right = right of the clock at the top
     g_size = ini_int(L"FontSize", 18, 10, 40);
     g_shadow = ini_int(L"Shadow", 1, 0, 1);
-    g_offX = ini_int(L"OffsetX", 0, -400, 400);
-    g_offY = ini_int(L"OffsetY", 0, -200, 200);
+    g_offX = ini_int(L"OffsetX", 0, -800, 800);
+    g_offY = ini_int(L"OffsetY", 0, -800, 800);   // 03.11: +-200 cut the minimap corner short (330 read as 200)
     g_gap = ini_int(L"Gap", 0, -200, 200);
     g_window = ini_int(L"Window", 60, 0, 600);
     g_onlineOnly = ini_int(L"OnlineOnly", 0, 0, 1);
@@ -65,7 +65,7 @@ static void reload_ini(DWORD now) {
     WIN32_FILE_ATTRIBUTE_DATA a;
     if (!GetFileAttributesExW(g_ini, GetFileExInfoStandard, &a) || !CompareFileTime(&a.ftLastWriteTime, &g_iniTime)) return;
     load_ini(); restyle();
-    logmsg("APM.ini re-read: Enabled=%d Place=%s FontSize=%d Window=%d OffsetX=%d OffsetY=%d", g_enabled, g_place == AP_LEFT ? "left" : "right", g_size, g_window, g_offX, g_offY);
+    logmsg("APM.ini re-read: Enabled=%d Place=%s FontSize=%d Window=%d OffsetX=%d OffsetY=%d", g_enabled, g_place == AP_LEFT ? "left" : g_place == AP_MINIMAP ? "minimap" : "top", g_size, g_window, g_offX, g_offY);
 }
 
 // ---------- counting (UI thread, once a frame) ----------
