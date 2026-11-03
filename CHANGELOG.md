@@ -4,6 +4,30 @@ Every version gets an entry here before it reaches `main`. CI then tags `vX.Y.Z`
 version (`X.Y.0`) it also publishes a GitHub Release with the DLLs and the entries since the previous `X.Y.0`.
 The version of the set lives only in `VERSION`; each DLL still writes its own version to its log.
 
+## Unreleased (branch feature/relay-21)
+- Relay 21 (Relay.dll + RelayForward.dll). No global lock on the hot path: Relay 20 took one critical section and walked 64
+  slots on every send / WSASend of every socket in the game (the IAT of all modules is hooked) and on every connect, so all the
+  game's network threads queued on it. A socket is ours only while its preamble waits (marked lock-free at the redirect, a
+  counter of waiting slots); every other send / WSASend / connect passes with one memory read, the lock is taken only when a
+  preamble is really due. Only TCP connects to 27000-27099 and to our nodes' 47100 are looked at: a UDP socket that connect()s
+  and everything else (launcher / ladder / lobby server API and chat, Relic's HTTPS lobby) pass untouched before any work.
+  NetProbe.dll is never hooked: its TCP 27015 test to our nodes went into our UDP tunnel as if it were the game (stand 03.11).
+  Stand 1: online Private custom game on Relic (relay_r2 on, forwarding off) - pass-through, no "ms between calls".
+  Measured under Wine 11.20 (the send hook path, the original send a stub, 16 threads on their own sockets): Relay 20 mean
+  6.2 us per call, 80% of calls over 1 us, 2.26 M calls/s; Relay 21 0.23 us, 0.007% over 1 us, 27.7 M calls/s; on 4 cores
+  Relay 20 had 1935 calls over 1 ms, Relay 21 99 (the scheduler).
+
+## Unreleased (branch feature/relay-20)
+- Relay 20 (Relay.dll + RelayForward.dll). Redundancy in the UDP tunnel: the SYN carries version 2; a gateway that knows it
+  answers SYNACK + 2 and both sides send DATA2 (each data packet also carries copies of the newest 2 earlier packets not
+  acknowledged yet) and ACK2 (an ack with such copies; answered only when a copy filled something). The copies go only while
+  the datagram stays within 1240 bytes, so turns and ticks get them and big transfers do not. An old gateway answers a bare
+  SYNACK -> the old DATA, no copies; Relay 18/19 with a new gateway likewise. Native connections of our lobby server's rooms
+  (the game connects to one of our nodes on 47100 itself) now go over UDP to that node's udp_gateway, TCP to the node when
+  UDP does not answer (3 s). Needs udp_gateway with DATA2 (dow2-ladder feature/relay-20) for the copies; works without it.
+  Tested: Linux netns, netem 40 ms each way, the tunnel code of Relay 19 / 20 under Wine against the old / new gateway:
+  loss 10% - p99 game->server 422 -> 141 ms, server->game 242 -> 140 ms (p95 138 -> 41); no loss - no change.
+
 ## Unreleased (branch fix/cooldowns-6-timer-apm)
 - Cooldowns 6 (siritos 03.11.2026: on Catachans one ability's recharge reset another's number, and with no energy the number
   went; the bunker stratagem never got one). Cooldowns 4-5 kept the recharge per button number and its end per ability
