@@ -107,6 +107,17 @@ The version of the set lives only in `VERSION`; each DLL still writes its own ve
   destroyed for 60 s + WM_CLOSE to the window): without it the game left the match (end reason 4) and quit; with it the
   match went on (clock 1:55, Steam back after 44 s), a later plain WM_CLOSE still closed the game.
 
+## Unreleased (branch feature/jumpretry)
+- JumpRetry 2: the retry goes as soon as the squad can walk again (the ability's own check 0x008645A0/0x00864670, polled
+  every 30 ms; LandTimeoutMs 600 as a fallback) instead of a fixed 600 ms, and an order the game still drops (no Ability
+  state within TakeMs 250) is sent again; MaxRetries 3, RetryDelayMs 0. Stand 1: the jump starts ~400 ms after falling
+  out of the ability (v1 ~1000 ms).
+- JumpRetry 1 (new add-on, own tick): an Autarch jump ordered out of range is lost when he hops an obstacle on the way
+  (the ability order ends while he is in the air, nothing spent). The local player's own order is remembered and sent
+  again after the landing, at most MaxRetries (2) times within WindowSec (10); any other order from the HUD to the squad
+  cancels it. Hooks CommandProxy +0x38/+0x34 (0x00AF51A0/0x00AF53C0) and watches WorldDoCommandSquad(s)/Entity imports;
+  only the game's own orders, no change to the simulation.
+
 ## Unreleased (branch fix/cooldowns-6-timer-apm)
 - Cooldowns 6 (siritos 03.11.2026: on Catachans one ability's recharge reset another's number, and with no energy the number
   went; the bunker stratagem never got one). Cooldowns 4-5 kept the recharge per button number and its end per ability

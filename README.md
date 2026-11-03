@@ -42,6 +42,14 @@ continue/
     private when it goes back to the lobby. Only the host needs it. Our lobby server puts the room back into the
     lobby on Relic's side too (own_lobby.py "reopen"). Log: Continue.log.
 
+jumpretry/
+    The Autarch hops over low walls by himself while walking. Ordered to jump to a point out of range, he walks
+    toward it inside the ability order, and a hop on the way ends that order: no jump, no energy spent, he idles.
+    JumpRetry remembers your own jump order and, if the squad fell out of it without jumping and you gave it no
+    other order, sends the same order again as soon as he has landed (up to 3 times within 10 s). The order is the game's
+    own (the HUD's CommandProxy), so the match stays in sync and the other players don't need the DLL. The
+    abilities are a list in JumpRetry.ini (Abilities=).
+
 vanilla-loader/
     winmm.dll loader. Forwards everything to the real winmm.dll and loads every *.dll from
     <game>\dow2-patches\, in vanilla and in Elite. Each patch refuses to load twice, so having the same
