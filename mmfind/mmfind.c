@@ -987,8 +987,7 @@ static volatile int g_recHumans, g_recBots; static FILETIME g_recStart; static c
 // 0.40 (03.11.2026, players: "replays do not always go out"): logs of 2-3.11 showed 429 (the replay site's per-address limit,
 // which counted every upload as one address - fixed on the server) and 413 (the Moscow mirror took 1 MB at most - fixed) taken as
 // success, so no other mirror was tried and the replay was lost. Now only 2xx is success (400 = not a replay: dropped); anything
-// else tries the next mirror, and a replay no mirror took waits in Elite_DLLs\replays_pending (5 at most, 7 days) and goes out
-// after the next match or at the next game start.
+// else tries the next mirror. No mirror took it: nothing more (owner: no queues - every player of the match sends his own copy).
 static int send_rec(const char *buf, DWORD size, const char *fname, const char *lobby) {   // 1 = done (sent or not a replay)
     wchar_t hdr[400]; _snwprintf(hdr, 400, L"Content-Type: application/octet-stream\r\nX-Filename: %hs\r\nX-Lobby: %hs\r\n", fname, lobby);
     char out[512];
@@ -1010,42 +1009,6 @@ static int send_rec(const char *buf, DWORD size, const char *fname, const char *
     }
     return 0;
 }
-static void pending_dir(wchar_t *d) {
-    _snwprintf(d, MAX_PATH, L"%lsreplays_pending", g_dir);                // g_dir ends with a backslash (Elite_DLLs\\)
-}
-static void pending_keep(const char *buf, DWORD size, const char *fname, const char *lobby) {
-    wchar_t d[MAX_PATH], p[MAX_PATH]; pending_dir(d); CreateDirectoryW(d, NULL);
-    _snwprintf(p, MAX_PATH, L"%ls\\%hs~%hs", d, lobby[0] ? lobby : "-", fname);
-    HANDLE f = CreateFileW(p, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, 0, NULL);
-    if (f != INVALID_HANDLE_VALUE) { DWORD w; WriteFile(f, buf, size, &w, NULL); CloseHandle(f); logmsg("replay: no mirror took it - kept for later (%hs)", fname); }
-}
-static volatile LONG g_pendBusy;
-static DWORD WINAPI pending_flush(LPVOID _) {                         // the replays no mirror took earlier: oldest first
-    if (InterlockedExchange(&g_pendBusy, 1)) return 0;
-    wchar_t d[MAX_PATH], q[MAX_PATH]; pending_dir(d); _snwprintf(q, MAX_PATH, L"%ls\\*.rec", d);
-    WIN32_FIND_DATAW fd; HANDLE fh = FindFirstFileW(q, &fd); int n = 0;
-    struct { wchar_t name[MAX_PATH]; FILETIME t; } list[16];
-    if (fh != INVALID_HANDLE_VALUE) { do { if (n < 16) { wcscpy(list[n].name, fd.cFileName); list[n].t = fd.ftLastWriteTime; n++; } } while (FindNextFileW(fh, &fd)); FindClose(fh); }
-    FILETIME now; GetSystemTimeAsFileTime(&now);
-    for (int i = 0; i < n; i++) for (int j = i + 1; j < n; j++) if (CompareFileTime(&list[j].t, &list[i].t) < 0) { wchar_t t[MAX_PATH]; FILETIME ft = list[i].t; wcscpy(t, list[i].name); wcscpy(list[i].name, list[j].name); list[i].t = list[j].t; wcscpy(list[j].name, t); list[j].t = ft; }
-    for (int i = 0; i < n; i++) {
-        wchar_t p[MAX_PATH]; _snwprintf(p, MAX_PATH, L"%ls\\%ls", d, list[i].name);
-        ULONGLONG age = ((((ULONGLONG)now.dwHighDateTime << 32) | now.dwLowDateTime) - (((ULONGLONG)list[i].t.dwHighDateTime << 32) | list[i].t.dwLowDateTime)) / 10000000ULL;
-        if (age > 7 * 86400 || n - i > 5) { DeleteFileW(p); continue; }   // too old, or older than the newest 5
-        HANDLE f = CreateFileW(p, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL); if (f == INVALID_HANDLE_VALUE) continue;
-        DWORD size = GetFileSize(f, NULL), got = 0; char *buf = (size > 64 && size < 30u << 20) ? malloc(size) : NULL;
-        if (buf) ReadFile(f, buf, size, &got, NULL); CloseHandle(f);
-        if (!buf || got != size) { free(buf); DeleteFileW(p); continue; }
-        char nm[MAX_PATH]; WideCharToMultiByte(CP_UTF8, 0, list[i].name, -1, nm, sizeof nm, NULL, NULL);
-        char *tl = strchr(nm, '~'); char lobby[96] = "", fname[200] = "replay.rec";
-        if (tl) { *tl = 0; snprintf(lobby, sizeof lobby, "%s", strcmp(nm, "-") ? nm : ""); snprintf(fname, sizeof fname, "%s", tl + 1); }
-        logmsg("replay: sending one kept earlier (%s)", fname);
-        if (send_rec(buf, size, fname, lobby)) DeleteFileW(p);
-        free(buf);
-    }
-    InterlockedExchange(&g_pendBusy, 0); return 0;
-}
-static DWORD WINAPI pending_start(LPVOID _) { Sleep(60000); return pending_flush(NULL); }
 static DWORD WINAPI replay_upload(LPVOID _) {
     Sleep(3000);                                                      // let the game finish writing the file
     wchar_t doc[MAX_PATH], path[MAX_PATH]; if (SHGetFolderPathW(NULL, CSIDL_PERSONAL, NULL, 0, doc) != S_OK) return 0;
@@ -1059,9 +1022,8 @@ static DWORD WINAPI replay_upload(LPVOID _) {
     if (got != size || memcmp(buf + 12, "DOW2_REC", 8)) { logmsg("replay: could not read temp.rec"); free(buf); return 0; }
     SYSTEMTIME t; GetLocalTime(&t); char fname[200];                 // file name on the site: MM-m2-xxxx_2026-10-27_12-31.rec / match_...
     snprintf(fname, sizeof fname, "%s_%04d-%02d-%02d_%02d-%02d.rec", g_recName[0] ? g_recName : "match", t.wYear, t.wMonth, t.wDay, t.wHour, t.wMinute);
-    if (!send_rec(buf, size, fname, g_recName)) pending_keep(buf, size, fname, g_recName);   // lobby: the ladder finds its replay
+    if (!send_rec(buf, size, fname, g_recName)) logmsg("replay: no mirror took it - not sent");   // lobby: the ladder finds its replay
     free(buf);
-    pending_flush(NULL);                                              // and whatever waited from before
     return 0;
 }
 static void replay_after_match(void) {
@@ -1986,7 +1948,6 @@ static void install(void) {
     install_host_hook(); install_sfm_hook(); install_slot_hook(); install_swap_hook(); marker_check();
     CloseHandle(CreateThread(NULL, 0, installer, NULL, 0, NULL));
     CloseHandle(CreateThread(NULL, 0, net_worker, NULL, 0, NULL));
-    CloseHandle(CreateThread(NULL, 0, pending_start, NULL, 0, NULL));   // 0.40: replays kept from before, 60 s after the start
 }
 static unsigned long long my_steam(void) {                         // Steam writes the active account id here
     DWORD v = 0, sz = sizeof v; HKEY k;
