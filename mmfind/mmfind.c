@@ -226,7 +226,8 @@ static volatile int g_coverWant; static wchar_t g_coverLine[160]; static int g_s
 // the match, the others' MMFind sees "cancelled" in its poll, leaves the lobby and shows who cancelled for a few seconds
 static volatile int g_remoteCancel; static wchar_t g_cancelBy[64]; static DWORD g_noticeUntil;
 
-static void set_state(int s) { logmsg("state %s -> %s", SN[g_state], SN[s]); g_state = s; g_stateTick = GetTickCount(); if (s == S_FAIL) { g_coverWant = 0; g_wantLeave = 1; }
+static void native_fast(int on);
+static void set_state(int s) { logmsg("state %s -> %s", SN[g_state], SN[s]); if (g_state == S_NATIVE && s != S_NATIVE) native_fast(0); g_state = s; g_stateTick = GetTickCount(); if (s == S_FAIL) { g_coverWant = 0; g_wantLeave = 1; }
     if (s == S_IDLE || s == S_FAIL) { if (g_pre || g_preWant) logmsg("direct: my room plan off"); g_pre = PRE_OFF; g_preWant = 0; g_heroDone = g_slotsOpen = 0; g_preRoom = 0; g_preReported = 0; }
     if (s == S_IDLE || s == S_SEARCH || s == S_FAIL) { SetEnvironmentVariableA("DOW2_RELAY_USE", "0"); SetEnvironmentVariableA("DOW2_RELAY_HOST", NULL); } }   // no automatch lobby: Relic
 static DWORD in_state(void) { return GetTickCount() - g_stateTick; }
@@ -276,6 +277,84 @@ static int code_jmp(unsigned char *at, void *dest, int len) {   // "jmp dest" at
     FlushInstructionCache(GetCurrentProcess(), at, len);
     patch_unlock(mx);
     return ok;
+}
+
+// 0.39 (owner 03.11.2026: "the ~12 s polling - make it 1 second like ours; cut the 5 s countdown to 2 s"): NativeFast=1 (default) -
+// while the game's own automatch runs on our servers (S_NATIVE: from the pass-through of Start Searching to the loading screen)
+// two changes of DOW2.exe 3.19, both or none (every byte checked first), two small detours that do nothing unless g_fastOn:
+// 1. WorldwideAutomatchService::Process 0x5fe140 polls automatch/polling when MORE than 10 s (whole seconds, _time64) passed since
+//    the last poll (`cmp dword [esp+0x10], 0xA; jbe` at 0x5fe29e) -> every second while SEARCHING (not in a room). In the room it
+//    stays 10 s: stands 03.11 - a poll every second there keeps the automatcher busy (IsBusy: AutomatchPollAsync) and the host
+//    readied up 5-6 s late; the room needs no polls anyway (the server pushes).
+// 2. SetupArbitrator (0x44917a, "GameMode is ranked, starting countdown"): the ranked countdown length +0x48 (Find a Game's form
+//    0x475b5d builds it with 5 s) -> 2 s at the moment the countdown starts (mode 1; mode 3 keeps its 30 s). The start itself is
+//    untouched: at 0 the arbitrator still waits for AllPlayersValidated and AreAllPlayersMatchInfoACKed (0x44971d).
+#define POLL_AT    0x005FE29E
+#define POLL_POLL  0x005FE2A9     // go on to the poll
+#define POLL_SKIP  0x005FE470     // no poll now
+#define CD_AT      0x004491BE
+#define CD_BACK    0x004491D0
+static const unsigned char POLL_BYTES[11] = {0x83, 0x7C, 0x24, 0x10, 0x0A, 0x0F, 0x86, 0xC7, 0x01, 0x00, 0x00};   // jbe 0x5fe470
+static const unsigned char CD_BYTES[18] = {0x83, 0x7E, 0x54, 0x03, 0x59, 0x75, 0x0B, 0x83, 0x66, 0x4C, 0x00, 0xC7, 0x46, 0x48, 0x1E, 0x00, 0x00, 0x00};
+static int g_fastCfg = 1, g_fastOk = -1;     // -1 not tried, 0 not possible (nothing changed), 1 both detours in
+static volatile int g_fastOn;                 // read by the detours
+static int code_bytes(unsigned char *at, const unsigned char *b, int len) {
+    HANDLE mx = patch_lock(); DWORD o; SIZE_T w = 0; int ok = 0;
+    if (VirtualProtect(at, len, PAGE_EXECUTE_READWRITE, &o)) { ok = WriteProcessMemory(GetCurrentProcess(), at, b, len, &w) && w == (SIZE_T)len; VirtualProtect(at, len, o, &o); }
+    FlushInstructionCache(GetCurrentProcess(), at, len); patch_unlock(mx); return ok;
+}
+static int fast_detours(void) {
+    unsigned char *pa = (unsigned char *)POLL_AT, *cd = (unsigned char *)CD_AT;
+    if (IsBadReadPtr(pa, sizeof POLL_BYTES) || IsBadReadPtr(cd, sizeof CD_BYTES) || memcmp(pa, POLL_BYTES, sizeof POLL_BYTES) || memcmp(cd, CD_BYTES, sizeof CD_BYTES)) {
+        logmsg("native fast: DOW2.exe bytes differ (not 3.19?) - the poll and the countdown left as they are"); return 0; }
+    unsigned char *c = VirtualAlloc(NULL, 160, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE); int k = 0, poll, cdn;
+    if (!c) { logmsg("native fast: no memory for the detours - nothing changed"); return 0; }
+#define B(x) c[k++] = (unsigned char)(x)
+#define D32(v) do { DWORD v_ = (DWORD)(v); memcpy(c + k, &v_, 4); k += 4; } while (0)
+#define REL(target) do { DWORD r_ = (DWORD)(target) - (DWORD)(c + k + 4); memcpy(c + k, &r_, 4); k += 4; } while (0)
+    poll = k;                                                         // --- the poll interval (ebx = session manager, eax/al live)
+    B(0x80); B(0x3D); D32(&g_fastOn); B(0x00);                        // cmp byte [g_fastOn],0
+    B(0x74); B(0x20);                                                 // je stock (+32)
+    B(0x50); B(0x51); B(0x52);                                        // push eax, ecx, edx
+    B(0x8B); B(0x13); B(0x53); B(0xFF); B(0x52); B(0x70);             // mov edx,[ebx]; push ebx; call [edx+70h] (IsConnected)
+    B(0x84); B(0xC0);                                                 // test al,al
+    B(0x5A); B(0x59); B(0x58);                                        // pop edx, ecx, eax (flags kept)
+    B(0x75); B(0x10);                                                 // jne stock (+16): in a room - 10 s as the game has it
+    B(0x83); B(0x7C); B(0x24); B(0x10); B(0x00);                      // cmp dword [esp+10h],0  (searching: every second)
+    B(0x0F); B(0x86); REL(POLL_SKIP);                                 // jbe skip
+    B(0xE9); REL(POLL_POLL);                                          // jmp poll
+    B(0x83); B(0x7C); B(0x24); B(0x10); B(0x0A);                      // stock: cmp dword [esp+10h],0Ah
+    B(0x0F); B(0x86); REL(POLL_SKIP);                                 // jbe skip
+    B(0xE9); REL(POLL_POLL);                                          // jmp poll
+    cdn = k;                                                          // --- the countdown (esi = SetupArbitrator)
+    B(0x59);                                                          // pop ecx (the original's, after the trace call)
+    B(0x83); B(0x7E); B(0x54); B(0x03); B(0x75); B(0x10);             // cmp [esi+54h],3 ; jne +16
+    B(0x83); B(0x66); B(0x4C); B(0x00); B(0xC7); B(0x46); B(0x48); D32(0x1E);   // and [esi+4Ch],0 ; mov [esi+48h],30
+    B(0xE9); REL(CD_BACK);
+    B(0x80); B(0x3D); D32(&g_fastOn); B(0x00);                        // cmp byte [g_fastOn],0
+    B(0x0F); B(0x84); REL(CD_BACK);                                   // je back
+    B(0x83); B(0x7E); B(0x54); B(0x01);                               // cmp [esi+54h],1 (ranked)
+    B(0x0F); B(0x85); REL(CD_BACK);                                   // jne back
+    B(0x83); B(0x66); B(0x4C); B(0x00); B(0xC7); B(0x46); B(0x48); D32(2);      // and [esi+4Ch],0 ; mov [esi+48h],2
+    B(0xE9); REL(CD_BACK);
+#undef B
+#undef D32
+#undef REL
+    unsigned char j1[sizeof POLL_BYTES], j2[sizeof CD_BYTES];
+    j1[0] = 0xE9; *(DWORD *)(j1 + 1) = (DWORD)(c + poll) - (DWORD)(pa + 5); memset(j1 + 5, 0x90, sizeof j1 - 5);
+    j2[0] = 0xE9; *(DWORD *)(j2 + 1) = (DWORD)(c + cdn) - (DWORD)(cd + 5); memset(j2 + 5, 0x90, sizeof j2 - 5);
+    if (!code_bytes(cd, j2, sizeof j2)) { logmsg("native fast: the countdown detour could not be written - nothing changed"); return 0; }
+    if (!code_bytes(pa, j1, sizeof j1)) { code_bytes(cd, CD_BYTES, sizeof CD_BYTES); logmsg("native fast: the poll detour could not be written - nothing changed"); return 0; }
+    logmsg("native fast: detours in (poll 0x%X, countdown 0x%X)", POLL_AT, CD_AT);
+    return 1;
+}
+static void native_fast(int on) {
+    if (!g_fastCfg || !on == !g_fastOn) return;
+    if (on && g_fastOk < 0) g_fastOk = fast_detours();
+    if (g_fastOk != 1) return;
+    g_fastOn = on;
+    logmsg(on ? "native fast ON: automatch/polling every 1 s while searching (was 10+ s), ranked countdown 2 s (was 5 s), the start still waits for every player's ACK"
+              : "native fast off: polling every 10+ s, countdown 5 s (as the game has it)");
 }
 static void install_swap_hook(void) {
     unsigned char *t = (unsigned char *)SWAP_AT;
@@ -373,7 +452,7 @@ static DWORD WINAPI nodes_fetch(LPVOID _) {               // once at the start, 
     char out[4096];
     for (int k = 0; k < g_nHosts; k++) {
         out[0] = 0; int got = 0;
-        HINTERNET s = WinHttpOpen(L"MMFind/0.38", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, NULL, NULL, 0); if (!s) return 0;
+        HINTERNET s = WinHttpOpen(L"MMFind/0.39", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, NULL, NULL, 0); if (!s) return 0;
         WinHttpSetTimeouts(s, 4000, 4000, 4000, 4000);
         HINTERNET c = WinHttpConnect(s, g_hosts[k], INTERNET_DEFAULT_HTTPS_PORT, 0);
         HINTERNET r = c ? WinHttpOpenRequest(c, L"GET", L"/ladder/api/relays", NULL, NULL, NULL, WINHTTP_FLAG_SECURE) : NULL;
@@ -1145,6 +1224,7 @@ static void __fastcall fs_hook(void *self, void *edx, void *movie, const char *c
         if (!strcmp(cmd, "OnLoadMovieComplete") && args && !strncmp(args, "/mp_mc", 6) && !g_loading) {
             if (g_state == S_NATIVE || g_state == S_NASK) {             // 0.38: the game's own automatch got here by itself
                 logmsg("native: loading %lu ms after Start Searching (lobby %s)", GetTickCount() - g_searchTick, g_natLobby[0] ? g_natLobby : "-");
+                native_fast(0);                                       // 0.39: the game as it was (the countdown is over, nothing polls now)
                 strcpy(g_gameName, g_natLobby); g_state = S_DONE; g_stateTick = GetTickCount(); g_reRow = 0; g_natWatchUntil = 0;      // after the match: ended + replay as usual (no ruin marker: not MM-)
             }
             // 0.34: the host starts at once - the match may load while a guest is still on the hero or taking the slot
@@ -1604,6 +1684,7 @@ static void tick(void) {
         if (g_natAnswer == 1) {
             g_natAnswer = 0; char a[8]; snprintf(a, sizeof a, "0;%d", g_mode);
             fs(".OnSelectDropDownItem", a);                           // the engine's own match type = the one on screen (it resets it by itself)
+            native_fast(1);                                           // 0.39: poll every 1 s, countdown 2 s - before the game's search starts
             fs(".OnClickStart", "");                                  // the game's own Start Searching -> automatch/startpolling on our server
             g_natPass = now; logmsg("native: Start Searching passed to the game %lu ms after the click (%s)", now - g_searchTick, MODE_KEY[g_mode]);
             set_state(S_NATIVE);
@@ -1875,6 +1956,7 @@ BOOL WINAPI DllMain(HINSTANCE h, DWORD r, LPVOID _) {
     g_direct = GetPrivateProfileIntW(L"MMFind", L"DirectStart", 0, ini);       // 0.34 experiment, see g_direct
     g_fast = GetPrivateProfileIntW(L"MMFind", L"Fast", 1, ini) != 0;           // 0.37, see g_fast
     g_nativeCfg = GetPrivateProfileIntW(L"MMFind", L"Native", 1, ini) != 0;    // 0.38, see g_nativeCfg
+    g_fastCfg = GetPrivateProfileIntW(L"MMFind", L"NativeFast", 1, ini) != 0;  // 0.39, see native_fast
     { wchar_t t[80]; GetPrivateProfileStringW(L"MMFind", L"TestLadder", L"", t, 80, ini); wchar_t *c = wcsrchr(t, L':');   // 0.38 tests, see g_tlHost
       if (t[0] && c && _wtoi(c + 1) > 0 && _wtoi(c + 1) < 65536) { *c = 0; wcsncpy(g_tlHost, t, 63); g_tlPort = (INTERNET_PORT)_wtoi(c + 1); } }
     g_testBots = GetPrivateProfileIntW(L"MMFind", L"TestBots", 0, ini);
@@ -1890,7 +1972,7 @@ BOOL WINAPI DllMain(HINSTANCE h, DWORD r, LPVOID _) {
     g_mySteam = my_steam();
     { wchar_t p[MAX_PATH], o[MAX_PATH]; _snwprintf(p, MAX_PATH, L"%lsMMFind.log", g_dir); _snwprintf(o, MAX_PATH, L"%lsMMFind.log.old", g_dir);
       WIN32_FILE_ATTRIBUTE_DATA a; if (GetFileAttributesExW(p, GetFileExInfoStandard, &a) && (a.nFileSizeHigh || a.nFileSizeLow > (1u << 20))) MoveFileExW(p, o, MOVEFILE_REPLACE_EXISTING); }
-    logmsg("MMFind 0.38 start, steam=%llu server=%ls%s%s%s", g_mySteam, g_server, g_direct ? ", fast automatch (experiment) on" : "", g_fast ? ", fast steps (public room, direct join)" : "",
+    logmsg("MMFind 0.39 start, steam=%llu server=%ls%s%s%s", g_mySteam, g_server, g_direct ? ", fast automatch (experiment) on" : "", g_fast ? ", fast steps (public room, direct join)" : "",
            g_nativeCfg ? ", native search when on our lobby server" : ", native off");
     if (g_tlHost[0]) logmsg("TEST LADDER: every ladder API call goes to http://%ls:%u (TestLadder=)", g_tlHost, (unsigned)g_tlPort);
     { char n[64]; wsprintfA(n, "Local\\dow2patch_MMFind_%lu", GetCurrentProcessId());          // one copy per game (launcher + dow2-patches)
