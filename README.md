@@ -34,6 +34,14 @@ reinforcefix/
     kept by the HUD and every tick it drops squads that have no models on the map, which is the case
     while a squad sits inside the gate. ReinforceFix skips such squads instead of dropping them.
 
+jumpretry/
+    The Autarch hops over low walls by himself while walking. Ordered to jump to a point out of range, he walks
+    toward it inside the ability order, and a hop on the way ends that order: no jump, no energy spent, he idles.
+    JumpRetry remembers your own jump order and, if the squad fell out of it without jumping and you gave it no
+    other order, sends the same order again after the landing (up to 2 times within 10 s). The order is the game's
+    own (the HUD's CommandProxy), so the match stays in sync and the other players don't need the DLL. The
+    abilities are a list in JumpRetry.ini (Abilities=).
+
 vanilla-loader/
     winmm.dll loader. Forwards everything to the real winmm.dll and loads every *.dll from
     <game>\dow2-patches\, in vanilla and in Elite. Each patch refuses to load twice, so having the same

@@ -1,0 +1,96 @@
+-- STAND ONLY: autarch jump ability vs obstacle hops (vanilla). Logs states per tick, outcome per trial.
+local L = eliteai_log or (string and string.eliteai_log) or print
+local function try(name, fn, ...) local r = {pcall(fn, ...)}; if not r[1] then L(name, "ERR", tostring(r[2])) end; return r[1], r[2] end
+local SBP = "sbps/pvp/race_eldar/troops/eld_autarch"
+local ABP = "ability\\pvp\\race_eldar\\autarch\\eld_autarch_jump"
+AT = { n = 0, trial = 0, t = 0 }
+local DIRS = 8
+local MODES = { "plain", "reissue", "split" }
+local function abil()
+	if AT.abid then return AT.abid end
+	AT.abid = Util_GetAbilityID(ABP); return AT.abid
+end
+local CN = {}
+for k, v in pairs(_G) do if type(k) == "string" and type(v) == "number" and string.sub(k, 1, 13) == "SQUADSTATEID_" then CN[v] = string.sub(k, 14) end end
+local function sname(s)
+	local c = "none"
+	if Squad_HasActiveCommand(s) then local v = Squad_GetActiveCommand(s); c = CN[v] or tostring(v) end
+	local mv = Squad_IsMoving(s) and "moving" or "still"
+	local ab = Squad_IsDoingAbility(s, abil()) and "doing" or "-"
+	return c .. " " .. mv .. " ab:" .. ab
+end
+local function hgt(s)
+	local p = Squad_GetPosition(s)
+	local ok, h = pcall(World_GetSurfaceHeight, p.x, p.z)
+	if not ok then ok, h = pcall(World_GetSurfaceHeight, p) end
+	if ok and type(h) == "number" then return p.y - h, p end
+	return -99, p
+end
+local function issue()
+	if AT.mode == "split" and not AT.split_done then
+		-- client-style split: plain move to a point inside range, then the ability when there
+		local dx, dz = AT.tp.x - AT.sp.x, AT.tp.z - AT.sp.z; local d = math.sqrt(dx * dx + dz * dz)
+		local k = (d - 40) / d
+		try("Cmd_Move", Cmd_Move, AT.g, World_Pos(AT.sp.x + dx * k, AT.tp.y, AT.sp.z + dz * k))
+		AT.split_wait = true
+		return
+	end
+	try("Cmd_SquadAbilityPos", Cmd_SquadAbilityPos, AT.g, abil(), AT.tp, false)
+end
+function AT_StartTrial()
+	AT.trial = AT.trial + 1
+	local mi = math.floor((AT.trial - 1) / DIRS) + 1
+	if mi > #MODES then L("GT_DONE"); return false end
+	AT.mode = MODES[mi]
+	local k = (AT.trial - 1) % DIRS
+	if AT.s then pcall(Squad_Destroy, AT.s) end
+	AT.n = AT.n + 1
+	local base = AT.base
+	AT.sp = World_Pos(base.x + 25, base.y, base.z + 25)
+	local ang = 2 * math.pi * k / DIRS
+	local dist = 72
+	AT.tp = World_Pos(AT.sp.x + dist * math.cos(ang), AT.sp.y, AT.sp.z + dist * math.sin(ang))
+	AT.s = Squad_CreateAndSpawnToward(World_GetPropertyBagGroupID(SBP), AT.P, 0, AT.sp, AT.tp)
+	AT.g = SGroup_CreateIfNotFound("at_g" .. AT.n); SGroup_Add(AT.g, AT.s); SGroup_SetInvulnerable(AT.g, true)
+	Squad_ModifyEnergy(AT.s, 500)
+	AT.e0 = Squad_GetEnergy(AT.s); AT.t = 0; AT.last = ""; AT.maxh = 0; AT.hops = 0; AT.inhop = false
+	AT.fired = false; AT.reissues = 0; AT.split_done = false; AT.split_wait = false; AT.issued = false
+	L(string.format("TRIAL %d mode=%s dir=%d start=(%.1f,%.1f) target=(%.1f,%.1f) energy=%.1f", AT.trial, AT.mode, k, AT.sp.x, AT.sp.z, AT.tp.x, AT.tp.z, AT.e0))
+	return true
+end
+local function endTrial()
+	local p = Squad_GetPosition(AT.s)
+	local dx, dz = p.x - AT.tp.x, p.z - AT.tp.z
+	L(string.format("RESULT %d mode=%s fired=%s hops=%d reissues=%d dist_to_target=%.1f energy=%.1f state=%s", AT.trial, AT.mode,
+		tostring(AT.fired), AT.hops, AT.reissues, math.sqrt(dx * dx + dz * dz), Squad_GetEnergy(AT.s), sname(AT.s)))
+end
+function AT_Tick()
+	if not AT.s or AT.done then return end
+	AT.t = AT.t + 1
+	if AT.t == 4 and not AT.issued then AT.issued = true; issue() end
+	local st = sname(AT.s)
+	local h, p = hgt(AT.s)
+	local en = Squad_GetEnergy(AT.s)
+	if st ~= AT.last then L(string.format("  t=%.3f gt=%s %s h=%.2f e=%.0f pos=(%.1f,%.1f)", AT.t / 8, tostring(World_GetGameTime()), st, h, en, p.x, p.z)); AT.last = st end
+	if h > 0.6 and h < 5 and not AT.inhop and not AT.fired then AT.inhop = true; AT.hops = AT.hops + 1; L(string.format("  t=%.3f HOP h=%.2f", AT.t / 8, h)) end
+	if h < 0.3 then AT.inhop = false end
+	if en < AT.e0 - 30 and not AT.fired then AT.fired = true; L(string.format("  t=%.3f FIRED e=%.0f", AT.t / 8, en)) end
+	if AT.mode == "split" and AT.split_wait and AT.t > 8 and not Squad_IsMoving(AT.s) then
+		AT.split_wait = false; AT.split_done = true; L(string.format("  t=%.3f split: move done -> ability", AT.t / 8)); issue()
+	end
+	if AT.mode == "reissue" and AT.issued and not AT.fired and AT.t > 6 and AT.reissues < 3 then
+		if not string.find(st, "Ability", 1, true) and not Squad_IsDoingAbility(AT.s, abil()) then
+			AT.reissues = AT.reissues + 1; L(string.format("  t=%.3f REISSUE %d (state %s)", AT.t / 8, AT.reissues, st)); issue()
+		end
+	end
+	if AT.t >= 8 * 12 then endTrial(); if not AT_StartTrial() then AT.done = true end end
+end
+function AT_Setup()
+	AT.P = World_GetPlayerAt(1)
+	AT.base = Player_GetStartingPosition(AT.P)
+	L("abil id", tostring(abil()))
+	AT_StartTrial()
+end
+Rule_AddOneShot(AT_Setup, 3)
+Rule_AddInterval(AT_Tick, 0.125)
+L("autarch test loaded")

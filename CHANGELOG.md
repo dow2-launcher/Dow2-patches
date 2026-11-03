@@ -4,6 +4,13 @@ Every version gets an entry here before it reaches `main`. CI then tags `vX.Y.Z`
 version (`X.Y.0`) it also publishes a GitHub Release with the DLLs and the entries since the previous `X.Y.0`.
 The version of the set lives only in `VERSION`; each DLL still writes its own version to its log.
 
+## Unreleased (branch feature/jumpretry)
+- JumpRetry 1 (new add-on, own tick): an Autarch jump ordered out of range is lost when he hops an obstacle on the way
+  (the ability order ends while he is in the air, nothing spent). The local player's own order is remembered and sent
+  again after the landing, at most MaxRetries (2) times within WindowSec (10); any other order from the HUD to the squad
+  cancels it. Hooks CommandProxy +0x38/+0x34 (0x00AF51A0/0x00AF53C0) and watches WorldDoCommandSquad(s)/Entity imports;
+  only the game's own orders, no change to the simulation.
+
 ## Unreleased (branch fix/cooldowns-6-timer-apm)
 - Cooldowns 6 (siritos 03.11.2026: on Catachans one ability's recharge reset another's number, and with no energy the number
   went; the bunker stratagem never got one). Cooldowns 4-5 kept the recharge per button number and its end per ability
