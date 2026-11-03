@@ -48,10 +48,10 @@ $(OUT)/MMFind.dll: mmfind/mmfind.c | $(OUT)
 # Relay 17: two add-ons from one source, two ticks (docs/ADDON_RULES.md): our servers for games (relay_r2) and the
 # forwarding servers for all other games (relay_fwd); whichever loads first carries the connections for both
 $(OUT)/Relay.dll: relay/relay.c | $(OUT)
-	$(CC) $(CFLAGS) -shared -o $@ $< -lws2_32 -lpsapi -static-libgcc
+	$(CC) $(CFLAGS) -shared -o $@ $< -lws2_32 -lpsapi -lwinmm -static-libgcc
 
 $(OUT)/RelayForward.dll: relay/relay.c | $(OUT)
-	$(CC) $(CFLAGS) -DRELAY_FWD -shared -o $@ $< -lws2_32 -lpsapi -static-libgcc
+	$(CC) $(CFLAGS) -DRELAY_FWD -shared -o $@ $< -lws2_32 -lpsapi -lwinmm -static-libgcc
 
 # what closed the game: serious exceptions with module+offset and stack, a minidump on a crash, ExitProcess / TerminateProcess callers
 $(OUT)/CrashLog.dll: crashlog/crashlog.c | $(OUT)

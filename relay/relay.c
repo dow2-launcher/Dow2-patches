@@ -1,4 +1,4 @@
-// Relay 17 (02.11.2026) - DoW2 Retribution / Elite: online games through OUR game servers. One source, two add-ons
+// Relay 17/18 (02-03.11.2026) - DoW2 Retribution / Elite: online games through OUR game servers. One source, two add-ons
 // (docs/ADDON_RULES.md: one feature - one DLL - one tick), two separate ticks in the launcher (owner 02.11.2026: the old
 // Fallback / Mode / Backup / UDP / Server controls were "убогие" - two clear ticks instead, the server is always automatic):
 //
@@ -32,6 +32,7 @@
 #include <ws2tcpip.h>
 #include <windows.h>
 #include <psapi.h>
+#include <mmsystem.h>
 #include <stdio.h>
 #include <stdarg.h>
 #include <math.h>
@@ -150,9 +151,45 @@ static int udp_open(struct in_addr ip, SOCKET *pu, DWORD *pcid) {   // the hands
 
 // ---------- which node ----------
 static int node_of(struct in_addr ip) { for (int i = 0; i < g_nHosts; i++) if (g_hosts[i].s_addr == ip.s_addr) return i; return -1; }
-static void measure(int i) {                                    // best of 3
+// Relay 18 (03.11.2026): a node counts only if a STREAM gets through, not just a short ping. NetProbe (2-3.11): for most
+// players in Russia the way to Poland/Germany answers a connect or a ping in ~50 ms but stops after ~33 KB (DPI) - Relay 17
+// ranked such a node "nearest" and the game went to a dead server. So after the ping: 40 packets x 1000 bytes (40 KB, past
+// the cut), paced; the gateway answers each with a short PONG (never more bytes than came in). Usable = 30+ answers and 3+
+// of the last 6 (the ones past ~33 KB). The node keeps its ping time when it passes, else -1 (not used, not offered).
+#define BURST_N 40
+#define BURST_LEN 1000
+static int udp_burst(struct in_addr ip, int *tail) {
+    SOCKET u = udp_to(ip); if (u == INVALID_SOCKET) return 0;
+    DWORD cid = new_cid(); static unsigned char pk[BURST_LEN + 16]; unsigned char got[BURST_N] = {0}, in[64];
+    memset(pk, 0x5a, sizeof pk); u_hdr(pk, U_PING, cid);
+    timeBeginPeriod(1);
+    for (int n = 0; n < BURST_N; n++) {
+        DWORD seq = n | 0xB0000000u; memcpy(pk + 7, &seq, 4); send(u, (char *)pk, 7 + BURST_LEN, 0);
+        if (n % 4 == 3) Sleep(2);                                       // ~1 MB/s: a stream, not a flood
+        for (int r; (r = udp_wait(u, in, sizeof in, 0)) >= 11; )        // answers that are already here
+            if (in[0] == 'D' && in[2] == U_PONG && !memcmp(in + 3, &cid, 4)) { DWORD q; memcpy(&q, in + 7, 4); if ((q >> 28) == 0xB && (q & 0xff) < BURST_N) got[q & 0xff] = 1; }
+    }
+    timeEndPeriod(1);
+    DWORD until = GetTickCount() + 1500;
+    while ((int)(until - GetTickCount()) > 0) {
+        int r = udp_wait(u, in, sizeof in, (int)(until - GetTickCount())); if (r < 0) break;
+        if (r >= 11 && in[0] == 'D' && in[2] == U_PONG && !memcmp(in + 3, &cid, 4)) { DWORD q; memcpy(&q, in + 7, 4); if ((q >> 28) == 0xB && (q & 0xff) < BURST_N) got[q & 0xff] = 1; }
+    }
+    closesocket(u);
+    int n = 0, t = 0; for (int i = 0; i < BURST_N; i++) { n += got[i]; if (i >= BURST_N - 6) t += got[i]; }
+    *tail = t; return n;
+}
+static void measure(int i) {                                    // best of 3 pings, then the stream check (Relay 18)
     int best = -1;
     for (int k = 0; k < 3; k++) { int r = udp_rtt(g_hosts[i], 1500); if (r >= 0 && (best < 0 || r < best)) best = r; Sleep(50); }
+    if (best >= 0) {
+        int tail = 0, got = udp_burst(g_hosts[i], &tail);
+        if (got < 30 || tail < 3) {
+            logmsg("relay: %s answers a ping in %d ms but a stream does not get through (%d of %d answers, %d of the last 6) - not used",
+                   inet_ntoa(g_hosts[i]), best, got, BURST_N, tail);
+            best = -1;
+        }
+    }
     g_ms[i] = best;
 }
 static int nearest(DWORD skip) {                                // the lowest delay of the nodes that answer, -1 = none
@@ -407,7 +444,7 @@ BOOL WINAPI DllMain(HINSTANCE h, DWORD reason, LPVOID _) {
     int n = patch_imports(real, (void *)connect_hook);
     int ns = g_sendOrig ? patch_imports((void *)g_sendOrig, (void *)send_hook) : 0;
     int nw = g_wsaSendOrig ? patch_imports((void *)g_wsaSendOrig, (void *)wsasend_hook) : 0;
-    logmsg("Relay 17 start (%s.dll carries the connections; our servers: %s, forwarding: %s - each tick is read at connect time; "
+    logmsg("Relay 18 start (%s.dll carries the connections; our servers: %s, forwarding: %s - each tick is read at connect time; "
            "UDP only, %d node(s)), connect hooked in %d import(s), send %d, WSASend %d%s", ME,
            flag("DOW2_RELAY_OWN") ? "on" : "off (yet)", flag("DOW2_RELAY_FWD") ? "on" : "off (yet)", g_nHosts, n, ns, nw,
            n ? "" : " - another add-on (automatch) already routes the relay, staying idle");
