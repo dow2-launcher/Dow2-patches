@@ -70,7 +70,7 @@ static void load_ini_as(int forced) {
     g_enabled    = ini_int(L"Enabled", 1, 0, 1);
     { wchar_t pl[16]; GetPrivateProfileStringW(L"MatchTimer", L"Place", L"top", pl, 16, g_ini); g_place = !_wcsicmp(pl, L"left") ? PL_LEFT : !_wcsicmp(pl, L"menu") ? PL_MENU : !_wcsicmp(pl, L"under") ? PL_UNDER : PL_TOP; }   // three places (siritos 03.11): top, under (also the fallback), menu
     if (forced >= 0) g_place = forced;
-    g_size       = ini_int(L"FontSize", g_place == PL_MENU ? 17 : g_place == PL_LEFT ? 20 : 18, 10, 40);
+    g_size       = ini_int(L"FontSize", g_place == PL_LEFT ? 20 : 18, 10, 40);   // menu too (03.11: 18 like the others)
     g_shadow     = ini_int(L"Shadow", 1, 0, 1);
     g_onlineOnly = ini_int(L"OnlineOnly", 0, 0, 1);
     g_color      = ini_color(L"Color", g_place == PL_TOP || g_place == PL_MINI ? L"FFFFFF" : L"CAF9FF");   // top / minimap: white like the score; under / menu: the Menu label's colour
@@ -263,7 +263,7 @@ static void clock_make(void *mv) {
         label_shift(mv, LABEL_X - LABEL_SHIFT);
         // the label's centre (clip 25 + 81) moved, plus half of "Menu" and a space; without the label found: after it
         px = 12.7 + (g_lbl[0] ? LABEL_X + 81 - LABEL_SHIFT + 25 : LABEL_X + 81 + 25) + g_offX;
-        W = 90; fy = mby + 23 + (31.0 - fh) / 2 + g_offY; h = fh;   // on the label's middle line
+        W = 90; fy = mby + 23 + (31.0 - fh) / 2 - 3 + g_offY; h = fh;   // on the label's middle line (3 up: set in the game with siritos 03.11)
     } else label_shift(mv, LABEL_X);
     for (int k = 0; k < 2; k++) {                    // the shadow first: the text over it
         const char *nm = k ? "mt_clock" : "mt_clock_sh";
