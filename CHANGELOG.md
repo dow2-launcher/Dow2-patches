@@ -4,6 +4,22 @@ Every version gets an entry here before it reaches `main`. CI then tags `vX.Y.Z`
 version (`X.Y.0`) it also publishes a GitHub Release with the DLLs and the entries since the previous `X.Y.0`.
 The version of the set lives only in `VERSION`; each DLL still writes its own version to its log.
 
+## MMFind 0.42 (branch feature/mmfind-0.42-mode, staging mmfind-0.42, not released)
+- MMFind 0.42: the kind of search shown on Find a Game (owner 03.11.2026: "when we press search, show right away which search
+  it is"; "change the search screen so it is clear it is a different one"). Two text fields of the game's own Find a Game panel
+  (Scaleform, docs/UI_RULES.md, no Direct3D), made right after the engine's per-frame call into the panel: right of the screen
+  title "ELITE: AUTOMATCH ON OUR SERVERS" / "ELITE: LADDER AUTOMATCH (CLASSIC)", and under "Your Party" "Automatch: our
+  servers" or "Automatch: classic (MMFind)" with why (not signed in through our lobby, players without OwnLobby are waiting,
+  switched off on the server, the lobby server is unreachable, OwnLobby is off, ...), "MMFind 0.42", and the queue of the
+  match type and who is online (mm/hello every 5 s), while searching "Searching... 0:12". Russian when the game's own texts are
+  Cyrillic (Localizer, as EliteAI; or the Start button). From the moment the screen opens: a peek at mm/native (`"peek":true`:
+  the ladder answers as for Start Searching and changes nothing; on entering, every 20 s and on a match type change, only
+  while idle); after the click by the path really taken. Hidden while the hero panel or Map Preferences is up.
+  `[MMFind] ShowMode=1` (default, 0 = off), `Lang=auto|ru|en`; HeadX/HeadY/HeadSize, ModeX/ModeY/ModeSize, ModeProbe=1 (a grid
+  of panel units) for placing. Needs dow2-ladder feature/mm-native-peek (peek without side effects, per-mode queue in mm/hello);
+  an older ladder answers a peek like a real ask, so no peek is sent while a native search or its search-again is pending.
+  Stand 1 (Elite 3.2, OwnLobby ownlobby-3, production ladder, test group): shown on entering, native search starts and stops.
+
 ## Unreleased (branch fix/cooldowns-6-timer-apm)
 - Cooldowns 6 (siritos 03.11.2026: on Catachans one ability's recharge reset another's number, and with no energy the number
   went; the bunker stratagem never got one). Cooldowns 4-5 kept the recharge per button number and its end per ability

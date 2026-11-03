@@ -60,7 +60,6 @@ static volatile int g_humans, g_lobbyRace = -1;   // people in the lobby; my rac
 static volatile int g_oppIn;              // the expected opponent is in the lobby
 static wchar_t g_myName[64];              // our gamer tag
 static void *g_mmSelf; static int g_mmFlags;  // Find a Game panel object (to push our status into it)
-static int g_mapIndex = -1;               // (unused since 0.9: index comes from the map catalog)
 static wchar_t g_mapName[64]; static char g_hostMap[96];   // g_hostMap: the map the host really set (UTF-8, for the ladder)             // map for this match (from the server), empty = host picks
 // modes: Match Type list on Find a Game = Head to Head / Two on Two / Team Battle / Team Free For All
 int g_mode;                               // 0 1v1, 1 2v2, 2 3v3, 3 watch (the Team FFA item is renamed to "Watch a match")
@@ -199,6 +198,21 @@ static volatile DWORD g_natPass, g_natGood; static volatile int g_natSeen, g_nat
 static volatile int g_engSearch = -1;       // the engine's own search state (Receive_ShowSearchingAnimation as the engine sends it), -1 unknown
 static DWORD g_natStopAt; static int g_natStops;   // fallback: Stop Searching sent to the engine (checked once more)
 static char g_natLobby[48], g_natWhy[96], g_natLastCancel[32];
+// 0.42 (owner 03.11.2026: "when we press search, show right away which search it is - which automatch"): the kind of search, a
+// text field of ours in the game's own Find a Game panel (docs/UI_RULES.md: the game's interface, no Direct3D) under its left
+// box: "Automatch: our servers" (the game's own search on our lobby server), "Automatch: classic (MMFind)" and why, and
+// "MMFind 0.42". Shown from the moment the screen opens (a peek at mm/native: the ladder answers as for Start Searching and
+// changes nothing; again every 20 s and on a match type change while the screen is open), after the click by the path really
+// taken. [MMFind] ShowMode=1 (default) / 0 = off, Lang=auto (the game's own text: Cyrillic = Russian) / ru / en.
+#define MMF_VER "0.42"
+#define MMF_VER_W L"0.42"
+static int g_showMode = 1, g_langCfg = -1, g_lang = -1, g_modeProbe;
+static double g_mx = 1065, g_my = 590, g_msz = 30;           // panel units, see mode_make
+static volatile int g_peekWant, g_peekAns; static volatile DWORD g_peekLast; static char g_peekWhy[96], g_runWhy[96];
+static volatile int g_liveOnline = -1, g_liveQueue = -1;          // mm/hello (net_worker, every 5 s on Find a Game)
+// the panel's own dialogs over it, from the engine's calls and the buttons (the hero panel keeps _visible true when it closes,
+// and no HideHeroSelect comes on Find a Game): Receive_ShowHeroSelect .. hero_selection_mc.OnClickAccept, Map Preferences .. Save / Cancel
+static volatile int g_heroUp, g_mapUp;
 // a native match called off by the server while the game was setting it up (host never came, a guest never joined, ...): the game
 // ends its own search and goes back to Find a Game; the ladder says {"state":"cancelled","again":true} to everyone who was not the
 // reason - MMFind presses Start Searching again for them (the native path), at most once per 30 s and 3 times in a row
@@ -452,7 +466,7 @@ static DWORD WINAPI nodes_fetch(LPVOID _) {               // once at the start, 
     char out[4096];
     for (int k = 0; k < g_nHosts; k++) {
         out[0] = 0; int got = 0;
-        HINTERNET s = WinHttpOpen(L"MMFind/0.41", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, NULL, NULL, 0); if (!s) return 0;
+        HINTERNET s = WinHttpOpen(L"MMFind/" MMF_VER_W, WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, NULL, NULL, 0); if (!s) return 0;
         WinHttpSetTimeouts(s, 4000, 4000, 4000, 4000);
         HINTERNET c = WinHttpConnect(s, g_hosts[k], INTERNET_DEFAULT_HTTPS_PORT, 0);
         HINTERNET r = c ? WinHttpOpenRequest(c, L"GET", L"/ladder/api/relays", NULL, NULL, NULL, WINHTTP_FLAG_SECURE) : NULL;
@@ -590,6 +604,23 @@ static DWORD WINAPI net_worker(LPVOID _) {
             else { if (!ok) strcpy(g_natWhy, "the ladder did not answer in time"); else if (!jstr(res, "why", g_natWhy, sizeof g_natWhy)) snprintf(g_natWhy, sizeof g_natWhy, "%.90s", res);
                    g_natAnswer = 2; }
             logmsg("native: mm/native -> %s (%lu ms): %s", g_natAnswer == 1 ? "yes" : "no", GetTickCount() - t0, ok ? res : "-");
+        }
+        if (g_showMode && g_screen == SC_MM && !g_loading && g_state != S_NASK) {   // 0.42: who is online / searching, for the Find a Game info block
+            static DWORD lh; if (!lh || GetTickCount() - lh >= 5000) { lh = GetTickCount();
+                snprintf(body, sizeof body, "{\"steam\":\"%llu\"}", g_mySteam);
+                if (http_quick(L"hello", body, res, sizeof res, 1000) && strstr(res, "\"online\"")) {
+                    g_liveOnline = jint(res, "online", -1);
+                    const char *q = strstr(res, "\"queue\""); g_liveQueue = q ? jint(q, MODE_KEY[g_mode], -1) : jint(res, "searching", -1); } } }
+        if (g_peekWant) {                                                 // 0.42: which search Start Searching would take (nothing changes)
+            g_peekWant = 0; join_body(body, sizeof body);
+            size_t bl = strlen(body); if (bl > 1 && bl + 16 < sizeof body) strcpy(body + bl - 1, ",\"peek\":true}");
+            DWORD t0 = GetTickCount(); int ok = http_quick(L"native", body, res, sizeof res, 1500); char why[96] = "";
+            if (ok && jtrue(res, "native")) g_peekAns = 1;
+            else { if (!ok) strcpy(why, "the ladder did not answer in time"); else if (!jstr(res, "why", why, sizeof why)) snprintf(why, sizeof why, "%.90s", res);
+                   strcpy(g_peekWhy, why); g_peekAns = 2; }
+            static int lastA; static char lastW[96];
+            if (g_peekAns != lastA || strcmp(lastW, why)) { lastA = g_peekAns; strcpy(lastW, why);
+                logmsg("search kind: mm/native peek -> %s (%lu ms): %s", g_peekAns == 1 ? "native" : "classic", GetTickCount() - t0, ok ? res : "-"); }
         }
         if ((g_state == S_NATIVE || (g_state == S_IDLE && g_natWatchUntil && (int)(g_natWatchUntil - GetTickCount()) > 0)) && !g_loading) {   // 0.38: the native search as the ladder sees it, every 2 s
             static DWORD lastn; if (GetTickCount() - lastn >= 2000) { lastn = GetTickCount();
@@ -994,7 +1025,7 @@ static int send_rec(const char *buf, DWORD size, const char *fname, const char *
     char out[512];
     for (int k = 0; k < g_nHosts; k++) {                              // the analysis runs while we wait: long receive timeout
         int h = (g_curHost + k) % g_nHosts; out[0] = 0; int n = 0; DWORD code = 0, sz = sizeof code;
-        HINTERNET s = WinHttpOpen(L"MMFind/0.41", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, NULL, NULL, 0); if (!s) break;
+        HINTERNET s = WinHttpOpen(L"MMFind/" MMF_VER_W, WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, NULL, NULL, 0); if (!s) break;
         WinHttpSetTimeouts(s, 4000, 8000, 60000, 300000);
         HINTERNET c = WinHttpConnect(s, g_hosts[h], INTERNET_DEFAULT_HTTPS_PORT, 0);
         HINTERNET r = c ? WinHttpOpenRequest(c, L"POST", L"/replay/api/upload", NULL, NULL, NULL, WINHTTP_FLAG_SECURE) : NULL;
@@ -1095,6 +1126,158 @@ static void on_game_list(GFxValue *a, unsigned n) {
     g_rowFound = row;
 }
 
+// ---------------- 0.42: the kind of search on Find a Game (see g_showMode) ----------------
+static const char *native_no(void);
+static int has_cyr(const wchar_t *w) { for (; w && *w; w++) if (*w >= 0x400 && *w < 0x500) return 1; return 0; }
+// the language of the game's own texts, as EliteAI does it: Russian if they are Cyrillic (Localizer.dll, the game's text table)
+static void lang_detect(void) {
+    if (g_lang >= 0) return;
+    if (g_langCfg >= 0) { g_lang = g_langCfg; logmsg("search kind: language %s (Lang=)", g_lang ? "ru" : "en"); return; }
+    HMODULE lz = GetModuleHandleA("Localizer.dll");
+    typedef unsigned char (__stdcall *GetStrB)(int id, void *out); typedef const wchar_t *(__fastcall *CstrFn)(const void *self, void *edx);
+    LocCtorFn ctor = lz ? (LocCtorFn)GetProcAddress(lz, "??0LocString@@QAE@PB_W@Z") : NULL;
+    LocDtorFn dtor = lz ? (LocDtorFn)GetProcAddress(lz, "??1LocString@@UAE@XZ") : NULL;
+    GetStrB get = lz ? (GetStrB)GetProcAddress(lz, "?GetString@Localizer@@SG_NHAAVLocString@@@Z") : NULL;
+    CstrFn cstr = lz ? (CstrFn)GetProcAddress(lz, "?c_str@LocString@@QBEPB_WXZ") : NULL;
+    int ru = 0, got = 0;
+    if (ctor && dtor && get && cstr) {
+        static const int IDS[] = {555027, 555036};                   // "Add Normal Computer", "Normal Computer Player" (as EliteAI)
+        static __attribute__((aligned(16))) unsigned char ls[64];
+        for (int i = 0; i < 2; i++) { memset(ls, 0, sizeof ls); ctor(ls, NULL, L"");
+            if (get(IDS[i], ls)) { got = 1; ru |= has_cyr(cstr(ls, NULL)); } dtor(ls, NULL); }
+    }
+    g_lang = ru;
+    logmsg("search kind: language %s (%s)", ru ? "ru" : "en", got ? "the game's text table" : "no text table - English");
+}
+// the ladder's / our own reasons in the player's words
+static const wchar_t *why_text(const char *w, int ru) {
+    static const struct { const char *k; const wchar_t *ru, *en; } T[] = {
+        {"not signed in through our lobby", L"нет входа через наше лобби", L"not signed in through our lobby"},
+        {"classic players waiting",         L"ждут игроки без OwnLobby", L"players without OwnLobby are waiting"},
+        {"native automatch off",            L"выключен на сервере", L"switched off on the server"},
+        {"lobby server unreachable",        L"сервер лобби недоступен", L"the lobby server is unreachable"},
+        {"did not answer",                  L"ладдер не ответил", L"the ladder did not answer"},
+        {"no OwnLobby.dll",                 L"OwnLobby выключен", L"OwnLobby is off"},
+        {"Native=0",                        L"Native=0 в MMFind.ini", L"Native=0 in MMFind.ini"},
+        {"Manual=1",                        L"тестовый режим", L"test mode"}, {"TestBots", L"тестовый режим", L"test mode"},
+        {"DirectStart",                     L"тестовый режим", L"test mode"},
+        {"watch",                           L"просмотр матча", L"watching a match"}, {"mode", L"просмотр матча", L"watching a match"},
+        {"native search",                   L"родной поиск не дошёл до ладдера", L"the native search did not reach the ladder"},
+    };
+    if (!w || !w[0]) return L"";
+    for (unsigned i = 0; i < sizeof T / sizeof T[0]; i++) if (strstr(w, T[i].k)) return ru ? T[i].ru : T[i].en;
+    static wchar_t raw[96]; MultiByteToWideChar(CP_UTF8, 0, w, -1, raw, 96); return raw;
+}
+// 1 our servers, 2 classic (*why), 0 not known yet
+static int mode_kind(const char **why) {
+    *why = NULL;
+    if (g_state == S_NATIVE) return 1;
+    if (g_state >= S_SEARCH && g_state <= S_PLACE) { *why = g_runWhy; return 2; }   // the classic flow runs
+    const char *no = native_no(); if (no) { *why = no; return 2; }                    // idle / asking: what Start Searching would take
+    if (g_peekAns == 2) *why = g_peekWhy;
+    return g_peekAns;
+}
+// Two text fields of the Find a Game panel itself (they go and come with the panel; its units = the stage, 2134 x 1200, seen
+// with ModeProbe=1 on the stand): the head right of the screen's own title "Find a Game", and the info block in the free space
+// under "Your Party" (no button of the game there): the kind of search, MMFind's version, the queue and who is online.
+// [MMFind] HeadX/HeadY/HeadSize, ModeX/ModeY/ModeSize move them (read again on every new field).
+static double g_hx = 600, g_hy = 30, g_hsz = 34;
+static void head_html(wchar_t *h, int cap) {
+    const char *why; int k = mode_kind(&why), ru = g_lang == 1;
+    const wchar_t *t = k == 1 ? (ru ? L"ELITE: АВТОМАТЧ НА НАШИХ СЕРВЕРАХ" : L"ELITE: AUTOMATCH ON OUR SERVERS")
+                     : k == 2 ? (ru ? L"ELITE: АВТОМАТЧ ЛАДДЕРА (КЛАССИЧЕСКИЙ)" : L"ELITE: LADDER AUTOMATCH (CLASSIC)") : (ru ? L"ELITE: АВТОМАТЧ" : L"ELITE: AUTOMATCH");
+    _snwprintf(h, cap - 1, L"<font face='%ls' size='%d' color='#E2C36B'>%ls</font>", ru ? L"$NormalFont" : L"$TitleFont", (int)(g_hsz + 0.5), t);
+    h[cap - 1] = 0;   // the game's title font has no Cyrillic in every install: Russian in $NormalFont
+}
+static void mode_html(wchar_t *h, int cap) {
+    const char *why; int k = mode_kind(&why), ru = g_lang == 1;
+    const wchar_t *lab = ru ? L"Автопоиск:" : L"Automatch:";
+    const wchar_t *val = k == 1 ? (ru ? L"наши серверы" : L"our servers") : k == 2 ? (ru ? L"классический (MMFind)" : L"classic (MMFind)")
+                                : (ru ? L"проверяем..." : L"checking...");
+    const wchar_t *col = k == 1 ? L"#8FE3B4" : k == 2 ? L"#E2C36B" : L"#A9B4AE";
+    const wchar_t *wt = k == 2 ? why_text(why, ru) : L"";
+    int s1 = (int)(g_msz + 0.5), s2 = (int)(g_msz * 0.78 + 0.5);
+    wchar_t q[160] = L"", n[64] = L"", o[64] = L"";
+    int searching = g_state == S_NASK || g_state == S_NATIVE || (g_state >= S_SEARCH && g_state <= S_GO_LIST);
+    int qn = g_liveQueue >= 0 ? g_liveQueue : g_queue;
+    if (qn >= 0) _snwprintf(n, 63, ru ? L"в очереди: %d" : L"in the queue: %d", qn);
+    if (g_liveOnline >= 0) _snwprintf(o, 63, ru ? L"онлайн: %d" : L"online: %d", g_liveOnline);
+    if (searching) { DWORD s = (GetTickCount() - g_searchTick) / 1000;
+        _snwprintf(q, 159, L"%ls %u:%02u%ls%ls%ls%ls", ru ? L"Ищем..." : L"Searching...", (unsigned)(s / 60), (unsigned)(s % 60), n[0] ? L" \x00B7 " : L"", n, o[0] ? L" \x00B7 " : L"", o); }
+    else if (n[0] || o[0]) { _snwprintf(q, 159, L"%ls%ls%ls", n, n[0] && o[0] ? L" \x00B7 " : L"", o); if (q[0] >= L'a' && q[0] <= L'z') q[0] -= 32; else if (q[0] >= 0x430 && q[0] <= 0x44F) q[0] -= 32; }
+    _snwprintf(h, cap - 1, L"<font face='$NormalFont' size='%d' color='#D8D2BC'>%ls</font><font face='$NormalFont' size='%d' color='%ls'> %ls</font><br>"
+                           L"<font face='$NormalFont' size='%d' color='#8E9A94'>MMFind " MMF_VER_W L"%ls%ls</font><br>"
+                           L"<font face='$NormalFont' size='%d' color='#C9D6CF'>%ls</font>",
+               s1, lab, s1, col, val, s2, wt[0] ? L" \x2014 " : L"", wt, s2, q);
+    h[cap - 1] = 0;
+}
+static void field_make(void *m, const char *nm, double depth, double x, double y, double w, double hgt) {
+    char fn[240], p[240]; snprintf(fn, sizeof fn, "%s.createTextField", g_panel);
+    as_fnv(m, fn, "snnnnn", nm, depth, x, y, w, hgt);
+    static const char *B[] = {"embedFonts", "html", "multiline", "selectable"}; static const int BV[] = {1, 1, 1, 0};
+    for (int i = 0; i < 4; i++) { snprintf(p, sizeof p, "%s.%s.%s", g_panel, nm, B[i]); as_setb(m, p, BV[i]); }
+}
+static void mode_make(void *m) {
+    { wchar_t t[16]; static const wchar_t *K[6] = {L"ModeX", L"ModeY", L"ModeSize", L"HeadX", L"HeadY", L"HeadSize"};
+      double *V[6] = {&g_mx, &g_my, &g_msz, &g_hx, &g_hy, &g_hsz};
+      for (int i = 0; i < 6; i++) { GetPrivateProfileStringW(L"MMFind", K[i], L"", t, 16, g_ini); if (t[0]) *V[i] = _wtof(t); }
+      g_modeProbe = GetPrivateProfileIntW(L"MMFind", L"ModeProbe", 0, g_ini); }
+    field_make(m, "mmf_head", 16122.0, g_hx, g_hy, 1500, g_hsz * 1.6);
+    field_make(m, "mmf_mode", 16123.0, g_mx, g_my, 1000, g_msz * 4.6);
+    logmsg("search kind: fields made in %s (head %g,%g, info %g,%g)", g_panel, g_hx, g_hy, g_mx, g_my);
+    if (g_modeProbe) {                                          // debug (ModeProbe=1): labels every 200 x 100 panel units
+        int n = 0; char fn[240], p[240]; snprintf(fn, sizeof fn, "%s.createTextField", g_panel);
+        for (int y = 0; y <= 1200; y += 100) for (int x = 0; x <= 2000; x += 200) {
+            char nm[32]; wchar_t w[96]; snprintf(nm, sizeof nm, "mmf_p%d", n);
+            as_fnv(m, fn, "snnnnn", nm, 16200.0 + n, (double)x, (double)y, 160.0, 30.0);
+            snprintf(p, sizeof p, "%s.%s.html", g_panel, nm); as_setb(m, p, 1);
+            snprintf(p, sizeof p, "%s.%s.embedFonts", g_panel, nm); as_setb(m, p, 1);
+            _snwprintf(w, 95, L"<font face='$NormalFont' size='14' color='#FF60FF'>+%d,%d</font>", x, y);
+            snprintf(p, sizeof p, "%s.%s.htmlText", g_panel, nm); as_setw(m, p, w); n++;
+        }
+    }
+}
+// right after the engine's own per-frame call into the Find a Game panel (Receive_ShowSearchingAnimation): the panel and its
+// movie are alive at that moment, on the game's UI thread
+static void mode_ui(void) {
+    static DWORD last, tries, triesScr; DWORD now = GetTickCount();
+    if (!g_showMode || now - last < 250) return; last = now;
+    void *m = g_fsMovie;
+    if (!m || g_loading || g_screen != SC_MM || !g_panel[0] || now - g_scrTick < 300) return;
+    lang_detect();
+    char p[240], ph[240]; GFxValue v; snprintf(p, sizeof p, "%s.mmf_mode._visible", g_panel); snprintf(ph, sizeof ph, "%s.mmf_head._visible", g_panel);
+    static int shown = -1; static wchar_t lastH[900], lastT[300];
+    if (!(as_get(m, p, &v) && v.type == GFX_BOOL)) {
+        if (triesScr != g_scrTick) { triesScr = g_scrTick; tries = 0; }
+        if (tries >= 3) return;
+        tries++; mode_make(m); shown = -1; lastH[0] = lastT[0] = 0;
+        if (!(as_get(m, p, &v) && v.type == GFX_BOOL)) { logmsg("search kind: the fields were not made (try %lu)", tries); return; }
+    }
+    int hv = g_heroUp, mv = g_mapUp, over = hv || mv || g_coverOn;
+    if ((!over) != shown) { shown = !over; as_setb(m, p, shown); as_setb(m, ph, shown);
+        logmsg("search kind: %s (hero panel %d, map preferences %d, hero shown %d)", shown ? "shown" : "hidden", hv, mv, g_heroShown); }
+    wchar_t h[900], t[300]; mode_html(h, 900); head_html(t, 300);
+    if (wcscmp(t, lastT)) { wcscpy(lastT, t); snprintf(ph, sizeof ph, "%s.mmf_head.htmlText", g_panel); as_setw(m, ph, t); }
+    if (wcscmp(h, lastH)) {
+        static int lastK = -1; const char *why; int k = mode_kind(&why);
+        wcscpy(lastH, h); snprintf(p, sizeof p, "%s.mmf_mode.htmlText", g_panel); as_setw(m, p, h);
+        if (k != lastK) { lastK = k; logmsg("search kind shown: %s%s%s (state %s)", k == 1 ? "our servers" : k == 2 ? "classic" : "checking",
+                                            why && why[0] ? " - " : "", why ? why : "", SN[g_state]); }
+    }
+}
+// on the game's thread (tick): ask the ladder which search Start Searching would take - on entering Find a Game, every 20 s
+// there and on a match type change; only while idle and nothing of a native search is pending (an older ladder without "peek"
+// would drop the "cancelled" note the search again needs)
+static void mode_peek(DWORD now) {
+    static DWORD scr;
+    if (!g_showMode || g_screen != SC_MM || g_loading || !g_mySteam) return;
+    if (scr != g_scrTick) { scr = g_scrTick; g_peekAns = 0; g_peekLast = 0; }
+    int idle = g_state == S_IDLE || g_state == S_FAIL || g_state == S_DONE;
+    if (!idle || native_no() || g_reWant || g_natCancelled || (g_natWatchUntil && (int)(g_natWatchUntil - now) > 0) || now - g_scrTick < 300) return;
+    if (g_peekLast && now - g_peekLast < 20000) return;
+    g_peekLast = now; g_peekWant = 1; SetEvent(g_wake);
+}
+
 static char __fastcall inv_hook(void *self, void *edx, const char *method, int flags, GFxValue *args, unsigned count) {
     if (g_logInvoke && method && args && count < 64 && !IsBadReadPtr(args, count * sizeof(GFxValue))     // debug: engine -> Flash calls
         && strcmp(method, "Receive_ShowSearchingAnimation") && strcmp(method, "Receive_UpdateSearchStatus") && strncmp(method, "Receive_SetFrameRate", 20)) {
@@ -1168,8 +1351,8 @@ static char __fastcall inv_hook(void *self, void *edx, const char *method, int f
                 args[1].v.num = g_mode;
             }
         }
-        else if (!strcmp(method, "Receive_ShowHeroSelect")) { g_heroShown = 1; g_heroTick = GetTickCount(); if (g_screen == SC_MM && g_state == S_IDLE && !g_mmApplied) { g_applyMM = 1; g_mmApplied = 1; } }
-        else if (!strcmp(method, "Receive_HideHeroSelect")) g_heroShown = 0;
+        else if (!strcmp(method, "Receive_ShowHeroSelect")) { g_heroShown = 1; g_heroUp = 1; g_heroTick = GetTickCount(); if (g_screen == SC_MM && g_state == S_IDLE && !g_mmApplied) { g_applyMM = 1; g_mmApplied = 1; } }
+        else if (!strcmp(method, "Receive_HideHeroSelect")) g_heroShown = g_heroUp = 0;
         else if (searching_ui() && g_screen == SC_MM) {             // our search: the panel shows our state, not Relic's
             if (!strcmp(method, "Receive_ShowSearchingAnimation") && count == 1) { args[0].type = GFX_BOOL; args[0].v.b = 1; }
             else if (!strcmp(method, "Receive_SetMapPreferencesButtonVisible") && count == 1) { args[0].type = GFX_BOOL; args[0].v.b = 0; }
@@ -1180,7 +1363,10 @@ static char __fastcall inv_hook(void *self, void *edx, const char *method, int f
             }
         }
     }
+    if (method && !strcmp(method, "Receive_SetStartButtonText") && count == 1 && args && args[0].type == GFX_WSTRING && args[0].v.ws
+        && !IsBadReadPtr(args[0].v.ws, 2) && g_langCfg < 0 && g_lang != 1 && has_cyr(args[0].v.ws)) { g_lang = 1; logmsg("search kind: language ru (the Start button)"); }
     char rc = g_invOrig(self, edx, method, flags, args, count);
+    if (method && !strcmp(method, "Receive_ShowSearchingAnimation") && g_screen == SC_MM) mode_ui();   // 0.42
     // our status line: pushed right after the engine's own per-frame call into the Find a Game panel, on its thread
     if (method && !strcmp(method, "Receive_ShowSearchingAnimation") && g_screen == SC_MM && g_banNote && GetTickCount() - g_banNote < 8000 && !searching_ui()) {
         GFxValue v[3]; memset(v, 0, sizeof v); static wchar_t a1[] = L"Only 3 maps can be banned per mode.", a2[] = L"Можно убрать не больше 3 карт на режим.", a3[] = L"The first 3 unchecked maps are kept.";
@@ -1218,7 +1404,7 @@ static void search_click(void) {
     g_matchMode = g_mode < 3 ? g_mode : 0; g_backToMM = 0;                   // 0.35: my room's player slots follow the searched mode
     const char *no = native_no();
     if (!no) { g_natAnswer = 0; g_natSeen = g_natCancelled = 0; g_natLobby[0] = 0; g_natStopAt = 0; g_natWatchUntil = 0; set_state(S_NASK); SetEvent(g_wake); }   // 0.38: ask the ladder
-    else { logmsg("native: not tried (%s) - classic flow", no); set_state(S_SEARCH); g_wantJoin = 1; SetEvent(g_wake); }
+    else { logmsg("native: not tried (%s) - classic flow", no); snprintf(g_runWhy, sizeof g_runWhy, "%s", no); set_state(S_SEARCH); g_wantJoin = 1; SetEvent(g_wake); }
 }
 static int ends_with(const char *s, const char *t) { size_t a = strlen(s), b = strlen(t); return a >= b && !strcmp(s + a - b, t); }
 static void __fastcall fs_hook(void *self, void *edx, void *movie, const char *cmd, const char *args) {
@@ -1258,7 +1444,7 @@ static void __fastcall fs_hook(void *self, void *edx, void *movie, const char *c
                 if (strstr(url, "main_menu.gfx")) sc = SC_MAIN; else if (strstr(url, "matchmaking.gfx")) sc = SC_MM;
                 else if (strstr(url, "game_list_movie.gfx")) sc = SC_LIST; else if (strstr(url, "game_setup_movie.gfx")) sc = SC_SETUP;
                 if (sc >= 0 && !strcmp(path + strlen(path) - 9, ".panel_mc")) {
-                    strcpy(g_panel, path); g_screen = sc; g_scrTick = GetTickCount(); g_engSearch = -1; if (sc != SC_MM) g_mmSelf = NULL; else g_mmApplied = 0; if (sc == SC_LIST) { g_listSeen = 0; g_rowFound = -1; }
+                    strcpy(g_panel, path); g_screen = sc; g_scrTick = GetTickCount(); g_engSearch = -1; g_mapUp = 0; if (sc != SC_MM) g_heroUp = 0; if (sc != SC_MM) g_mmSelf = NULL; else g_mmApplied = 0; if (sc == SC_LIST) { g_listSeen = 0; g_rowFound = -1; }
                     logmsg("screen %d panel %s", sc, g_panel);
                 }
             }
@@ -1278,6 +1464,11 @@ static void __fastcall fs_hook(void *self, void *edx, void *movie, const char *c
                 if (g_random) { g_random = 0; save_choice(); logmsg("choice: random off"); }
                 g_curHero = a; if (a != g_hero) { g_hero = a; save_choice(); logmsg("choice: hero %d", a); }
             }
+        }
+        if (g_screen == SC_MM) {                                      // 0.42: the panel's dialogs over our search kind fields
+            if (ends_with(cmd, "hero_selection_mc.OnClickAccept")) g_heroUp = 0;
+            else if (ends_with(cmd, ".OnClickMapPreferences")) g_mapUp = 1;
+            else if (ends_with(cmd, "map_preferences_mc.OnClickSave") || ends_with(cmd, "map_preferences_mc.OnClickCancel")) g_mapUp = 0;
         }
         if (strstr(cmd, "map_preferences_mc.") && g_mpSelf && g_mpMode >= 0) {          // our dialog - the engine must not see it
             static unsigned char tmp[MAXMAPS]; GFxValue v; memset(&v, 0, sizeof v);
@@ -1308,7 +1499,7 @@ static void __fastcall fs_hook(void *self, void *edx, void *movie, const char *c
         if (g_screen == SC_MM && !g_sending && args && !strncmp(cmd, g_panel, strlen(g_panel)) && !strcmp(cmd + strlen(g_panel), ".OnSelectDropDownItem")) {
             int a = -1, b = -1;
             if (sscanf(args, "%d;%d", &a, &b) == 2 && a == 0 && b >= 0 && b < 4 && b != g_mode) {
-                g_mode = b; wchar_t w[8]; _snwprintf(w, 8, L"%d", b); WritePrivateProfileStringW(L"Choice", L"Mode", w, g_ini);
+                g_mode = b; g_peekLast = 0; wchar_t w[8]; _snwprintf(w, 8, L"%d", b); WritePrivateProfileStringW(L"Choice", L"Mode", w, g_ini);
                 logmsg("mode: %s", MODE_KEY[b]);
             }
         }
@@ -1618,6 +1809,7 @@ static void tick(void) {
     if (g_noticeUntil && (int)(now - g_noticeUntil) > 0) { g_noticeUntil = 0; g_coverWant = 0; }
     if (g_coverWant && g_state != S_DONE && !g_noticeUntil) stage_line();
     { static DWORD hb; if (now - hb > 30000) { hb = now; logmsg("tick alive, state %s screen %d", SN[g_state], g_screen); } }
+    mode_peek(now);                                                   // 0.42
     (void)lastStatus;
     if (g_loadTick && now - g_loadTick > 180000) { g_loadTick = 0; marker_set(NULL); }      // past loading: a crash later is not a ruined loading
     { static LONG seen; if (g_swapCount != seen) { seen = g_swapCount; logmsg("swap request accepted (%ld so far)", seen); } }
@@ -1705,7 +1897,8 @@ static void tick(void) {
             g_natPass = now; logmsg("native: Start Searching passed to the game %lu ms after the click (%s)", now - g_searchTick, MODE_KEY[g_mode]);
             set_state(S_NATIVE);
         } else if (g_natAnswer == 2 || in_state() > 3000) {
-            logmsg("native: not used (%s) - classic flow", g_natAnswer == 2 ? g_natWhy : "no answer in 3 s"); g_natAnswer = 0;
+            logmsg("native: not used (%s) - classic flow", g_natAnswer == 2 ? g_natWhy : "no answer in 3 s");
+            snprintf(g_runWhy, sizeof g_runWhy, "%s", g_natAnswer == 2 ? g_natWhy : "the ladder did not answer in time"); g_natAnswer = 0;
             set_state(S_SEARCH); g_wantJoin = 1; SetEvent(g_wake);
         }
         break;
@@ -1716,7 +1909,7 @@ static void tick(void) {
         if (g_screen != SC_MM) { logmsg("native: %s (%lu ms) and not on Find a Game - idle (the game goes on by itself)", why, quiet); set_state(S_IDLE); g_natWatchUntil = now + 30000; break; }   // no leave: it would call off a match the game may still be setting up
         logmsg("native: FALLBACK - %s (%lu ms quiet), the game's own search %s - classic flow", why, quiet, g_engSearch == 1 ? "on: stopping it" : g_engSearch == 0 ? "off" : "unknown");
         if (g_engSearch == 1) { fs(".OnClickStart", ""); g_natStopAt = now; g_natStops = 0; }   // Stop Searching (the same button)
-        g_queue = -1; set_state(S_SEARCH); g_wantJoin = 1; SetEvent(g_wake);
+        snprintf(g_runWhy, sizeof g_runWhy, "%s", why); g_queue = -1; set_state(S_SEARCH); g_wantJoin = 1; SetEvent(g_wake);
         break; }
     case S_GO_MAIN:                                                   // leave Find a Game -> main menu
         { static DWORD since, lastBack, entered; if (entered != g_stateTick) { entered = g_stateTick; since = now; lastBack = now - 800; }
@@ -1973,6 +2166,9 @@ BOOL WINAPI DllMain(HINSTANCE h, DWORD r, LPVOID _) {
     g_fast = GetPrivateProfileIntW(L"MMFind", L"Fast", 1, ini) != 0;           // 0.37, see g_fast
     g_nativeCfg = GetPrivateProfileIntW(L"MMFind", L"Native", 1, ini) != 0;    // 0.38, see g_nativeCfg
     g_fastCfg = GetPrivateProfileIntW(L"MMFind", L"NativeFast", 1, ini) != 0;  // 0.39, see native_fast
+    g_showMode = GetPrivateProfileIntW(L"MMFind", L"ShowMode", 1, ini) != 0;   // 0.42, see g_showMode
+    { wchar_t t[16]; GetPrivateProfileStringW(L"MMFind", L"Lang", L"auto", t, 16, ini); g_langCfg = !_wcsicmp(t, L"ru") ? 1 : !_wcsicmp(t, L"en") ? 0 : -1;
+    }
     { wchar_t t[80]; GetPrivateProfileStringW(L"MMFind", L"TestLadder", L"", t, 80, ini); wchar_t *c = wcsrchr(t, L':');   // 0.38 tests, see g_tlHost
       if (t[0] && c && _wtoi(c + 1) > 0 && _wtoi(c + 1) < 65536) { *c = 0; wcsncpy(g_tlHost, t, 63); g_tlPort = (INTERNET_PORT)_wtoi(c + 1); } }
     g_testBots = GetPrivateProfileIntW(L"MMFind", L"TestBots", 0, ini);
@@ -1988,7 +2184,7 @@ BOOL WINAPI DllMain(HINSTANCE h, DWORD r, LPVOID _) {
     g_mySteam = my_steam();
     { wchar_t p[MAX_PATH], o[MAX_PATH]; _snwprintf(p, MAX_PATH, L"%lsMMFind.log", g_dir); _snwprintf(o, MAX_PATH, L"%lsMMFind.log.old", g_dir);
       WIN32_FILE_ATTRIBUTE_DATA a; if (GetFileAttributesExW(p, GetFileExInfoStandard, &a) && (a.nFileSizeHigh || a.nFileSizeLow > (1u << 20))) MoveFileExW(p, o, MOVEFILE_REPLACE_EXISTING); }
-    logmsg("MMFind 0.41 start, steam=%llu server=%ls%s%s%s", g_mySteam, g_server, g_direct ? ", fast automatch (experiment) on" : "", g_fast ? ", fast steps (public room, direct join)" : "",
+    logmsg("MMFind " MMF_VER " start, steam=%llu server=%ls%s%s%s", g_mySteam, g_server, g_direct ? ", fast automatch (experiment) on" : "", g_fast ? ", fast steps (public room, direct join)" : "",
            g_nativeCfg ? ", native search when on our lobby server" : ", native off");
     if (g_tlHost[0]) logmsg("TEST LADDER: every ladder API call goes to http://%ls:%u (TestLadder=)", g_tlHost, (unsigned)g_tlPort);
     { char n[64]; wsprintfA(n, "Local\\dow2patch_MMFind_%lu", GetCurrentProcessId());          // one copy per game (launcher + dow2-patches)
