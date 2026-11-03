@@ -73,6 +73,12 @@ $(OUT)/OwnLobby.dll: ownlobby/ownlobby.c ownlobby/ca_pem.h | $(OUT)
 $(OUT)/winmm.dll: vanilla-loader/winmm_proxy.c vanilla-loader/winmm.def | $(OUT)
 	$(CC) $(CFLAGS) -shared -o $@ vanilla-loader/winmm_proxy.c vanilla-loader/winmm.def -static-libgcc
 
+# the same loader for the launcher add-on ownlobby (03.11.2026): only the early add-ons in Elite_DLLs, no dow2-patches folder
+# (the launcher takes a winmm.dll naming that folder for the old stand-alone package and puts it aside before every start)
+$(OUT)/early/winmm.dll: vanilla-loader/winmm_proxy.c vanilla-loader/winmm.def | $(OUT)
+	mkdir -p $(OUT)/early
+	$(CC) $(CFLAGS) -DEARLY_ONLY -shared -o $@ vanilla-loader/winmm_proxy.c vanilla-loader/winmm.def -static-libgcc
+
 $(OUT)/FrameProbe.dll: frameprobe/frameprobe.c | $(OUT)
 	$(CC) $(CFLAGS) -Wno-unused-variable -shared -o $@ $< -lpsapi -lwinmm -static-libgcc
 
