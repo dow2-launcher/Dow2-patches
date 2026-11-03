@@ -4,7 +4,30 @@ Every version gets an entry here before it reaches `main`. CI then tags `vX.Y.Z`
 version (`X.Y.0`) it also publishes a GitHub Release with the DLLs and the entries since the previous `X.Y.0`.
 The version of the set lives only in `VERSION`; each DLL still writes its own version to its log.
 
-## Unreleased (branch feature/relay-21)
+## 2026-11-03 released
+What the launcher store (store3/launcher.json) gives players on 03.11.2026, all in this tree (branch release/consolidate-0311).
+Store id -> the version the DLL writes to its log -> the commit the released DLL was built from. Each module's source here is
+the same as in that commit (`git diff <commit> HEAD -- <module dir> common` is empty); rebuilt with the same compiler (and the
+same image base / link name), the DLLs are byte for byte the released ones but for the PE timestamps.
+- automatch: mmfind-0.44 -> MMFind 0.44 (with 0.39 native fast, 0.42 search kind, 0.43 rematch, off by default) -> fe58795
+  (feature/native-continue). Built as MMFind044.dll and renamed. Continue.dll (Continue 1, same branch) stays in the tree but
+  was taken out of the store on 03.11.
+- relay_r2 / relay_fwd: relay-21 / relayfwd-21 -> Relay 21 (on Relay 20) -> 4693a39 (feature/relay-21, on feature/relay-20 773d547)
+- steamkeep: steamkeep-2 -> SteamKeep 2 -> c6d8d01 (feature/steamkeep)
+- jumpretry: jumpretry-2 -> JumpRetry 2 -> add4085 (feature/jumpretry)
+- roomjoin: roomjoin-1 -> RoomJoin 7 -> 72d832c (feat/roomjoin, PR #10)
+- cooldowns_r2: cooldowns-7 -> Cooldowns 6 -> a38a5a6 (fix/cooldowns-6-timer-apm)
+- matchtimer_r2: matchtimer-8 -> MatchTimer v5 (Place=menu etc.) -> a38a5a6
+- apm: apm-1 -> APM 1 -> a38a5a6
+- ownlobby: ownlobby-3 -> OwnLobby 2 + the early winmm.dll (build/early/winmm.dll) -> 7cc5f42 (fix/ownlobby-2-moscow)
+- reinforcefix: reinforcefix-1 -> ReinforceFix v1 (main)
+- unchanged on main, checked the same way: lobbystats-0.11.0 (LobbyStats 0.11.0), joinsound-1 (JoinSound 1), netprobe-2
+  (NetProbe 2), crashlog-1 (CrashLog 1).
+- loadingratings-4 was built on 02.11 from 0f725df (lobbystats.c with -DLS_LOADING, "LoadingRatings v0.10.1"); the tree now builds
+  LoadingRatings from the later lobbystats.c (0.11.0: the join sound moved to JoinSound.dll), not released as LoadingRatings yet.
+The sections below with "branch ..." in the heading are the details of these versions.
+
+## Relay 21 (branch feature/relay-21; released 2026-11-03 as relay-21 / relayfwd-21)
 - Relay 21 (Relay.dll + RelayForward.dll). No global lock on the hot path: Relay 20 took one critical section and walked 64
   slots on every send / WSASend of every socket in the game (the IAT of all modules is hooked) and on every connect, so all the
   game's network threads queued on it. A socket is ours only while its preamble waits (marked lock-free at the redirect, a
@@ -17,7 +40,7 @@ The version of the set lives only in `VERSION`; each DLL still writes its own ve
   6.2 us per call, 80% of calls over 1 us, 2.26 M calls/s; Relay 21 0.23 us, 0.007% over 1 us, 27.7 M calls/s; on 4 cores
   Relay 20 had 1935 calls over 1 ms, Relay 21 99 (the scheduler).
 
-## Unreleased (branch feature/relay-20)
+## Relay 20 (branch feature/relay-20; in relay-21, released 2026-11-03)
 - Relay 20 (Relay.dll + RelayForward.dll). Redundancy in the UDP tunnel: the SYN carries version 2; a gateway that knows it
   answers SYNACK + 2 and both sides send DATA2 (each data packet also carries copies of the newest 2 earlier packets not
   acknowledged yet) and ACK2 (an ack with such copies; answered only when a copy filled something). The copies go only while
@@ -28,7 +51,7 @@ The version of the set lives only in `VERSION`; each DLL still writes its own ve
   Tested: Linux netns, netem 40 ms each way, the tunnel code of Relay 19 / 20 under Wine against the old / new gateway:
   loss 10% - p99 game->server 422 -> 141 ms, server->game 242 -> 140 ms (p95 138 -> 41); no loss - no change.
 
-## Continue 1 + MMFind 0.44 (branch feature/native-continue, staging continue-1 + mmfind-0.44, not released)
+## Continue 1 + MMFind 0.44 (branch feature/native-continue; mmfind-0.44 released 2026-11-03, continue-1 taken out of the store)
 - Continue 1 (new add-on, owner 03.11.2026: "the rematch is mostly a crutch - the game has this logic, the room is put together
   again: the host presses Continue, the others have it greyed out, everyone goes straight into the room"). The game's own
   path is all there (PostGameStatsForm::OnClickNext 0x480A71): the host sends PPMT_TransitionToGameSetup over the match
@@ -49,7 +72,7 @@ The version of the set lives only in `VERSION`; each DLL still writes its own ve
 - MMFind 0.44: the 0.43 rematch (menus walked, a new room Rematch-xxxxxx) is off by default - `[MMFind] RematchMenus=1`
   (the old `Rematch=` the launcher wrote is ignored), and it never runs while Continue.dll is in the game.
 
-## MMFind 0.43 (branch feature/mmfind-rematch, staging mmfind-0.43, not released)
+## MMFind 0.43 (branch feature/mmfind-rematch; in mmfind-0.44, released 2026-11-03)
 - MMFind 0.43: rematch on Continue (owner 03.11.2026: "Continue after a match from an ordinary lobby - a new lobby with the same
   people"). The game's own post-game Continue only throws everyone to the main menu after a Custom Games match (Relic ~2016).
   While a lobby that is NOT our automatch is up, MMFind keeps who sits where (room id, slots with Relic profile ids and names,
@@ -73,7 +96,7 @@ The version of the set lives only in `VERSION`; each DLL still writes its own ve
   "Rematch-2zcurm" on the old map in 1.7 s and the fake players' poll got its room id. Not tested: a real second player
   joining (needs two stands), 2v2/3v3 slot moves.
 
-## MMFind 0.42 (branch feature/mmfind-0.42-mode, staging mmfind-0.42, not released)
+## MMFind 0.42 (branch feature/mmfind-0.42-mode; in mmfind-0.44, released 2026-11-03)
 - MMFind 0.42: the kind of search shown on Find a Game (owner 03.11.2026: "when we press search, show right away which search
   it is"; "change the search screen so it is clear it is a different one"). Two text fields of the game's own Find a Game panel
   (Scaleform, docs/UI_RULES.md, no Direct3D), made right after the engine's per-frame call into the panel: right of the screen
@@ -89,7 +112,7 @@ The version of the set lives only in `VERSION`; each DLL still writes its own ve
   an older ladder answers a peek like a real ask, so no peek is sent while a native search or its search-again is pending.
   Stand 1 (Elite 3.2, OwnLobby ownlobby-3, production ladder, test group): shown on entering, native search starts and stops.
 
-## Unreleased (branch feature/steamkeep, SteamKeep 2)
+## SteamKeep 2 (branch feature/steamkeep; released 2026-11-03 as steamkeep-2)
 - SteamKeep 2 (owner 03.11.2026: Steam's servers can be away for an hour - the match must be played to the end): no time
   limit. Any number of drops and returns (and the every-frame "logged on?" check 0x4E5900) never end the match; Steam's close
   request (a bare WM_CLOSE) is ignored for the rest of the match once Steam went away in it or while it is not logged on.
@@ -98,7 +121,7 @@ The version of the set lives only in `VERSION`; each DLL still writes its own ve
   shutdown. After the match the game is not closed, so the result and the replay go out. ini: CloseWindowSec is gone,
   IgnoreSteamClose=1.
 
-## Unreleased (branch feature/steamkeep)
+## SteamKeep 1 (branch feature/steamkeep)
 - SteamKeep 1 (new add-on, not in the launcher catalog yet): the match goes on when Steam goes away. DOW2.exe turns a Steam
   drop (SteamLoginService SetConnected(false) 0x004F6F20 -> bus events 0x0C / 1 / 2) into an end reason in GameObj
   (0x0041FB0E) and leaves the match (GameQuitForSteamInternal 0x00426D9C); a close request that the Steam client sends
@@ -107,7 +130,7 @@ The version of the set lives only in `VERSION`; each DLL still writes its own ve
   destroyed for 60 s + WM_CLOSE to the window): without it the game left the match (end reason 4) and quit; with it the
   match went on (clock 1:55, Steam back after 44 s), a later plain WM_CLOSE still closed the game.
 
-## Unreleased (branch feature/jumpretry)
+## JumpRetry 1-2 (branch feature/jumpretry; released 2026-11-03 as jumpretry-2)
 - JumpRetry 2: the retry goes as soon as the squad can walk again (the ability's own check 0x008645A0/0x00864670, polled
   every 30 ms; LandTimeoutMs 600 as a fallback) instead of a fixed 600 ms, and an order the game still drops (no Ability
   state within TakeMs 250) is sent again; MaxRetries 3, RetryDelayMs 0. Stand 1: the jump starts ~400 ms after falling
@@ -118,7 +141,7 @@ The version of the set lives only in `VERSION`; each DLL still writes its own ve
   cancels it. Hooks CommandProxy +0x38/+0x34 (0x00AF51A0/0x00AF53C0) and watches WorldDoCommandSquad(s)/Entity imports;
   only the game's own orders, no change to the simulation.
 
-## Unreleased (branch fix/cooldowns-6-timer-apm)
+## Cooldowns 6, MatchTimer, APM 1 (branch fix/cooldowns-6-timer-apm; released 2026-11-03 as cooldowns-7, matchtimer-8, apm-1)
 - Cooldowns 6 (siritos 03.11.2026: on Catachans one ability's recharge reset another's number, and with no energy the number
   went; the bunker stratagem never got one). Cooldowns 4-5 kept the recharge per button number and its end per ability
   blueprint (the same for every squad of a kind), and right after a cast the squad often lacks the energy, when the game
@@ -134,7 +157,7 @@ The version of the set lives only in `VERSION`; each DLL still writes its own ve
   bottom left corner of the minimap frame, also the fallback in annihilation); "apm" small.
 - Launcher catalog entries with the Place picks: docs/launcher-catalog-timer-apm.json (matchtimer-8, apm-1, cooldowns-6).
 
-## Unreleased (branch feat/roomjoin)
+## RoomJoin 1-7 (branch feat/roomjoin; released 2026-11-03 as roomjoin-1)
 - RoomJoin 1 (new add-on, experiment, launcher 1.4.5+): Join on an Elite room without a password in the launcher's Lobbies tab -
   the game starts (or comes to the front) and walks into the room by itself under a cover that says what goes on; a no from the
   game (full, closed) is shown with its own text, then the public games list. MMFind is not touched (own DLL, own mutex, hooks
@@ -142,7 +165,7 @@ The version of the set lives only in `VERSION`; each DLL still writes its own ve
   (the idle main menu sends nothing: mouse moves posted to it once it is in front; a second Join for the same room is dropped;
   Cancel never leaves a room we got into).
 
-## Unreleased (branch feature/mmfind-0.39 only, not released)
+## MMFind 0.39 (branch feature/mmfind-0.39; in mmfind-0.44, released 2026-11-03)
 - MMFind 0.39: the game's own automatch faster (owner 03.11.2026: "the ~12 s polling - make it 1 second; cut the 5 s countdown to
   2 s"). `[MMFind] NativeFast=1` (default; 0 = off): only while a native search runs (Start Searching passed to the game until the
   loading screen) two detours of DOW2.exe 3.19 act, put in once, both or none (every byte checked first, log "native fast: detours
