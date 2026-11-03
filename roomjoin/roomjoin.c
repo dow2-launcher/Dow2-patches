@@ -13,6 +13,9 @@
 //   - the fscommand handler 0x681AB0 (Flash -> engine): which full-screen panel is up (OnLoadComplete), the menu movie and its
 //     handler (to send Back / Public Games), the loading screen;
 //   - Shark.dll shark::update (import 0x00F88068): the main-thread tick.
+//   - the engine -> Flash Invoke 0x45DB6C (MMFind and LobbyStats chain onto each other there too): the menu movie and its
+//     fscommand handler at once (Elite's injector loads us ~9 s after the start, when the main menu is up already - its
+//     OnLoadComplete is long gone and the menu sends no command until the player clicks something: 03.11 the cover never came).
 // If MMFind.dll is in the folder but not in the game yet, the fscommand hook waits for the first tick (MMFind checks that
 // function's original bytes when it starts; it must find them).
 #include <windows.h>
@@ -23,6 +26,9 @@
 #include <stdarg.h>
 #include <wchar.h>
 
+#define HOOK_ADDR   0x0045DB6C                    // Invoke (engine -> Flash), this = SFMovie: +4 the movie, +0x18 its fscommand handler
+#define HOOK_RESUME 0x0045DB71
+static const unsigned char INV_PRO[5] = {0xB8, 0x59, 0x70, 0xEF, 0x00};
 #define FN_FSCMD    0x00681AB0
 static const unsigned char FSCMD_PRO[7] = {0x51, 0x56, 0x57, 0x8B, 0x7C, 0x24, 0x14};
 #define IAT_SHARK_UPDATE 0x00F88068
@@ -31,7 +37,8 @@ typedef struct { int type; int pad; union { double num; unsigned char b; const w
 enum { GFX_BOOL = 2, GFX_NUMBER = 3, GFX_STRING = 4, GFX_WSTRING = 5 };
 typedef void (__fastcall *FsCmdFn)(void *self, void *edx, void *movie, const char *cmd, const char *args);
 typedef void (__stdcall *UpdFn)(float dt);
-static FsCmdFn g_fsOrig; static UpdFn g_updOrig;
+typedef char (__fastcall *InvokeFn)(void *self, void *edx, const char *method, int flags, GFxValue *args, unsigned count);
+static FsCmdFn g_fsOrig; static UpdFn g_updOrig; static InvokeFn g_invOrig;
 
 static wchar_t g_dir[MAX_PATH]; static CRITICAL_SECTION g_lk;
 static void logmsg(const char *fmt, ...) {
@@ -107,6 +114,24 @@ static void fs(const char *rel, const char *args) {          // a menu command a
     char cmd[300]; if (rel[0] == '.') snprintf(cmd, sizeof cmd, "%s%s", g_panel, rel); else snprintf(cmd, sizeof cmd, "%s", rel);
     logmsg("-> fscommand %s", cmd);
     g_sending++; g_fsOrig(g_fsSelf, NULL, g_fsMovie, cmd, args ? args : ""); g_sending--;
+}
+
+// which full-screen panel is up, asked from the menu movie itself (the panel clip's _url) - for the screen we came in on
+static int probe_screen(void) {
+    void *m = g_fsMovie; if (!m) return -1;
+    for (int k = 1; k <= 3; k++) {
+        char pth[96], q[128]; GFxValue v; snprintf(pth, sizeof pth, "_level0.display_item.panel%d_mc.panel_mc", k);
+        snprintf(q, sizeof q, "%s._visible", pth); if (!as_get(m, q, &v) || v.type != GFX_BOOL || !v.v.b) continue;
+        snprintf(q, sizeof q, "%s._url", pth); if (!as_get(m, q, &v)) continue;
+        char u[200] = "";
+        if (v.type == GFX_STRING && v.v.s && !IsBadReadPtr(v.v.s, 1)) snprintf(u, sizeof u, "%s", v.v.s);
+        else if (v.type == GFX_WSTRING && v.v.ws && !IsBadReadPtr(v.v.ws, 2)) WideCharToMultiByte(CP_UTF8, 0, v.v.ws, -1, u, sizeof u, NULL, NULL);
+        int sc = strstr(u, "main_menu.gfx") ? SC_MAIN : strstr(u, "matchmaking.gfx") ? SC_MM : strstr(u, "game_list_movie.gfx") ? SC_LIST
+               : strstr(u, "game_setup_movie.gfx") ? SC_SETUP : -1;
+        logmsg("screen asked: %s = %s", pth, u[0] ? u : "?");
+        if (sc >= 0) { strcpy(g_panel, pth); g_screen = sc; return sc; }
+    }
+    return -1;
 }
 
 // ---------------- the game browser's join by room id (MMFind 0.34-0.37: research_direct/directjoin.c) ----------------
@@ -256,12 +281,21 @@ static void rj_step(DWORD now) {
     if (g_rj == RJ_NONE) { if (!g_loading) rj_read(now); return; }
     if (g_loading) { rj_end("fail a match is loading", 0); return; }
     switch (g_rj) {
-    case RJ_MENU:                                                     // the game may still be starting: up to 90 s
+    case RJ_MENU: {                                                   // the game may still be starting: up to 90 s
+        static DWORD probed, known; if (now - g_rjAt < 50) { probed = 0; known = 0; }
+        if (g_fsMovie && !known) known = now;
+        if (g_screen == SC_OTHER && g_fsMovie && now - probed > 1000) { probed = now; probe_screen(); }
+        // still not told after 6 s with the menu movie known, no match loading, in no room: the main menu the game starts on
+        if (g_screen == SC_OTHER && known && now - known > 6000 && !dj_room()) {
+            for (int k = 1; k <= 3 && !g_panel[0]; k++) { char q[96]; GFxValue v; snprintf(q, sizeof q, "_level0.display_item.panel%d_mc.panel_mc._visible", k);
+                if (as_get(g_fsMovie, q, &v) && v.type == GFX_BOOL && v.v.b) snprintf(g_panel, sizeof g_panel, "_level0.display_item.panel%d_mc.panel_mc", k); }
+            g_screen = SC_MAIN; logmsg("the screen not known after 6 s - taken as the main menu (panel %s)", g_panel[0] ? g_panel : "?");
+        }
         if (g_screen == SC_MAIN && g_fsMovie) {
             if (g_rjName[0]) _snwprintf(g_coverLine, 159, L"%ls", g_rjName); else wcscpy(g_coverLine, L"Custom game");
             g_coverWant = 1; g_rj = RJ_JOIN; g_rjAt = now; g_rjTries = 0; g_rjTry = 0;
-        } else if (now - g_rjAt > 90000) rj_end("fail no main menu", 0);
-        break;
+        } else if (now - g_rjAt > 90000) rj_end(g_fsMovie ? "fail no main menu" : "fail the menu movie never seen", 0);
+        break; }
     case RJ_JOIN: {
         if (g_screen != SC_MAIN && g_screen != SC_SETUP) { rj_end("fail the player went elsewhere", 0); break; }   // e.g. Find a Game
         unsigned long long in = dj_room();
@@ -302,6 +336,22 @@ static void __fastcall fs_hook(void *self, void *edx, void *movie, const char *c
     }
     g_fsOrig(self, edx, movie, cmd, args);
 }
+static char __fastcall inv_hook(void *self, void *edx, const char *method, int flags, GFxValue *args, unsigned count) {
+    // the menu's SFMovie: its movie (+4) has _level0.display_item; its fscommand handler (+0x18) as the buttons use it
+    if (!g_fsMovie && self && !IsBadReadPtr(self, 0x1C)) {
+        void *mv = *(void **)((char *)self + 4), *h = *(void **)((char *)self + 0x18);
+        static void *tried[16]; static int nt; int seen = 0;
+        for (int i = 0; i < nt; i++) if (tried[i] == mv) seen = 1;
+        DWORD vt = mv && !IsBadReadPtr(mv, 4) ? *(DWORD *)mv : 0;          // a live GFx movie: its vtable in DOW2.exe (GFx is linked in)
+        if (!seen && mv && h && vt >= 0x00F87000 && vt < 0x0124F000 && !IsBadReadPtr((void *)vt, 0x34) && !IsBadReadPtr(mv, 0x600) && !IsBadReadPtr(h, 0x20)) {
+            if (nt < 16) tried[nt++] = mv;
+            GFxValue v; if (as_get(mv, "_level0.display_item._visible", &v) && v.type == GFX_BOOL) {
+                g_fsMovie = mv; g_fsSelf = h; logmsg("the menu movie %p (handler %p) from the engine's calls", mv, h);
+            }
+        }
+    }
+    return g_invOrig(self, edx, method, flags, args, count);
+}
 static void __stdcall upd_hook(float dt);
 static HANDLE patch_lock(void) {
     char n[64]; wsprintfA(n, "Local\\dow2patch_iat_%lu", GetCurrentProcessId());
@@ -323,6 +373,23 @@ static int hook_fscmd(void) {
     if (VirtualProtect(f, 5, PAGE_EXECUTE_READWRITE, &o)) { ok = WriteProcessMemory(GetCurrentProcess(), f, b, 5, &w) && w == 5; VirtualProtect(f, 5, o, &o); }
     FlushInstructionCache(GetCurrentProcess(), f, 5); patch_unlock(mx);
     logmsg("hooked fscommand%s", chained ? " (after another add-on's hook)" : "");
+    return ok;
+}
+// Invoke: its own bytes, or another add-on's jump (LobbyStats, MMFind) - chained either way, as MMFind does
+static int hook_invoke(void) {
+    unsigned char *t = (unsigned char *)HOOK_ADDR;
+    if (IsBadReadPtr(t, 5)) return 0;
+    int chained = t[0] == 0xE9;
+    if (!chained && memcmp(t, INV_PRO, 5)) { logmsg("Invoke not as in DOW2.exe 3.19 - the menu movie only from its commands"); return 0; }
+    unsigned char *tr = VirtualAlloc(NULL, 16, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE); if (!tr) return 0;
+    if (chained) { DWORD dest = (DWORD)(t + 5) + *(DWORD *)(t + 1); tr[0] = 0xE9; *(DWORD *)(tr + 1) = dest - (DWORD)(tr + 5); }
+    else { memcpy(tr, INV_PRO, 5); tr[5] = 0xE9; *(DWORD *)(tr + 6) = HOOK_RESUME - (DWORD)(tr + 10); }
+    g_invOrig = (InvokeFn)tr;
+    unsigned char b[5]; b[0] = 0xE9; *(DWORD *)(b + 1) = (DWORD)inv_hook - (DWORD)(t + 5);
+    HANDLE mx = patch_lock(); DWORD o; SIZE_T w = 0; int ok = 0;
+    if (VirtualProtect(t, 5, PAGE_EXECUTE_READWRITE, &o)) { ok = WriteProcessMemory(GetCurrentProcess(), t, b, 5, &w) && w == 5; VirtualProtect(t, 5, o, &o); }
+    FlushInstructionCache(GetCurrentProcess(), t, 5); patch_unlock(mx);
+    logmsg("hooked Invoke%s", chained ? " (after another add-on's hook)" : "");
     return ok;
 }
 static int g_fsHooked, g_fsLater;
@@ -358,7 +425,7 @@ BOOL WINAPI DllMain(HINSTANCE h, DWORD r, LPVOID _) {
     if (r != DLL_PROCESS_ATTACH) return TRUE;
     DisableThreadLibraryCalls(h); InitializeCriticalSection(&g_lk);
     GetModuleFileNameW(h, g_dir, MAX_PATH); wchar_t *s = wcsrchr(g_dir, L'\\'); if (s) s[1] = 0;
-    logmsg("RoomJoin 1 (experiment: joining a room from the launcher's Lobbies tab)");
+    logmsg("RoomJoin 2 (experiment: joining a room from the launcher's Lobbies tab)");
     { char n[64]; wsprintfA(n, "Local\\dow2patch_RoomJoin_%lu", GetCurrentProcessId());
       HANDLE mx = CreateMutexA(NULL, FALSE, n); if (mx && GetLastError() == ERROR_ALREADY_EXISTS) { logmsg("another RoomJoin copy is active, this one stays idle"); return TRUE; } }
     // MMFind checks the fscommand handler's own bytes when it starts: in the folder but not in the game yet -> hook on the first tick
@@ -367,6 +434,7 @@ BOOL WINAPI DllMain(HINSTANCE h, DWORD r, LPVOID _) {
     if (!IsBadReadPtr(f, 1) && f[0] != 0xE9 && GetFileAttributesW(mm) != INVALID_FILE_ATTRIBUTES && !GetModuleHandleW(L"MMFind.dll")) {
         g_fsLater = 1; logmsg("MMFind.dll not in the game yet: the fscommand hook on the first frame");
     } else g_fsHooked = hook_fscmd();
+    hook_invoke();
     CloseHandle(CreateThread(NULL, 0, installer, NULL, 0, NULL));
     return TRUE;
 }
