@@ -250,10 +250,19 @@ static void cover_update(void) {
 // ---------------- the join ----------------
 enum { RJ_NONE, RJ_MENU, RJ_JOIN, RJ_LOBBY };
 static int g_rj; static unsigned long long g_rjRoom; static wchar_t g_rjName[64];
+// the game's own message boxes while we join (Receive_CreateMessageBox): the text of the latest one, and how many came.
+// The first one can be the game's "Connecting..." - a box after it, or one that is still up when the join gives up, is the
+// reason (the room is full, closed, a version mismatch...)
+static wchar_t g_mbText[200]; static volatile int g_mbCount; static DWORD g_mbAt;
 static void stage(const wchar_t *title, const wchar_t *what) {          // what the cover says now (siritos 03.11: what is going on)
     wcsncpy(g_coverTitle, title, 63);
     const wchar_t *n = g_rjName[0] ? g_rjName : L"the custom game";
     _snwprintf(g_coverLine, 159, what, n); g_coverTextTick = 0;
+}
+static void rj_fail_notice(const wchar_t *why) {                       // the reason on the cover for 3 s, then the public games list
+    wcsncpy(g_coverTitle, L"Could Not Join", 63);
+    _snwprintf(g_coverLine, 159, L"%ls", why); g_coverTextTick = 0;
+    g_coverWant = 1; g_noticeUntil = GetTickCount() + 3000; g_noticeList = 1;
 } static DWORD g_rjAt, g_rjTry, g_rjCheck; static int g_rjTries;
 static void rj_end(const char *res, int toList) {
     logmsg("%s (room %llu)%s", res, g_rjRoom, toList ? " - the public games list" : "");
@@ -261,8 +270,10 @@ static void rj_end(const char *res, int toList) {
     FILE *f = _wfopen(p, L"w"); if (f) { fprintf(f, "%s %llu\n", res, g_rjRoom); fclose(f); }
     g_rj = RJ_NONE;
     if (toList && strcmp(res, "fail cancelled")) {               // a moment to read why, then the public games list
-        stage(L"Could Not Join", L"%ls did not let us in. Opening the public games list");
-        g_coverWant = 1; g_noticeUntil = GetTickCount() + 2500; g_noticeList = 1; return;
+        wchar_t w[200];
+        if (g_mbText[0]) _snwprintf(w, 199, L"%ls", g_mbText);
+        else _snwprintf(w, 199, L"%ls did not let us in. Opening the public games list", g_rjName[0] ? g_rjName : L"The game");
+        rj_fail_notice(w); return;
     }
     g_coverWant = 0;
     if (toList && g_screen == SC_MAIN) fs(".OnClickPublicMatch", "");
@@ -301,8 +312,15 @@ static void rj_step(DWORD now) {
                 if (as_get(g_fsMovie, q, &v) && v.type == GFX_BOOL && v.v.b) snprintf(g_panel, sizeof g_panel, "_level0.display_item.panel%d_mc.panel_mc", k); }
             g_screen = SC_MAIN; logmsg("the screen not known after 6 s - taken as the main menu (panel %s)", g_panel[0] ? g_panel : "?");
         }
+        static DWORD lastBack;
+        if ((g_screen == SC_LIST || g_screen == SC_MM) && g_fsMovie && now - lastBack > 1500) {   // the game was running: back to the main menu
+            lastBack = now; logmsg("on screen %d - Back to the main menu", g_screen); fs(".OnClickBack", ""); }
+        if (g_screen == SC_SETUP && now - g_rjAt > 1500 && dj_room() != g_rjRoom) {
+            logmsg("in another lobby - not leaving it"); g_rj = RJ_NONE;
+            rj_fail_notice(L"You are in another lobby. Leave it first, then press Join again"); g_noticeList = 0; break; }
         if (g_screen == SC_MAIN && g_fsMovie) {
             stage(L"Joining the Game", L"Opening the lobby: %ls");
+            g_mbText[0] = 0; g_mbCount = 0;
             g_coverWant = 1; g_rj = RJ_JOIN; g_rjAt = now; g_rjTries = 0; g_rjTry = 0;
         } else if (now - g_rjAt > 90000) rj_end(g_fsMovie ? "fail no main menu" : "fail the menu movie never seen", 0);
         break; }
@@ -311,7 +329,10 @@ static void rj_step(DWORD now) {
         unsigned long long in = dj_room();
         if (in && in == g_rjRoom) { logmsg("in the room after %lu ms", now - g_rjAt); stage(L"Joining the Game", L"In %ls. Opening the lobby screen"); dj_to_lobby(); g_rj = RJ_LOBBY; g_rjAt = now; break; }
         if (in) { rj_end("fail in another room", 0); break; }
-        if (g_screen == SC_MAIN && g_rjTries < 3 && (!g_rjTry || now - g_rjTry > 8000)) {          // 03.11: a join took 5 s - no second one on top
+        if ((g_mbCount >= 2 && now - g_mbAt > 1500) || (g_mbCount && g_rjTries >= 1 && now - g_mbAt > 6000)) {     // the game said no (full, closed, ...)
+            char u[200]; WideCharToMultiByte(CP_UTF8, 0, g_mbText, -1, u, sizeof u, NULL, NULL);
+            logmsg("the game said: %s", u); rj_end("fail the game said no", 1); break; }
+        if (g_screen == SC_MAIN && !g_mbCount && g_rjTries < 3 && (!g_rjTry || now - g_rjTry > 8000)) {          // 03.11: a join took 5 s - no second one on top
             g_rjTries++; g_rjTry = now;
             stage(L"Joining the Game", g_rjTries == 1 ? L"Connecting to the game: %ls" : g_rjTries == 2 ? L"Connecting to the game: %ls (try 2 of 3)" : L"Connecting to the game: %ls (try 3 of 3)");
             if (!dj_join(g_rjRoom)) { rj_end("fail join call", 1); break; }
@@ -348,6 +369,21 @@ static void __fastcall fs_hook(void *self, void *edx, void *movie, const char *c
     g_fsOrig(self, edx, movie, cmd, args);
 }
 static char __fastcall inv_hook(void *self, void *edx, const char *method, int flags, GFxValue *args, unsigned count) {
+    if (g_rj && method && !IsBadReadPtr(method, 24) && !strcmp(method, "Receive_CreateMessageBox") && args && count && count < 32 && !IsBadReadPtr(args, count * sizeof(GFxValue))) {
+        wchar_t t[200] = L""; int n = 0; char dbg[400]; int dl = 0;
+        for (unsigned i = 0; i < count; i++) {               // the box's strings: title, text, buttons - the longest one is the text
+            const wchar_t *w = args[i].type == GFX_WSTRING && args[i].v.ws && !IsBadReadPtr(args[i].v.ws, 2) ? args[i].v.ws : NULL;
+            if (args[i].type == GFX_STRING && args[i].v.s && !IsBadReadPtr(args[i].v.s, 1)) dl += snprintf(dbg + dl, sizeof dbg - dl > 0 ? sizeof dbg - dl : 0, " [%u]\"%.60s\"", i, args[i].v.s);
+            if (!w) { if (args[i].type == GFX_NUMBER && dl < 380) dl += snprintf(dbg + dl, sizeof dbg - dl, " [%u]%g", i, args[i].v.num); continue; }
+            int len = (int)wcsnlen(w, 400);
+            char u[120]; WideCharToMultiByte(CP_UTF8, 0, w, -1, u, sizeof u, NULL, NULL); u[119] = 0;
+            if (dl < 380) dl += snprintf(dbg + dl, sizeof dbg - dl, " [%u]'%s'", i, u);
+            if (len > n) { n = len; wcsncpy(t, w, 199); t[199] = 0; }
+        }
+        logmsg("message box while joining (%u args):%s", count, dl ? dbg : "");
+        if (t[0]) wcsncpy(g_mbText, t, 199);
+        g_mbCount++; g_mbAt = GetTickCount();
+    }
     // the menu's SFMovie: its movie (+4) has _level0.display_item; its fscommand handler (+0x18) as the buttons use it
     if (!g_fsMovie && self && !IsBadReadPtr(self, 0x1C)) {
         void *mv = *(void **)((char *)self + 4), *h = *(void **)((char *)self + 0x18);
@@ -408,7 +444,7 @@ static void __stdcall upd_hook(float dt) {
     g_updOrig(dt);
     if (g_fsLater && !g_fsHooked) { g_fsHooked = hook_fscmd(); g_fsLater = 0; }
     DWORD now = GetTickCount();
-    if (g_noticeUntil && (int)(now - g_noticeUntil) > 0) {
+    if (g_noticeUntil && (int)(now - g_noticeUntil) > 0) {          // the notice was read: cover off (and the list when it was a failed join)
         g_noticeUntil = 0; g_coverWant = 0;
         if (g_noticeList && g_screen == SC_MAIN) fs(".OnClickPublicMatch", "");
         g_noticeList = 0;
@@ -441,7 +477,7 @@ BOOL WINAPI DllMain(HINSTANCE h, DWORD r, LPVOID _) {
     if (r != DLL_PROCESS_ATTACH) return TRUE;
     DisableThreadLibraryCalls(h); InitializeCriticalSection(&g_lk);
     GetModuleFileNameW(h, g_dir, MAX_PATH); wchar_t *s = wcsrchr(g_dir, L'\\'); if (s) s[1] = 0;
-    logmsg("RoomJoin 4 (experiment: joining a room from the launcher's Lobbies tab)");
+    logmsg("RoomJoin 5 (experiment: joining a room from the launcher's Lobbies tab)");
     { char n[64]; wsprintfA(n, "Local\\dow2patch_RoomJoin_%lu", GetCurrentProcessId());
       HANDLE mx = CreateMutexA(NULL, FALSE, n); if (mx && GetLastError() == ERROR_ALREADY_EXISTS) { logmsg("another RoomJoin copy is active, this one stays idle"); return TRUE; } }
     // MMFind checks the fscommand handler's own bytes when it starts: in the folder but not in the game yet -> hook on the first tick
