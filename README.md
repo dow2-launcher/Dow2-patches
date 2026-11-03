@@ -75,6 +75,15 @@ cooldowns/
     for that game). Read-only: no desync.
     Cooldowns.ini [Cooldowns]: Enabled, DigitSize, Color, Ask (0 = shares only).
 
+roomjoin/
+    RoomJoin.dll (experiment): Join from the launcher's Lobbies tab. The launcher writes Elite_DLLs/RoomJoin.txt (the room id
+    from Relic's list, its name) and starts the game or brings it to the front; in the main menu RoomJoin shows a cover
+    (what goes on: opening the lobby, connecting, try n of 3), joins by the room id (the game browser's own join), opens the
+    lobby screen and steps aside. The game says no (its message box: full, closed...) or 25 s pass: the reason on the cover,
+    then the public games list. Its own add-on next to MMFind - MMFind is not touched: the fscommand / Invoke / Shark frame
+    hooks are chained onto MMFind's (the injector loads Elite_DLLs in name order). The answer: RoomJoin_result.txt, the log
+    RoomJoin.log. Catalog entry: roomjoin/catalog-entry.json.
+
 frameprobe/
     The diagnostics DLL I used to find the observer lag: frame times, sim ticks, a stack sampler on the
     game thread, a probe on the post-game Continue button.

@@ -1,0 +1,16 @@
+{
+  "_readme": "The launcher catalog (launcher.json) entry for RoomJoin, by hand like JoinSound. With it on (or RoomJoin.dll in Elite_DLLs) the launcher's Lobbies tab shows Join on Elite rooms without a password.",
+  "id": "roomjoin",
+  "version": "roomjoin-1",
+  "inject": "RoomJoin.dll",
+  "default": false,
+  "category": "experiment",
+  "name": { "en": "Join a lobby from the launcher (test)", "ru": "Вход в комнату из лаунчера (тест)", "es": "Entrar a una sala desde el launcher (prueba)", "fr": "Rejoindre un salon depuis le launcher (test)", "de": "Lobby aus dem Launcher betreten (Test)" },
+  "description": {
+    "en": "EXPERIMENT. A Join button on the Lobbies tab for Elite rooms without a password: the game starts and walks into the room by itself (a 'Joining the Game' screen). If it can't, the game shows the public games list. The automatch is not touched.",
+    "ru": "ЭКСПЕРИМЕНТ. Кнопка «Войти» во вкладке «Комнаты» для Elite-комнат без пароля: игра запускается и сама заходит в комнату (экран «Joining the Game»). Если не вышло — игра показывает список публичных игр. Автоматч не затрагивается.",
+    "es": "EXPERIMENTO. Botón Entrar en Salas para salas Elite sin contraseña: el juego se inicia y entra solo; si no puede, muestra la lista de partidas públicas.",
+    "fr": "EXPÉRIENCE. Bouton Rejoindre dans Salons pour les salons Elite sans mot de passe : le jeu démarre et y entre seul ; sinon, la liste des parties publiques.",
+    "de": "EXPERIMENT. Ein Beitreten-Knopf im Lobbys-Tab für Elite-Räume ohne Passwort: das Spiel startet und tritt selbst bei; sonst die Liste der öffentlichen Spiele."
+  }
+}

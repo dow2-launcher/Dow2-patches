@@ -7,7 +7,7 @@ STATS_HOST ?= rts.fintebtc.de
 STATS = $(if $(STATS_HOST),-DSTATS_HOST='L"$(STATS_HOST)"',)
 
 all: $(OUT)/ObsFix.dll $(OUT)/LobbyStats.dll $(OUT)/LoadingRatings.dll $(OUT)/Cooldowns.dll $(OUT)/MatchTimer.dll $(OUT)/winmm.dll $(OUT)/FrameProbe.dll $(OUT)/ReinforceFix.dll $(OUT)/JumpRetry.dll $(OUT)/JoinSound.dll $(OUT)/APM.dll $(OUT)/SteamKeep.dll
-all: $(OUT)/EliteAI.dll $(OUT)/Reverse.dll $(OUT)/MMFind.dll $(OUT)/Relay.dll $(OUT)/Continue.dll
+all: $(OUT)/EliteAI.dll $(OUT)/Reverse.dll $(OUT)/MMFind.dll $(OUT)/RoomJoin.dll $(OUT)/Relay.dll $(OUT)/Continue.dll
 
 $(OUT):
 	mkdir -p $(OUT)
@@ -96,3 +96,7 @@ $(OUT)/Continue.dll: continue/continue.c | $(OUT)
 # 03.11.2026: a jump order lost on an obstacle hop (Autarch) is sent again - client side, the game's own order
 $(OUT)/JumpRetry.dll: jumpretry/jumpretry.c | $(OUT)
 	$(CC) $(CFLAGS) -shared -o $@ $< -static-libgcc
+
+# 03.11.2026 experiment: joining a room from the launcher (the Lobbies tab), its own add-on next to MMFind
+$(OUT)/RoomJoin.dll: roomjoin/roomjoin.c | $(OUT)
+	$(CC) $(CFLAGS) -shared -o $@ $< -lpsapi -static-libgcc -Wl,--exclude-all-symbols
