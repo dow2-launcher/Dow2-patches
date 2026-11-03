@@ -1,4 +1,4 @@
-// Relay 17-20 (02-03.11.2026) - DoW2 Retribution / Elite: online games through OUR game servers. One source, two add-ons
+// Relay 17-21 (02-03.11.2026) - DoW2 Retribution / Elite: online games through OUR game servers. One source, two add-ons
 // (docs/ADDON_RULES.md: one feature - one DLL - one tick), two separate ticks in the launcher (owner 02.11.2026: the old
 // Fallback / Mode / Backup / UDP / Server controls were "убогие" - two clear ticks instead, the server is always automatic):
 //
@@ -28,6 +28,11 @@
 // "nearest" = the lowest delay. DOW2_RELAY_PING "ip:ms,..." (-1 = no answer) goes to the matchmaker only with Relay.dll on.
 // Removed in 17: Mode, Fallback (compatible / strict), Backup, UDP=, Hosts= (the hand pick), TCP to our servers, the
 // "game closed" windows of the strict mode.
+// Relay 21 (03.11.2026): no global lock on the hot path. Relay 20 took one critical section and walked 64 slots on EVERY send /
+// WSASend of every socket of the process (the IAT of all modules is hooked) and on every connect - all the game's network
+// threads queued on it (players in Russia: "BattleServerRelay::Process - 177..325 ms between calls" with the add-on). Now a
+// socket is ours only when its preamble waits (marked lock-free at the redirect); every other send passes with one read.
+// Also: only TCP connects to 27000-27099 / our battle port are looked at (a UDP socket's connect is never redirected).
 // Relay 20 (03.11.2026): copies of the unacknowledged packets inside each UDP data packet (see DATA2 below; agreed in the SYN,
 // an old gateway = no copies), and the native connections of our lobby server's rooms (the game connects to one of our nodes
 // on the battle port itself) over UDP too - before they went to the node over TCP, which DPI cuts in Russia after ~33 KB;
@@ -55,7 +60,16 @@ typedef int (WSAAPI *RecvFn)(SOCKET, char *, int, int);
 typedef int (WSAAPI *WSASendFn)(SOCKET, LPWSABUF, DWORD, LPDWORD, DWORD, LPWSAOVERLAPPED, LPWSAOVERLAPPED_COMPLETION_ROUTINE);
 static ConnectFn g_connectOrig; static SendFn g_sendOrig; static WSASendFn g_wsaSendOrig; static RecvFn g_recvOrig;
 static int g_port = 47100;                                       // our nodes: udp_gateway (UDP) in front of battle_relay
-static struct { SOCKET s; unsigned char pre[11]; int len; } g_pend[64]; static CRITICAL_SECTION g_pk;   // local sockets, preamble not sent yet
+// local sockets whose preamble is not sent yet. Relay 21: written only under g_pk (a redirected connect - rare), READ without
+// any lock: g_npend = filled slots; 0 (nearly always: a slot lives from the redirect to the game's first send, milliseconds)
+// = every send / WSASend / connect of the process passes the hook with one memory read, no lock, no loop
+static struct { volatile SOCKET s; unsigned char pre[11]; int len; } g_pend[64]; static CRITICAL_SECTION g_pk;
+static volatile LONG g_npend;
+static int pend_find(SOCKET s) {                                // lock-free: the slot of s, -1 = not ours
+    if (!g_npend || !s) return -1;
+    for (int i = 0; i < 64; i++) if (g_pend[i].s == s) return i;
+    return -1;
+}
 static wchar_t g_dir[MAX_PATH], g_ini[MAX_PATH]; static CRITICAL_SECTION g_lk;
 static struct in_addr g_hosts[8]; static int g_nHosts; static volatile LONG g_ms[8] = {-2, -2, -2, -2, -2, -2, -2, -2};   // -2 = not measured yet
 
@@ -438,11 +452,18 @@ static int relay_connect(ConnectFn pass, SOCKET sock, const struct sockaddr *nam
 static int WSAAPI connect_hook(SOCKET sock, const struct sockaddr *name, int len) { return relay_connect(g_connectOrig, sock, name, len); }
 static int WSAAPI exe_connect_hook(SOCKET sock, const struct sockaddr *name, int len) { return relay_connect(g_exePrev, sock, name, len); }
 static int relay_connect(ConnectFn pass, SOCKET sock, const struct sockaddr *name, int len) {
-    EnterCriticalSection(&g_pk);                                  // a reused socket handle must not get a stale preamble
-    for (int i = 0; i < 64; i++) if (g_pend[i].s == sock) g_pend[i].s = 0;
-    LeaveCriticalSection(&g_pk);
+    if (pend_find(sock) >= 0) {                                    // a reused socket handle must not get a stale preamble (lock only then)
+        EnterCriticalSection(&g_pk);
+        for (int i = 0; i < 64; i++) if (g_pend[i].s == sock) { g_pend[i].s = 0; InterlockedDecrement(&g_npend); }
+        LeaveCriticalSection(&g_pk);
+    }
     if (!name || name->sa_family != AF_INET || len < (int)sizeof(struct sockaddr_in)) return pass(sock, name, len);
     const struct sockaddr_in *a = (const struct sockaddr_in *)name; unsigned short p = ntohs(a->sin_port);
+    // Relay 21: only the game's TCP connections to Relic's relays (27000-27099) and to our nodes' battle port are ours; anything
+    // else - the chat and API of the launcher / ladder / our lobby server (443, 47443), Relic's lobby over HTTPS, a UDP socket
+    // that connect()s (Steam's networking, a ping) - goes on untouched, address and all
+    if (p != g_port && (p < 27000 || p > 27099)) return pass(sock, name, len);
+    { int ty = 0, tl = sizeof ty; if (getsockopt(sock, SOL_SOCKET, SO_TYPE, (char *)&ty, &tl) || ty != SOCK_STREAM) return pass(sock, name, len); }
     if (p == g_port && node_of(a->sin_addr) >= 0) {              // Relay 20: native - our lobby server gave one of our nodes as the room's relay
         int lp = tunnel_port(node_of(a->sin_addr), 2, 0, a);       // that node over UDP, TCP to it when UDP does not answer; no preamble
         if (!lp) { logmsg("relay: the UDP tunnel did not start - %s:%u over TCP", inet_ntoa(a->sin_addr), p); return pass(sock, name, len); }
@@ -475,8 +496,9 @@ static int relay_connect(ConnectFn pass, SOCKET sock, const struct sockaddr *nam
     if (!lp) { logmsg("relay: the UDP tunnel did not start - %s:%u straight to Relic", ip, p); return pass(sock, name, len); }
     EnterCriticalSection(&g_pk);
     int k = -1; for (int i = 0; i < 64; i++) if (!g_pend[i].s) { k = i; break; }
-    if (k >= 0) { g_pend[k].s = sock; memcpy(g_pend[k].pre, straight ? "DWR2" : "DWR3", 4); memcpy(g_pend[k].pre + 4, &a->sin_addr, 4);
-                  g_pend[k].pre[8] = (unsigned char)(p >> 8); g_pend[k].pre[9] = (unsigned char)p; g_pend[k].pre[10] = (unsigned char)players; g_pend[k].len = plen; }
+    if (k >= 0) { memcpy(g_pend[k].pre, straight ? "DWR2" : "DWR3", 4); memcpy(g_pend[k].pre + 4, &a->sin_addr, 4);
+                  g_pend[k].pre[8] = (unsigned char)(p >> 8); g_pend[k].pre[9] = (unsigned char)p; g_pend[k].pre[10] = (unsigned char)players; g_pend[k].len = plen;
+                  MemoryBarrier(); g_pend[k].s = sock; InterlockedIncrement(&g_npend); }   // the bytes first, then the socket: a lock-free reader never sees half
     LeaveCriticalSection(&g_pk);
     if (k < 0) logmsg("relay: too many connections at once - the preamble is missing on this one");
     logmsg("relay: %s:%u -> ours %s over UDP (%s)", ip, p, inet_ntoa(g_hosts[node]),
@@ -486,9 +508,10 @@ static int relay_connect(ConnectFn pass, SOCKET sock, const struct sockaddr *nam
 }
 
 static void send_preamble(SOCKET s) {                           // before the first game bytes on a redirected socket
+    if (pend_find(s) < 0) return;                                 // Relay 21: not a redirected socket - no lock (Relay 20 took g_pk on every send)
     unsigned char pre[11]; int have = 0, plen = 10;
     EnterCriticalSection(&g_pk);
-    for (int i = 0; i < 64; i++) if (g_pend[i].s == s) { memcpy(pre, g_pend[i].pre, 11); plen = g_pend[i].len; g_pend[i].s = 0; have = 1; break; }
+    for (int i = 0; i < 64; i++) if (g_pend[i].s == s) { memcpy(pre, g_pend[i].pre, 11); plen = g_pend[i].len; g_pend[i].s = 0; InterlockedDecrement(&g_npend); have = 1; break; }
     LeaveCriticalSection(&g_pk);
     if (!have) return;
     for (int off = 0, tries = 0; off < plen; ) {                  // the socket is fresh and local: the bytes go at once
@@ -547,7 +570,7 @@ BOOL WINAPI DllMain(HINSTANCE h, DWORD reason, LPVOID _) {
     n += nx;
     int ns = g_sendOrig ? patch_imports((void *)g_sendOrig, (void *)send_hook) : 0;
     int nw = g_wsaSendOrig ? patch_imports((void *)g_wsaSendOrig, (void *)wsasend_hook) : 0;
-    logmsg("Relay 20 start (%s.dll carries the connections; our servers: %s, forwarding: %s - each tick is read at connect time; "
+    logmsg("Relay 21 start (%s.dll carries the connections; our servers: %s, forwarding: %s - each tick is read at connect time; "
            "UDP only, %d node(s)), connect hooked in %d import(s)%s, send %d, WSASend %d%s", ME,
            flag("DOW2_RELAY_OWN") ? "on" : "off (yet)", flag("DOW2_RELAY_FWD") ? "on" : "off (yet)", g_nHosts, n, nx ? " (the game's own one chained after another add-on)" : "", ns, nw,
            n ? "" : " - another add-on (automatch) already routes the relay, staying idle");
