@@ -70,30 +70,12 @@ static void cd_share(char *w, float p, unsigned key);
 // got its share and then a 0 in the same frame, and the number (and the game's own dark sweep) went (siritos 02.11).
 // While that update runs the values are only collected (g_cap*); after it the largest share wins (see hk_btnupd).
 static char *volatile g_capW;                        // the button whose update runs now (UI thread), NULL = none
-static float g_capMax, g_capLast; static int g_capN; static float g_capSeq[8];
-static int g_trace;                                  // Cooldowns.ini [Cooldowns] Trace=1: what each update did, in the log
-// Built-like global abilities (the Imperial Guard bunker, siritos 02.11): no recharge share through SetProgress - the
-// update's reason 10 asks the engine (vt+0xCC) and gives the value to another widget of the button (+0x40) through
-// 0x688CD0 (usercall: ESI = that widget, the value on the stack; it fills the widget 0..1). Caught for that widget while
-// the update runs (g_cap10*), turned into the share after it (see hk_btnupd).
-static char *volatile g_capW10; static float g_cap10 = -1;
-void cd_value(char *w, float v, DWORD ret) __asm__("cd_value");
-void cd_value(char *w, float v, DWORD ret) {
-    if (w && w == g_capW10) g_cap10 = v;
-    if (g_trace && w && v > 0.0f && v < 0.999f) {      // where the other fills come from (the bunker's sweep, siritos 02.11)
-        static char *seen[32]; static int n;
-        for (int i = 0; i < n; i++) if (seen[i] == w) return;
-        if (n < 32) seen[n++] = w;
-        const char *p = w + 8;
-        logmsg("trace value %.3f into widget %p \"%.60s\" from %08lX%s", v, (void *)w, !IsBadReadPtr(p, 64) && p[0] == '/' ? p : "?", (unsigned long)ret, w == g_capW10 ? " (reason 10)" : "");
-    }
-}
+static float g_capMax, g_capLast; static int g_capN;
 void cd_progress(char *w, float p) __asm__("cd_progress");
 void cd_progress(char *w, float p) {
     if (w && w == g_capW) {
         if (p > 0.0f && p < 0.999f && p > g_capMax) g_capMax = p;
         g_capLast = p;
-        if (g_capN < 8) g_capSeq[g_capN] = p;
         g_capN++;
         return;
     }
@@ -132,77 +114,6 @@ static void cd_share(char *w, float p, unsigned key) {
 }
 
 void *g_spTramp __asm__("cd_sp_tramp");
-void *g_vTramp __asm__("cd_v_tramp");
-// Trace=1 only: the engine's "go to frame" of a widget clip (0x686890: widget, clip path, frame, flag - all on the stack).
-// Who moves a global ability's sweep that comes through neither SetProgress nor 0x688CD0 (the bunker, siritos 02.11).
-void *g_fTramp __asm__("cd_f_tramp");
-#define SETFRAME_ADDR 0x00686890
-void cd_frame(char *w, const char *path, int frame, DWORD ret) __asm__("cd_frame");
-void cd_frame(char *w, const char *path, int frame, DWORD ret) {
-    (void)w;
-    if (!path || IsBadReadPtr(path, 48) || !memchr(path, 0, 48) || !strstr(path, "global_btn")) return;
-    static struct { DWORD ret; char path[48]; int frame; DWORD t; } seen[24]; static int n;
-    DWORD now = GetTickCount();
-    for (int i = 0; i < n; i++) if (seen[i].ret == ret && !strcmp(seen[i].path, path)) {
-        if (frame != seen[i].frame && now - seen[i].t > 2000) { seen[i].frame = frame; seen[i].t = now; logmsg("trace frame %d of %s from %08lX", frame, path, (unsigned long)ret); }
-        return;
-    }
-    if (n < 24) { seen[n].ret = ret; snprintf(seen[n].path, 48, "%s", path); seen[n].frame = frame; seen[n].t = now; n++; }
-    logmsg("trace frame %d of %s from %08lX (first)", frame, path, (unsigned long)ret);
-}
-// Trace=1 only: every call the engine makes into a HUD movie (GFxMovieView::Invoke, movie vtable +0x48) with a global
-// ability button in its first argument - method, path, the number after it (who draws the bunker's sweep)
-typedef char (__fastcall *Inv_t)(void *mv, void *edx, const char *method, GfxVal *res, const GfxVal *args, unsigned n);
-static Inv_t o_inv; static DWORD *g_invSlot;
-static char __fastcall hk_inv(void *mv, void *edx, const char *method, GfxVal *res, const GfxVal *args, unsigned n) {
-    if (method && args && n >= 1 && args[0].type == GV_STRING && args[0].v.s && !IsBadReadPtr(args[0].v.s, 8) && strstr(args[0].v.s, "global_btn")
-        && strncmp(args[0].v.s, "global_abilities.global_btn0", 28) /* ours: dotted */) {
-        static struct { char m[40], p[48]; DWORD t; double num; } seen[32]; static int cnt;
-        char m[40], p[48]; snprintf(m, sizeof m, "%s", method); snprintf(p, sizeof p, "%s", args[0].v.s);
-        double num = n >= 2 && args[1].type == GV_NUMBER ? args[1].v.num : -1;
-        int i; for (i = 0; i < cnt; i++) if (!strcmp(seen[i].m, m) && !strcmp(seen[i].p, p)) break;
-        DWORD now = GetTickCount();
-        if (i == cnt && cnt < 32) { cnt++; snprintf(seen[i].m, 40, "%s", m); snprintf(seen[i].p, 48, "%s", p); seen[i].t = 0; seen[i].num = -2; }
-        if (i < 32 && (num != seen[i].num) && now - seen[i].t > 2000) {
-            seen[i].t = now; seen[i].num = num;
-            logmsg("trace invoke %s(%s, %s%g) n=%u", m, p, n >= 2 ? (args[1].type == GV_NUMBER ? "" : "type ") : "", n >= 2 ? (args[1].type == GV_NUMBER ? num : (double)args[1].type) : 0.0, n);
-        }
-    }
-    return o_inv(mv, edx, method, res, args, n);
-}
-static void trace_invoke(void *mv) {                 // once, from the first movie we see
-    if (!g_trace || g_invSlot || !mv) return;
-    DWORD *slot = (DWORD *)(*(char **)mv + 0x48), old;
-    if (!VirtualProtect(slot, 4, PAGE_READWRITE, &old)) return;
-    o_inv = (Inv_t)*slot; *slot = (DWORD)hk_inv; g_invSlot = slot;
-    VirtualProtect(slot, 4, old, &old);
-    logmsg("trace: hooked movie Invoke (vtable slot %p)", (void *)slot);
-}
-__attribute__((naked)) static void hk_setframe(void) {
-    __asm__ volatile(
-        "pushal\n\t"
-        "pushl 32(%esp)\n\t"                         // the caller
-        "pushl 48(%esp)\n\t"                         // the frame  ([esp+12] at the call)
-        "pushl 48(%esp)\n\t"                         // the path   ([esp+8])
-        "pushl 48(%esp)\n\t"                         // the widget ([esp+4])
-        "call cd_frame\n\t"
-        "addl $16, %esp\n\t"
-        "popal\n\t"
-        "jmp *cd_f_tramp\n\t");
-}
-#define SETVALUE_ADDR 0x00688CD0
-static const unsigned char SETVALUE_PRO[6] = {0x55, 0x8B, 0xEC, 0x83, 0xE4, 0xF8};   // push ebp; mov ebp,esp; and esp,-8
-__attribute__((naked)) static void hk_setvalue(void) {
-    __asm__ volatile(
-        "pushal\n\t"
-        "pushl 32(%esp)\n\t"                         // the caller
-        "pushl 40(%esp)\n\t"                         // the value (float, [esp+4] at the call)
-        "pushl %esi\n\t"                             // the widget
-        "call cd_value\n\t"
-        "addl $12, %esp\n\t"
-        "popal\n\t"
-        "jmp *cd_v_tramp\n\t");
-}
 __attribute__((naked)) static void hk_setprogress(void) {
     __asm__ volatile(
         "pushal\n\t"
@@ -398,7 +309,7 @@ static float ask_vt(char *ctx, char *btn, int ability, int off) {   // the engin
         g_qOff = 1; logmsg("engine query: vt+0x%X = %p is not in DOW2.exe - shares only", off, fn); return -1;
     }
     static unsigned said;
-    if (!(said & 1u << (off / 4 % 32))) { said |= 1u << (off / 4 % 32); logmsg("engine query: iface %p, vtable %p, vt+0x%X = %p (%s)", (void *)iface, *iface, off, fn, off == 0xB4 ? "the share of a recharge, every ability button" : "reason 10 value, stratagem buttons"); }
+    if (!(said & 1u << (off / 4 % 32))) { said |= 1u << (off / 4 % 32); logmsg("engine query: iface %p, vtable %p, vt+0x%X = %p (%s)", (void *)iface, *iface, off, fn, "the share of a recharge"); }
     g_qThread = GetCurrentThreadId();
     float p = cd_q_call(fn, iface, btn + 0x2A8, ability);
     if (!g_qThread) {                                  // the handler took us out
@@ -413,13 +324,11 @@ static float ask_vt(char *ctx, char *btn, int ability, int off) {   // the engin
 static void __fastcall hk_btnupd(char *btn, void *edx, char *ctx) {
     char *w0 = btn ? *(char **)(btn + 0x28) : NULL;
     g_capMax = 0; g_capLast = -1; g_capN = 0; g_capW = g_on ? w0 : NULL;
-    g_cap10 = -1; g_capW10 = g_on && btn ? *(char **)(btn + 0x40) : NULL;
     o_btnupd(btn, edx, ctx);
-    g_capW = NULL; g_capW10 = NULL;
+    g_capW = NULL;
     if (!g_on || !btn) return;
     char *w = *(char **)(btn + 0x28); int ability = *(int *)(btn + 0x74);
     if (!w) return;
-    if (g_trace && !g_invSlot) trace_invoke(gfx_movie_of_widget(w));
     const char *path = w + 0xDD0;
     int s = !IsBadReadPtr(path, 16) && path[0] == '/' ? slot_of(path) : -1;
     int vis = *(w + 0x209) == 1;
@@ -428,11 +337,7 @@ static void __fastcall hk_btnupd(char *btn, void *edx, char *ctx) {
         // stratagems: asked even with no reasons - the bunker (siritos 03.11) has none 10 s after the cast (the drop is down) while
         // the engine's 120 s recharge still runs; the number ended there
         float q = g_capN || s >= 16 ? ask_vt(ctx, btn, ability, 0xB4) : -1;
-        // stratagems (the player's global abilities in this panel, global_btnNN; siritos 03.11: the bunker never got a number):
-        // with no recharge share the game asks vt+0xCC for reason 10 and fills another widget (+0x40) with it - take that
-        float q10 = -1;
-        if (s >= 16 && g_capN && !(q > 0.0f && q < 0.999f)) { q10 = ask_vt(ctx, btn, ability, 0xCC); if (q10 > 0.0f && q10 < 0.999f) q = q10; }
-        float p = q >= 0 ? q : g_capMax > 0 ? g_capMax : g_cap10 > 0.0f && g_cap10 < 0.999f ? g_cap10 : -1;
+        float p = q >= 0 ? q : g_capMax > 0 ? g_capMax : -1;
         int rech = p > 0.0f && p < 0.999f;
         unsigned key = rec_key(btn, ability);
         DWORD gt = (DWORD)mt_ticks(), now = GetTickCount();
@@ -455,15 +360,6 @@ static void __fastcall hk_btnupd(char *btn, void *edx, char *ctx) {
         LeaveCriticalSection(&g_cs);
         // the game's own sweep: its last value of this update is a 0 of another reason (no energy, busy) - put the share back
         if (sweep > 0 && (g_capN || s >= 16) && (g_capLast < sweep - 0.002f || g_capLast > sweep + 0.002f)) set_progress(w, sweep < 0.001f ? 0.001f : sweep > 0.998f ? 0.998f : sweep);
-        if (g_trace) {
-            static unsigned last[SLOTS]; static int lastSec[SLOTS];
-            int sec = left > 0 ? (int)((left * mt_ms_per_tick() + 999) / 1000) : 0;
-            if (last[s] != key || (lastSec[s] > 0) != (sec > 0) || (sec && sec % 10 == 0 && sec != lastSec[s])) {
-                last[s] = key; lastSec[s] = sec;
-                logmsg("trace %.40s ability %p key %08X: reasons %d, engine %.3f (cc %.3f), captured %.3f/%.3f -> %s %d s (length %.0f ticks)", path, (void *)(UINT_PTR)ability, key,
-                       g_capN, q, q10, g_capMax, g_capLast, sec ? "recharging" : "ready", sec, r ? (r->total > 0 ? r->total : ab_len(ability)) : 0.0f);
-            }
-        }
     } else if (!ability || !vis) cd_progress(w, 0.0f);         // no ability or the button is hidden: no number
     // after the match (no sim ticks) cd_show takes a number still there off
     if (s >= 0) cd_show(s, w);
@@ -488,14 +384,6 @@ static void __fastcall hk_globupd(char *btn, void *edx, char *ctx) {
     char *ent = ctx && mt_ticking() ? *(char **)(ctx + 0x10) : NULL;
     void *ec = ent ? *(void **)(ent + 0x3C) : NULL; QI_t qi = *(QI_t *)IAT_QI;
     char *ext = ec && qi ? qi(ec, 1) : NULL;
-    if (g_trace && ent) {                            // the drop bunker (siritos 02.11): where its recharge is, if anywhere
-        static void *lastEnt[SLOTS]; static int lastLeft[SLOTS];
-        int left = ext ? *(int *)(ext + 0x14) : -1;
-        if (lastEnt[s] != ent || (left > 0) != (lastLeft[s] > 0)) {
-            lastEnt[s] = ent; lastLeft[s] = left;
-            logmsg("trace %s: entity %p controller %p extension 1 %p, ticks left %d", path, (void *)ent, ec, (void *)ext, left);
-        }
-    }
     if (ext) {
         int left = *(int *)(ext + 0x14);
         EnterCriticalSection(&g_cs);
@@ -518,7 +406,7 @@ static void install_btnupd(void) {
     if (!VirtualProtect(slot, 4, PAGE_READWRITE, &old)) return;
     *slot = (DWORD)hk_btnupd;
     VirtualProtect(slot, 4, old, &old);
-    logmsg("hooked ability button update (vtable %08X): hidden buttons cleared, no engine queries", BTNUPD_SLOT);
+    logmsg("hooked ability button update (vtable %08X)", BTNUPD_SLOT);
 }
 
 static void install(void) {
@@ -533,25 +421,6 @@ static void install(void) {
     t[0] = 0xE9; *(DWORD *)(t + 1) = (DWORD)hk_setprogress - (DWORD)(t + 5); t[5] = t[6] = t[7] = t[8] = 0x90;
     VirtualProtect(t, 9, old, &old); FlushInstructionCache(GetCurrentProcess(), t, 9);
     logmsg("hooked button SetProgress at %08X", SETPROGRESS_ADDR);
-    unsigned char *v = (unsigned char *)SETVALUE_ADDR;
-    if (!g_trace) return;                                         // the bunker: not solved, its probes only with Trace=1
-    if (IsBadReadPtr(v, 6) || memcmp(v, SETVALUE_PRO, 6)) { logmsg("DOW2.exe differs at %08X: no numbers for reason-10 buttons (the bunker)", SETVALUE_ADDR); return; }
-    unsigned char *tv = tr + 16;
-    memcpy(tv, SETVALUE_PRO, 6); tv[6] = 0xE9; *(DWORD *)(tv + 7) = (SETVALUE_ADDR + 6) - (DWORD)(tv + 11);
-    g_vTramp = tv;
-    VirtualProtect(v, 6, PAGE_EXECUTE_READWRITE, &old);
-    v[0] = 0xE9; *(DWORD *)(v + 1) = (DWORD)hk_setvalue - (DWORD)(v + 5); v[5] = 0x90;
-    VirtualProtect(v, 6, old, &old); FlushInstructionCache(GetCurrentProcess(), v, 6);
-    logmsg("hooked widget value at %08X (reason 10)", SETVALUE_ADDR);
-    unsigned char *f = (unsigned char *)SETFRAME_ADDR;            // same prologue as 0x688CD0
-    if (!g_trace || IsBadReadPtr(f, 6) || memcmp(f, SETVALUE_PRO, 6)) return;
-    unsigned char *tf = tr + 32;
-    memcpy(tf, SETVALUE_PRO, 6); tf[6] = 0xE9; *(DWORD *)(tf + 7) = (SETFRAME_ADDR + 6) - (DWORD)(tf + 11);
-    g_fTramp = tf;
-    VirtualProtect(f, 6, PAGE_EXECUTE_READWRITE, &old);
-    f[0] = 0xE9; *(DWORD *)(f + 1) = (DWORD)hk_setframe - (DWORD)(f + 5); f[5] = 0x90;
-    VirtualProtect(f, 6, old, &old); FlushInstructionCache(GetCurrentProcess(), f, 6);
-    logmsg("trace: hooked clip frames at %08X", SETFRAME_ADDR);
 }
 
 // called by LobbyStats once: dir = its folder (with a trailing backslash), ini = its ini file
@@ -566,10 +435,9 @@ void cd_start(const wchar_t *dir, const wchar_t *ini) {
     if (g_size < 12) g_size = 12; if (g_size > 40) g_size = 40;
     wchar_t c[16]; GetPrivateProfileStringW(L"Cooldowns", L"Color", L"FFFFFF", c, 16, ini);
     g_color = wcstoul(c, NULL, 16) & 0xFFFFFF;
-    g_trace = GetPrivateProfileIntW(L"Cooldowns", L"Trace", 0, ini);
     g_query = GetPrivateProfileIntW(L"Cooldowns", L"Ask", 1, ini);
-    logmsg("Cooldowns 6 (%s): the numbers in the game's own button movie; every recharge per squad and ability%s%s",
-           g_on ? "on" : "off, [Cooldowns] Enabled=0", g_query ? ", asked from the engine (guarded)" : ", Ask=0: shares only", g_trace ? "; Trace=1" : "");
+    logmsg("Cooldowns 6 (%s): the numbers in the game's own button movie; every recharge per squad and ability%s",
+           g_on ? "on" : "off, [Cooldowns] Enabled=0", g_query ? ", asked from the engine (guarded)" : ", Ask=0: shares only");
     if (!g_on) return;
     InitializeCriticalSection(&g_cs);
     if (g_query) AddVectoredExceptionHandler(1, cd_veh);

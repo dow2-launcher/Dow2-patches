@@ -57,7 +57,7 @@ cooldowns/
     (iface vt+0xB4: the share done, with the owner and ability the panel just worked out), so no energy, a busy squad,
     another ability or another squad of the kind don't touch the number. The call is guarded (a fault stops the queries
     for that game). Read-only: no desync.
-    Cooldowns.ini [Cooldowns]: Enabled, DigitSize, Color, Ask (0 = shares only), Trace (each update, in Cooldowns.log).
+    Cooldowns.ini [Cooldowns]: Enabled, DigitSize, Color, Ask (0 = shares only).
 
 frameprobe/
     The diagnostics DLL I used to find the observer lag: frame times, sim ticks, a stack sampler on the
