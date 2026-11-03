@@ -34,6 +34,14 @@ reinforcefix/
     kept by the HUD and every tick it drops squads that have no models on the map, which is the case
     while a squad sits inside the gate. ReinforceFix skips such squads instead of dropping them.
 
+continue/
+    The game's own Continue after a Custom Games match: the host presses it, the others have it greyed out, and
+    everyone is back in the same room (game setup, same slots and map) without the main menu or the game list.
+    DOW2.exe still has all of it; canContinue just said "no" for every custom game (match type 1). Continue.dll
+    lets it answer as for the other match types while the match session is connected, and keeps a private room
+    private when it goes back to the lobby. Only the host needs it. Our lobby server puts the room back into the
+    lobby on Relic's side too (own_lobby.py "reopen"). Log: Continue.log.
+
 vanilla-loader/
     winmm.dll loader. Forwards everything to the real winmm.dll and loads every *.dll from
     <game>\dow2-patches\, in vanilla and in Elite. Each patch refuses to load twice, so having the same

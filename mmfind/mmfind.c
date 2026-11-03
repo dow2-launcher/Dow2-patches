@@ -204,8 +204,8 @@ static char g_natLobby[48], g_natWhy[96], g_natLastCancel[32];
 // "MMFind 0.42". Shown from the moment the screen opens (a peek at mm/native: the ladder answers as for Start Searching and
 // changes nothing; again every 20 s and on a match type change while the screen is open), after the click by the path really
 // taken. [MMFind] ShowMode=1 (default) / 0 = off, Lang=auto (the game's own text: Cyrillic = Russian) / ru / en.
-#define MMF_VER "0.43"
-#define MMF_VER_W L"0.43"
+#define MMF_VER "0.44"
+#define MMF_VER_W L"0.44"
 static int g_showMode = 1, g_langCfg = -1, g_lang = -1, g_modeProbe;
 static double g_mx = 1065, g_my = 590, g_msz = 30;           // panel units, see mode_make
 static volatile int g_peekWant, g_peekAns; static volatile DWORD g_peekLast; static char g_peekWhy[96], g_runWhy[96];
@@ -250,10 +250,15 @@ static volatile int g_remoteCancel; static wchar_t g_cancelBy[64]; static DWORD 
 // Nobody waits for anybody: a later Continue (10 min) still gets in, players without MMFind can find the room by its name, the
 // host starts the game himself as in any lobby, and keeps strangers out for the first 3 minutes. [MMFind] Rematch=1 (default;
 // the launcher's option "Rematch on Continue") / 0 = the game's own Continue. RematchTest=1: tests on one stand (see rm_test_step).
+// 0.44 (owner 03.11.2026: "mostly a crutch - the game has this logic, the room is put together again"): the game's own Continue
+// works again with the add-on Continue.dll (the host presses it, everyone is back in the SAME room, no main menu, no list), so
+// this rematch is OFF by default: the key is now [MMFind] RematchMenus=1 (the old Rematch= that the launcher wrote is ignored),
+// and it never runs while Continue.dll is in the game.
 extern int g_race, g_chapter, g_hero, g_random;
 typedef struct { unsigned long long key, ids[8]; wchar_t names[8][64], map[64]; int kind[8], mySlot, host, n, people, race, chapter, hero; DWORD t; } RmSnap;
 static RmSnap g_rmSnap, g_rmLast;           // the lobby as it is now (every 0.7 s), and as it was when the match loaded
-static int g_rmCfg = 1, g_rmTest;
+static int g_rmCfg = 0, g_rmTest;
+static int continue_addon(void) { return GetModuleHandleW(L"Continue.dll") != NULL; }   // 0.44: the game's own Continue is back
 static volatile int g_rm, g_rmArmed, g_iHost, g_rmRole, g_rmGone, g_rmHostWant, g_rmLeave, g_rmClosed, g_rmSent, g_rmTitle;
 static volatile unsigned long long g_rmRoom; static unsigned long long g_rmLeaveKey, g_rmClosedKey; static char g_rmLobby[48];
 static int g_rmSaved, g_rmSv[4];
@@ -1529,7 +1534,7 @@ static void __fastcall fs_hook(void *self, void *edx, void *movie, const char *c
                    g_msgWrap && !IsBadReadPtr(g_msgWrap, 8) ? *(void **)((char *)g_msgWrap + 4) : NULL); }
         if (!strcmp(cmd, "OnLoadMovieComplete") && args && !strncmp(args, "/mp_mc", 6) && !g_loading) {
             int natLoad = 0;
-            if (g_rmCfg) rm_loading();                                // 0.43: an ordinary lobby's match - Continue makes its rematch
+            if (g_rmCfg && !continue_addon()) rm_loading();           // 0.43: an ordinary lobby's match - Continue makes its rematch (0.44: not with Continue.dll)
             if (g_state == S_NATIVE || g_state == S_NASK) {             // 0.38: the game's own automatch got here by itself
                 natLoad = 1;
                 logmsg("native: loading %lu ms after Start Searching (lobby %s)", GetTickCount() - g_searchTick, g_natLobby[0] ? g_natLobby : "-");
@@ -1576,7 +1581,7 @@ static void __fastcall fs_hook(void *self, void *edx, void *movie, const char *c
                 rm_start(); logmsg("rematch: Continue pressed - leaving the post-game screen (%s) instead of the game's own Continue", back);
                 g_fsOrig(self, edx, movie, back, ""); return;
             }
-            logmsg("post-game Continue: the game's own (rematch %s)", !g_rmCfg ? "off" : g_rm ? "already running" : "not for this match");
+            logmsg("post-game Continue: the game's own (rematch %s)", !g_rmCfg || continue_addon() ? "off" : g_rm ? "already running" : "not for this match");
         }
         // the player's own pick - remember it (not while we set up the lobby ourselves: the panel answers our hero pick with its
         // own OnSelectHero, which turned the saved Random off after a random pick)
@@ -2421,7 +2426,7 @@ BOOL WINAPI DllMain(HINSTANCE h, DWORD r, LPVOID _) {
     g_nativeCfg = GetPrivateProfileIntW(L"MMFind", L"Native", 1, ini) != 0;    // 0.38, see g_nativeCfg
     g_fastCfg = GetPrivateProfileIntW(L"MMFind", L"NativeFast", 1, ini) != 0;  // 0.39, see native_fast
     g_showMode = GetPrivateProfileIntW(L"MMFind", L"ShowMode", 1, ini) != 0;   // 0.42, see g_showMode
-    g_rmCfg = GetPrivateProfileIntW(L"MMFind", L"Rematch", 1, ini) != 0;       // 0.43, see g_rmCfg (the launcher's option)
+    g_rmCfg = GetPrivateProfileIntW(L"MMFind", L"RematchMenus", 0, ini) != 0;  // 0.44: off by default, see g_rmCfg
     g_rmTest = GetPrivateProfileIntW(L"MMFind", L"RematchTest", 0, ini);
     { wchar_t t[16]; GetPrivateProfileStringW(L"MMFind", L"Lang", L"auto", t, 16, ini); g_langCfg = !_wcsicmp(t, L"ru") ? 1 : !_wcsicmp(t, L"en") ? 0 : -1;
     }
@@ -2442,7 +2447,7 @@ BOOL WINAPI DllMain(HINSTANCE h, DWORD r, LPVOID _) {
       WIN32_FILE_ATTRIBUTE_DATA a; if (GetFileAttributesExW(p, GetFileExInfoStandard, &a) && (a.nFileSizeHigh || a.nFileSizeLow > (1u << 20))) MoveFileExW(p, o, MOVEFILE_REPLACE_EXISTING); }
     logmsg("MMFind " MMF_VER " start, steam=%llu server=%ls%s%s%s", g_mySteam, g_server, g_direct ? ", fast automatch (experiment) on" : "", g_fast ? ", fast steps (public room, direct join)" : "",
            g_nativeCfg ? ", native search when on our lobby server" : ", native off");
-    logmsg("rematch on Continue after an ordinary lobby's match: %s%s", g_rmCfg ? "on" : "off (Rematch=0)", g_rmTest ? " - TEST: one person is enough, a Private Match against a computer at the start" : "");
+    logmsg("rematch on Continue after an ordinary lobby's match: %s%s", g_rmCfg ? "on (RematchMenus=1; off while Continue.dll is in the game)" : "off - the game's own Continue (add-on Continue.dll)", g_rmTest ? " - TEST: one person is enough, a Private Match against a computer at the start" : "");
     if (g_tlHost[0]) logmsg("TEST LADDER: every ladder API call goes to http://%ls:%u (TestLadder=)", g_tlHost, (unsigned)g_tlPort);
     { char n[64]; wsprintfA(n, "Local\\dow2patch_MMFind_%lu", GetCurrentProcessId());          // one copy per game (launcher + dow2-patches)
       HANDLE mx = CreateMutexA(NULL, FALSE, n); if (mx && GetLastError() == ERROR_ALREADY_EXISTS) { logmsg("another MMFind copy is active, this one stays idle"); return TRUE; } }

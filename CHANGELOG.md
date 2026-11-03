@@ -4,6 +4,27 @@ Every version gets an entry here before it reaches `main`. CI then tags `vX.Y.Z`
 version (`X.Y.0`) it also publishes a GitHub Release with the DLLs and the entries since the previous `X.Y.0`.
 The version of the set lives only in `VERSION`; each DLL still writes its own version to its log.
 
+## Continue 1 + MMFind 0.44 (branch feature/native-continue, staging continue-1 + mmfind-0.44, not released)
+- Continue 1 (new add-on, owner 03.11.2026: "the rematch is mostly a crutch - the game has this logic, the room is put together
+  again: the host presses Continue, the others have it greyed out, everyone goes straight into the room"). The game's own
+  path is all there (PostGameStatsForm::OnClickNext 0x480A71): the host sends PPMT_TransitionToGameSetup over the match
+  session (0x456976), every game goes to game_setup_movie of the SAME session (0x481880; the others get "You have been
+  pulled back to game setup by the host"), and the host puts the room back: SetMatchState 0, SetVisible 1. Why it never ran:
+  canContinue (0x47F7EF) returns false at once for match type 1 = custom game (settings+0xEAC, from GameInfo+0xC0 at the
+  start, 0x447538) - Continue was grey for everyone after every custom game. Continue.dll: canContinue for a custom game is
+  asked again with the type out of the way, only while the match session is connected (host + everybody on the post-game
+  screen, as for the other types); the SetVisible on Continue (0x480C79) keeps a private room private (the game would list
+  it). Guests need nothing (the move is the game's own message). Relic answers [4] to the host's advertisement/update of a
+  started custom room - the room is back for the players, only not in the list; dow2-ladder feature/native-continue
+  (own_lobby "reopen") then sends updateState 0 and the update again -> [0]. Test option `[Continue] KeepSoloSession=1`: a
+  match against computers keeps its session (0x46FE8E), so the host's path runs on one machine.
+  Stand 1 (Elite 3.2, OwnLobby -> a test lobby with reopen): Private Match vs computer, Exit Game, Continue enabled by
+  itself, pressed: game setup of the same room (same session, slots, map), "a private room - stays out of the list",
+  Relic: updateState 0 [0], update [0]; a second match started from that room and its Continue worked again. Without
+  reopen: the same, Relic [4] only logged (LogFailure WorldwideUpdateAdvertisementAsync). Not tested: a real second player.
+- MMFind 0.44: the 0.43 rematch (menus walked, a new room Rematch-xxxxxx) is off by default - `[MMFind] RematchMenus=1`
+  (the old `Rematch=` the launcher wrote is ignored), and it never runs while Continue.dll is in the game.
+
 ## MMFind 0.43 (branch feature/mmfind-rematch, staging mmfind-0.43, not released)
 - MMFind 0.43: rematch on Continue (owner 03.11.2026: "Continue after a match from an ordinary lobby - a new lobby with the same
   people"). The game's own post-game Continue only throws everyone to the main menu after a Custom Games match (Relic ~2016).

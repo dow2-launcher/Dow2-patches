@@ -7,7 +7,7 @@ STATS_HOST ?= rts.fintebtc.de
 STATS = $(if $(STATS_HOST),-DSTATS_HOST='L"$(STATS_HOST)"',)
 
 all: $(OUT)/ObsFix.dll $(OUT)/LobbyStats.dll $(OUT)/LoadingRatings.dll $(OUT)/Cooldowns.dll $(OUT)/MatchTimer.dll $(OUT)/winmm.dll $(OUT)/FrameProbe.dll $(OUT)/ReinforceFix.dll $(OUT)/JoinSound.dll $(OUT)/APM.dll
-all: $(OUT)/EliteAI.dll $(OUT)/Reverse.dll $(OUT)/MMFind.dll $(OUT)/Relay.dll
+all: $(OUT)/EliteAI.dll $(OUT)/Reverse.dll $(OUT)/MMFind.dll $(OUT)/Relay.dll $(OUT)/Continue.dll
 
 $(OUT):
 	mkdir -p $(OUT)
@@ -83,4 +83,8 @@ $(OUT)/FrameProbe.dll: frameprobe/frameprobe.c | $(OUT)
 	$(CC) $(CFLAGS) -Wno-unused-variable -shared -o $@ $< -lpsapi -lwinmm -static-libgcc
 
 $(OUT)/ReinforceFix.dll: reinforcefix/reinforcefix.c | $(OUT)
+	$(CC) $(CFLAGS) -shared -o $@ $< -static-libgcc
+
+# 03.11.2026: the game's own Continue after a custom game (host -> everyone back in the same room)
+$(OUT)/Continue.dll: continue/continue.c | $(OUT)
 	$(CC) $(CFLAGS) -shared -o $@ $< -static-libgcc
