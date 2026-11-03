@@ -358,13 +358,21 @@ static int tunnel_port(int node, int own, int plen, const struct sockaddr_in *re
 }
 
 // ---------- the hooks ----------
-static int WSAAPI connect_hook(SOCKET sock, const struct sockaddr *name, int len) {
+// Relay 19 (release gate 03.11.2026): OwnLobby.dll (loaded first by winmm.dll) hooks DOW2.exe's own import of connect; patch_imports
+// only takes entries that still point at ws2_32's connect, so the exe's entry - the one the game's battleserverrelay connects use -
+// was never ours: with OwnLobby on, Relay did nothing for the game (stands: a classic automatch with own_server true played on
+// Relic's relay, no "relay:" line). Now the exe's entry is hooked whatever is there and chains to it (exe_connect_hook -> g_exePrev).
+static ConnectFn g_exePrev;
+static int relay_connect(ConnectFn pass, SOCKET sock, const struct sockaddr *name, int len);
+static int WSAAPI connect_hook(SOCKET sock, const struct sockaddr *name, int len) { return relay_connect(g_connectOrig, sock, name, len); }
+static int WSAAPI exe_connect_hook(SOCKET sock, const struct sockaddr *name, int len) { return relay_connect(g_exePrev, sock, name, len); }
+static int relay_connect(ConnectFn pass, SOCKET sock, const struct sockaddr *name, int len) {
     EnterCriticalSection(&g_pk);                                  // a reused socket handle must not get a stale preamble
     for (int i = 0; i < 64; i++) if (g_pend[i].s == sock) g_pend[i].s = 0;
     LeaveCriticalSection(&g_pk);
-    if (!name || name->sa_family != AF_INET || len < (int)sizeof(struct sockaddr_in)) return g_connectOrig(sock, name, len);
+    if (!name || name->sa_family != AF_INET || len < (int)sizeof(struct sockaddr_in)) return pass(sock, name, len);
     const struct sockaddr_in *a = (const struct sockaddr_in *)name; unsigned short p = ntohs(a->sin_port);
-    if (p < 27000 || p > 27099) return g_connectOrig(sock, name, len);   // not Relic's battleserverrelay
+    if (p < 27000 || p > 27099) return pass(sock, name, len);   // not Relic's battleserverrelay
     int own = flag("DOW2_RELAY_OWN"), fwd = flag("DOW2_RELAY_FWD"), automatch = flag("DOW2_RELAY_USE");
     char ip[32]; snprintf(ip, sizeof ip, "%s", inet_ntoa(a->sin_addr));
     int node = node_of(a->sin_addr), straight = 0;
@@ -378,7 +386,7 @@ static int WSAAPI connect_hook(SOCKET sock, const struct sockaddr *name, int len
             static DWORD said; if (GetTickCount() - said > 60000) { said = GetTickCount();
                 logmsg(fwd ? "relay: no forwarding server answers - %s:%u straight to Relic" : "relay: %s:%u on Relic's servers%s", ip, p,
                        own && !fwd ? " (not our automatch; forwarding is off)" : ""); }
-            return g_connectOrig(sock, name, len);
+            return pass(sock, name, len);
         }
     }
     int players = 0; char ev[8];
@@ -386,7 +394,7 @@ static int WSAAPI connect_hook(SOCKET sock, const struct sockaddr *name, int len
     if (players < 0 || players > 16) players = 0;
     int plen = straight ? 11 : 10;
     int lp = tunnel_port(node, straight, plen, a);
-    if (!lp) { logmsg("relay: the UDP tunnel did not start - %s:%u straight to Relic", ip, p); return g_connectOrig(sock, name, len); }
+    if (!lp) { logmsg("relay: the UDP tunnel did not start - %s:%u straight to Relic", ip, p); return pass(sock, name, len); }
     EnterCriticalSection(&g_pk);
     int k = -1; for (int i = 0; i < 64; i++) if (!g_pend[i].s) { k = i; break; }
     if (k >= 0) { g_pend[k].s = sock; memcpy(g_pend[k].pre, straight ? "DWR2" : "DWR3", 4); memcpy(g_pend[k].pre + 4, &a->sin_addr, 4);
@@ -396,7 +404,7 @@ static int WSAAPI connect_hook(SOCKET sock, const struct sockaddr *name, int len
     logmsg("relay: %s:%u -> ours %s over UDP (%s)", ip, p, inet_ntoa(g_hosts[node]),
            straight ? "straight: the game is on our server" : "forwarding: a Relic game, our server passes it on");
     struct sockaddr_in b = *a; b.sin_addr.s_addr = htonl(INADDR_LOOPBACK); b.sin_port = htons((unsigned short)lp);
-    return g_connectOrig(sock, (const struct sockaddr *)&b, sizeof b);
+    return pass(sock, (const struct sockaddr *)&b, sizeof b);
 }
 
 static void send_preamble(SOCKET s) {                           // before the first game bytes on a redirected socket
@@ -442,11 +450,28 @@ BOOL WINAPI DllMain(HINSTANCE h, DWORD reason, LPVOID _) {
     g_connectOrig = (ConnectFn)real;
     g_sendOrig = (SendFn)GetProcAddress(ws, "send"); g_wsaSendOrig = (WSASendFn)GetProcAddress(ws, "WSASend"); g_recvOrig = (RecvFn)GetProcAddress(ws, "recv");
     int n = patch_imports(real, (void *)connect_hook);
+    int nx = 0;                                                   // DOW2.exe's own import, if another add-on (OwnLobby) hooked it first
+    { unsigned char *b = (unsigned char *)GetModuleHandleA(NULL); IMAGE_NT_HEADERS *nt = (IMAGE_NT_HEADERS *)(b + ((IMAGE_DOS_HEADER *)b)->e_lfanew);
+      IMAGE_DATA_DIRECTORY dir = nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT];
+      for (IMAGE_IMPORT_DESCRIPTOR *imp = (IMAGE_IMPORT_DESCRIPTOR *)(b + dir.VirtualAddress); dir.VirtualAddress && imp->Name; imp++) {
+          if (lstrcmpiA((const char *)(b + imp->Name), "ws2_32.dll")) continue;
+          IMAGE_THUNK_DATA *ot = (IMAGE_THUNK_DATA *)(b + (imp->OriginalFirstThunk ? imp->OriginalFirstThunk : imp->FirstThunk));
+          IMAGE_THUNK_DATA *t = (IMAGE_THUNK_DATA *)(b + imp->FirstThunk);
+          for (; ot->u1.AddressOfData; ot++, t++) {
+              int match = IMAGE_SNAP_BY_ORDINAL(ot->u1.Ordinal) ? IMAGE_ORDINAL(ot->u1.Ordinal) == 4
+                        : !strcmp((const char *)((IMAGE_IMPORT_BY_NAME *)(b + ot->u1.AddressOfData))->Name, "connect");
+              void *cur = (void *)t->u1.Function;
+              if (!match || cur == (void *)connect_hook || cur == (void *)exe_connect_hook || cur == real) continue;
+              DWORD o; g_exePrev = (ConnectFn)cur; VirtualProtect(&t->u1.Function, 4, PAGE_READWRITE, &o);
+              t->u1.Function = (DWORD)exe_connect_hook; VirtualProtect(&t->u1.Function, 4, o, &o); nx++;
+          }
+      } }
+    n += nx;
     int ns = g_sendOrig ? patch_imports((void *)g_sendOrig, (void *)send_hook) : 0;
     int nw = g_wsaSendOrig ? patch_imports((void *)g_wsaSendOrig, (void *)wsasend_hook) : 0;
-    logmsg("Relay 18 start (%s.dll carries the connections; our servers: %s, forwarding: %s - each tick is read at connect time; "
-           "UDP only, %d node(s)), connect hooked in %d import(s), send %d, WSASend %d%s", ME,
-           flag("DOW2_RELAY_OWN") ? "on" : "off (yet)", flag("DOW2_RELAY_FWD") ? "on" : "off (yet)", g_nHosts, n, ns, nw,
+    logmsg("Relay 19 start (%s.dll carries the connections; our servers: %s, forwarding: %s - each tick is read at connect time; "
+           "UDP only, %d node(s)), connect hooked in %d import(s)%s, send %d, WSASend %d%s", ME,
+           flag("DOW2_RELAY_OWN") ? "on" : "off (yet)", flag("DOW2_RELAY_FWD") ? "on" : "off (yet)", g_nHosts, n, nx ? " (the game's own one chained after another add-on)" : "", ns, nw,
            n ? "" : " - another add-on (automatch) already routes the relay, staying idle");
     if (n) CloseHandle(CreateThread(NULL, 0, ping_loop, NULL, 0, NULL));
     return TRUE;
