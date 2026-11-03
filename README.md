@@ -104,10 +104,11 @@ reverse/
     simulation changes, no desync, the other players don't need it. Reverse.ini: Key, StepMeters, LeadMeters.
 
 mmfind/
-    Automatch (launcher add-on "Automatch (test)"): Multiplayer -> Find a Game -> Start Searching queues the player on
-    the ladder service (rts.fintebtc.de/ladder/api/mm); when a match is found the host creates the room, the others
-    join, the lobby options (VP, 500 points, fixed positions, standard resources), swaps and observers are set by the
-    DLL, and the match starts by itself. Settings in MMFind.ini (server, maps, rating spread, chosen race/hero).
+    Automatch v2.0 (launcher add-on "automatch", one tick with OwnLobby.dll and its early winmm.dll): Multiplayer ->
+    Find a Game -> Start Searching asks the ladder (rts.fintebtc.de/ladder/api/mm/native); on "yes" the game's own search
+    runs on our lobby server, which matches it from the ladder's queue, and the game hosts / joins and starts by itself.
+    No menus are walked. On "no" nothing searches (Relic's matchmaker matches nobody) and Find a Game says why.
+    Settings in MMFind.ini (server, map wishes, rating spread, chosen race/hero/mode).
     Published by hand for now (launcher id "automatch", store version mmfind-<ver>), not through addons.json.
 
 Installing with Elite: put the DLL into Elite_DLLs\ and add it to InjectedFiles= in Elite.launchconfig.

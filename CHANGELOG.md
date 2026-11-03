@@ -4,6 +4,27 @@ Every version gets an entry here before it reaches `main`. CI then tags `vX.Y.Z`
 version (`X.Y.0`) it also publishes a GitHub Release with the DLLs and the entries since the previous `X.Y.0`.
 The version of the set lives only in `VERSION`; each DLL still writes its own version to its log.
 
+## MMFind 0.45 (branch feature/mmfind-0.45, staging mmfind-0.45, not released)
+- MMFind 0.45: only the native automatch (owner 03.11.2026: "the automatch is tested - remove the old one, keep only the
+  new one"; "never start Relic's search - it does not work anyway"). Start Searching asks the ladder (mm/native) and, on its
+  "yes", goes to the game: the game's own Find a Game search on our lobby server (OwnLobby.dll), as in 0.38-0.44 (poll 1 s,
+  countdown 2 s, X-Lobby NM- replays, the info block and the queue on the screen, searching again after a match the server
+  called off). On "no" the click is NOT passed to the game - Relic's matchmaker matches nobody - and the screen says why and
+  what to do: "Automatch v2.0 is not available: restart the game from the Elite launcher" (no OwnLobby.dll, or the game did
+  not sign in through our lobby server), "our lobby server does not answer - try again in a minute", "switched off on the
+  server", "Team FFA is not in the automatch"; the next click asks again. A search of the game that runs anyway without our
+  native search behind it (on for 1.5 s on Find a Game while MMFind is idle; 5 s grace after a native search of ours) is
+  stopped at once (Stop Searching, 3 times at most). 10 s without the ladder seeing the native search: the game's search
+  stopped, the reason on the screen (was: the classic flow).
+- Removed with the classic flow (0.12-0.44): mm/join / mm/host / mm/room / mm/started / mm/ruined, the menus walked
+  (Back / Public Match / Host / Join / Private Match), the "Match Found" cover and its Cancel, the host's game options,
+  slots, kicks, swaps and observers (the OnClickHost, slot menu and swap-request detours are no longer installed), the
+  "Watch a match" item (Team FFA is the game's own again), the ruined-loading marker, DirectStart / Fast / Manual / TestBots
+  / AutoSwap / ReadyField / Native=, and the 0.43 menu rematch (RematchMenus / RematchTest; the game's own Continue is
+  Continue.dll). The DLL is 2455 -> about 1180 lines.
+- Package mmfind-0.45 = Elite_DLLs/MMFind.dll + Elite_DLLs/OwnLobby.dll + winmm.dll (EARLY_ONLY), both from ownlobby-3
+  (launcher "Automatch v2.0", one tick).
+
 ## Continue 1 + MMFind 0.44 (branch feature/native-continue, staging continue-1 + mmfind-0.44, not released)
 - Continue 1 (new add-on, owner 03.11.2026: "the rematch is mostly a crutch - the game has this logic, the room is put together
   again: the host presses Continue, the others have it greyed out, everyone goes straight into the room"). The game's own
