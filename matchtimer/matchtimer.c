@@ -63,6 +63,7 @@ static int ini_int(const wchar_t *key, int def, int lo, int hi) {
     return v < lo ? lo : v > hi ? hi : v;
 }
 static int g_topFallback;                         // Place=top in a match without the victory point counter: under Menu
+static int g_fallbackOn;                          // MatchTimer.ini TopFallback=1 (03.11.2026: off until annihilation is tested)
 static void load_ini_as(int forced) {
     WIN32_FILE_ATTRIBUTE_DATA a;
     if (GetFileAttributesExW(g_ini, GetFileExInfoStandard, &a)) g_iniTime = a.ftLastWriteTime;
@@ -82,6 +83,7 @@ static void load_ini_as(int forced) {
     g_raise      = ini_int(L"Raise", g_place == PL_UNDER ? 8 : 0, 0, 20);
     g_textY      = ini_int(L"TextY", 3, -30, 30);
     g_plateAlpha = ini_int(L"PlateAlpha", 85, 0, 100);
+    g_fallbackOn = ini_int(L"TopFallback", 0, 0, 1);
 }
 static void load_ini(void) { load_ini_as(g_topFallback ? PL_UNDER : -1); }
 static void clock_restyle(void);
@@ -326,6 +328,11 @@ static void clock_text(void *mv, const char *t0) {
 // one clock: in the Menu button movie (host 0) or the victory point movie (host 1, Place=top); the other host takes its
 // own off when the place changes while the game runs
 static volatile DWORD g_vpSeen;                   // the victory point panel's last per-frame update (GetTickCount)
+// Menu button frames since the panel's last one (03.11.2026): back from alt-tab the Menu button updated a frame before the
+// panel, past 3 s without it, and the clock went under Menu for the rest of the match. Now it takes 3 s AND 120 frames of
+// the Menu button without the panel, and the panel coming back puts the clock at the top again.
+static volatile LONG g_menuSinceVp;
+static void *g_hostMv[2];                         // the movie our clock fields are in, per host (0 Menu button, 1 counter)
 static void clock_frame(char *form, int host) {
     void *mv = gfx_movie_of_form(form);
     if (!mv) return;
@@ -333,12 +340,12 @@ static void clock_frame(char *form, int host) {
     reload_ini(now);
     // Place=top needs the victory point counter; a match without one (annihilation) gets the clock under the Menu button
     // (02.11.2026: in such a match there was no clock at all). The next match tries the top again (see "clock hidden").
-    if (!host && g_place == PL_TOP && !g_topFallback && g_enabled && clock_visible() && mt_game_ms() > 4000 && now - g_vpSeen > 3000) {
+    if (!host && g_fallbackOn && g_place == PL_TOP && !g_topFallback && g_enabled && clock_visible() && mt_game_ms() > 4000 && now - g_vpSeen > 3000 && g_menuSinceVp > 120) {
         g_topFallback = 1; load_ini(); clock_restyle();
         logmsg("no victory point counter in this match: the clock under the Menu button");
     }
     if (host != (g_place == PL_TOP)) {
-        if (mv == g_clkMovie) {                      // the clock was here: off, the Menu button as the game has it
+        if (mv == g_hostMv[host]) {                  // the clock was here: off, the Menu button as the game has it
             gfx_setvar(mv, "_root.mt_clock._visible", gv_bool(0));
             gfx_setvar(mv, "_root.mt_clock_sh._visible", gv_bool(0));
             if (!host) {
@@ -346,13 +353,13 @@ static void clock_frame(char *form, int host) {
                 gfx_setvar(mv, "_root.menu_btn._y", gv_num(-9.6));
                 label_shift(mv, LABEL_X);
             }
-            g_clkMovie = NULL;
+            g_hostMv[host] = NULL; if (mv == g_clkMovie) g_clkMovie = NULL;
         }
         return;
     }
     int vis = g_enabled && clock_visible();
     if (mv != g_clkMovie || (now - g_clkCheck > 3000 && (g_clkCheck = now, !gfx_exists(mv, "mt_clock")))) {
-        g_clkMovie = mv; g_clkCheck = now; g_clkShown = -1; g_clkText[0] = 0;
+        g_clkMovie = mv; g_hostMv[host] = mv; g_clkCheck = now; g_clkShown = -1; g_clkText[0] = 0;
         if (host) clock_make_top(mv); else clock_make(mv);
     }
     if (vis != g_clkShown) {
@@ -374,18 +381,24 @@ static void clock_frame(char *form, int host) {
     else snprintf(t, sizeof t, "%02lu:%02lu", s / 60, s % 60);
     if (strcmp(t, g_clkText)) { strcpy(g_clkText, t); clock_text(mv, t); }
 }
-static void __thiscall hk_menu_upd(char *form, float dt) { o_menuUpd(form, dt); clock_frame(form, 0); }
+static void __thiscall hk_menu_upd(char *form, float dt) { o_menuUpd(form, dt); InterlockedIncrement(&g_menuSinceVp); clock_frame(form, 0); }
 static MenuUpd_t o_vpUpd;
-static void __thiscall hk_vp_upd(char *form, float dt) { o_vpUpd(form, dt); g_vpSeen = GetTickCount(); clock_frame(form, 1); }
+static void __thiscall hk_vp_upd(char *form, float dt) {
+    o_vpUpd(form, dt); g_vpSeen = GetTickCount(); g_menuSinceVp = 0;
+    if (g_topFallback && g_enabled && clock_visible()) {      // the counter is there after all: the clock back at the top
+        g_topFallback = 0; load_ini(); clock_restyle();
+        logmsg("the victory point counter is back: the clock at the top again");
+    }
+    clock_frame(form, 1);
+}
 static void clock_install(void) {
     static volatile LONG done;
     if (InterlockedExchange(&done, 1)) return;
-    o_menuUpd = (MenuUpd_t)NULLSUB_RET4;
-    if (gfx_patch_slot(MENU_VT_UPD, NULLSUB_RET4, (void *)hk_menu_upd)) logmsg("clock: in the game's own Menu button movie (its form's per-frame update)");
+    // chained (03.11.2026): APM.dll hooks the same two per-frame updates
+    if (gfx_hook_slot(MENU_VT_UPD, NULLSUB_RET4, (void *)hk_menu_upd, (void **)&o_menuUpd)) logmsg("clock: in the game's own Menu button movie (its form's per-frame update)%s", (DWORD)o_menuUpd != NULLSUB_RET4 ? ", after another add-on's hook" : "");
     else logmsg("Menu button form not as in DOW2.exe 3.19 (slot %08X = %08lX) - no clock", MENU_VT_UPD,
                 IsBadReadPtr((void *)MENU_VT_UPD, 4) ? 0UL : (unsigned long)*(DWORD *)MENU_VT_UPD);
-    o_vpUpd = (MenuUpd_t)NULLSUB_RET4;
-    if (gfx_patch_slot(VP_VT_UPD, NULLSUB_RET4, (void *)hk_vp_upd)) logmsg("clock: Place=top ready (the victory point panel's per-frame update)");
+    if (gfx_hook_slot(VP_VT_UPD, NULLSUB_RET4, (void *)hk_vp_upd, (void **)&o_vpUpd)) logmsg("clock: Place=top ready (the victory point panel's per-frame update)");
     else logmsg("victory point panel form not as in DOW2.exe 3.19 - no Place=top");
 }
 
@@ -476,6 +489,7 @@ static void core_start(const wchar_t *dir, const wchar_t *ini, const wchar_t *lo
 }
 void mt_start(const wchar_t *dir, const wchar_t *ini) { core_start(dir, ini, L"MatchState.log", "the cooldown numbers"); }
 void mt_start_nodevice(const wchar_t *dir, const wchar_t *ini) { core_start(dir, ini, L"MatchState.log", "the loading screen ratings"); }
+void mt_start_for(const wchar_t *dir, const wchar_t *ini, const char *what) { core_start(dir, ini, L"MatchState.log", what); }
 #else
 // MatchTimer.dll on its own (30.10.2026, owner: every feature its own add-on and launcher tick)
 BOOL WINAPI DllMain(HINSTANCE h, DWORD reason, LPVOID _) {

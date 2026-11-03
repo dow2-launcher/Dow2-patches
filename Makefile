@@ -6,7 +6,7 @@ OUT = build
 STATS_HOST ?= rts.fintebtc.de
 STATS = $(if $(STATS_HOST),-DSTATS_HOST='L"$(STATS_HOST)"',)
 
-all: $(OUT)/ObsFix.dll $(OUT)/LobbyStats.dll $(OUT)/LoadingRatings.dll $(OUT)/Cooldowns.dll $(OUT)/MatchTimer.dll $(OUT)/winmm.dll $(OUT)/FrameProbe.dll $(OUT)/ReinforceFix.dll $(OUT)/JoinSound.dll
+all: $(OUT)/ObsFix.dll $(OUT)/LobbyStats.dll $(OUT)/LoadingRatings.dll $(OUT)/Cooldowns.dll $(OUT)/MatchTimer.dll $(OUT)/winmm.dll $(OUT)/FrameProbe.dll $(OUT)/ReinforceFix.dll $(OUT)/JoinSound.dll $(OUT)/APM.dll
 all: $(OUT)/EliteAI.dll $(OUT)/Reverse.dll $(OUT)/MMFind.dll $(OUT)/Relay.dll
 
 $(OUT):
@@ -30,6 +30,10 @@ $(OUT)/MatchTimer.dll: matchtimer/matchtimer.c | $(OUT)
 
 $(OUT)/Cooldowns.dll: cooldowns/cooldowns_main.c cooldowns/cooldowns.c matchtimer/matchtimer.c | $(OUT)
 	$(CC) $(CFLAGS) -DMT_EMBED -DCD_STANDALONE -shared -o $@ cooldowns/cooldowns_main.c cooldowns/cooldowns.c matchtimer/matchtimer.c -lpsapi -lgdi32 -lwinmm -static-libgcc -Wl,--exclude-all-symbols
+
+# 03.11.2026: actions per minute beside the victory point counter, its own add-on (the match core of matchtimer.c)
+$(OUT)/APM.dll: apm/apm.c matchtimer/matchtimer.c common/gfxui.h | $(OUT)
+	$(CC) $(CFLAGS) -DMT_EMBED -shared -o $@ apm/apm.c matchtimer/matchtimer.c -lpsapi -lgdi32 -static-libgcc -Wl,--exclude-all-symbols
 
 clean:
 	rm -rf $(OUT)

@@ -66,4 +66,19 @@ static inline int gfx_patch_slot(DWORD slot, DWORD expect, void *fn) {
     *s = (DWORD)fn; VirtualProtect(s, 4, old, &old);
     return 1;
 }
+// the same, and the slot may already hold another add-on's hook (code outside DOW2.exe, e.g. MatchTimer and APM both on the
+// victory point panel's per-frame update, 03.11.2026): fn goes in, *orig = what was there, fn calls it first. 1 = done
+static inline int gfx_hook_slot(DWORD slot, DWORD expect, void *fn, void **orig) {
+    DWORD *s = (DWORD *)slot, old, cur;
+    if (IsBadReadPtr(s, 4)) return 0;
+    cur = *s;
+    if (cur != expect) {
+        MEMORY_BASIC_INFORMATION mb;
+        if (!VirtualQuery((void *)cur, &mb, sizeof mb) || !(mb.Protect & (PAGE_EXECUTE | PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY))
+            || mb.AllocationBase == (void *)GetModuleHandleA(NULL)) return 0;       // other game code there: not ours to chain
+    }
+    if (!VirtualProtect(s, 4, PAGE_READWRITE, &old)) return 0;
+    *orig = (void *)cur; *s = (DWORD)fn; VirtualProtect(s, 4, old, &old);
+    return 1;
+}
 #endif

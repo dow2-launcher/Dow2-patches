@@ -13,6 +13,7 @@
 // the seconds left.
 // Nothing in the simulation is touched: no desync, the other players don't need it.
 #include <windows.h>
+#include <psapi.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdarg.h>
@@ -45,7 +46,7 @@ typedef struct {
     volatile int ready;                              // the latest value said ready (0 or 1), or the button is hidden
     int exact; DWORD exactLeft, exactAt;             // global abilities: game ms left read from the engine at game ms exactAt
     void *uiMovie; char *uiW; int uiShown;           // UI thread: our copy of the count clip made in this movie on this button, seconds in it
-    int ab;                                          // the ability of the latest share (the button update's +0x74)
+    int ab; unsigned key;                            // the ability (the button update's +0x74) and the recharge (squad + ability) shown
 } Slot;
 static Slot g_slot[SLOTS];
 static CRITICAL_SECTION g_cs;
@@ -230,7 +231,7 @@ static int cd_seconds(Slot *b, DWORD now, DWORD gt) {       // seconds left to s
     if (b->exact) left = (float)b->exactLeft - (float)(gt - b->exactAt);   // global ability: read, not guessed
     else {
         float rate = (b->p - b->p0) / (float)(b->t - b->t0);                 // share per sim tick
-        // from the latest share on: ticks without one (the squad busy, see cd_hold) count down too
+        // from the latest share on: ticks without one (the squad busy) count down too
         left = ((1.0f - b->p) / rate - (float)((DWORD)mt_ticks() - b->t)) * mt_ms_per_tick();
     }
     if (left < 0) left = 0;
@@ -301,52 +302,114 @@ static void set_progress(char *w, float p) {
     __asm__ volatile("pushl %[p]\n\t call *%[f]\n\t"  // the callee takes it off (ret 4)
                      : "+a"(w) : [p] "g"(bits), [f] "c"(fn) : "edx", "memory", "cc");
 }
-// The end of each ability's recharge as we last saw it (siritos 02.11): the game sends only 0s for a recharging ability while
-// another reason stands (no energy, the squad busy) - no share, its own sweep gone too. The 0s don't end the recharge here:
-// it ends at the tick worked out from the shares seen. Kept per ability, so another squad's button in between (a hidden
-// button, another selection) doesn't lose it either. Nothing is asked of the game: only what came through SetProgress.
-typedef struct { int ab; float end, total; } Mem;  // sim ticks: when it ends, how long the whole recharge is
-static Mem g_mem[32]; static int g_nmem;
-static Mem *mem_of(int ability, int make) {
-    for (int i = 0; i < g_nmem; i++) if (g_mem[i].ab == ability) return &g_mem[i];
+// ---------- Cooldowns 6 (03.11.2026): every recharge kept per squad AND ability, asked from the engine ----------
+// Cooldowns 4-5 kept the recharge per button number (ability_btn00..) and remembered its end per ability blueprint (+0x74,
+// the same for every squad of a kind). siritos 03.11, Catachans (several abilities): one ability's recharge reset another's
+// number, and with no energy the number went. Why: a button number holds another ability (or another squad's) after a
+// selection change, so its shares mixed into the rate of the one before; and right after a cast the squad often lacks the
+// energy - the game then sends only 0s (the reasons have no recharge, 0xD/0xE), so no share came at all.
+// Now (as in LobbyStats 0.9.0, the version that counted right): after the panel's own update we ask the engine the same
+// read-only question the panel asks for a recharge - iface vt+0xB4(owner, ability) = the share done - with the owner the
+// panel has just worked out for this button (+0x2A8, ConstOwnerPointer) and its ability (+0x74), whatever the reasons.
+// 0.9.0's crash was not this call (it was GetBounds declared __cdecl, fixed in 0.9.2); still, the call is guarded: a fault
+// inside it is caught (vectored handler, this thread only), queries stop for the rest of the game, the log says where.
+// The recharge is kept per (owner, ability) - its share, the tick it came, the start of its rate and the whole length -
+// so other squads, other buttons and the selection going back and forth don't touch it.
+typedef struct { unsigned key; int ab; float p, p0; DWORD t, t0; float total; DWORD used; } Rec;   // ticks
+#define NREC 96
+static Rec g_rec[NREC];
+typedef struct { int ab; float total; } AbLen;      // the length of an ability's recharge in ticks, any owner: the
+static AbLen g_abLen[48]; static int g_nabLen;       // first number of another squad of that kind comes at once
+static float ab_len(int ab) { for (int i = 0; i < g_nabLen; i++) if (g_abLen[i].ab == ab) return g_abLen[i].total; return 0; }
+static void ab_len_set(int ab, float total) {
+    for (int i = 0; i < g_nabLen; i++) if (g_abLen[i].ab == ab) { g_abLen[i].total = total; return; }
+    AbLen *a = &g_abLen[g_nabLen < 48 ? g_nabLen++ : (unsigned)ab % 48]; a->ab = ab; a->total = total;
+}
+static unsigned rec_key(const char *btn, int ability) {   // the ability and its owner (ConstOwnerPointer, 16 bytes)
+    unsigned key = (unsigned)ability * 2654435761u;
+    for (int i = 0; i < 4; i++) key = (key ^ ((const unsigned *)(btn + 0x2A8))[i]) * 16777619u;
+    return key | 1;
+}
+static Rec *rec_of(unsigned key, int ab, int make) {
+    Rec *old = &g_rec[0];
+    for (int i = 0; i < NREC; i++) {
+        if (g_rec[i].key == key) { g_rec[i].used = GetTickCount(); return &g_rec[i]; }
+        if (g_rec[i].used < old->used) old = &g_rec[i];
+    }
     if (!make) return NULL;
-    Mem *m = &g_mem[g_nmem < 32 ? g_nmem++ : (unsigned)ability % 32]; m->ab = ability; m->end = m->total = 0; return m;
+    memset(old, 0, sizeof *old); old->key = key; old->ab = ab; old->used = GetTickCount();
+    return old;
 }
-// a share came: this button follows it again (not the remembered end), and the end of the recharge is remembered
-static void cd_mark(char *w, int ability) {
-    const char *path = w + 0xDD0; int s;
-    if (!ability || IsBadReadPtr(path, 16) || path[0] != '/' || (s = slot_of(path)) < 0) return;
-    EnterCriticalSection(&g_cs);
-    Slot *b = &g_slot[s];
-    if (b->w == w) {
-        b->ab = ability; b->exact = 0;
-        if (b->t > b->t0 && b->p > b->p0) {
-            float rate = (b->p - b->p0) / (float)(b->t - b->t0);
-            Mem *m = mem_of(ability, 1); m->end = (float)b->t + (1.0f - b->p) / rate; m->total = 1.0f / rate;
-        }
+// a share p (0..1) of this recharge at sim tick gt
+static void rec_share(Rec *r, float p, DWORD gt) {
+    float tot = r->total > 0 ? r->total : ab_len(r->ab);
+    int fresh = !r->t0 || !(r->p > 0) || p < r->p - 0.002f;
+    // not where this recharge would be by now (it ended and was cast again while not selected, or got shorter): a new one
+    if (!fresh && tot > 0 && gt > r->t) { float expect = r->p + (float)(gt - r->t) / tot; if (p > expect + 0.03f) fresh = 1; }
+    if (fresh) { r->p0 = p; r->t0 = gt ? gt : 1; }
+    if (gt > r->t0 && p > r->p0 + 0.0001f) { r->total = (float)(gt - r->t0) / (p - r->p0); ab_len_set(r->ab, r->total); }
+    r->p = p; r->t = gt;
+}
+static float rec_left(const Rec *r, DWORD gt) {        // ticks left, <= 0 = over or not known
+    float tot = r->total > 0 ? r->total : ab_len(r->ab);
+    if (!(r->p > 0) || tot <= 0) return 0;
+    return (1.0f - r->p) * tot - (float)(gt - r->t);
+}
+
+// the guarded engine query: iface vt+0xB4 (__thiscall, float in st0)
+static volatile DWORD g_qThread; static int g_qOff; static DWORD g_qFault; static void *g_qFaultAt;
+DWORD g_qEsp __asm__("cd_q_esp"); DWORD g_qSeh __asm__("cd_q_seh"); unsigned short g_qCw __asm__("cd_q_cw");
+float cd_q_call(void *fn, void *iface, void *owner, int ability) __asm__("cd_q_call");
+void cd_q_fail(void) __asm__("cd_q_fail");
+__asm__(".text\n"
+    "cd_q_call:\n\t"
+    "pushl %ebp\n\t pushl %ebx\n\t pushl %esi\n\t pushl %edi\n\t"
+    "movl %fs:0, %eax\n\t movl %eax, cd_q_seh\n\t fnstcw cd_q_cw\n\t"
+    "movl %esp, cd_q_esp\n\t"
+    "pushl 32(%esp)\n\t"                             // ability (arg 4: esp+16+16)
+    "pushl 32(%esp)\n\t"                             // owner   (arg 3, one push later)
+    "movl 32(%esp), %ecx\n\t"                        // iface   (arg 2) = this
+    "movl 28(%esp), %eax\n\t"                        // fn      (arg 1)
+    "call *%eax\n\t"                                 // callee pops its 2 arguments; the share in st0
+    "movl cd_q_esp, %esp\n\t"
+    "popl %edi\n\t popl %esi\n\t popl %ebx\n\t popl %ebp\n\t ret\n"
+    "cd_q_fail:\n\t"                                 // a fault inside: back here from the handler
+    "movl cd_q_esp, %esp\n\t movl cd_q_seh, %eax\n\t movl %eax, %fs:0\n\t"
+    "fninit\n\t fldcw cd_q_cw\n\t fld1\n\t fchs\n\t" // -1 = no answer (the game's FPU precision kept)
+    "popl %edi\n\t popl %esi\n\t popl %ebx\n\t popl %ebp\n\t ret\n");
+static LONG CALLBACK cd_veh(EXCEPTION_POINTERS *e) {
+    if (!g_qThread || GetCurrentThreadId() != g_qThread) return EXCEPTION_CONTINUE_SEARCH;
+    DWORD c = e->ExceptionRecord->ExceptionCode;
+    if (c != EXCEPTION_ACCESS_VIOLATION && c != EXCEPTION_ILLEGAL_INSTRUCTION && c != EXCEPTION_PRIV_INSTRUCTION
+        && c != EXCEPTION_INT_DIVIDE_BY_ZERO && c != EXCEPTION_ARRAY_BOUNDS_EXCEEDED) return EXCEPTION_CONTINUE_SEARCH;
+    g_qFault = c; g_qFaultAt = e->ExceptionRecord->ExceptionAddress; g_qThread = 0;
+    e->ContextRecord->Eip = (DWORD)cd_q_fail;
+    return EXCEPTION_CONTINUE_EXECUTION;
+}
+static int g_query = 1;                              // Cooldowns.ini [Cooldowns] Ask=0: no engine query (shares only)
+static float ask_share(char *ctx, char *btn, int ability) {   // the engine's share, -1 = none
+    if (!g_query || g_qOff || !ctx || IsBadReadPtr(ctx + 0xC, 4)) return -1;
+    void **iface = *(void ***)(ctx + 0xC);
+    if (!iface || IsBadReadPtr(iface, 4) || IsBadReadPtr(*iface, 0xB8)) return -1;
+    void *fn = (*(void ***)iface)[0xB4 / 4];
+    static HMODULE exe; static MODULEINFO mi;
+    if (!exe) { exe = GetModuleHandleA(NULL); GetModuleInformation(GetCurrentProcess(), exe, &mi, sizeof mi); }
+    if ((DWORD)fn < (DWORD)mi.lpBaseOfDll || (DWORD)fn >= (DWORD)mi.lpBaseOfDll + mi.SizeOfImage) {
+        g_qOff = 1; logmsg("engine query: vt+0xB4 = %p is not in DOW2.exe - shares only", fn); return -1;
     }
-    LeaveCriticalSection(&g_cs);
-}
-// only 0s in this update: a remembered recharge of this ability that isn't over yet goes on - seconds from its end, the
-// game's sweep put back. 1 = held.
-static int cd_hold(char *w, int ability) {
-    const char *path = w + 0xDD0; int s;
-    if (!ability || !mt_ticking() || IsBadReadPtr(path, 16) || path[0] != '/' || (s = slot_of(path)) < 0) return 0;
-    float now = (float)mt_ticks(), p = -1;
-    EnterCriticalSection(&g_cs);
-    Mem *m = mem_of(ability, 0);
-    if (m && m->total > 0 && m->end > now) {
-        Slot *b = &g_slot[s];
-        if (b->w != w) { b->w = w; b->shown = 0; }
-        b->ready = 0; b->exact = 1; b->seen = GetTickCount(); b->ab = ability;
-        b->exactLeft = (DWORD)((m->end - now) * mt_ms_per_tick()); b->exactAt = mt_game_ms();
-        p = 1.0f - (m->end - now) / m->total;
+    static int said;
+    if (!said) { said = 1; logmsg("engine query: iface %p, vtable %p, vt+0xB4 = %p (the share of a recharge, asked for every ability button)", (void *)iface, *iface, fn); }
+    g_qThread = GetCurrentThreadId();
+    float p = cd_q_call(fn, iface, btn + 0x2A8, ability);
+    if (!g_qThread) {                                  // the handler took us out
+        g_qOff = 1;
+        logmsg("engine query FAULTED (%08lX at %p, ability %p): no more queries this game, shares only", g_qFault, g_qFaultAt, (void *)(UINT_PTR)ability);
+        return -1;
     }
-    LeaveCriticalSection(&g_cs);
-    if (p < 0) return 0;
-    set_progress(w, p < 0.001f ? 0.001f : p);
-    return 1;
+    g_qThread = 0;
+    return p != p ? -1 : p;                            // NaN: none
 }
+
 static void __fastcall hk_btnupd(char *btn, void *edx, char *ctx) {
     char *w0 = btn ? *(char **)(btn + 0x28) : NULL;
     g_capMax = 0; g_capLast = -1; g_capN = 0; g_capW = g_on ? w0 : NULL;
@@ -357,24 +420,47 @@ static void __fastcall hk_btnupd(char *btn, void *edx, char *ctx) {
     char *w = *(char **)(btn + 0x28); int ability = *(int *)(btn + 0x74);
     if (!w) return;
     if (g_trace && !g_invSlot) trace_invoke(gfx_movie_of_widget(w));
-    if (w == w0 && g_capN) {
-        // a recharge share in this update wins over the 0 of another reason after it (no energy...): the number stays, and
-        // the game's own sweep too - its 0 is put back to the share (the ability stays unusable, the button dark as before)
-        int held = 0;
-        if (g_capMax > 0) { cd_share(w, g_capMax, 0); cd_mark(w, ability); if (g_capLast != g_capMax) set_progress(w, g_capMax); }
-        else if (g_cap10 > 0.0f && g_cap10 < 0.999f) { cd_share(w, g_cap10, 0); cd_mark(w, ability); }   // reason 10 (the bunker)
-        else if (!(held = cd_hold(w, ability))) cd_share(w, g_capLast, 0);
-        if (g_trace) {
-            static char last[SLOTS][64]; const char *path = w + 0xDD0; int s = !IsBadReadPtr(path, 16) && path[0] == '/' ? slot_of(path) : -1;
-            char seq[64] = ""; if (g_cap10 >= 0) snprintf(seq, sizeof seq, "v%.2f:", g_cap10); int n = g_capN < 8 ? g_capN : 8;
-            for (int i = 0; i < n; i++) snprintf(seq + strlen(seq), sizeof seq - strlen(seq), "%s%s", i ? "," : "", g_capSeq[i] <= 0 ? "0" : g_capSeq[i] >= 0.999f ? "1" : "s");
-            if (s >= 0 && strcmp(last[s], seq)) { strcpy(last[s], seq); logmsg("trace %s ability %p: SetProgress %s (largest share %.3f)%s%s", path, (void *)(UINT_PTR)ability, seq, g_capMax, g_capMax > 0 && g_capLast != g_capMax ? " - share put back" : "", held ? " - held" : ""); }
+    const char *path = w + 0xDD0;
+    int s = !IsBadReadPtr(path, 16) && path[0] == '/' ? slot_of(path) : -1;
+    int vis = *(w + 0x209) == 1;
+    if (s >= 0 && s < 16 && w == w0 && ability && vis && mt_ticking()) {
+        // reasons came (SetProgress was called): ask the engine; none: the ability can be used - no recharge
+        float q = g_capN ? ask_share(ctx, btn, ability) : -1;
+        float p = q >= 0 ? q : g_capMax > 0 ? g_capMax : g_cap10 > 0.0f && g_cap10 < 0.999f ? g_cap10 : -1;
+        int rech = p > 0.0f && p < 0.999f;
+        unsigned key = rec_key(btn, ability);
+        DWORD gt = (DWORD)mt_ticks(), now = GetTickCount();
+        float sweep = -1, left = 0;
+        EnterCriticalSection(&g_cs);
+        Rec *r = rec_of(key, ability, rech);
+        if (r) {
+            if (!g_capN || (q >= 0 && !rech)) r->p = 0;     // usable, or the engine says no recharge: over
+            else if (rech) rec_share(r, p, gt);
+            left = rec_left(r, gt);                          // only 0s and no answer: the remembered recharge goes on
         }
-    }
-    if (!ability || *(w + 0x209) != 1) cd_progress(w, 0.0f);         // no ability or the button is hidden: no number
+        Slot *b = &g_slot[s];
+        if (left > 0.5f) {
+            float tot = r->total > 0 ? r->total : ab_len(ability);
+            if (b->w != w || b->key != key) b->shown = 0;
+            b->w = w; b->key = key; b->ab = ability; b->ready = 0; b->exact = 1; b->seen = now;
+            b->exactLeft = (DWORD)(left * mt_ms_per_tick()); b->exactAt = mt_game_ms();
+            sweep = tot > 0 ? 1.0f - left / tot : -1;
+        } else { b->ready = 1; b->exact = 0; b->key = key; }
+        LeaveCriticalSection(&g_cs);
+        // the game's own sweep: its last value of this update is a 0 of another reason (no energy, busy) - put the share back
+        if (sweep > 0 && g_capN && (g_capLast < sweep - 0.002f || g_capLast > sweep + 0.002f)) set_progress(w, sweep < 0.001f ? 0.001f : sweep > 0.998f ? 0.998f : sweep);
+        if (g_trace) {
+            static unsigned last[16]; static int lastSec[16];
+            int sec = left > 0 ? (int)((left * mt_ms_per_tick() + 999) / 1000) : 0;
+            if (last[s] != key || (lastSec[s] > 0) != (sec > 0) || (sec && sec % 10 == 0 && sec != lastSec[s])) {
+                last[s] = key; lastSec[s] = sec;
+                logmsg("trace %.40s ability %p key %08X: reasons %d, engine %.3f, captured %.3f/%.3f -> %s %d s (length %.0f ticks)", path, (void *)(UINT_PTR)ability, key,
+                       g_capN, q, g_capMax, g_capLast, sec ? "recharging" : "ready", sec, r ? (r->total > 0 ? r->total : ab_len(ability)) : 0.0f);
+            }
+        }
+    } else if (!ability || !vis) cd_progress(w, 0.0f);         // no ability or the button is hidden: no number
     // after the match (no sim ticks) cd_show takes a number still there off
-    const char *path = w + 0xDD0; int s;
-    if (!IsBadReadPtr(path, 16) && path[0] == '/' && (s = slot_of(path)) >= 0) cd_show(s, w);
+    if (s >= 0) cd_show(s, w);
 }
 // Global abilities: their panel's button update (virtual, slot 0x01118B4C = 0xB5B850; this = the button's slot struct,
 // +0x28 the widget, arg +0x10 the ability's entity) takes the entity's extension 1 (EntityController::QI through the import
@@ -475,9 +561,11 @@ void cd_start(const wchar_t *dir, const wchar_t *ini) {
     wchar_t c[16]; GetPrivateProfileStringW(L"Cooldowns", L"Color", L"FFFFFF", c, 16, ini);
     g_color = wcstoul(c, NULL, 16) & 0xFFFFFF;
     g_trace = GetPrivateProfileIntW(L"Cooldowns", L"Trace", 0, ini);
-    logmsg("Cooldowns 5 (%s): the numbers in the game's own button movie, no Direct3D; a recharge share wins over the 0 of another reason%s",
-           g_on ? "on" : "off, [Cooldowns] Enabled=0", g_trace ? "; Trace=1" : "");
+    g_query = GetPrivateProfileIntW(L"Cooldowns", L"Ask", 1, ini);
+    logmsg("Cooldowns 6 (%s): the numbers in the game's own button movie; every recharge per squad and ability%s%s",
+           g_on ? "on" : "off, [Cooldowns] Enabled=0", g_query ? ", asked from the engine (guarded)" : ", Ask=0: shares only", g_trace ? "; Trace=1" : "");
     if (!g_on) return;
     InitializeCriticalSection(&g_cs);
+    if (g_query) AddVectoredExceptionHandler(1, cd_veh);
     install(); if (g_on) install_btnupd();
 }
