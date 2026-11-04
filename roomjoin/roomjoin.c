@@ -8,16 +8,20 @@
 // "fail <room> <why>"). A request older than 3 minutes is dropped (the game was started some other way). Rooms with a password:
 // not offered by the launcher.
 //
-// Its own add-on next to MMFind (the automatch is not touched): only what joining needs. Hooks, both chained onto whatever is
-// there already (Elite's injector loads every DLL of Elite_DLLs in name order - MMFind before RoomJoin):
-//   - the fscommand handler 0x681AB0 (Flash -> engine): which full-screen panel is up (OnLoadComplete), the menu movie and its
-//     handler (to send Back / Public Games), the loading screen;
+// Its own add-on next to MMFind (the automatch is not touched): only what joining needs. Hooks, all chained onto whatever is
+// there already:
+//   - the fscommand handler (Flash -> engine): which full-screen panel is up (OnLoadComplete), the menu movie and its handler
+//     (to send Back / Public Games), the loading screen. Not a patch of its code (0x681AB0 - MMFind and LobbyStats patch that,
+//     and MMFind refuses to start when it does not find the original bytes there) but its vtable slot 0x010BAC9C, the only
+//     reference to it in DOW2.exe 3.19 (no direct call): we come first and call whatever the slot held, so the order the
+//     add-ons load in does not matter (RoomJoin 8; review 03.11: a later MMFind would have found our jump and not started);
 //   - Shark.dll shark::update (import 0x00F88068): the main-thread tick.
 //   - the engine -> Flash Invoke 0x45DB6C (MMFind and LobbyStats chain onto each other there too): the menu movie and its
 //     fscommand handler at once (Elite's injector loads us ~9 s after the start, when the main menu is up already - its
 //     OnLoadComplete is long gone and the menu sends no command until the player clicks something: 03.11 the cover never came).
-// If MMFind.dll is in the folder but not in the game yet, the fscommand hook waits for the first tick (MMFind checks that
-// function's original bytes when it starts; it must find them).
+// The automatch first (RoomJoin 8, review 03.11): while MMFind's cover is up (its "Match Found" walk through the menus) or a
+// search runs on Find a Game, a Join request is dropped and nothing on the screen is touched (no Back on Find a Game).
+// RoomJoin.ini [RoomJoin] Enabled=0: off (no hooks).
 #include <windows.h>
 #include <psapi.h>
 #include <stdio.h>
@@ -29,8 +33,9 @@
 #define HOOK_ADDR   0x0045DB6C                    // Invoke (engine -> Flash), this = SFMovie: +4 the movie, +0x18 its fscommand handler
 #define HOOK_RESUME 0x0045DB71
 static const unsigned char INV_PRO[5] = {0xB8, 0x59, 0x70, 0xEF, 0x00};
-#define FN_FSCMD    0x00681AB0
-static const unsigned char FSCMD_PRO[7] = {0x51, 0x56, 0x57, 0x8B, 0x7C, 0x24, 0x14};
+#define FN_FSCMD    0x00681AB0                    // SFMovie's FSCommandHandler::Callback
+#define VT_FSCMD    0x010BAC9C                    // its vtable slot (.rdata; the vtable starts at 0x010BAC98, slot 0 = 0x00681E80)
+#define FN_FSCMD_VT0 0x00681E80
 #define IAT_SHARK_UPDATE 0x00F88068
 
 typedef struct { int type; int pad; union { double num; unsigned char b; const wchar_t *ws; const char *s; } v; } GFxValue;
@@ -55,6 +60,13 @@ enum { SC_OTHER, SC_MAIN, SC_MM, SC_LIST, SC_SETUP };
 static volatile int g_screen, g_loading;
 static char g_panel[160];
 static void *g_fsSelf, *g_fsMovie; static int g_sending;
+// the automatch (MMFind / the game's own search) on Find a Game: the engine's search animation as it is sent (-1 not seen),
+// the player's Start / Cancel Searching since the panel came up. Both forgotten when another panel comes or a match loads.
+static volatile int g_engSearch = -1, g_mmClicked;
+static void screen_reset(const char *why) {
+    if (g_screen != SC_OTHER || g_panel[0]) logmsg("screen forgotten (%s)", why);
+    g_screen = SC_OTHER; g_panel[0] = 0; g_engSearch = -1; g_mmClicked = 0;
+}
 
 // ---------------- ActionScript access (Scaleform 2.x inside DOW2.exe 3.19; as in MMFind) ----------------
 #define FN_STR_NEW   0x00DB64D0
@@ -129,7 +141,10 @@ static int probe_screen(void) {
         for (char *c = u; (c = strstr(c, "%5F")) || (c = strstr(u, "%5f")); ) { *c = '_'; memmove(c + 1, c + 3, strlen(c + 3) + 1); }   // the URL comes encoded (main%5Fmenu.gfx)
         int sc = strstr(u, "main_menu.gfx") ? SC_MAIN : strstr(u, "matchmaking.gfx") ? SC_MM : strstr(u, "game_list_movie.gfx") ? SC_LIST
                : strstr(u, "game_setup_movie.gfx") ? SC_SETUP : -1;
-        if (sc >= 0) { strcpy(g_panel, pth); g_screen = sc; logmsg("screen asked: %s = %s", pth, u); return sc; }
+        if (sc >= 0) {
+            strcpy(g_panel, pth); g_screen = sc; logmsg("screen asked: %s = %s", pth, u);
+            if (sc == SC_MM) g_mmClicked = 1;           // Find a Game since before we knew: a search may be on - taken as on
+            return sc; }
     }
     return -1;
 }
@@ -145,6 +160,10 @@ static void menu_seen(void *mv, void *handler, const char *how) {   // the menu 
     g_fsMovie = mv; if (handler) g_fsSelf = handler;
     logmsg("the menu movie %p (handler %p) from %s", mv, g_fsSelf, how);
 }
+// MMFind's cover ("Searching" / "Match Found": it walks the menus itself then) - in the menu movie, as MMFind makes it
+static int mm_cover(void) { GFxValue v; return g_fsMovie && !g_loading && as_get(g_fsMovie, "_level0.mmcover._visible", &v) && v.type == GFX_BOOL; }
+// a search on Find a Game: the game's own (MMFind's native automatch) or MMFind's queue (the player pressed Start Searching)
+static int mm_search(void) { return g_screen == SC_MM && (g_engSearch == 1 || g_mmClicked); }
 
 // ---------------- the game browser's join by room id (MMFind 0.34-0.37: research_direct/directjoin.c) ----------------
 // (*0x01335014)->vtbl[0x20]()->vtbl[0x34](this, midLo, midHi, &joiners, -1, -1), joiners = a vector of one 0x30-byte entry
@@ -277,7 +296,7 @@ static void rj_fail_notice(const wchar_t *why) {                       // the re
     wcsncpy(g_coverTitle, L"Could Not Join", 63);
     _snwprintf(g_coverLine, 159, L"%ls", why); g_coverTextTick = 0;
     g_coverWant = 1; g_noticeUntil = GetTickCount() + 3000; g_noticeList = 1;
-} static DWORD g_rjAt, g_rjTry, g_rjCheck; static int g_rjTries;
+} static DWORD g_rjAt, g_rjTry, g_rjCheck, g_rjKnown, g_rjProbed, g_rjBack; static int g_rjTries;
 static void rj_end(const char *res, int toList) {
     logmsg("%s (room %llu)%s", res, g_rjRoom, toList ? " - the public games list" : "");
     wchar_t p[MAX_PATH]; _snwprintf(p, MAX_PATH, L"%lsRoomJoin_result.txt", g_dir);
@@ -338,28 +357,40 @@ static void rj_read(DWORD now) {
     if (g_screen == SC_SETUP && dj_room() == room) { logmsg("already in room %llu - nothing to do", room); g_rjRoom = room; rj_end("ok", 0); return; }
     g_rjRoom = room; MultiByteToWideChar(CP_UTF8, 0, l2, -1, g_rjName, 63);
     logmsg("request: room %llu \"%s\" (%llu s old) - waiting for the main menu", room, l2, age);
-    g_rj = RJ_MENU; g_rjAt = now;
+    g_rj = RJ_MENU; g_rjAt = now; g_rjKnown = g_rjProbed = g_rjBack = 0;   // per request (03.11 review: was reset only by a frame within 50 ms)
+}
+// the automatch goes first: MMFind's cover up or a search on Find a Game - the join is off and the screen is not touched
+// (03.11 review: Back on Find a Game could break a match MMFind was walking the menus to)
+static int rj_automatch(void) {
+    if (mm_cover()) {
+        logmsg("MMFind's cover is up (the automatch has the menus) - no join, the screen not touched");
+        rj_end("fail automatch", 0); return 1; }
+    if (mm_search()) {
+        logmsg("a search on Find a Game (engine %d, Start pressed %d) - no join, no Back", g_engSearch, g_mmClicked);
+        rj_end("fail automatch", 0);
+        rj_fail_notice(L"Find a Game is open with a search on. Leave it (Back), then press Join again"); g_noticeList = 0;
+        return 1; }
+    return 0;
 }
 static void rj_step(DWORD now) {
     if (g_rj == RJ_NONE) { if (!g_loading) rj_read(now); return; }
     if (g_loading) { rj_end("fail a match is loading", 0); return; }
+    if ((g_rj == RJ_MENU || g_rj == RJ_JOIN) && rj_automatch()) return;
     switch (g_rj) {
     case RJ_MENU: {                                                   // the game may still be starting: up to 90 s
-        static DWORD probed, known; if (now - g_rjAt < 50) { probed = 0; known = 0; }
         if (!g_fsMovie && now - g_rjAt > 800) nudge_menu(now);
-        if (g_fsMovie && !known) { known = now;
+        if (g_fsMovie && !g_rjKnown) { g_rjKnown = now;
             { HWND gw = game_window(); POINT c; if (gw && GetCursorPos(&c) && ScreenToClient(gw, &c)) PostMessageW(gw, WM_MOUSEMOVE, 0, MAKELPARAM(c.x, c.y)); }   // the game's cursor back
             stage(L"Joining the Game", L"Opening the lobby: %ls"); g_coverWant = 1; }   // the cover at once
-        if (g_screen == SC_OTHER && g_fsMovie && now - probed > 250) { probed = now; probe_screen(); }
+        if (g_screen == SC_OTHER && g_fsMovie && now - g_rjProbed > 250) { g_rjProbed = now; if (probe_screen() == SC_MM && rj_automatch()) break; }
         // still not told after 6 s with the menu movie known, no match loading, in no room: the main menu the game starts on
-        if (g_screen == SC_OTHER && known && now - known > 6000 && !dj_room()) {
+        if (g_screen == SC_OTHER && g_rjKnown && now - g_rjKnown > 6000 && !dj_room()) {
             for (int k = 1; k <= 3 && !g_panel[0]; k++) { char q[96]; GFxValue v; snprintf(q, sizeof q, "_level0.display_item.panel%d_mc.panel_mc._visible", k);
                 if (as_get(g_fsMovie, q, &v) && v.type == GFX_BOOL && v.v.b) snprintf(g_panel, sizeof g_panel, "_level0.display_item.panel%d_mc.panel_mc", k); }
             g_screen = SC_MAIN; logmsg("the screen not known after 6 s - taken as the main menu (panel %s)", g_panel[0] ? g_panel : "?");
         }
-        static DWORD lastBack;
-        if ((g_screen == SC_LIST || g_screen == SC_MM) && g_fsMovie && now - lastBack > 1500) {   // the game was running: back to the main menu
-            lastBack = now; logmsg("on screen %d - Back to the main menu", g_screen); fs(".OnClickBack", ""); }
+        if ((g_screen == SC_LIST || g_screen == SC_MM) && g_fsMovie && now - g_rjBack > 1500) {   // the game was running: back to the main menu
+            g_rjBack = now; logmsg("on screen %d - Back to the main menu", g_screen); fs(".OnClickBack", ""); }   // (Find a Game: no search, rj_automatch)
         if (g_screen == SC_SETUP && dj_room() == g_rjRoom) { rj_end("ok", 0); break; }
         if (g_screen == SC_SETUP && now - g_rjAt > 1500 && dj_room() != g_rjRoom) {
             logmsg("in another lobby - not leaving it"); g_rj = RJ_NONE;
@@ -405,7 +436,10 @@ static void __fastcall fs_hook(void *self, void *edx, void *movie, const char *c
             for (int i = 0; i < nt; i++) if (tried[i] == movie) seen = 1;
             if (!seen) { if (nt < 16) tried[nt++] = movie; if (is_menu_movie(movie)) menu_seen(movie, self, cmd); }
         }
-        if (!strcmp(cmd, "OnLoadMovieComplete") && args && !IsBadReadPtr(args, 6) && !strncmp(args, "/mp_mc", 6) && !g_loading) { g_loading = 1; g_coverWant = 0; }
+        if (!strcmp(cmd, "OnLoadMovieComplete") && args && !IsBadReadPtr(args, 6) && !strncmp(args, "/mp_mc", 6) && !g_loading) {
+            g_loading = 1; g_coverWant = 0; screen_reset("a match is loading"); }   // 03.11 review: the lobby screen stayed known after the match
+        if (!g_sending && g_screen == SC_MM && strlen(cmd) > 13 && !strcmp(cmd + strlen(cmd) - 13, ".OnClickStart")) {
+            g_mmClicked = 1; logmsg("Start / Cancel Searching pressed on Find a Game"); }
         if (!strcmp(cmd, "OnLoadComplete") && args && !IsBadReadPtr(args, 1)) {     // which full-screen panel is up
             const char *nm = strstr(args, "name:="), *url = strstr(args, "url:=");
             if (nm && url) {
@@ -414,13 +448,20 @@ static void __fastcall fs_hook(void *self, void *edx, void *movie, const char *c
                 int sc = -1;
                 if (strstr(url, "main_menu.gfx")) sc = SC_MAIN; else if (strstr(url, "matchmaking.gfx")) sc = SC_MM;
                 else if (strstr(url, "game_list_movie.gfx")) sc = SC_LIST; else if (strstr(url, "game_setup_movie.gfx")) sc = SC_SETUP;
-                if (sc >= 0 && strlen(path) >= 9 && !strcmp(path + strlen(path) - 9, ".panel_mc")) { strcpy(g_panel, path); g_screen = sc; if (g_rj) logmsg("screen %d", sc); }
+                if (sc >= 0 && strlen(path) >= 9 && !strcmp(path + strlen(path) - 9, ".panel_mc")) {
+                    if (sc != g_screen) { g_engSearch = -1; g_mmClicked = 0; }     // a new panel: the search state of the old one goes
+                    strcpy(g_panel, path); g_screen = sc; if (g_rj) logmsg("screen %d", sc); }
             }
         }
     }
     g_fsOrig(self, edx, movie, cmd, args);
 }
 static char __fastcall inv_hook(void *self, void *edx, const char *method, int flags, GFxValue *args, unsigned count) {
+    if (method && !IsBadReadPtr(method, 31) && !strcmp(method, "Receive_ShowSearchingAnimation") && args && count == 1 && !IsBadReadPtr(args, sizeof *args)
+        && (args[0].type == GFX_BOOL || args[0].type == GFX_NUMBER)) {          // the search on Find a Game, as the engine sends it
+        int on = args[0].type == GFX_BOOL ? args[0].v.b != 0 : args[0].v.num != 0;
+        if (on != g_engSearch && g_screen == SC_MM) { g_engSearch = on; logmsg("the game's search %s", on ? "on" : "off"); }
+    }
     if (g_rj && method && !IsBadReadPtr(method, 24) && !strcmp(method, "Receive_CreateMessageBox") && args && count && count < 32 && !IsBadReadPtr(args, count * sizeof(GFxValue))) {
         wchar_t t[200] = L""; int n = 0; char dbg[400]; int dl = 0;
         for (unsigned i = 0; i < count; i++) {               // the box's strings: title, text, buttons - the longest one is the text
@@ -456,21 +497,24 @@ static HANDLE patch_lock(void) {
     HANDLE mx = CreateMutexA(NULL, FALSE, n); if (mx) WaitForSingleObject(mx, 5000); return mx;
 }
 static void patch_unlock(HANDLE mx) { if (mx) { ReleaseMutex(mx); CloseHandle(mx); } }
-// the fscommand handler: its own bytes, or another add-on's jump there already (MMFind) - chained onto it either way
+// the fscommand handler through its vtable slot (the function's own bytes stay as they are, for MMFind / LobbyStats - they
+// patch those, whenever they load; we call the slot's old value = the function's entry, so their hooks run after ours)
+static int is_code(DWORD a) {
+    MEMORY_BASIC_INFORMATION mi;
+    return a && VirtualQuery((void *)a, &mi, sizeof mi) && mi.State == MEM_COMMIT
+        && (mi.Protect & (PAGE_EXECUTE | PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY));
+}
 static int hook_fscmd(void) {
-    unsigned char *f = (unsigned char *)FN_FSCMD;
-    if (IsBadReadPtr(f, 7)) return 0;
-    int chained = f[0] == 0xE9;
-    if (!chained && memcmp(f, FSCMD_PRO, 7)) { logmsg("fscommand handler not as in DOW2.exe 3.19 - not starting"); return 0; }
-    unsigned char *tr = VirtualAlloc(NULL, 32, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE); if (!tr) return 0;
-    if (chained) { DWORD dest = (DWORD)(f + 5) + *(DWORD *)(f + 1); tr[0] = 0xE9; *(DWORD *)(tr + 1) = dest - (DWORD)(tr + 5); }
-    else { memcpy(tr, FSCMD_PRO, 7); tr[7] = 0xE9; *(DWORD *)(tr + 8) = (FN_FSCMD + 7) - (DWORD)(tr + 12); }
-    g_fsOrig = (FsCmdFn)tr;
-    unsigned char b[5]; b[0] = 0xE9; *(DWORD *)(b + 1) = (DWORD)fs_hook - (DWORD)(f + 5);
-    HANDLE mx = patch_lock(); DWORD o; SIZE_T w = 0; int ok = 0;
-    if (VirtualProtect(f, 5, PAGE_EXECUTE_READWRITE, &o)) { ok = WriteProcessMemory(GetCurrentProcess(), f, b, 5, &w) && w == 5; VirtualProtect(f, 5, o, &o); }
-    FlushInstructionCache(GetCurrentProcess(), f, 5); patch_unlock(mx);
-    logmsg("hooked fscommand%s", chained ? " (after another add-on's hook)" : "");
+    volatile DWORD *slot = (volatile DWORD *)VT_FSCMD;
+    if (IsBadReadPtr((void *)(VT_FSCMD - 4), 8) || slot[-1] != FN_FSCMD_VT0) { logmsg("the fscommand vtable not as in DOW2.exe 3.19 - not starting"); return 0; }
+    HANDLE mx = patch_lock(); DWORD o; int ok = 0;
+    DWORD cur = *slot;                                                 // read under the lock all our DLLs share
+    if (cur == (DWORD)fs_hook) { patch_unlock(mx); return 1; }
+    if (cur != FN_FSCMD && !is_code(cur)) { patch_unlock(mx); logmsg("the fscommand vtable slot holds %08lX - not starting", cur); return 0; }
+    g_fsOrig = (FsCmdFn)cur;
+    if (VirtualProtect((void *)slot, 4, PAGE_READWRITE, &o)) { InterlockedExchange((volatile LONG *)slot, (LONG)(DWORD)fs_hook); ok = 1; VirtualProtect((void *)slot, 4, o, &o); }
+    patch_unlock(mx);
+    logmsg("hooked fscommand (vtable slot %08X%s)", VT_FSCMD, cur != FN_FSCMD ? ", after another add-on's" : "");
     return ok;
 }
 // Invoke: its own bytes, or another add-on's jump (LobbyStats, MMFind) - chained either way, as MMFind does
@@ -490,10 +534,9 @@ static int hook_invoke(void) {
     logmsg("hooked Invoke%s", chained ? " (after another add-on's hook)" : "");
     return ok;
 }
-static int g_fsHooked, g_fsLater;
+static int g_fsHooked;
 static void __stdcall upd_hook(float dt) {
     g_updOrig(dt);
-    if (g_fsLater && !g_fsHooked) { g_fsHooked = hook_fscmd(); g_fsLater = 0; }
     DWORD now = GetTickCount();
     if (g_noticeUntil && (int)(now - g_noticeUntil) > 0) {          // the notice was read: cover off (and the list when it was a failed join)
         g_noticeUntil = 0; g_coverWant = 0;
@@ -528,15 +571,13 @@ BOOL WINAPI DllMain(HINSTANCE h, DWORD r, LPVOID _) {
     if (r != DLL_PROCESS_ATTACH) return TRUE;
     DisableThreadLibraryCalls(h); InitializeCriticalSection(&g_lk);
     GetModuleFileNameW(h, g_dir, MAX_PATH); wchar_t *s = wcsrchr(g_dir, L'\\'); if (s) s[1] = 0;
-    logmsg("RoomJoin 7 (experiment: joining a room from the launcher's Lobbies tab)");
+    logmsg("RoomJoin 8 (experiment: joining a room from the launcher's Lobbies tab)");
     { char n[64]; wsprintfA(n, "Local\\dow2patch_RoomJoin_%lu", GetCurrentProcessId());
       HANDLE mx = CreateMutexA(NULL, FALSE, n); if (mx && GetLastError() == ERROR_ALREADY_EXISTS) { logmsg("another RoomJoin copy is active, this one stays idle"); return TRUE; } }
-    // MMFind checks the fscommand handler's own bytes when it starts: in the folder but not in the game yet -> hook on the first tick
-    wchar_t mm[MAX_PATH]; _snwprintf(mm, MAX_PATH, L"%lsMMFind.dll", g_dir);
-    unsigned char *f = (unsigned char *)FN_FSCMD;
-    if (!IsBadReadPtr(f, 1) && f[0] != 0xE9 && GetFileAttributesW(mm) != INVALID_FILE_ATTRIBUTES && !GetModuleHandleW(L"MMFind.dll")) {
-        g_fsLater = 1; logmsg("MMFind.dll not in the game yet: the fscommand hook on the first frame");
-    } else g_fsHooked = hook_fscmd();
+    { wchar_t ini[MAX_PATH]; _snwprintf(ini, MAX_PATH, L"%lsRoomJoin.ini", g_dir);
+      if (!GetPrivateProfileIntW(L"RoomJoin", L"Enabled", 1, ini)) { logmsg("disabled in RoomJoin.ini - no hooks"); return TRUE; } }
+    g_fsHooked = hook_fscmd();                    // the vtable slot: the same whether MMFind is in the game already or comes later
+    if (!g_fsHooked) return TRUE;                 // without it no join can be done: nothing else either
     hook_invoke();
     CloseHandle(CreateThread(NULL, 0, installer, NULL, 0, NULL));
     return TRUE;

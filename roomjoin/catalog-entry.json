@@ -1,10 +1,11 @@
 {
   "_readme": "The launcher catalog (launcher.json) entry for RoomJoin, by hand like JoinSound. With it on (or RoomJoin.dll in Elite_DLLs) the launcher's Lobbies tab shows Join on Elite rooms without a password.",
   "id": "roomjoin",
-  "version": "roomjoin-1",
+  "version": "roomjoin-2",
   "inject": "RoomJoin.dll",
   "default": false,
   "category": "experiment",
+  "order": 10,
   "name": { "en": "Join a lobby from the launcher (test)", "ru": "Вход в комнату из лаунчера (тест)", "es": "Entrar a una sala desde el launcher (prueba)", "fr": "Rejoindre un salon depuis le launcher (test)", "de": "Lobby aus dem Launcher betreten (Test)" },
   "description": {
     "en": "EXPERIMENT. A Join button on the Lobbies tab for Elite rooms without a password: the game starts and walks into the room by itself (a 'Joining the Game' screen). If it can't, the game shows the public games list. The automatch is not touched.",

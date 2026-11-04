@@ -4,6 +4,28 @@ Every version gets an entry here before it reaches `main`. CI then tags `vX.Y.Z`
 version (`X.Y.0`) it also publishes a GitHub Release with the DLLs and the entries since the previous `X.Y.0`.
 The version of the set lives only in `VERSION`; each DLL still writes its own version to its log.
 
+## 0.2.1 — 2026-11-04
+Texts for players (siritos 04.11.2026: the add-on texts and the news were written for us, not for players) and RoomJoin 8.
+- RoomJoin 8 (store roomjoin-2; review of roomjoin-1, 03.11): the automatch first - while MMFind's cover is up (its walk
+  through the menus to a found match) or a search runs on Find a Game (the game's own search animation, or Start Searching
+  pressed there), a Join is dropped ("fail automatch" in RoomJoin_result.txt) and the screen is not touched: no Back on Find a
+  Game any more (a notice to leave it first; over MMFind's cover nothing is shown). The fscommand hook is now the handler's
+  vtable slot 0x010BAC9C (its only reference in DOW2.exe 3.19), not a patch of 0x681AB0: the code MMFind checks when it
+  starts stays original, so RoomJoin can load before or after MMFind (the deferred first-frame hook is gone). The screen is
+  forgotten when a match loads (after a match: a false "You are in another lobby"). The per-request state (menu movie known,
+  probe, Back timer) is reset with each request, not by a frame within 50 ms. RoomJoin.ini [RoomJoin] Enabled=0: off.
+  Built, not yet tested in the game.
+- docs/store-texts.json: new name, description and category of every add-on in the store, in plain words, 5 languages;
+  copied into addons.json (its 14 add-ons). docs/ADDON_TEXTS.md: how to write them. scripts/store_texts.py: check them, copy
+  them into addons.json, or into a store launcher.json for the hand-released add-ons (automatch, relay_r2, relay_fwd,
+  elitefix_wmic, rusifikator; nothing in the store is changed by this commit).
+- Every add-on names its group and its place in the group in its own entry: "category" (network / interface / gameplay /
+  fixes / experiment / other) and "order" (a number, smaller = higher) - in addons.json, docs/store-texts.json and
+  roomjoin/catalog-entry.json; the deploy carries both into the store, launcher 1.4.8 places add-ons by them.
+- Player notes: changelog/<version>/en.md + ru.md (from 0.2.1 on; what is released stays as it is). The GitHub Release of an X.Y.0 is
+  made from them instead of this file, and the launcher shows them as news (ru.md for Russian players, as for the launcher);
+  scripts/release_notes.py check fails without them.
+
 ## 0.2.0 — 2026-11-04
 Everything released to players on 03-04.11.2026 is in main (PR #11, release/main-0311, merge 31f3ea5); README, addons.json and
 docs now match the launcher store.

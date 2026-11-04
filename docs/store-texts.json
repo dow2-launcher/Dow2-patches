@@ -1,0 +1,349 @@
+{
+  "_readme": [
+    "Player texts of every add-on in the launcher store (store3/launcher.json), by store id: category, name, description; option names only where they changed.",
+    "How to write them: docs/ADDON_TEXTS.md. Applied to a launcher.json by scripts/store_texts.py (then sign it as usual); the add-ons of addons.json get the same texts there, so a deploy keeps them.",
+    "category = the group on the launcher's Add-ons tab: network, interface, gameplay, fixes, experiment, other; order = the place inside it (smaller = higher)."
+  ],
+  "relay_r2": {
+    "category": "network",
+    "order": 10,
+    "name": {
+      "en": "Play through our servers",
+      "ru": "Игры через наши серверы",
+      "es": "Jugar a través de nuestros servidores",
+      "fr": "Jouer via nos serveurs",
+      "de": "Über unsere Server spielen"
+    },
+    "description": {
+      "en": "Automatch games run through our nearest server (Poland, Germany or Moscow): less lag and fewer disconnects. Ordinary lobbies are not affected.",
+      "ru": "Игры автоматча идут через наш ближайший сервер (Польша, Германия или Москва): меньше лагов и обрывов. Обычные лобби это не затрагивает.",
+      "es": "Las partidas del automatch pasan por nuestro servidor más cercano (Polonia, Alemania o Moscú): menos lag y menos desconexiones. Las salas normales no cambian.",
+      "fr": "Les parties de l'automatch passent par notre serveur le plus proche (Pologne, Allemagne ou Moscou) : moins de lag et de déconnexions. Les salons normaux ne changent pas.",
+      "de": "Automatch-Spiele laufen über unseren nächsten Server (Polen, Deutschland oder Moskau): weniger Lag und Verbindungsabbrüche. Normale Lobbys bleiben, wie sie sind."
+    }
+  },
+  "relay_fwd": {
+    "category": "network",
+    "order": 20,
+    "name": {
+      "en": "All games through our server (if Relic lags)",
+      "ru": "Все игры через наш сервер (если Relic лагает)",
+      "es": "Todas las partidas por nuestro servidor (si Relic va mal)",
+      "fr": "Toutes les parties via notre serveur (si Relic rame)",
+      "de": "Alle Spiele über unseren Server (wenn Relic hakt)"
+    },
+    "description": {
+      "en": "Turn it on if your games on Relic lag or disconnect. Every online game then goes through our nearest server, which passes it on to Relic. If our server can't be reached, the game connects directly as usual.",
+      "ru": "Включайте, если игры через Relic у вас лагают или обрываются. Тогда все сетевые игры пойдут через наш ближайший сервер, а он передаст их Relic. Если наш сервер недоступен, игра подключится напрямую, как обычно.",
+      "es": "Actívalo si tus partidas en Relic van con lag o se cortan. Todas las partidas en línea pasarán por nuestro servidor más cercano, que las envía a Relic. Si no está disponible, el juego se conecta directo como siempre.",
+      "fr": "À activer si vos parties sur Relic rament ou se coupent. Toutes les parties en ligne passent alors par notre serveur le plus proche, qui les transmet à Relic. S'il est injoignable, le jeu se connecte directement comme d'habitude.",
+      "de": "Einschalten, wenn deine Spiele über Relic haken oder abbrechen. Dann laufen alle Online-Spiele über unseren nächsten Server, der sie an Relic weitergibt. Ist er nicht erreichbar, verbindet sich das Spiel wie gewohnt direkt."
+    }
+  },
+  "automatch": {
+    "category": "network",
+    "order": 30,
+    "name": {
+      "en": "Automatch v2.0",
+      "ru": "Автоматч v2.0",
+      "es": "Automatch v2.0",
+      "fr": "Automatch v2.0",
+      "de": "Automatch v2.0"
+    },
+    "description": {
+      "en": "Quick matches by rating on our servers: Multiplayer → Find a Game → Start Searching. 1v1, 2v2 and 3v3, the match starts within seconds. If it can't run, Find a Game says why. Ordinary lobbies are not affected.",
+      "ru": "Быстрый подбор соперника по рейтингу на наших серверах: Мультиплеер → Find a Game → Start Searching. 1v1, 2v2 и 3v3, матч стартует за секунды. Если что-то не так, на экране Find a Game написано, что делать. Обычные лобби не меняются.",
+      "es": "Partidas rápidas por rating en nuestros servidores: Multijugador → Find a Game → Start Searching. 1v1, 2v2 y 3v3, la partida empieza en segundos. Si no puede funcionar, Find a Game dice por qué. Las salas normales no cambian.",
+      "fr": "Parties rapides au classement sur nos serveurs : Multijoueur → Find a Game → Start Searching. 1v1, 2v2 et 3v3, la partie démarre en quelques secondes. En cas de souci, Find a Game explique pourquoi. Les salons normaux ne changent pas.",
+      "de": "Schnelle Spiele nach Rating auf unseren Servern: Mehrspieler → Find a Game → Start Searching. 1v1, 2v2 und 3v3, das Spiel startet in Sekunden. Klappt es nicht, sagt Find a Game warum. Normale Lobbys bleiben, wie sie sind."
+    }
+  },
+  "steamkeep": {
+    "category": "network",
+    "order": 40,
+    "name": {
+      "en": "Keep the match when Steam drops",
+      "ru": "Матч не обрывается при сбое Steam",
+      "es": "La partida sigue si Steam se cae",
+      "fr": "La partie continue si Steam décroche",
+      "de": "Spiel läuft weiter, wenn Steam ausfällt"
+    },
+    "description": {
+      "en": "If Steam loses its connection or restarts during a match, the game no longer throws you out: you play to the end, the result and the replay are saved.",
+      "ru": "Если во время матча у Steam пропала связь или он перезапустился, игра больше не выкидывает вас из матча: вы доигрываете до конца, результат и реплей сохраняются.",
+      "es": "Si Steam pierde la conexión o se reinicia durante una partida, el juego ya no te echa: juegas hasta el final y el resultado y la repetición se guardan.",
+      "fr": "Si Steam perd la connexion ou redémarre pendant une partie, le jeu ne vous éjecte plus : vous jouez jusqu'au bout, le résultat et le replay sont enregistrés.",
+      "de": "Verliert Steam während eines Spiels die Verbindung oder startet neu, wirft dich das Spiel nicht mehr raus: du spielst zu Ende, Ergebnis und Replay werden gespeichert."
+    }
+  },
+  "matchtimer_r2": {
+    "category": "interface",
+    "order": 10,
+    "name": {
+      "en": "Match timer",
+      "ru": "Таймер матча",
+      "es": "Cronómetro de partida",
+      "fr": "Chrono de partie",
+      "de": "Spieluhr"
+    },
+    "description": {
+      "en": "How long the match has been going, right in the game's interface. Choose where it sits below.",
+      "ru": "Сколько идёт матч — прямо в интерфейсе игры. Где показывать, выберите ниже.",
+      "es": "Cuánto dura la partida, en la propia interfaz del juego. Elige abajo dónde mostrarlo.",
+      "fr": "Depuis combien de temps dure la partie, dans l'interface du jeu. Choisissez l'emplacement ci-dessous.",
+      "de": "Wie lange das Spiel schon läuft, direkt in der Spieloberfläche. Wo, wählst du unten."
+    }
+  },
+  "apm": {
+    "category": "interface",
+    "order": 20,
+    "name": {
+      "en": "APM (actions per minute)",
+      "ru": "APM (действия в минуту)",
+      "es": "APM (acciones por minuto)",
+      "fr": "APM (actions par minute)",
+      "de": "APM (Aktionen pro Minute)"
+    },
+    "description": {
+      "en": "How many clicks and key presses per minute you make, shown during the match. Only you see it.",
+      "ru": "Сколько кликов и нажатий в минуту вы делаете — прямо во время матча. Видите только вы.",
+      "es": "Cuántos clics y teclas por minuto haces, durante la partida. Solo lo ves tú.",
+      "fr": "Combien de clics et de touches par minute vous faites, pendant la partie. Vous seul le voyez.",
+      "de": "Wie viele Klicks und Tasten pro Minute du machst, während des Spiels. Nur du siehst es."
+    }
+  },
+  "cooldowns_r2": {
+    "category": "interface",
+    "order": 30,
+    "name": {
+      "en": "Cooldown seconds",
+      "ru": "Секунды перезарядки",
+      "es": "Segundos de recarga",
+      "fr": "Secondes de recharge",
+      "de": "Abklingzeit in Sekunden"
+    },
+    "description": {
+      "en": "The seconds left until an ability (and a global ability) is ready, as a number on its button.",
+      "ru": "Сколько секунд осталось до готовности способности (и глобальной тоже) — цифрой на её кнопке.",
+      "es": "Los segundos que faltan para que una habilidad (también global) esté lista, como número en su botón.",
+      "fr": "Les secondes restantes avant qu'une capacité (globale aussi) soit prête, en chiffre sur son bouton.",
+      "de": "Die Sekunden, bis eine Fähigkeit (auch eine globale) bereit ist, als Zahl auf ihrer Taste."
+    }
+  },
+  "lobbystats_r3": {
+    "category": "interface",
+    "order": 40,
+    "name": {
+      "en": "Player ratings in the lobby",
+      "ru": "Рейтинг игроков в лобби",
+      "es": "Rating de los jugadores en la sala",
+      "fr": "Classement des joueurs dans le salon",
+      "de": "Spieler-Rating in der Lobby"
+    },
+    "description": {
+      "en": "Each player's rating next to their name in the lobby. Hover over it for win rate, games played and Steam hours.",
+      "ru": "Рейтинг каждого игрока рядом с его именем в лобби. Наведите мышку — увидите процент побед, число игр и часы в Steam.",
+      "es": "El rating de cada jugador junto a su nombre en la sala. Pasa el ratón para ver victorias, partidas y horas en Steam.",
+      "fr": "Le classement de chaque joueur à côté de son nom dans le salon. Survolez-le pour voir victoires, parties et heures Steam.",
+      "de": "Das Rating jedes Spielers neben seinem Namen in der Lobby. Mit der Maus darüber: Siegquote, Spiele und Steam-Stunden."
+    }
+  },
+  "loadingratings_r3": {
+    "category": "interface",
+    "order": 50,
+    "name": {
+      "en": "Ratings on the loading screen",
+      "ru": "Рейтинг на экране загрузки",
+      "es": "Rating en la pantalla de carga",
+      "fr": "Classement à l'écran de chargement",
+      "de": "Rating im Ladebildschirm"
+    },
+    "description": {
+      "en": "Each player's rating next to their name while an online match is loading.",
+      "ru": "Рейтинг каждого игрока рядом с его именем, пока грузится онлайн-матч.",
+      "es": "El rating de cada jugador junto a su nombre mientras carga una partida en línea.",
+      "fr": "Le classement de chaque joueur à côté de son nom pendant le chargement d'une partie en ligne.",
+      "de": "Das Rating jedes Spielers neben seinem Namen, während ein Online-Spiel lädt."
+    }
+  },
+  "joinsound": {
+    "category": "interface",
+    "order": 60,
+    "name": {
+      "en": "Sound when someone joins your lobby",
+      "ru": "Звук, когда кто-то зашёл в лобби",
+      "es": "Sonido cuando alguien entra en tu sala",
+      "fr": "Son quand quelqu'un rejoint votre salon",
+      "de": "Ton, wenn jemand deiner Lobby beitritt"
+    },
+    "description": {
+      "en": "If the game is minimized and a player joins your lobby, you hear a sound and the taskbar button flashes. Soft or sharp.",
+      "ru": "Если игра свёрнута, а в ваше лобби зашёл игрок, прозвучит сигнал и замигает значок на панели задач. Звук мягкий или резкий.",
+      "es": "Si el juego está minimizado y alguien entra en tu sala, suena un aviso y parpadea el botón de la barra de tareas. Suave o fuerte.",
+      "fr": "Si le jeu est réduit et qu'un joueur rejoint votre salon, un son retentit et le bouton de la barre des tâches clignote. Doux ou vif.",
+      "de": "Ist das Spiel minimiert und jemand tritt deiner Lobby bei, ertönt ein Ton und die Taskleiste blinkt. Sanft oder scharf."
+    }
+  },
+  "reverse_r2": {
+    "category": "gameplay",
+    "order": 10,
+    "name": {
+      "en": "Reverse",
+      "ru": "Задний ход",
+      "es": "Marcha atrás",
+      "fr": "Marche arrière",
+      "de": "Rückwärtsgang"
+    },
+    "description": {
+      "en": "Like in Company of Heroes: Ctrl + right-click behind a vehicle (or on the minimap) and it backs up there, keeping its front armour to the enemy.",
+      "ru": "Как в Company of Heroes: Ctrl + правый клик позади техники (или на миникарте) — она отъедет туда задом, не подставляя врагу корму.",
+      "es": "Como en Company of Heroes: Ctrl + clic derecho detrás de un vehículo (o en el minimapa) y retrocede hasta allí, con el blindaje frontal hacia el enemigo.",
+      "fr": "Comme dans Company of Heroes : Ctrl + clic droit derrière un véhicule (ou sur la minicarte) et il recule jusque-là, blindage avant face à l'ennemi.",
+      "de": "Wie in Company of Heroes: Strg + Rechtsklick hinter ein Fahrzeug (oder auf die Minikarte) und es fährt rückwärts dorthin, die Frontpanzerung zum Feind."
+    }
+  },
+  "jumpretry": {
+    "category": "gameplay",
+    "order": 20,
+    "name": {
+      "en": "Jumps don't fail on obstacles",
+      "ru": "Прыжок не срывается",
+      "es": "Los saltos no fallan por obstáculos",
+      "fr": "Les sauts n'échouent plus sur les obstacles",
+      "de": "Sprünge scheitern nicht an Hindernissen"
+    },
+    "description": {
+      "en": "If a jumper (the Autarch, for example) stumbles over an obstacle on the way and the jump fails, he jumps again by himself right after landing. Any new order you give cancels it.",
+      "ru": "Если прыгун (например, автарх) по пути запнулся о препятствие и прыжок сорвался, он сам прыгнет снова сразу после приземления. Любой ваш новый приказ это отменяет.",
+      "es": "Si un saltador (por ejemplo, el Autarca) tropieza con un obstáculo y el salto falla, vuelve a saltar solo al aterrizar. Cualquier orden nueva lo cancela.",
+      "fr": "Si un sauteur (l'Autarque par exemple) bute sur un obstacle et que le saut échoue, il ressaute tout seul dès l'atterrissage. Tout nouvel ordre l'annule.",
+      "de": "Bleibt ein Springer (etwa der Autarch) unterwegs an einem Hindernis hängen und der Sprung scheitert, springt er nach der Landung von selbst erneut. Jeder neue Befehl bricht das ab."
+    }
+  },
+  "reinforcefix": {
+    "category": "gameplay",
+    "order": 30,
+    "name": {
+      "en": "Auto-reinforce after the Webway Gate",
+      "ru": "Автоподкрепление после врат Паутины",
+      "es": "Refuerzo automático tras el Portal de la Telaraña",
+      "fr": "Renfort auto après la Porte de la Toile",
+      "de": "Auto-Verstärkung nach dem Netzportal"
+    },
+    "description": {
+      "en": "A squad that goes through an Eldar Webway Gate no longer loses its auto-reinforce.",
+      "ru": "Отряд, прошедший через врата Паутины эльдар, больше не теряет включённое автоподкрепление.",
+      "es": "Una escuadra que pasa por un Portal de la Telaraña eldar ya no pierde el refuerzo automático.",
+      "fr": "Une escouade qui passe par une Porte de la Toile eldar ne perd plus son renfort automatique.",
+      "de": "Ein Trupp, der durch ein Eldar-Netzportal geht, verliert seine Auto-Verstärkung nicht mehr."
+    }
+  },
+  "elitefix_wmic": {
+    "category": "fixes",
+    "order": 10,
+    "name": {
+      "en": "Fix: Elite crashes on Windows 11 25H2",
+      "ru": "Исправление: вылет Elite на Windows 11 25H2",
+      "es": "Arreglo: Elite se cierra en Windows 11 25H2",
+      "fr": "Correctif : plantage d'Elite sous Windows 11 25H2",
+      "de": "Fix: Elite stürzt unter Windows 11 25H2 ab"
+    },
+    "description": {
+      "en": "Turn it on if you have Windows 11 25H2 and Elite.exe crashes right after the game starts. Turn it off and the original file comes back.",
+      "ru": "Включайте, если у вас Windows 11 25H2 и Elite.exe падает сразу после запуска игры. Снимете галочку — вернётся исходный файл.",
+      "es": "Actívalo si tienes Windows 11 25H2 y Elite.exe se cierra nada más iniciar el juego. Al desactivarlo vuelve el archivo original.",
+      "fr": "À activer si vous avez Windows 11 25H2 et qu'Elite.exe plante juste après le lancement du jeu. Désactivé, le fichier d'origine revient.",
+      "de": "Einschalten, wenn du Windows 11 25H2 hast und Elite.exe direkt nach dem Spielstart abstürzt. Ausgeschaltet kommt die Originaldatei zurück."
+    }
+  },
+  "obsfix_r2": {
+    "category": "fixes",
+    "order": 20,
+    "name": {
+      "en": "Smoother spectating",
+      "ru": "Без тормозов в режиме наблюдателя",
+      "es": "Espectador sin tirones",
+      "fr": "Mode spectateur plus fluide",
+      "de": "Flüssiger Zuschauermodus"
+    },
+    "description": {
+      "en": "Removes the stutter when you watch someone else's live game as an observer.",
+      "ru": "Убирает подтормаживания, когда вы смотрите чужую игру как наблюдатель.",
+      "es": "Quita los tirones cuando ves una partida ajena como espectador.",
+      "fr": "Supprime les saccades quand vous regardez la partie d'autres joueurs en spectateur.",
+      "de": "Beseitigt das Ruckeln, wenn du als Zuschauer ein fremdes Spiel ansiehst."
+    }
+  },
+  "crashlog": {
+    "category": "fixes",
+    "order": 30,
+    "name": {
+      "en": "Record game crashes",
+      "ru": "Запись вылетов игры",
+      "es": "Registrar cierres del juego",
+      "fr": "Enregistrer les plantages du jeu",
+      "de": "Spielabstürze aufzeichnen"
+    },
+    "description": {
+      "en": "If your game sometimes closes by itself: turn this on, wait for the crash, then press \"Send logs\" in the launcher settings. That tells us the cause. Nothing changes in the game.",
+      "ru": "Если игра у вас иногда сама закрывается: включите, дождитесь вылета и нажмите «Отправить логи» в настройках лаунчера. Так мы узнаем причину. В игре ничего не меняется.",
+      "es": "Si el juego a veces se cierra solo: actívalo, espera al cierre y pulsa «Enviar registros» en los ajustes del launcher. Así sabremos la causa. En el juego no cambia nada.",
+      "fr": "Si votre jeu se ferme parfois tout seul : activez, attendez le plantage puis cliquez sur « Envoyer les journaux » dans les réglages du lanceur. Nous saurons pourquoi. Rien ne change en jeu.",
+      "de": "Schließt sich dein Spiel manchmal von selbst: einschalten, auf den Absturz warten und in den Launcher-Einstellungen „Logs senden“ drücken. So finden wir die Ursache. Im Spiel ändert sich nichts."
+    }
+  },
+  "roomjoin": {
+    "category": "experiment",
+    "order": 10,
+    "name": {
+      "en": "Join a lobby from the launcher",
+      "ru": "Вход в лобби из лаунчера",
+      "es": "Entrar a una sala desde el launcher",
+      "fr": "Rejoindre un salon depuis le lanceur",
+      "de": "Lobby aus dem Launcher betreten"
+    },
+    "description": {
+      "en": "A Join button on the Lobbies tab: the game starts and goes into the chosen lobby by itself. Still being tested.",
+      "ru": "Кнопка «Войти» на вкладке «Комнаты»: игра сама запустится и зайдёт в выбранное лобби. Пока в тесте.",
+      "es": "Un botón Entrar en la pestaña Salas: el juego se inicia y entra solo en la sala elegida. Aún en pruebas.",
+      "fr": "Un bouton Rejoindre dans l'onglet Salons : le jeu démarre et entre seul dans le salon choisi. Encore en test.",
+      "de": "Ein Beitreten-Knopf im Tab Lobbys: das Spiel startet und tritt der gewählten Lobby selbst bei. Noch im Test."
+    }
+  },
+  "netprobe": {
+    "category": "experiment",
+    "order": 20,
+    "name": {
+      "en": "Connection check to our servers",
+      "ru": "Проверка связи с нашими серверами",
+      "es": "Prueba de conexión con nuestros servidores",
+      "fr": "Test de connexion à nos serveurs",
+      "de": "Verbindungstest zu unseren Servern"
+    },
+    "description": {
+      "en": "Help us with our servers: turn it on, start the game and wait 2 minutes in the menu. The game checks the connection to our servers (about 5 MB) and sends us the result. It doesn't affect play.",
+      "ru": "Помогите нам с серверами: включите, запустите игру и подождите 2 минуты в меню. Игра проверит связь с нашими серверами (около 5 МБ) и сама пришлёт нам результат. На игру не влияет.",
+      "es": "Ayúdanos con los servidores: actívalo, inicia el juego y espera 2 minutos en el menú. El juego prueba la conexión con nuestros servidores (unos 5 MB) y nos envía el resultado. No afecta al juego.",
+      "fr": "Aidez-nous avec nos serveurs : activez, lancez le jeu et attendez 2 minutes dans le menu. Le jeu teste la connexion à nos serveurs (environ 5 Mo) et nous envoie le résultat. Sans effet sur le jeu.",
+      "de": "Hilf uns bei den Servern: einschalten, Spiel starten und 2 Minuten im Menü warten. Das Spiel prüft die Verbindung zu unseren Servern (etwa 5 MB) und schickt uns das Ergebnis. Kein Einfluss aufs Spiel."
+    }
+  },
+  "rusifikator": {
+    "category": "other",
+    "order": 10,
+    "name": {
+      "en": "Russian translation (by Gosudar)",
+      "ru": "Русский перевод (автор — Gosudar)",
+      "es": "Traducción al ruso (de Gosudar)",
+      "fr": "Traduction russe (par Gosudar)",
+      "de": "Russische Übersetzung (von Gosudar)"
+    },
+    "description": {
+      "en": "Russian text for Dawn of War II and Elite 3.2 by Gosudar. Turn it off and the English text comes back. Support the author: boosty.to/gosudar412th",
+      "ru": "Русский текст Dawn of War II и Elite 3.2 от Gosudar. Снимете галочку — вернётся английский. Поддержать автора: boosty.to/gosudar412th",
+      "es": "Texto en ruso para Dawn of War II y Elite 3.2 de Gosudar. Al desactivarlo vuelve el inglés. Apoya al autor: boosty.to/gosudar412th",
+      "fr": "Texte russe pour Dawn of War II et Elite 3.2 par Gosudar. Désactivé, l'anglais revient. Soutenir l'auteur : boosty.to/gosudar412th",
+      "de": "Russischer Text für Dawn of War II und Elite 3.2 von Gosudar. Ausgeschaltet kommt Englisch zurück. Den Autor unterstützen: boosty.to/gosudar412th"
+    }
+  }
+}
