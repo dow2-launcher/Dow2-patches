@@ -1,0 +1,3 @@
+- The add-on descriptions are rewritten: shorter and in plain words - what you get and when to turn it on.
+- Add-ons are split into clear groups: network, interface, gameplay, fixes, experiments.
+- Join a lobby from the launcher: never interferes with the automatch any more: while a search runs or a match is found, Join does nothing - leave the search first.

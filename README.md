@@ -30,7 +30,7 @@ are client-side, and the other players in the match don't need them.
 | **Reverse (test)** | Ctrl + right-click behind your vehicles: they back off driving backwards, front armour to the enemy. | `reverse_r2` → `reverse-4` | `reverse/` | no (the game's own orders) |
 | **Don't drop out of the match when Steam goes away** | A match is played to the end when Steam loses its connection, however long it is away. | `steamkeep` → `steamkeep-2` | `steamkeep/` | no |
 | **Observer lag fix (experimental)** | Spectating a live game no longer stutters. | `obsfix_r2` → `obsfix-1` | `obsfix/` | no |
-| **Join a lobby from the launcher (test)** | Experiment by siritos: a Join button on the launcher's Lobbies tab; the game starts and walks into the room by itself. | `roomjoin` → `roomjoin-1` | `roomjoin/` | no |
+| **Join a lobby from the launcher (test)** | Experiment by siritos: a Join button on the launcher's Lobbies tab; the game starts and walks into the room by itself. | `roomjoin` → `roomjoin-2` | `roomjoin/` | no |
 | **Record game crashes (for the developers)** | Writes where the game crashed and what closed it, for "Send logs". | `crashlog` → `crashlog-1` | `crashlog/` | no |
 | **EXPERIMENT: connection check to our servers** | Once per game start, 1-2 minutes in the background: what gets through from your computer to our game servers; sends us the result. | `netprobe` → `netprobe-2` | `netprobe/` | no |
 | **Fix: Elite.exe crash on Windows 11 25H2** | An Elite.exe without its wmic check (wmic is gone in 25H2, Elite.exe crashed on it). | `elitefix_wmic` → `elitefix-nowmic-1` | not in this repo (one jump patched in Elite.exe) | no |
@@ -115,10 +115,12 @@ obsfix/ - **ObsFix.dll** (ObsFix v1)
     When you spectate a live game the client asks "which slot am I in" dozens of times per frame and rebuilds the whole match
     info every time. ObsFix caches the answer for 500 ms. Write-up: docs/OBSERVER_LAG.md
 
-roomjoin/ - **RoomJoin.dll** (RoomJoin 7, roomjoin-1) - siritos's experiment
+roomjoin/ - **RoomJoin.dll** (RoomJoin 8, roomjoin-2) - siritos's experiment
     The launcher writes Elite_DLLs/RoomJoin.txt (room id, name) and starts the game or brings it to the front; in the main menu
     RoomJoin shows a cover, joins by the room id (the game browser's own join), opens the lobby screen and steps aside. A no from
-    the game or 25 s: the reason, then the public games list. Hooks chained onto MMFind's. Store entry: roomjoin/catalog-entry.json.
+    the game or 25 s: the reason, then the public games list. Never during the automatch (MMFind's cover, a search on Find a
+    Game): the Join is dropped. Any load order with MMFind (the fscommand hook is a vtable slot). RoomJoin.ini Enabled=0 = off.
+    Store entry: roomjoin/catalog-entry.json.
 
 crashlog/ - **CrashLog.dll** (CrashLog 1)
     No hooks into the game: serious exceptions with module+offset and stack, a minidump on a crash, and who called ExitProcess /
@@ -154,12 +156,14 @@ Elite: winmm.dll next to DOW2.exe, patches into dow2-patches\.
 
 ## Versions and CI
 
-- The version of the set lives only in `VERSION` and needs a `## X.Y.Z` entry in CHANGELOG.md (CI runs
-  `scripts/release_notes.py check`). Each DLL writes its own version to its log; the store has its own version per add-on.
+- The version of the set lives only in `VERSION` and needs a `## X.Y.Z` entry in CHANGELOG.md (for us, technical) and
+  player notes in `changelog/X.Y.Z/en.md` + `ru.md` (plain words, see docs/ADDON_TEXTS.md) - CI runs
+  `scripts/release_notes.py check`. Each DLL writes its own version to its log; the store has its own version per add-on.
 - CI (.github/workflows/build.yml) builds every push and PR and does a dry-run publish into a temporary store with a one-off key.
   It uploads nothing to the mirrors and has no store key: CI never changes what players get.
 - After a merge to main CI tags `vX.Y.Z` if the tag is new; for `X.Y.0` it also makes a GitHub Release with the DLLs and the
-  CHANGELOG entries since the previous X.Y.0. Tags are set by CI, not by hand.
+  player notes (changelog/<version>/en.md) since the previous X.Y.0 - the launcher shows them as news. Tags are set by CI,
+  not by hand.
 
 ## Releasing to players
 
