@@ -1,4 +1,4 @@
-// Relay 17-21 (02-03.11.2026) - DoW2 Retribution / Elite: online games through OUR game servers. One source, two add-ons
+// Relay 17-22 (02-04.11.2026) - DoW2 Retribution / Elite: online games through OUR game servers. One source, two add-ons
 // (docs/ADDON_RULES.md: one feature - one DLL - one tick), two separate ticks in the launcher (owner 02.11.2026: the old
 // Fallback / Mode / Backup / UDP / Server controls were "убогие" - two clear ticks instead, the server is always automatic):
 //
@@ -28,6 +28,13 @@
 // "nearest" = the lowest delay. DOW2_RELAY_PING "ip:ms,..." (-1 = no answer) goes to the matchmaker only with Relay.dll on.
 // Removed in 17: Mode, Fallback (compatible / strict), Backup, UDP=, Hosts= (the hand pick), TCP to our servers, the
 // "game closed" windows of the strict mode.
+// Relay 22 (04.11.2026): the relay chain. A native game (our lobby server's room: the game connects to one of our nodes itself)
+// whose node this player can't reach - no UDP answer, or the stream check of Relay 18 failed (DPI) - plays through the
+// player's own nearest usable node: preamble "DWR4" + IPv4 + port (BE) of the room's node, then the game's stream; that node
+// passes it on to the room's node over our UDP tunnel between the nodes (battle_relay.py, du_client.py). Player -> his node ->
+// the session's node, never more. Before, such a player could not join at all (UDP to the node, then TCP to it, then nothing).
+// The pings offered to the matchmaker start with "0.0.0.22:22" - "this player can chain": the ladder may then put the match on a
+// node he doesn't reach (the lowest worst delay of all players, a chain = ping to his node + node -> node).
 // Relay 21 (03.11.2026): no global lock on the hot path. Relay 20 took one critical section and walked 64 slots on EVERY send /
 // WSASend of every socket of the process (the IAT of all modules is hooked) and on every connect - all the game's network
 // threads queued on it (players in Russia: "BattleServerRelay::Process - 177..325 ms between calls" with the add-on). Now a
@@ -255,7 +262,9 @@ static DWORD WINAPI ping_loop(LPVOID _) {
             int ms = g_ms[i] == 0 ? 1 : (int)g_ms[i];           // the matchmaker reads 0 as "no answer" (a local VPN once faked 0 ms over TCP)
             L += snprintf(env + L, sizeof env - L, "%s%s:%d", L ? "," : "", inet_ntoa(g_hosts[i]), ms);
         }
-        SetEnvironmentVariableA("DOW2_RELAY_PING", flag("DOW2_RELAY_OWN") ? env : NULL);   // only "use our servers" offers us to the matchmaker
+        // Relay 22: "0.0.0.22:22" first (MMFind passes it on as one more ping, the ladder reads it as "can chain"; old ladders ignore it)
+        char offer[300]; snprintf(offer, sizeof offer, "0.0.0.22:22%s%s", env[0] ? "," : "", env);
+        SetEnvironmentVariableA("DOW2_RELAY_PING", flag("DOW2_RELAY_OWN") ? offer : NULL);   // only "use our servers" offers us to the matchmaker
         if (strcmp(env, last)) { logmsg("relay: UDP ping %s", env); strcpy(last, env); }
         for (int k = 0; k < 60; k++) {                          // every 5 minutes, at once when MMFind wrote new Nodes=
             Sleep(5000);
@@ -283,7 +292,25 @@ static void pipe_relic(SOCKET g, SOCKET t, int skip) {         // forwarding fai
         if (FD_ISSET(t, &r)) { int n = g_recvOrig(t, buf, sizeof buf, 0); if (n <= 0 || g_sendOrig(g, buf, n, 0) != n) break; }
     }
 }
-static void udp_carry(SOCKET g, SOCKET u, DWORD cid, int ver);
+static void udp_carry(SOCKET g, SOCKET u, DWORD cid, int ver, const unsigned char *pre, int plen);
+// Relay 22: a native game whose node (x) this player can't reach - through his own nearest usable node, "DWR4" + x's address.
+// 1 = carried (the game is over), 0 = no other node of ours answers (the nodes in *tried are skipped, each one tried is added)
+static int native_chain(SOCKET g, TunArg *ta, DWORD *tried) {
+    int x = ta->node; unsigned char pre[10]; SOCKET u; DWORD cid; int ver; DWORD t0 = GetTickCount();
+    memcpy(pre, "DWR4", 4); memcpy(pre + 4, &g_hosts[x], 4); memcpy(pre + 8, &ta->relic.sin_port, 2);   // sin_port: already big-endian
+    for (int i = nearest(*tried); i >= 0; i = nearest(*tried)) {
+        *tried |= 1u << i;
+        if ((ver = udp_open(g_hosts[i], &u, &cid))) {
+            char xs[20]; snprintf(xs, sizeof xs, "%s", inet_ntoa(g_hosts[x]));
+            logmsg("udp: connection %08lX to %s, chain on to the room's node %s (handshake %lu ms, %s)", cid, inet_ntoa(g_hosts[i]), xs,
+                   GetTickCount() - t0, ver >= 2 ? "with copies" : "old gateway, no copies");
+            udp_carry(g, u, cid, ver, pre, sizeof pre); return 1;
+        }
+        g_ms[i] = -1;
+        logmsg("udp: %s does not answer over UDP", inet_ntoa(g_hosts[i]));
+    }
+    return 0;
+}
 static DWORD WINAPI tunnel(LPVOID pv) {
     TunArg ta = *(TunArg *)pv; free(pv);
     fd_set r; FD_ZERO(&r); FD_SET(ta.lst, &r); struct timeval tv = {30, 0};
@@ -293,15 +320,27 @@ static DWORD WINAPI tunnel(LPVOID pv) {
     int one = 1; setsockopt(g, IPPROTO_TCP, TCP_NODELAY, (char *)&one, sizeof one);
     u_long nb = 0; ioctlsocket(g, FIONBIO, &nb);
     SOCKET u; DWORD cid; DWORD tried = 0; DWORD t0 = GetTickCount(); int ver;
+    if (ta.own == 2) {                                          // Relay 22: native - the room's node if it is usable, else a chain
+        int x = ta.node;
+        if (g_ms[x] == -2) measure(x);
+        if (g_ms[x] < 0) {
+            logmsg("udp: the room's node %s is not usable from here (no answer or the stream does not get through) - through another of our nodes",
+                   inet_ntoa(g_hosts[x]));
+            tried |= 1u << x;
+            if (native_chain(g, &ta, &tried)) return 0;
+            tried &= ~(1u << x);                                // no other node either: the room's node itself after all
+        }
+    }
     for (int i = ta.node; i >= 0; i = ta.own == 1 ? nearest(tried) : -1) {
         tried |= 1u << i;
         if ((ver = udp_open(g_hosts[i], &u, &cid))) {
             logmsg("udp: connection %08lX to %s%s (handshake %lu ms, %s)", cid, inet_ntoa(g_hosts[i]), ta.own == 2 ? ", native" : "",
                    GetTickCount() - t0, ver >= 2 ? "with copies" : "old gateway, no copies");
-            udp_carry(g, u, cid, ver); return 0;
+            udp_carry(g, u, cid, ver, NULL, 0); return 0;
         }
         g_ms[i] = -1;                                           // until the next ping round
         logmsg("udp: %s does not answer over UDP", inet_ntoa(g_hosts[i]));
+        if (ta.own == 2 && !(tried & ~(1u << i)) && native_chain(g, &ta, &tried)) return 0;   // Relay 22: native, its node silent - a chain
     }
     if (ta.own != 1) {                                          // a Relic game: straight to Relic, as without the add-on; native: TCP to the node
         SOCKET t = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
@@ -343,13 +382,17 @@ static int u_ackpk(unsigned char *pk, DWORD cid, int ver, UPkt *snd, DWORD sbase
     if (!k) return 15;
     pk[2] = U_ACK2; pk[15] = (unsigned char)k; *copies += k; return o;
 }
-static void udp_carry(SOCKET g, SOCKET u, DWORD cid, int ver) {
+static void udp_carry(SOCKET g, SOCKET u, DWORD cid, int ver, const unsigned char *pre, int plen) {
     unsigned char pk[U_BUDGET + 64], ak[U_BUDGET + 64];
     UPkt *snd = calloc(U_WIN, sizeof(UPkt)); UPkt *rcv = calloc(U_WIN, sizeof(UPkt));   // ring buffers by packet number % U_WIN
     char *rhave = calloc(U_WIN, 1);
     DWORD snext = 0, sbase = 0, rnext = 0, lastIn = GetTickCount(), lastOut = 0, lastAck = (DWORD)-1; int dup = 0;
     double srtt = 150, rttvar = 50; unsigned resent = 0, sentn = 0, gotn = 0, gapn = 0, copies = 0, saved = 0; int gameOpen = 1;
     #define SACK() ({ DWORD m_ = 0; for (int i_ = 0; i_ < 32; i_++) if (rhave[(rnext + 1 + i_) % U_WIN]) m_ |= 1u << i_; m_; })
+    if (plen > 0 && plen <= U_MAXP) {                            // Relay 22: our preamble (DWR4) is the stream's first packet
+        UPkt *q = &snd[0]; memcpy(q->d, pre, plen); q->n = plen; q->first = q->last = GetTickCount(); q->sends = 1;
+        int len = u_build(pk, cid, ver, snd, sbase, snext, rnext, 0, &copies); send(u, (char *)pk, len, 0); snext++; sentn++; lastOut = q->first;
+    }
     for (;;) {
         DWORD now = GetTickCount();
         if (now - lastIn > 30000) { logmsg("udp: %08lX - nothing from the server for 30 s", cid); break; }
@@ -573,7 +616,7 @@ BOOL WINAPI DllMain(HINSTANCE h, DWORD reason, LPVOID _) {
     n += nx;
     int ns = g_sendOrig ? patch_imports((void *)g_sendOrig, (void *)send_hook) : 0;
     int nw = g_wsaSendOrig ? patch_imports((void *)g_wsaSendOrig, (void *)wsasend_hook) : 0;
-    logmsg("Relay 21 start (%s.dll carries the connections; our servers: %s, forwarding: %s - each tick is read at connect time; "
+    logmsg("Relay 22 start (%s.dll carries the connections; our servers: %s, forwarding: %s - each tick is read at connect time; "
            "UDP only, %d node(s)), connect hooked in %d import(s)%s, send %d, WSASend %d%s", ME,
            flag("DOW2_RELAY_OWN") ? "on" : "off (yet)", flag("DOW2_RELAY_FWD") ? "on" : "off (yet)", g_nHosts, n, nx ? " (the game's own one chained after another add-on)" : "", ns, nw,
            n ? "" : " - another add-on (automatch) already routes the relay, staying idle");

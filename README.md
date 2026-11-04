@@ -66,7 +66,7 @@ mmfind/ + ownlobby/ + vanilla-loader/ - **Automatch v2.0** (`automatch`, mmfind-
     key is only on the server) next to Relic's before RLink starts, so it must be loaded at process start - that is the early
     winmm.dll; loaded later it does nothing. OwnLobby.ini [OwnLobby] Servers=host:port;host:port. Wine/Proton: winmm=n,b.
 
-relay/ - **Relay.dll** (`relay_r2`) and **RelayForward.dll** (`relay_fwd`), Relay 21
+relay/ - **Relay.dll** (`relay_r2`) and **RelayForward.dll** (`relay_fwd`), Relay 22
     One source, two ticks. Relay.dll: a game goes straight through our game server when everyone in it reaches our servers
     (our automatch: the matchmaker knows every player's ping and picks the node). RelayForward.dll: every other online game goes
     through our nearest node, which passes it on to the Relic relay. UDP only (TCP to our servers gets cut in Russia), our own
