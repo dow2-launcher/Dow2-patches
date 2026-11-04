@@ -4,7 +4,52 @@ Every version gets an entry here before it reaches `main`. CI then tags `vX.Y.Z`
 version (`X.Y.0`) it also publishes a GitHub Release with the DLLs and the entries since the previous `X.Y.0`.
 The version of the set lives only in `VERSION`; each DLL still writes its own version to its log.
 
-## MMFind 0.45 (branch feature/mmfind-0.45, staging mmfind-0.45, not released)
+## 0.2.0 — 2026-11-04
+Everything released to players on 03-04.11.2026 is in main (PR #11, release/main-0311, merge 31f3ea5); README, addons.json and
+docs now match the launcher store.
+
+**In the store on 04.11.2026** (store3/launcher.json). Store id -> version -> what is inside (the version each DLL writes to its
+log) -> the folder. The source of each released DLL in main is the same as in the commit it was built from (listed in the
+sections below).
+- automatch -> mmfind-0.45 -> "Automatch v2.0", on by default: Elite_DLLs/MMFind.dll (MMFind 0.45, c845fbc) + Elite_DLLs/OwnLobby.dll
+  (OwnLobby 2, 7cc5f42) + winmm.dll next to DOW2.exe (vanilla-loader -DEARLY_ONLY). One tick by the owner's decision of
+  03.11.2026 (docs/ADDON_RULES.md). Only the native automatch on our servers; no classic flow, Relic's search is never started.
+- relay_r2 -> relay-21 -> Relay.dll (Relay 21, 4693a39), on by default; relay_fwd -> relayfwd-21 -> RelayForward.dll (Relay 21).
+  UDP only, copies of recent packets; from Moscow the way on to Relic goes through iggy (dow2-ladder gameserver/egress).
+- steamkeep -> steamkeep-2 -> SteamKeep 2 (c6d8d01)
+- jumpretry -> jumpretry-2 -> JumpRetry 2 (add4085)
+- reinforcefix -> reinforcefix-1 -> ReinforceFix v1
+- roomjoin -> roomjoin-1 -> RoomJoin 7 (72d832c, PR #10) - siritos's experiment
+- cooldowns_r2 -> cooldowns-7 -> Cooldowns 6 (a38a5a6)
+- matchtimer_r2 -> matchtimer-8 -> MatchTimer v5 (a38a5a6)
+- apm -> apm-1 -> APM 1 (a38a5a6)
+- lobbystats_r3 -> lobbystats-0.11.0 -> LobbyStats 0.11.0
+- loadingratings_r3 -> loadingratings-4 -> LoadingRatings v0.10.1 (0f725df)
+- joinsound -> joinsound-1 -> JoinSound 1
+- netprobe -> netprobe-2 -> NetProbe 2 (experiment)
+- crashlog -> crashlog-1 -> CrashLog 1
+- obsfix_r2 -> obsfix-1 -> ObsFix v1
+- reverse_r2 -> reverse-4 -> Reverse 4
+- elitefix_wmic -> elitefix-nowmic-1 -> Elite.exe without the wmic check (not built here)
+- rusifikator -> rusifikator-text-1 -> Gosudar's Russian text (not built here)
+- frameprobe_r2 -> frameprobe-off, eliteai_off -> eliteai-off: turned off for everyone.
+
+**Gone from the store:** ownlobby (in automatch since mmfind-0.44-r2 / 0.45), continue-1 (taken out on 03.11.2026: Relic's relay
+closes the match session 61 s after the match; continue/ stays here as research), the classic automatch, the fast automatch with
+private rooms and the menu rematch (MMFind 0.45).
+
+**This version (docs and build only, no DLL changes):**
+- README: the add-ons as the store has them - what each does, store id and version, folder, whether it can touch sync; what is
+  gone; how a release really goes (elite-release on rts; the dow2-patches-deploy timer is off on purpose).
+- addons.json: the store's ids, versions and texts for the 15 add-ons it can describe; the hand-released ones are listed in its
+  `_readme`. Nothing to publish: every version in it is already live.
+- docs/launcher-catalog-timer-apm.json removed (its entries are in the store and in addons.json); docs/ADDON_RULES.md: the
+  Automatch v2.0 exception.
+- Makefile: `make` also builds RelayForward.dll, OwnLobby.dll, CrashLog.dll and NetProbe.dll (released, but only built by name
+  before), so the GitHub Release carries every released DLL of this repo; build/early/winmm.dll stays a target of its own.
+- The sections below that said "not released" / "branch ..." are marked with what was released.
+
+## MMFind 0.45 (branch feature/mmfind-0.45; released 2026-11-03 as mmfind-0.45, "Automatch v2.0")
 - MMFind 0.45: only the native automatch (owner 03.11.2026: "the automatch is tested - remove the old one, keep only the
   new one"; "never start Relic's search - it does not work anyway"). Start Searching asks the ladder (mm/native) and, on its
   "yes", goes to the game: the game's own Find a Game search on our lobby server (OwnLobby.dll), as in 0.38-0.44 (poll 1 s,
@@ -25,9 +70,8 @@ The version of the set lives only in `VERSION`; each DLL still writes its own ve
 - Package mmfind-0.45 = Elite_DLLs/MMFind.dll + Elite_DLLs/OwnLobby.dll + winmm.dll (EARLY_ONLY), both from ownlobby-3
   (launcher "Automatch v2.0", one tick).
 
-## Continue 1 + MMFind 0.44 (branch feature/native-continue, staging continue-1 + mmfind-0.44, not released)
-## 2026-11-03 released
-What the launcher store (store3/launcher.json) gives players on 03.11.2026, all in this tree (branch release/consolidate-0311).
+## Store on 2026-11-03 (released; superseded by 0.2.0 above)
+What the launcher store (store3/launcher.json) gave players on 03.11.2026, all in this tree (branch release/consolidate-0311).
 Store id -> the version the DLL writes to its log -> the commit the released DLL was built from. Each module's source here is
 the same as in that commit (`git diff <commit> HEAD -- <module dir> common` is empty); rebuilt with the same compiler (and the
 same image base / link name), the DLLs are byte for byte the released ones but for the PE timestamps.
@@ -143,7 +187,7 @@ The sections below with "branch ..." in the heading are the details of these ver
   shutdown. After the match the game is not closed, so the result and the replay go out. ini: CloseWindowSec is gone,
   IgnoreSteamClose=1.
 
-## SteamKeep 1 (branch feature/steamkeep)
+## SteamKeep 1 (branch feature/steamkeep; released 2026-11-03 as steamkeep-1, then steamkeep-2)
 - SteamKeep 1 (new add-on, not in the launcher catalog yet): the match goes on when Steam goes away. DOW2.exe turns a Steam
   drop (SteamLoginService SetConnected(false) 0x004F6F20 -> bus events 0x0C / 1 / 2) into an end reason in GameObj
   (0x0041FB0E) and leaves the match (GameQuitForSteamInternal 0x00426D9C); a close request that the Steam client sends
@@ -177,7 +221,8 @@ The sections below with "branch ..." in the heading are the details of these ver
   game: the Menu button stays where the game has it, plate 30 high, Gap 0, TextY 5; menu: the time 3 up, size 18.
 - APM 1 (new add-on APM.dll, launcher entry apm): see README apm/. Place=top (right of the clock) | left | minimap (the
   bottom left corner of the minimap frame, also the fallback in annihilation); "apm" small.
-- Launcher catalog entries with the Place picks: docs/launcher-catalog-timer-apm.json (matchtimer-8, apm-1, cooldowns-6).
+- Launcher catalog entries with the Place picks: docs/launcher-catalog-timer-apm.json (matchtimer-8, apm-1, cooldowns-6; removed in
+  0.2.0 - the store has them, and addons.json since 0.2.0).
 
 ## RoomJoin 1-7 (branch feat/roomjoin; released 2026-11-03 as roomjoin-1)
 - RoomJoin 1 (new add-on, experiment, launcher 1.4.5+): Join on an Elite room without a password in the launcher's Lobbies tab -
