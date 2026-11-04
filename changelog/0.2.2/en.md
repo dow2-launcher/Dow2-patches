@@ -1,0 +1,1 @@
+- Our game servers: if you can't reach the server of your automatch (some providers block some of our servers), you now play through the server nearest to you - it passes your game on to the match's server. Before, such a game did not connect.

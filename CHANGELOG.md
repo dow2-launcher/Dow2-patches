@@ -4,6 +4,25 @@ Every version gets an entry here before it reaches `main`. CI then tags `vX.Y.Z`
 version (`X.Y.0`) it also publishes a GitHub Release with the DLLs and the entries since the previous `X.Y.0`.
 The version of the set lives only in `VERSION`; each DLL still writes its own version to its log.
 
+## 0.2.2 — 2026-11-04
+Relay 22 (store relay-22 / relayfwd-22, released by hand; branch feature/relay-22): the relay chain between our game nodes.
+- A native game (our lobby server's room: the game connects to one of our nodes on the battle port) whose node this player
+  can't reach - no UDP answer, or the stream check of Relay 18 failed (DPI) - goes to the player's own nearest usable node
+  with the preamble "DWR4" + IPv4 + port (BE) of the room's node; that node passes it on to the room's node over our UDP
+  tunnel between the nodes (dow2-ladder feature/relay-chain: battle_relay.py DWR4, du_client.py). Player -> his node -> the
+  session's node. No other node answers: the room's node itself over UDP, then TCP, as in Relay 21. Before, such a player
+  could not join a native match at all.
+- The pings offered to the matchmaker (DOW2_RELAY_PING, through MMFind's relay_ping) start with "0.0.0.22:22" - "this player
+  can chain": the ladder (_best_relay chain) may then put the match on a node he doesn't reach, choosing the node with the
+  lowest worst delay of all players (a chain = ping to his nearest node + node -> node round trip + 10 ms). Older ladders
+  ignore the key (it is not a node of relays.json); MMFind is unchanged.
+- Unchanged: Relic games / forwarding (DWR3), our automatch of older clients (DWR2), the pings and the stream check.
+- Needs the nodes with battle_relay.py of dow2-ladder relay-chain (DWR4); an older node answers DWR4 with nothing (closes).
+- Tested: stand 1 under Wine (stands lock), native room of the TEST lobby on Moscow 83.217.192.34:47190 (test instance),
+  UDP+TCP to it dropped by iptables: "the room's node ... is not usable - chain on to the room's node 83.217.192.34" through
+  Germany 116.202.106.150:47190; Germany: chain -> pass_on via du; Moscow: the game's session joined, the game's
+  battleserverrelay Connected, pings both ways for 40 s; iptables removed, stand restored (md5 ok).
+
 ## 0.2.1 — 2026-11-04
 Texts for players (siritos 04.11.2026: the add-on texts and the news were written for us, not for players) and RoomJoin 8.
 - RoomJoin 8 (store roomjoin-2; review of roomjoin-1, 03.11): the automatch first - while MMFind's cover is up (its walk
