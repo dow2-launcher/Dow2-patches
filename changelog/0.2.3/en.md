@@ -1,0 +1,1 @@
+- New: Fix: the game closes when a match starts - turn it on if your game closes by itself a second after a match begins.

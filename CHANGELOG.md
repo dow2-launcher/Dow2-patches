@@ -4,6 +4,27 @@ Every version gets an entry here before it reaches `main`. CI then tags `vX.Y.Z`
 version (`X.Y.0`) it also publishes a GitHub Release with the DLLs and the entries since the previous `X.Y.0`.
 The version of the set lives only in `VERSION`; each DLL still writes its own version to its log.
 
+## 0.2.3 — 2026-11-04
+ShellFix 1 (store shellfix-1, new add-on, default off; branch fix/shellpatch-hook): BeArD's crash at the start of every match.
+- Cause (CrashLog dump 04.11 23:12, 0xC0000005 at DOW2.exe+0x285450 reading 0x00000209, ecx=0, return to ShellPatch.dll+0x3E65):
+  Elite's ShellPatch.dll (the race meter above the command panel) patches four jumps into the HUD code and wraps the meter
+  shell's activate 0x00B6CF40 with Detours (ShellPatch+0x3A10, which reads the player's race). Its Detours 3 looks for a
+  trampoline only in target +-2 GB without 0x70000000-0x80000000 - for 0x00B6CF40 the lower 1.75 GB. With that full when
+  ShellPatch starts (Intel + NVIDIA drivers in the process, the game's reservations, the add-ons loaded before it), the
+  attach fails, ShellPatch does not check it: the jumps are in, the wrapper is not, the race string stays empty and its
+  jump at 0x00B6D0A7 calls SetVisible(NULL, 1) = DOW2.exe 0x00685450 (writes widget+0x209) on the first frame of the
+  match HUD. BugSplat closes the game (TerminateProcess -3). In the dump the game's frame returns straight to 0x00AD5A92 (no
+  wrapper), "address space free 2024 MB" of 4 GB at the start, heap objects at 0x7Dxxxxxx/0x9xxxxxxx. None of our add-ons
+  hooks this code; they only take address space (thread stacks, 64 KB VirtualAllocs) before ShellPatch starts.
+- ShellFix waits for ShellPatch.dll (LoadLibrary of it waits for its DllMain), checks its build (stamp 669C7309), its jumps
+  in and 0x00B6CF40 untouched with its Detours pointer (ShellPatch+0xF2A0) still 0x00B6CF40 - then puts the wrapper in as
+  Detours would: trampoline (push ecx/ebx/ebp/esi/edi + jmp 0x00B6CF45, MEM_TOP_DOWN), the pointer, jmp ShellPatch+0x3A10 at
+  0x00B6CF40 (shared patch mutex, WriteProcessMemory). Otherwise nothing. Its own thread reserves 64 KB of stack, not 1 MB.
+- Tested: stand 1 (Wine, IG vs AI, -dev -init, Profiler's loader released at the start): the lower address space filled
+  before ShellPatch starts (stand-only test DLL) = the same crash (CrashLog: the same offsets as BeArD's) 1 s into the match;
+  with ShellFix "REPAIRED", the match goes on, ShellPatch's race string set; BeArD's full add-on set + ShellFix: "hooked in as
+  it should - nothing to do", no exceptions.
+
 ## 0.2.2 — 2026-11-04
 Relay 22 (store relay-22 / relayfwd-22, released by hand; branch feature/relay-22): the relay chain between our game nodes.
 - A native game (our lobby server's room: the game connects to one of our nodes on the battle port) whose node this player

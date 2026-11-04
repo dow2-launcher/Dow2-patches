@@ -31,6 +31,7 @@ are client-side, and the other players in the match don't need them.
 | **Don't drop out of the match when Steam goes away** | A match is played to the end when Steam loses its connection, however long it is away. | `steamkeep` → `steamkeep-2` | `steamkeep/` | no |
 | **Observer lag fix (experimental)** | Spectating a live game no longer stutters. | `obsfix_r2` → `obsfix-1` | `obsfix/` | no |
 | **Join a lobby from the launcher (test)** | Experiment by siritos: a Join button on the launcher's Lobbies tab; the game starts and walks into the room by itself. | `roomjoin` → `roomjoin-2` | `roomjoin/` | no |
+| **Fix: the game closes when a match starts** (new, not released yet) | Repairs Elite's ShellPatch.dll (the race meter) when it could not hook in at the game's start - then every match crashed a second in. Otherwise does nothing. | `shellfix` → `shellfix-1` (staging) | `shellfix/` | no |
 | **Record game crashes (for the developers)** | Writes where the game crashed and what closed it, for "Send logs". | `crashlog` → `crashlog-1` | `crashlog/` | no |
 | **EXPERIMENT: connection check to our servers** | Once per game start, 1-2 minutes in the background: what gets through from your computer to our game servers; sends us the result. | `netprobe` → `netprobe-2` | `netprobe/` | no |
 | **Fix: Elite.exe crash on Windows 11 25H2** | An Elite.exe without its wmic check (wmic is gone in 25H2, Elite.exe crashed on it). | `elitefix_wmic` → `elitefix-nowmic-1` | not in this repo (one jump patched in Elite.exe) | no |
@@ -121,6 +122,12 @@ roomjoin/ - **RoomJoin.dll** (RoomJoin 8, roomjoin-2) - siritos's experiment
     the game or 25 s: the reason, then the public games list. Never during the automatch (MMFind's cover, a search on Find a
     Game): the Join is dropped. Any load order with MMFind (the fscommand hook is a vtable slot). RoomJoin.ini Enabled=0 = off.
     Store entry: roomjoin/catalog-entry.json.
+
+shellfix/ - **ShellFix.dll** (ShellFix 1)
+    Elite's ShellPatch.dll wraps the HUD meter shell 0x00B6CF40 with Detours; with no free 64 KB in the lower 2 GB when it
+    starts, the wrapper is missing while its jumps are in, and the first match crashes (SetVisible(NULL) at 0x00685450).
+    ShellFix waits for ShellPatch, and only in that state puts the wrapper in itself (trampoline + jmp ShellPatch+0x3A10).
+    Elite_DLLs/ShellFix.log; ShellFix.ini Enabled=0 = off.
 
 crashlog/ - **CrashLog.dll** (CrashLog 1)
     No hooks into the game: serious exceptions with module+offset and stack, a minidump on a crash, and who called ExitProcess /

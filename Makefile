@@ -10,6 +10,7 @@ all: $(OUT)/ObsFix.dll $(OUT)/LobbyStats.dll $(OUT)/LoadingRatings.dll $(OUT)/Co
 all: $(OUT)/EliteAI.dll $(OUT)/Reverse.dll $(OUT)/MMFind.dll $(OUT)/RoomJoin.dll $(OUT)/Relay.dll $(OUT)/Continue.dll
 # released too (04.11.2026: the GitHub Release carries every released DLL; build/early/winmm.dll is built by its own name)
 all: $(OUT)/RelayForward.dll $(OUT)/OwnLobby.dll $(OUT)/CrashLog.dll $(OUT)/NetProbe.dll
+all: $(OUT)/ShellFix.dll
 
 $(OUT):
 	mkdir -p $(OUT)
@@ -39,6 +40,11 @@ $(OUT)/APM.dll: apm/apm.c matchtimer/matchtimer.c common/gfxui.h | $(OUT)
 
 # 03.11.2026: the match goes on when Steam goes away (no leaving the match / closing the game on a Steam drop)
 $(OUT)/SteamKeep.dll: steamkeep/steamkeep.c | $(OUT)
+	$(CC) $(CFLAGS) -shared -o $@ $< -static-libgcc
+
+# 04.11.2026: Elite's ShellPatch.dll without its Detours wrapper (no room for a trampoline in the lower 2 GB) crashed every
+# match start (SetVisible(NULL)); ShellFix puts the wrapper in when it is missing, changes nothing otherwise
+$(OUT)/ShellFix.dll: shellfix/shellfix.c | $(OUT)
 	$(CC) $(CFLAGS) -shared -o $@ $< -static-libgcc
 
 clean:
