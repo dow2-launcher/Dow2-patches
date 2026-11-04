@@ -465,8 +465,9 @@ static char __fastcall inv_hook(void *self, void *edx, const char *method, int f
     if (g_rj && method && !IsBadReadPtr(method, 24) && !strcmp(method, "Receive_CreateMessageBox") && args && count && count < 32 && !IsBadReadPtr(args, count * sizeof(GFxValue))) {
         wchar_t t[200] = L""; int n = 0; char dbg[400]; int dl = 0;
         for (unsigned i = 0; i < count; i++) {               // the box's strings: title, text, buttons - the longest one is the text
+            if (dl > (int)sizeof dbg - 1) dl = (int)sizeof dbg - 1;   // snprintf returns the full length: never past the buffer (review 04.11)
             const wchar_t *w = args[i].type == GFX_WSTRING && args[i].v.ws && !IsBadReadPtr(args[i].v.ws, 2) ? args[i].v.ws : NULL;
-            if (args[i].type == GFX_STRING && args[i].v.s && !IsBadReadPtr(args[i].v.s, 1)) dl += snprintf(dbg + dl, sizeof dbg - dl > 0 ? sizeof dbg - dl : 0, " [%u]\"%.60s\"", i, args[i].v.s);
+            if (args[i].type == GFX_STRING && args[i].v.s && !IsBadReadPtr(args[i].v.s, 1)) dl += snprintf(dbg + dl, dl < (int)sizeof dbg ? sizeof dbg - dl : 0, " [%u]\"%.60s\"", i, args[i].v.s);
             if (!w) { if (args[i].type == GFX_NUMBER && dl < 380) dl += snprintf(dbg + dl, sizeof dbg - dl, " [%u]%g", i, args[i].v.num); continue; }
             int len = (int)wcsnlen(w, 400);
             char u[120]; WideCharToMultiByte(CP_UTF8, 0, w, -1, u, sizeof u, NULL, NULL); u[119] = 0;
