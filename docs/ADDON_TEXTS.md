@@ -24,11 +24,10 @@ README and the commits.
 | category | for |
 |---|---|
 | `network` | our servers, the automatch, staying connected |
-| `interface` | what the game shows: timers, ratings, sounds |
+| `interface` | what the game shows: timers, ratings, sounds, the translation |
 | `gameplay` | how units act on orders |
 | `fixes` | fixes of the game or Elite, crash records |
-| `experiment` | being tested, may change or go away |
-| `other` | everything else (the translation) |
+| `experiment` | being tested, may change or go away; anything that fits no other group |
 
 `order` is the place inside the group: a whole number, smaller = higher (10, 20, 30 ... leaves room for a new one between).
 Both live in the add-on's own entry (addons.json, docs/store-texts.json, a catalog-entry.json) and go to the store with

@@ -15,7 +15,7 @@ ROOT = Path(__file__).resolve().parent.parent
 TEXTS = ROOT / "docs" / "store-texts.json"
 ADDONS = ROOT / "addons.json"
 LANGS = ("en", "ru", "es", "fr", "de")
-CATEGORIES = ("network", "interface", "gameplay", "fixes", "experiment", "other")
+CATEGORIES = ("network", "interface", "gameplay", "fixes", "experiment")
 KEYS = ("category", "order", "name", "description")
 
 

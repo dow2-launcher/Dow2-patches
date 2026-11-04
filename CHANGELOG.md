@@ -20,8 +20,9 @@ Texts for players (siritos 04.11.2026: the add-on texts and the news were writte
   them into addons.json, or into a store launcher.json for the hand-released add-ons (automatch, relay_r2, relay_fwd,
   elitefix_wmic, rusifikator; nothing in the store is changed by this commit).
 - Every add-on names its group and its place in the group in its own entry: "category" (network / interface / gameplay /
-  fixes / experiment / other) and "order" (a number, smaller = higher) - in addons.json, docs/store-texts.json and
-  roomjoin/catalog-entry.json; the deploy carries both into the store, launcher 1.4.8 places add-ons by them.
+  fixes / experiment; no "other": the translation is interface) and "order" (a number, smaller = higher) - in
+  addons.json, docs/store-texts.json and roomjoin/catalog-entry.json; the deploy carries both into the store, launcher
+  1.4.8 places add-ons by them.
 - Player notes: changelog/<version>/en.md + ru.md (from 0.2.1 on; what is released stays as it is). The GitHub Release of an X.Y.0 is
   made from them instead of this file, and the launcher shows them as news (ru.md for Russian players, as for the launcher);
   scripts/release_notes.py check fails without them.

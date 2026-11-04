@@ -2,7 +2,7 @@
   "_readme": [
     "Player texts of every add-on in the launcher store (store3/launcher.json), by store id: category, name, description; option names only where they changed.",
     "How to write them: docs/ADDON_TEXTS.md. Applied to a launcher.json by scripts/store_texts.py (then sign it as usual); the add-ons of addons.json get the same texts there, so a deploy keeps them.",
-    "category = the group on the launcher's Add-ons tab: network, interface, gameplay, fixes, experiment, other; order = the place inside it (smaller = higher)."
+    "category = the group on the launcher's Add-ons tab: network, interface, gameplay, fixes, experiment; order = the place inside it (smaller = higher)."
   ],
   "relay_r2": {
     "category": "network",
@@ -329,8 +329,8 @@
     }
   },
   "rusifikator": {
-    "category": "other",
-    "order": 10,
+    "category": "interface",
+    "order": 70,
     "name": {
       "en": "Russian translation (by Gosudar)",
       "ru": "Русский перевод (автор — Gosudar)",
