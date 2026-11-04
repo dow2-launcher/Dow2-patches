@@ -1,14 +1,19 @@
-// MMFind.dll - one-button matchmaking for DoW2 Retribution / Elite (DOW2.exe 3.19).
+// MMFind.dll - the Elite automatch on our servers for DoW2 Retribution / Elite (DOW2.exe 3.19).
 //
-// The stock "Multiplayer -> Find a Game" screen talks to Relic's ranked matchmaker. We take that screen over:
-// "Start Searching" no longer starts Relic's search, it puts the player into our queue (dow2-ladder /ladder/api/mm)
-// and the screen shows our status. When the server pairs two players, the DLL walks both clients through the
-// normal custom-game menus by sending the same UI commands the buttons send (fscommand): the host creates a
-// public game with a unique name MM-<match>, the guest finds that name in the Public Games list and joins,
-// the host starts the game when the opponent is in. No screen coordinates are used.
+// 0.45 (owner 03.11.2026: "the automatch is tested - remove the old one, keep only the new one"): only the game's OWN Find a Game
+// search runs, served by our lobby server (OwnLobby.dll + own_lobby.py) from the ladder's matchmaker: the game hosts / joins the
+// AUTOMATCH room and starts by itself. MMFind walks no menus, draws no cover, makes no public rooms - the classic flow of 0.12-0.44
+// (menus walked, MM-<match> rooms, mm/join) and the 0.43 menu rematch are gone.
+// Start Searching first asks the ladder (mm/native). "No" (the game is not signed in through our lobby server, the lobby server or
+// the ladder does not answer, the native automatch is off on the server) = the click is NOT passed to the game: Relic's own
+// matchmaker matches nobody any more (owner: never start it). The Find a Game screen says why and what to do; the next click asks
+// again. A search of the game that runs anyway without our lobby server behind it is stopped at once (Stop Searching).
+// What MMFind still does: the ladder's word before the search, the faster poll (1 s) and countdown (2 s) while the native search
+// runs, the kind of search / queue / online on the screen, the saved race / hero / mode / map wishes, searching again after a
+// match the server called off, the replay of every multiplayer match to the replay site.
 //
-// Hooks: Invoke 0x45DB6C (engine -> Flash, to read lists and to show our status), fscommand handler 0x681AB0
-// (Flash -> engine, to catch the button and to replay menu commands), Shark.dll shark::update (main-thread tick).
+// Hooks: Invoke 0x45DB6C (engine -> Flash, to read lists and to show our status), fscommand handler 0x681AB0 (Flash -> engine, to
+// catch the button and to send menu commands), Shark.dll shark::update (main-thread tick).
 #include <windows.h>
 #include <winhttp.h>
 #include <psapi.h>
@@ -52,26 +57,19 @@ enum { SC_OTHER, SC_MAIN, SC_MM, SC_LIST, SC_SETUP };
 static volatile int g_screen;
 static char g_panel[160];                 // path of the current full-screen panel, e.g. _level0.display_item.panel2_mc.panel_mc
 static void *g_fsSelf, *g_fsMovie;        // fscommand handler + frontend movie, taken from real button presses
-static volatile int g_heroShown;          // hero selection is on screen (needs Accept)
-static volatile DWORD g_heroTick, g_scrTick;   // 0.35: the hero panel's last message / the last screen change (a fresh panel = after it)
-static volatile int g_listSeen;           // a Public Games list arrived since we opened the list
-static volatile int g_rowFound = -1;      // row index of our game in the list
-static volatile int g_humans, g_lobbyRace = -1;   // people in the lobby; my race as the lobby shows it (slot field 6)             // people in the lobby (from the player list)
-static volatile int g_oppIn;              // the expected opponent is in the lobby
+static volatile int g_heroShown;          // hero selection is on screen
+static volatile DWORD g_heroTick, g_scrTick;   // the hero panel's last message / the last screen change
+static volatile int g_humans;             // people in the last Custom Games lobby (its player list): a match with people = a replay
 static wchar_t g_myName[64];              // our gamer tag
-static void *g_mmSelf; static int g_mmFlags;  // Find a Game panel object (to push our status into it)
-static int g_mapIndex = -1;               // (unused since 0.9: index comes from the map catalog)
-static wchar_t g_mapName[64]; static char g_hostMap[96];   // g_hostMap: the map the host really set (UTF-8, for the ladder)             // map for this match (from the server), empty = host picks
-// modes: Match Type list on Find a Game = Head to Head / Two on Two / Team Battle / Team Free For All
-int g_mode;                               // 0 1v1, 1 2v2, 2 3v3, 3 watch (the Team FFA item is renamed to "Watch a match")
-static const char *MODE_KEY[] = {"1v1", "2v2", "3v3", "watch"};
-static const wchar_t *MODE_W[] = {L"1v1", L"2v2", L"3v3", L"Watch"};
+// modes: Match Type list on Find a Game = Head to Head / Two on Two / Team Battle / Team Free For All (the game's own, not ours)
+int g_mode;                               // 0 1v1, 1 2v2, 2 3v3, 3 Team FFA (no Elite automatch for it)
+static const char *MODE_KEY[] = {"1v1", "2v2", "3v3", "ffa"};
+static const wchar_t *MODE_W[] = {L"1v1", L"2v2", L"3v3", L"Watch"};   // [Maps] Off<mode> keys of MMFind.ini (as before)
 static const wchar_t *MODE_PREFIX[] = {L"(2p)", L"(4p)", L"(6p)", L"(6p)"};
 // map catalog: the lobby map list as the game sends it (all Elite maps, same order as the lobby drop-down)
 #define MAX_BANS 3                // maps a player may uncheck per mode (ladder rule)
 #define MAXMAPS 160
 static wchar_t g_maps[MAXMAPS][64]; static int g_nmaps;
-static wchar_t g_lmaps[MAXMAPS][64]; static int g_nlmaps;   // 0.32: the map list the game sent last (in a lobby: the lobby's own drop-down) - the host picks from it
 static unsigned char g_off[4][MAXMAPS];  // 1 = player unchecked this map for the mode
 static int map_index(const wchar_t *n) { for (int i = 0; i < g_nmaps; i++) if (!wcscmp(g_maps[i], n)) return i; return -1; }
 static int mode_map(int i, int mode) { return !wcsncmp(g_maps[i], MODE_PREFIX[mode], 4); }
@@ -129,86 +127,49 @@ static int as_fnv(void *movie, const char *fn, const char *sig, ...) {      // n
 static int as_set(void *movie, const char *path, GFxValue *v) { return ((SetVarFn)(*(void ***)movie)[0x2C / 4])(movie, NULL, path, v, 1) != 0; }
 static int as_get(void *movie, const char *path, GFxValue *v) { memset(v, 0, sizeof *v); return ((GetVarFn)(*(void ***)movie)[0x30 / 4])(movie, NULL, v, path) != 0; }
 static void as_setw(void *movie, const char *path, const wchar_t *w) { GFxValue v; memset(&v, 0, sizeof v); v.type = GFX_WSTRING; v.v.ws = w; as_set(movie, path, &v); }
-static void as_setn(void *movie, const char *path, double d) { GFxValue v; memset(&v, 0, sizeof v); v.type = GFX_NUMBER; v.v.num = d; as_set(movie, path, &v); }
 static void as_setb(void *movie, const char *path, int b) { GFxValue v; memset(&v, 0, sizeof v); v.type = GFX_BOOL; v.v.b = b; as_set(movie, path, &v); }
 
-// ---------------- matchmaking state ----------------
-enum { S_IDLE, S_SEARCH, S_GO_MAIN, S_GO_LIST, S_HOST_DIALOG, S_HOST_NAME, S_SETUP_HERO, S_HOST_OPEN, S_HOST_WAIT, S_GUEST_NAME, S_GUEST_DJOIN, S_GUEST_FIND, S_GUEST_JOINED, S_PLACE, S_DONE, S_FAIL, S_NASK, S_NATIVE };
-static const char *SN[] = {"idle","search","go_main","go_list","host_dialog","host_name","setup_hero","host_open","host_wait","guest_name","guest_djoin","guest_find","guest_joined","place","done","fail","native_ask","native"};
+// ---------------- the search ----------------
+// idle -> (Start Searching) native_ask: the ladder's word (mm/native) -> native: the game's own search on our lobby server, MMFind
+// only watches the ladder -> done: the match loads (back to idle in the menu after it). A "no" leaves the game where it was.
+enum { S_IDLE, S_NASK, S_NATIVE, S_DONE };
+static const char *SN[] = {"idle", "native_ask", "native", "done"};
 static volatile int g_state;
-static volatile int g_role;               // 1 host, 2 guest
 static DWORD g_stateTick, g_searchTick;
-static char g_match[32];                  // server match id
-static char g_gameName[48];               // MM-<match>
-static wchar_t g_oppName[64];
 static volatile int g_queue = -1;
-// match roster from the server: who must be in which lobby slot; watchers go to observer slots; strangers get kicked
-static unsigned long long g_rSteam[8], g_wSteam[8], g_rPid[8], g_wPid[8], g_myPid; static int g_rSlot[8], g_nR, g_nW, g_mySlot = -1, g_matchMode, g_bots;
-static wchar_t g_rName[8][64], g_wName[8][64], g_slotName[8][64];
 static int jstr(const char *j, const char *key, char *out, int cap);
-extern unsigned long long g_mySteam;
-static unsigned long long parse_u64(const char *p) { return _strtoui64(p, NULL, 10); }
-static void parse_roster(const char *res) {
-    int nr = 0, nw = 0; char tmp[200];
-    const char *r = strstr(res, "\"roster\":["), *w = strstr(res, "\"watchers\":["), *wp = strstr(res, "\"watcher_pids\":["), *wn = strstr(res, "\"watcher_names\":[");
-    if (r) { const char *e = strstr(r, "}]"); if (!e) e = r + strlen(r);
-        for (const char *p = strstr(r, "\"steam\":\""); p && p < e && nr < 8; p = strstr(p + 1, "\"steam\":\"")) {
-            const char *end = strchr(p, '}'); int len = end ? (int)(end - p) : 190; if (len > 190) len = 190;
-            memcpy(tmp, p, len); tmp[len] = 0;
-            g_rSteam[nr] = parse_u64(p + 9);
-            const char *sl = strstr(tmp, "\"slot\":"); g_rSlot[nr] = sl ? atoi(sl + 7) : -1;
-            const char *pi = strstr(tmp, "\"pid\":"); g_rPid[nr] = pi ? parse_u64(pi + 6) : 0;
-            char nm[96] = ""; jstr(tmp, "name", nm, sizeof nm); MultiByteToWideChar(CP_UTF8, 0, nm, -1, g_rName[nr], 64);
-            nr++; } }
-    if (w) { const char *e = strchr(w, ']');
-        for (const char *p = strchr(w + 12, '"'); p && p < e && nw < 8; ) { g_wSteam[nw++] = parse_u64(p + 1);
-            const char *q = strchr(p + 1, '"'); if (!q) break; p = strchr(q + 1, '"'); } }
-    for (int i = 0; i < nw; i++) { g_wPid[i] = 0; g_wName[i][0] = 0; }
-    if (wp) { const char *p = wp + 16; for (int i = 0; i < nw && *p && *p != ']'; i++) { g_wPid[i] = parse_u64(p); p = strchr(p, ','); if (!p) break; p++; } }
-    if (wn) { const char *p = strchr(wn + 17, '"'); const char *e = strchr(wn, ']');
-        for (int i = 0; i < nw && p && p < e; i++) { const char *q = strchr(p + 1, '"'); if (!q) break; char nm[96]; int l = (int)(q - p - 1); if (l > 95) l = 95;
-            memcpy(nm, p + 1, l); nm[l] = 0; MultiByteToWideChar(CP_UTF8, 0, nm, -1, g_wName[i], 64); p = strchr(q + 1, '"'); } }
-    g_nR = nr; g_nW = nw;
-    for (int i = 0; i < nr; i++) if (g_rSteam[i] == g_mySteam && g_rPid[i]) g_myPid = g_rPid[i];
-    for (int i = 0; i < nw; i++) if (g_wSteam[i] == g_mySteam && g_wPid[i]) g_myPid = g_wPid[i];
-    const char *ms = strstr(res, "\"slot\":"); if (ms && (!r || ms < r)) g_mySlot = atoi(ms + 7);
-    char md[16]; if (jstr(res, "mode", md, sizeof md)) for (int i = 0; i < 3; i++) if (!strcmp(md, MODE_KEY[i])) g_matchMode = i;
-    g_bots = strstr(res, "\"bots\":true") != NULL;
-}
 unsigned long long g_mySteam;
-static volatile int g_wantJoin, g_wantLeave, g_wantHost, g_hostReported, g_wantStarted, g_wantEnded; static char g_ruined[48]; static volatile int g_loading;
-static int g_maxDiff, g_testBots, g_aiDiff, g_manual, g_autoSwap = 1, g_autoSwapCfg = 1; static char g_group[32]; static char g_game[24] = "elite";
-// 0.34 EXPERIMENT (owner 02.11.2026, launcher tick "fast automatch"): DirectStart=1 - the host opens a PRIVATE room, the guests
-// join it by its id (no game browser), their screen goes to the lobby by itself, the host starts at once (OnClickStart: no
-// "ready" and no countdown). Paired only with players who have it too (the ladder keeps them in their own queue).
-static int g_direct, g_matchDirect, g_djDebug;
-// 0.37 (owner 02.11.2026: "the automatch fully on OUR servers, fast and without friends"): Fast=1 (default) - the ORDINARY Custom
-// Games room (never a private match), every step on the engine's answer instead of safety pauses, polls every 0.3 s; the host gives
-// the ladder its room id with the room name and the guests join that id directly (the browser's own join call, no list); the list
-// stays as the fallback. Our lobby server (OwnLobby.dll + own_lobby.py v2) keeps such a room off Relic when everyone is there.
-static int g_fast = 1;
-static volatile unsigned long long g_room; static volatile int g_roomReady;
-// 0.38 (owner 03.11.2026: "Start Searching straight to the loading screen, fully on our servers"): Native=1 (default) - with
-// OwnLobby.dll in the game and our lobby server able to do it (the ladder says so: mm/native), Start Searching is NOT swallowed:
-// the game's own Find a Game search runs against our lobby server, which answers it from the ladder's matchmaker, and the game
-// hosts / joins the AUTOMATCH room and starts by itself - no menus walked, no cover. MMFind only watches the ladder: no native
-// search there for 10 s (our lobby server away, the ladder away) -> the engine's search is stopped and the classic flow takes over.
-static int g_nativeCfg = 1;
+static volatile int g_wantLeave, g_wantEnded, g_loading;
+static int g_maxDiff; static char g_group[32]; static char g_game[24] = "elite";
+// 0.38 (owner 03.11.2026: "Start Searching straight to the loading screen, fully on our servers"): with OwnLobby.dll in the game and
+// our lobby server able to do it (the ladder says so: mm/native), Start Searching goes to the game: its own Find a Game search runs
+// against our lobby server, which answers it from the ladder's matchmaker. MMFind watches the ladder meanwhile: no native search
+// there for 10 s (our lobby server away, the ladder away) -> 0.45: the game's search is stopped and the screen says so.
 static volatile int g_natAnswer;            // 0 waiting, 1 native, 2 not native (g_natWhy)
 static volatile DWORD g_natPass, g_natGood; static volatile int g_natSeen, g_natCancelled;   // pass-through time, last native answer of the ladder
 static volatile int g_engSearch = -1;       // the engine's own search state (Receive_ShowSearchingAnimation as the engine sends it), -1 unknown
-static DWORD g_natStopAt; static int g_natStops;   // fallback: Stop Searching sent to the engine (checked once more)
+static DWORD g_stopGrace;                   // 0.45: no stray-search stop before this (the game is still ending a native search of ours)
 static char g_natLobby[48], g_natWhy[96], g_natLastCancel[32];
+// 0.42 (owner 03.11.2026: "when we press search, show right away which search it is"): the kind of search, text fields of ours in
+// the game's own Find a Game panel (docs/UI_RULES.md: the game's interface, no Direct3D): a head right of the screen title and an
+// info block under its left box - "Automatch: our servers", or 0.45 "The Elite automatch is not available:" with the reason and
+// what to do, "MMFind 0.45", the queue and who is online. Shown from the moment the screen opens (a peek at mm/native: the ladder
+// answers as for Start Searching and changes nothing; again every 20 s and on a match type change while the screen is open), after
+// the click by what really happened. [MMFind] ShowMode=1 (default) / 0 = off, Lang=auto (the game's own text: Cyrillic = Russian) / ru / en.
+#define MMF_VER "0.45"
+#define MMF_VER_W L"0.45"
+static int g_showMode = 1, g_langCfg = -1, g_lang = -1, g_modeProbe;
+static double g_mx = 1065, g_my = 590, g_msz = 30;           // panel units, see mode_make
+static volatile int g_peekWant, g_peekAns; static volatile DWORD g_peekLast; static char g_peekWhy[96];
+static char g_runWhy[96];                                     // 0.45: why the last Start Searching did not search (shown until it can)
+static volatile int g_liveOnline = -1, g_liveQueue = -1;      // mm/hello (net_worker, every 5 s on Find a Game)
+// the panel's own dialogs over it, from the engine's calls and the buttons (the hero panel keeps _visible true when it closes,
+// and no HideHeroSelect comes on Find a Game): Receive_ShowHeroSelect .. hero_selection_mc.OnClickAccept, Map Preferences .. Save / Cancel
+static volatile int g_heroUp, g_mapUp;
 // a native match called off by the server while the game was setting it up (host never came, a guest never joined, ...): the game
 // ends its own search and goes back to Find a Game; the ladder says {"state":"cancelled","again":true} to everyone who was not the
 // reason - MMFind presses Start Searching again for them (the native path), at most once per 30 s and 3 times in a row
 static volatile int g_natAgain, g_reWant, g_reBoxOk; static volatile DWORD g_natWatchUntil; static DWORD g_reSince, g_reLast; static int g_reRow;
-#define QUICK (g_matchDirect || g_fast)
-// 0.35 (owner 02.11.2026: faster): the first one in the queue makes his private room while searching - player slots open, hero
-// accepted - and gives the ladder its id; the ladder makes him the host and his guests get the id with "matched" and join at once.
-// Every step goes on the engine's answer (screen up, hero panel up, slot handler done), not on safety pauses.
-enum { PRE_OFF, PRE_GO_MAIN, PRE_PRIVATE, PRE_HERO, PRE_SLOTS, PRE_READY };
-static volatile int g_pre, g_preWant, g_heroDone, g_slotsOpen, g_preReported, g_backToMM; static volatile unsigned long long g_preRoom;   // Manual=1: no automation in the lobby (tests)   // TestBots: 1 = me vs computers, 2 = computers vs computers, I watch (AI tests)
 // 0.33: vanilla and Elite players never share a queue (the ladder keeps one queue per game). Every Elite start has "-modname Elite"
 // on the command line (players' warnings.txt: RUN OPTIONS); a start without it is vanilla even when an Elite copy of this DLL got
 // loaded (Elite's own Profiler.dll replaces the game's one and is loaded in vanilla too - not a sign of Elite).
@@ -221,43 +182,16 @@ static void detect_game(void) {
 }
 static const char *RACES[] = {"chaos_space_marines","eldar","imperial_guard","ordo_malleus","orks","space_marines","tau","tyranids","necron"};
 static HANDLE g_wake;
-static volatile int g_coverWant; static wchar_t g_coverLine[160]; static int g_sending;
-// 0.32 Cancel on the "Match Found" cover (owner 31.10.2026: «кнопка отмена… и тогда всех игроков распускает»): the ladder dissolves
-// the match, the others' MMFind sees "cancelled" in its poll, leaves the lobby and shows who cancelled for a few seconds
-static volatile int g_remoteCancel; static wchar_t g_cancelBy[64]; static DWORD g_noticeUntil;
+static int g_sending;                       // our own fscommand to the engine is on the way (not the player's)
+static DWORD g_banNote;                     // Map Preferences: more than MAX_BANS unchecked - a note on the status line
 
 static void native_fast(int on);
-static void set_state(int s) { logmsg("state %s -> %s", SN[g_state], SN[s]); if (g_state == S_NATIVE && s != S_NATIVE) native_fast(0); g_state = s; g_stateTick = GetTickCount(); if (s == S_FAIL) { g_coverWant = 0; g_wantLeave = 1; }
-    if (s == S_IDLE || s == S_FAIL) { if (g_pre || g_preWant) logmsg("direct: my room plan off"); g_pre = PRE_OFF; g_preWant = 0; g_heroDone = g_slotsOpen = 0; g_preRoom = 0; g_preReported = 0; }
-    if (s == S_IDLE || s == S_SEARCH || s == S_FAIL) { SetEnvironmentVariableA("DOW2_RELAY_USE", "0"); SetEnvironmentVariableA("DOW2_RELAY_HOST", NULL); } }   // no automatch lobby: Relic
+static void set_state(int s) {
+    logmsg("state %s -> %s", SN[g_state], SN[s]);
+    if (g_state == S_NATIVE && s != S_NATIVE) { native_fast(0); g_stopGrace = GetTickCount() + 5000; }   // the game ends its search by itself
+    g_state = s; g_stateTick = GetTickCount();
+}
 static DWORD in_state(void) { return GetTickCount() - g_stateTick; }
-
-// ---------------- ruined loading: MMFind_match.txt holds the ladder lobby while the match loads ----------------
-static DWORD g_loadTick;
-static void marker_set(const char *lobby) {
-    wchar_t p[MAX_PATH]; _snwprintf(p, MAX_PATH, L"%lsMMFind_match.txt", g_dir);
-    if (!lobby) { DeleteFileW(p); return; }
-    FILE *f = _wfopen(p, L"w"); if (f) { fputs(lobby, f); fclose(f); }
-}
-static void marker_check(void) {                    // at start: a marker left over = the game died while that match was loading
-    wchar_t p[MAX_PATH]; _snwprintf(p, MAX_PATH, L"%lsMMFind_match.txt", g_dir);
-    FILE *f = _wfopen(p, L"r"); if (!f) return;
-    char b[48] = ""; fgets(b, sizeof b, f); fclose(f); DeleteFileW(p); b[strcspn(b, "\r\n")] = 0;
-    if (!strncmp(b, "MM-", 3)) { strcpy(g_ruined, b); logmsg("the last ladder match (%s) did not get past loading - reporting", b); }
-}
-
-// ---------------- "swap slots" requests: accepted without the Yes/No box ----------------
-// PlayerListPanel event handler, swap request from another player (0x490FBF..): unless the hero panel is open it builds the box
-// "Slot Swap Requested" (555015/555016) with the answer callback 0x4910BB(this = esi-0x4C; 2nd arg 1 = Yes, 2 = No, ret 8),
-// storing the request id in esi+0xC. At 0x491026 ("is a box already up?") we jump to a stub that, when no box is up,
-// stores the request id and calls the callback with Yes right away.
-#define SWAP_AT   0x00491026
-#define SWAP_BOX  0x0049102C      // original: create the box
-#define SWAP_BUSY 0x00491076      // original: a box is already up - answer "busy"
-#define SWAP_DONE 0x0049108C
-#define SWAP_CB   0x004910BB
-static const unsigned char SWAP_PRO[6] = {0x83, 0x7E, 0x08, 0xFF, 0x75, 0x4A};
-static volatile LONG g_swapCount;
 // Every patch of the game's code or import table goes through here: the mutex all our DLLs share (one patch at a time in the
 // game process - two threads opening a page for writing and closing it again crashed the game at start), the bytes written
 // with WriteProcessMemory (fails instead of crashing if the page is closed under us), the instruction cache flushed.
@@ -356,41 +290,6 @@ static void native_fast(int on) {
     logmsg(on ? "native fast ON: automatch/polling every 1 s while searching (was 10+ s), ranked countdown 2 s (was 5 s), the start still waits for every player's ACK"
               : "native fast off: polling every 10+ s, countdown 5 s (as the game has it)");
 }
-static void install_swap_hook(void) {
-    unsigned char *t = (unsigned char *)SWAP_AT;
-    if (IsBadReadPtr(t, 6) || memcmp(t, SWAP_PRO, 6)) { logmsg("swap request prologue mismatch - swaps are asked as usual"); return; }
-    unsigned char *c = VirtualAlloc(NULL, 64, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE); int k = 0;
-#define B(x) c[k++] = (unsigned char)(x)
-#define REL(target) do { DWORD r_ = (DWORD)(target) - (DWORD)(c + k + 4); memcpy(c + k, &r_, 4); k += 4; } while (0)
-#define ABS(ptr) do { DWORD a_ = (DWORD)(ptr); memcpy(c + k, &a_, 4); k += 4; } while (0)
-    B(0x83); B(0x7E); B(0x08); B(0xFF);                 // cmp dword [esi+8], -1
-    B(0x0F); B(0x85); REL(SWAP_BUSY);                    // jne busy
-    B(0x83); B(0x3D); ABS(&g_autoSwap); B(0x00);         // cmp dword [g_autoSwap], 0
-    B(0x0F); B(0x84); REL(SWAP_BOX);                     // je  -> the usual box
-    B(0xF0); B(0xFF); B(0x05); ABS(&g_swapCount);        // lock inc dword [g_swapCount]
-    B(0x8B); B(0x47); B(0x20);                           // mov eax, [edi+0x20]   request id
-    B(0x89); B(0x46); B(0x0C);                           // mov [esi+0xC], eax
-    B(0x8D); B(0x4E); B(0xB4);                           // lea ecx, [esi-0x4C]
-    B(0x6A); B(0x01); B(0x6A); B(0x00);                  // push 1 (Yes); push 0
-    B(0xE8); REL(SWAP_CB);                               // call answer callback (ret 8)
-    B(0xE9); REL(SWAP_DONE);                             // jmp done
-#undef B
-#undef REL
-#undef ABS
-    code_jmp(t, (void *)c, 6);
-    logmsg("hooked swap requests (auto-accept in ladder lobbies: %s)", g_autoSwapCfg ? "on" : "off");
-}
-
-// ---------------- game options of a ladder lobby: Victory Point Control, 500 points, random start positions, standard resources ----------------
-// Random start (0.29): the game shuffles the start positions inside each team (checked on 6p maps), so only who is in which team
-// matters, not the slot inside the team - see the lobby placement below.
-// Lobby drop-downs (Receive_PopulateDropDownList: id, title, items...): 1 victory condition, 2 tickets, 3 start location, 4 resources.
-// The host's game keeps the last custom game's options - the host sets these every time.
-// the wanted item in each language the players use (English game, Gosudar's Russian translation)
-static const wchar_t *OPT_WANT[5][3] = {{NULL}, {L"Victory Point Control", L"Контроль победных точек", NULL}, {L"500 points", L"500", NULL},
-                                        {L"Random", L"Случайная", L"Случайно"}, {L"Standard", L"Стандартный", NULL}};
-static volatile int g_optWant[5] = {-1, -1, -1, -1, -1}, g_optCur[5] = {-1, -1, -1, -1, -1}; static void *g_optSelf;
-
 // ---------------- HTTP (worker thread) ----------------
 // the ladder API through the mirrors (Server=host;host;...): stay on the one that answered, go to the next when it can't be reached
 static wchar_t g_hosts[4][64]; static int g_nHosts, g_curHost;
@@ -422,7 +321,7 @@ static int http_post1(const wchar_t *host, const wchar_t *path, const char *body
     return http_post1x(host, INTERNET_DEFAULT_HTTPS_PORT, 1, path, body, out, cap, tmo);
 }
 // 0.36 (02.11.2026): the game servers from the ladder into Relay.ini [Relay] Nodes= (Relay 16 adds them to its ping set, so
-// the matchmaker can pick a mirror added on the ladder without a client update). Sources: the "relays" field of mm/join and
+// the matchmaker can pick a mirror added on the ladder without a client update). Sources: the "relays" field of the ladder's
 // mm/poll ("relays": ["ip", ...]) and, at the start, GET /ladder/api/relays ({"relays":[{"ip":...}, ...]}) - both over HTTPS
 // from our hosts. Only IPv4 addresses are taken, 8 at most; written only when the list changed.
 static void nodes_from_json(const char *j) {
@@ -452,7 +351,7 @@ static DWORD WINAPI nodes_fetch(LPVOID _) {               // once at the start, 
     char out[4096];
     for (int k = 0; k < g_nHosts; k++) {
         out[0] = 0; int got = 0;
-        HINTERNET s = WinHttpOpen(L"MMFind/0.41", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, NULL, NULL, 0); if (!s) return 0;
+        HINTERNET s = WinHttpOpen(L"MMFind/" MMF_VER_W, WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, NULL, NULL, 0); if (!s) return 0;
         WinHttpSetTimeouts(s, 4000, 4000, 4000, 4000);
         HINTERNET c = WinHttpConnect(s, g_hosts[k], INTERNET_DEFAULT_HTTPS_PORT, 0);
         HINTERNET r = c ? WinHttpOpenRequest(c, L"GET", L"/ladder/api/relays", NULL, NULL, NULL, WINHTTP_FLAG_SECURE) : NULL;
@@ -479,7 +378,7 @@ static int http_post(const wchar_t *ep, const char *body, char *out, int cap) {
             int h = (g_curHost + k) % g_nHosts;
             if (http_post1(g_hosts[h], path, body, out, cap, TMO[round])) {
                 if (h != g_curHost) { logmsg("server: %ls is not reachable, now using %ls", g_hosts[g_curHost], g_hosts[h]); g_curHost = h; }
-                nodes_from_json(out);                                  // 0.36: mm/join and mm/poll carry the game servers
+                nodes_from_json(out);                                  // 0.36: the ladder's answers carry the game servers
                 return 1;
             }
         }
@@ -514,8 +413,7 @@ static int jint(const char *j, const char *key, int def) {
     return atoi(p + strlen(k));
 }
 static void name_utf8(char *o, int cap) { WideCharToMultiByte(CP_UTF8, 0, g_myName, -1, o, cap, NULL, NULL); }
-
-// the body of mm/join (0.38: mm/native gets exactly the same)
+// the body of mm/native: my wishes for the ladder's matchmaker (maps, rating spread, test group, pings to our game servers)
 static void join_body(char *body, int cap) {
     char nm[128]; name_utf8(nm, sizeof nm);
     extern int g_race, g_hero, g_random; static char maps[6000]; int L = 0; maps[0] = 0;
@@ -536,52 +434,22 @@ static void join_body(char *body, int cap) {
         rl += snprintf(rp + rl, sizeof rp - rl, "}");
     }
     detect_game();
-    snprintf(body, cap, "{\"steam\":\"%llu\",\"game\":\"%s\",\"mode\":\"%s\",\"name\":\"%s\",\"race\":\"%s\",\"hero\":\"%d\",\"maps\":[%s],\"max_diff\":%d%s%s%s,\"group\":\"%s\"}",
-             g_mySteam, g_game, MODE_KEY[g_mode], nm, (g_random ? "random" : g_race >= 0 && g_race < 9 ? RACES[g_race] : ""), g_hero, maps, g_maxDiff, g_testBots ? ",\"bots\":true" : "",
+    snprintf(body, cap, "{\"steam\":\"%llu\",\"game\":\"%s\",\"mode\":\"%s\",\"name\":\"%s\",\"race\":\"%s\",\"hero\":\"%d\",\"maps\":[%s],\"max_diff\":%d%s%s,\"group\":\"%s\"}",
+             g_mySteam, g_game, MODE_KEY[g_mode], nm, (g_random ? "random" : g_race >= 0 && g_race < 9 ? RACES[g_race] : ""), g_hero, maps, g_maxDiff,
              own ? (compat ? ",\"own_server\":true,\"relay_compat\":true" : ",\"own_server\":true") : "", rp, g_group);
-    if (g_direct && !g_testBots) { size_t bl = strlen(body); if (bl > 1 && bl + 20 < (size_t)cap) strcpy(body + bl - 1, ",\"direct\":true}"); }
-    if (g_fast) { size_t bl = strlen(body); if (bl > 1 && bl + 20 < (size_t)cap) strcpy(body + bl - 1, ",\"fast\":true}"); }   // 0.37: the ladder may drop me after 20 s without a poll
-    if (g_direct && !g_testBots && g_preRoom) { size_t bl = strlen(body); if (bl > 1 && bl + 40 < (size_t)cap) snprintf(body + bl - 1, cap - bl + 1, ",\"room\":\"%llu\"}", (unsigned long long)g_preRoom); }
-}
-// 0.35: nobody else of my kind waits (the ladder's "alone": my own pool - same game, same mode, fast mode) - I will be the host:
-// my room now, while searching. An older ladder without "alone": the total queue of my mode
-static void pre_check(const char *res) {
-    if (!g_direct || g_testBots || g_preWant || g_state != S_SEARCH || !strstr(res, "\"searching\"")) return;
-    int alone = jint(res, "alone", -1);
-    if (alone == 1 || (alone < 0 && g_queue >= 0 && g_queue <= 1)) { g_preWant = 1; logmsg("direct: first in the queue - making my room while searching"); }
 }
 static DWORD WINAPI net_worker(LPVOID _) {
     static char body[8192]; char res[4096];
     for (;;) {
-        WaitForSingleObject(g_wake, (g_direct || g_fast) && (g_state == S_SEARCH || g_state == S_GUEST_NAME) ? 300 : 2000);   // 0.35: the pair and the room id at once
-        if (g_wantLeave) {
+        WaitForSingleObject(g_wake, 2000);
+        if (g_wantLeave) {                                                // Stop Searching / Back: out of the ladder's queue
             g_wantLeave = 0; snprintf(body, sizeof body, "{\"steam\":\"%llu\"}", g_mySteam);
             http_post(L"leave", body, res, sizeof res); logmsg("leave -> %s", res);
         }
-        if (g_wantJoin) {
-            g_wantJoin = 0; join_body(body, sizeof body);
-            http_post(L"join", body, res, sizeof res); logmsg("join (%s%s) -> %s", g_game, g_direct && !g_testBots ? ", direct" : "", res);
-            g_queue = jint(res, MODE_KEY[g_mode], -1);
-            pre_check(res);
-        }
-        if (g_wantHost && !g_hostReported) {
-            if (g_room) snprintf(body, sizeof body, "{\"steam\":\"%llu\",\"lobby\":\"%s\",\"map\":\"%s\",\"room\":\"%llu\"}", g_mySteam, g_gameName, g_hostMap, (unsigned long long)g_room);
-            else snprintf(body, sizeof body, "{\"steam\":\"%llu\",\"lobby\":\"%s\",\"map\":\"%s\"}", g_mySteam, g_gameName, g_hostMap);
-            if (http_post(L"host", body, res, sizeof res)) { g_hostReported = 1; logmsg("host %s -> %s", g_gameName, res); }
-        }
-        if (g_preRoom && !g_preReported && g_state == S_SEARCH) {         // 0.35: my room is ready - its id to the ladder
-            snprintf(body, sizeof body, "{\"steam\":\"%llu\",\"room\":\"%llu\"}", g_mySteam, (unsigned long long)g_preRoom);
-            if (http_post(L"room", body, res, sizeof res)) { g_preReported = 1; logmsg("room %llu -> %s", (unsigned long long)g_preRoom, res); }
-        }
-        if (g_wantStarted) { g_wantStarted = 0; snprintf(body, sizeof body, "{\"steam\":\"%llu\"}", g_mySteam); http_post(L"started", body, res, sizeof res); logmsg("started -> %s", res); }
         if (g_wantEnded) { g_wantEnded = 0; snprintf(body, sizeof body, "{\"steam\":\"%llu\"}", g_mySteam); http_post(L"ended", body, res, sizeof res); logmsg("ended -> %s", res); }
         if (g_loading) {                                                  // in a match: "still playing" once a minute (the ladder closes a match nobody plays)
             static DWORD lastA; if (GetTickCount() - lastA > 60000) { lastA = GetTickCount();
                 snprintf(body, sizeof body, "{\"steam\":\"%llu\"}", g_mySteam); http_post(L"alive", body, res, sizeof res); }
-        }
-        if (g_ruined[0]) {                                                // the game died while a ladder match was loading (found at start)
-            snprintf(body, sizeof body, "{\"steam\":\"%llu\",\"lobby\":\"%s\"}", g_mySteam, g_ruined);
-            if (http_post(L"ruined", body, res, sizeof res)) { logmsg("ruined loading %s -> %s", g_ruined, res); g_ruined[0] = 0; }
         }
         if (g_state == S_NASK && !g_natAnswer) {                          // 0.38: may the game's own search run on our lobby server?
             join_body(body, sizeof body); DWORD t0 = GetTickCount();
@@ -590,6 +458,23 @@ static DWORD WINAPI net_worker(LPVOID _) {
             else { if (!ok) strcpy(g_natWhy, "the ladder did not answer in time"); else if (!jstr(res, "why", g_natWhy, sizeof g_natWhy)) snprintf(g_natWhy, sizeof g_natWhy, "%.90s", res);
                    g_natAnswer = 2; }
             logmsg("native: mm/native -> %s (%lu ms): %s", g_natAnswer == 1 ? "yes" : "no", GetTickCount() - t0, ok ? res : "-");
+        }
+        if (g_showMode && g_screen == SC_MM && !g_loading && g_state != S_NASK) {   // 0.42: who is online / searching, for the Find a Game info block
+            static DWORD lh; if (!lh || GetTickCount() - lh >= 5000) { lh = GetTickCount();
+                snprintf(body, sizeof body, "{\"steam\":\"%llu\"}", g_mySteam);
+                if (http_quick(L"hello", body, res, sizeof res, 1000) && strstr(res, "\"online\"")) {
+                    g_liveOnline = jint(res, "online", -1);
+                    const char *q = strstr(res, "\"queue\""); g_liveQueue = q ? jint(q, MODE_KEY[g_mode], -1) : jint(res, "searching", -1); } } }
+        if (g_peekWant) {                                                 // 0.42: would Start Searching search now (nothing changes)
+            g_peekWant = 0; join_body(body, sizeof body);
+            size_t bl = strlen(body); if (bl > 1 && bl + 16 < sizeof body) strcpy(body + bl - 1, ",\"peek\":true}");
+            DWORD t0 = GetTickCount(); int ok = http_quick(L"native", body, res, sizeof res, 1500); char why[96] = "";
+            if (ok && jtrue(res, "native")) { g_peekAns = 1; if (g_state == S_IDLE) g_runWhy[0] = 0; }   // it can now: the old reason goes
+            else { if (!ok) strcpy(why, "the ladder did not answer in time"); else if (!jstr(res, "why", why, sizeof why)) snprintf(why, sizeof why, "%.90s", res);
+                   strcpy(g_peekWhy, why); g_peekAns = 2; }
+            static int lastA; static char lastW[96];
+            if (g_peekAns != lastA || strcmp(lastW, why)) { lastA = g_peekAns; strcpy(lastW, why);
+                logmsg("search kind: mm/native peek -> %s (%lu ms): %s", g_peekAns == 1 ? "native" : "not available", GetTickCount() - t0, ok ? res : "-"); }
         }
         if ((g_state == S_NATIVE || (g_state == S_IDLE && g_natWatchUntil && (int)(g_natWatchUntil - GetTickCount()) > 0)) && !g_loading) {   // 0.38: the native search as the ladder sees it, every 2 s
             static DWORD lastn; if (GetTickCount() - lastn >= 2000) { lastn = GetTickCount();
@@ -607,71 +492,6 @@ static DWORD WINAPI net_worker(LPVOID _) {
                         strcpy(g_natLastCancel, mid); g_natSeen = 1; g_natGood = GetTickCount(); g_natAgain = jtrue(res, "again"); g_natCancelled = 1; }
                 } }
         }
-        int st = g_state;
-        if (g_role && st >= S_GO_MAIN && st <= S_DONE && st != S_GUEST_NAME && !g_loading && !g_remoteCancel) {
-            // everyone in a match being set up polls: the host for watchers added meanwhile, all of us for a cancel (0.32)
-            static DWORD lastp; if (GetTickCount() - lastp > (QUICK ? 500u : 2000u)) { lastp = GetTickCount();
-                snprintf(body, sizeof body, "{\"steam\":\"%llu\"}", g_mySteam);
-                if (http_post(L"poll", body, res, sizeof res)) {
-                    char state[32], mid[32]; jstr(res, "state", state, sizeof state); jstr(res, "match", mid, sizeof mid);
-                    if (!strcmp(state, "matched") && g_role == 1 && st <= S_HOST_WAIT) parse_roster(res);
-                    if (!strcmp(state, "cancelled") && !strcmp(mid, g_match)) {
-                        char by[96] = ""; jstr(res, "by", by, sizeof by); MultiByteToWideChar(CP_UTF8, 0, by, -1, g_cancelBy, 64);
-                        logmsg("the match was cancelled by %s", by); g_remoteCancel = 1;
-                    }
-                } }
-            continue;
-        }
-        if (st == S_SEARCH || st == S_GUEST_NAME) {
-            snprintf(body, sizeof body, "{\"steam\":\"%llu\"}", g_mySteam);
-            if (!http_post(L"poll", body, res, sizeof res)) continue;
-            char state[32]; jstr(res, "state", state, sizeof state);
-            if (st == S_SEARCH && !strcmp(state, "searching")) { g_queue = jint(res, MODE_KEY[g_mode], g_queue); pre_check(res); continue; }
-            if (st == S_SEARCH && !strcmp(state, "idle")) { g_wantJoin = 1; continue; }        // server forgot us - rejoin
-            if (st == S_GUEST_NAME && !strcmp(state, "cancelled") && !g_remoteCancel) {
-                char mid[32], by[96] = ""; jstr(res, "match", mid, sizeof mid);
-                if (!strcmp(mid, g_match)) { jstr(res, "by", by, sizeof by); MultiByteToWideChar(CP_UTF8, 0, by, -1, g_cancelBy, 64);
-                    logmsg("the match was cancelled by %s", by); g_remoteCancel = 1; }
-                continue;
-            }
-            if (!strcmp(state, "matched")) {
-                char role[16], lobby[64], en[128] = "";
-                jstr(res, "role", role, sizeof role); jstr(res, "match", g_match, sizeof g_match);
-                { char mp[96]; g_mapName[0] = 0; if (jstr(res, "map", mp, sizeof mp) && mp[0]) MultiByteToWideChar(CP_UTF8, 0, mp, -1, g_mapName, 64); }
-                const char *e = strstr(res, "\"enemies\""); if (e) jstr(e, "name", en, sizeof en);
-                MultiByteToWideChar(CP_UTF8, 0, en, -1, g_oppName, 64);
-                parse_roster(res);
-                if (st == S_SEARCH) g_matchDirect = (strstr(res, "\"direct\": true") || strstr(res, "\"direct\":true")) && !g_bots;
-                // Relay 8 in its compatible mode uses our game server only for this: an automatch where everyone has it
-                SetEnvironmentVariableA("DOW2_RELAY_USE", strstr(res, "\"own_server\": true") || strstr(res, "\"own_server\":true") ? "1" : "0");
-                { char rh[32] = ""; SetEnvironmentVariableA("DOW2_RELAY_HOST", jstr(res, "relay_host", rh, sizeof rh) && rh[0] ? rh : NULL); }   // best ping for all
-                if (st == S_SEARCH) {
-                    logmsg("matched: %s", res);
-                    g_role = !strcmp(role, "host") ? 1 : !strcmp(role, "watcher") ? 3 : 2;
-                    if (g_role == 1) {                       // unique room name: match id + random tail (match ids restart with the server)
-                        static const char A[] = "abcdefghjkmnpqrstuvwxyz23456789"; char r[7]; unsigned x = GetTickCount() ^ (unsigned)(g_mySteam * 2654435761u);
-                        for (int i = 0; i < 6; i++) { x = x * 1103515245u + 12345u; r[i] = A[(x >> 16) % (sizeof A - 1)]; } r[6] = 0;
-                        snprintf(g_gameName, sizeof g_gameName, "MM-%s-%s", g_match, r);
-                    }
-                    _snwprintf(g_coverLine, 159, L"Opponent: %ls. Connecting", g_oppName[0] ? g_oppName : L"player"); g_coverWant = 1;
-                    g_state = S_GO_MAIN; g_stateTick = GetTickCount();
-                    if (g_matchDirect && g_role == 2) {          // 0.35: the host's room came with the match - straight in
-                        char rm[32] = ""; jstr(res, "room", rm, sizeof rm); unsigned long long r = parse_u64(rm);
-                        if (r) { g_room = r; logmsg("guest: host room %llu (direct, with the match)", r); g_state = S_GUEST_DJOIN; g_stateTick = GetTickCount(); }
-                    } else if (g_matchDirect && g_role == 1 && (g_pre || g_preWant)) { g_state = S_GO_LIST; g_stateTick = GetTickCount(); }   // my room is made / being made
-                    logmsg("state search -> %s", SN[g_state]);
-                } else if (g_matchDirect) {                  // 0.34: the room id, no name and no browser
-                    char rm[32] = ""; jstr(res, "room", rm, sizeof rm);
-                    unsigned long long r = parse_u64(rm);
-                    if (r) { g_room = r; logmsg("guest: host room %llu (direct)", r); g_state = S_GUEST_DJOIN; g_stateTick = GetTickCount(); }
-                } else if (jstr(res, "lobby", lobby, sizeof lobby) && lobby[0]) {
-                    strncpy(g_gameName, lobby, sizeof g_gameName - 1); logmsg("guest: host game is %s", g_gameName);
-                    char rm[32] = ""; jstr(res, "room", rm, sizeof rm); unsigned long long r = g_fast ? parse_u64(rm) : 0;
-                    if (r) { g_room = r; logmsg("guest: host room %llu - joining it directly (the list is the fallback)", r); g_state = S_GUEST_DJOIN; g_stateTick = GetTickCount(); }   // 0.37
-                    else { g_state = S_GO_LIST; g_stateTick = GetTickCount(); }
-                }
-            }
-        }
     }
     return 0;
 }
@@ -684,94 +504,6 @@ static void fs(const char *rel, const char *args) {          // rel: ".OnClickHo
     logmsg("-> fscommand %s '%s'", cmd, args ? args : "");
     g_sending++; g_fsOrig(g_fsSelf, NULL, g_fsMovie, cmd, args ? args : ""); g_sending--;
 }
-static HWND game_wnd(void) {
-    HWND w = FindWindowW(NULL, L"Dawn of War II"); if (w) return w;
-    return GetForegroundWindow();
-}
-static void type_text(const char *s) {
-    HWND w = game_wnd(); if (!w) { logmsg("type: no window"); return; }
-    for (const char *p = s; *p; p++) PostMessageW(w, WM_CHAR, (WPARAM)(unsigned char)*p, 1);
-    logmsg("typed '%s' into %p", s, w);
-}
-static void press_enter(void) {
-    HWND w = game_wnd(); if (!w) return;
-    PostMessageW(w, WM_KEYDOWN, VK_RETURN, 0x001C0001); PostMessageW(w, WM_CHAR, '\r', 0x001C0001); PostMessageW(w, WM_KEYUP, VK_RETURN, 0xC01C0001);
-}
-
-// ---------------- cover: while the DLL walks the menus, the player sees one calm "connecting" screen ----------------
-static double g_btnX, g_btnY, g_btnW, g_btnH; static int g_btnHover, g_btnShown, g_uiHidden;
-static int g_coverOn; static volatile int g_loading; static wchar_t g_btnText[64], g_startTxt[64], g_aloneTxt[64]; static volatile int g_btnEnabled, g_readyMe, g_allReady, g_readyIdx = -1; static DWORD g_coverTextTick; static DWORD g_ffaNote, g_banNote; static double g_coverH = 1200;
-static int can_cancel(void); static void user_cancel(void);
-static void cancel_button(void *m) {        // hover look + a click with the left button inside it (the game window in front)
-    int show = can_cancel();
-    if (show != g_btnShown) { g_btnShown = show; as_setb(m, "_level0.mmcover.b._visible", show); }
-    if (!show) return;
-    GFxValue x, y; if (!as_get(m, "_level0.mmcover._xmouse", &x) || x.type != GFX_NUMBER || !as_get(m, "_level0.mmcover._ymouse", &y) || y.type != GFX_NUMBER) return;
-    int in = x.v.num >= g_btnX && x.v.num <= g_btnX + g_btnW && y.v.num >= g_btnY && y.v.num <= g_btnY + g_btnH;
-    if (in != g_btnHover) { g_btnHover = in; as_setn(m, "_level0.mmcover.b._alpha", in ? 100 : 75); }
-    static int wasDown; HWND fg = GetForegroundWindow(); DWORD pid = 0; if (fg) GetWindowThreadProcessId(fg, &pid);
-    int down = pid == GetCurrentProcessId() && (GetAsyncKeyState(VK_LBUTTON) & 0x8001);   // 0x0001: a tap shorter than a frame
-    if (down && !wasDown && in) {           // the menu under the cover is hidden until the button is let go: its own buttons
-        as_setb(m, "_level0.display_item._visible", 0); g_uiHidden = 1;   // must not take this click
-        user_cancel();
-    }
-    wasDown = down;
-}
-static void cover_update(void) {
-    void *m = g_fsMovie; if (!m) return;
-    GFxValue v;
-    int exists = as_get(m, "_level0.mmcover._visible", &v) && v.type == GFX_BOOL;
-    if (g_coverWant && !exists) {
-        as_fnv(m, "_level0.createEmptyMovieClip", "sn", "mmcover", 30000.0);
-        double W = 1280, H = 800, d;
-        if (as_get(m, "Stage.width", &v) && v.type == GFX_NUMBER && v.v.num > 100) W = v.v.num;
-        if (as_get(m, "Stage.height", &v) && v.type == GFX_NUMBER && v.v.num > 100) H = v.v.num;
-        as_fnv(m, "_level0.mmcover.beginFill", "nn", (double)0x07100d, 100.0);
-        as_fnv(m, "_level0.mmcover.moveTo", "nn", -3000.0, -3000.0); as_fnv(m, "_level0.mmcover.lineTo", "nn", 6000.0, -3000.0);
-        as_fnv(m, "_level0.mmcover.lineTo", "nn", 6000.0, 6000.0); as_fnv(m, "_level0.mmcover.lineTo", "nn", -3000.0, 6000.0);
-        as_fnv(m, "_level0.mmcover.lineTo", "nn", -3000.0, -3000.0); as_fnv(m, "_level0.mmcover.endFill", "");
-        d = H / 2 - H * 0.12;
-        as_fnv(m, "_level0.mmcover.createTextField", "snnnnn", "t1", 1.0, W * 0.1, d, W * 0.8, H * 0.3);
-        as_setb(m, "_level0.mmcover.t1.multiline", 1); as_setb(m, "_level0.mmcover.t1.wordWrap", 1);
-        as_setb(m, "_level0.mmcover.t1.embedFonts", 1); as_setb(m, "_level0.mmcover.t1.html", 1); as_setb(m, "_level0.mmcover.t1.selectable", 0);
-        g_coverH = H;
-        // the Cancel button (0.32): a clip of its own under the text; the mouse is read from Flash (_xmouse: stage units) every frame
-        g_btnW = W * 0.16; g_btnH = H * 0.06; g_btnX = W / 2 - g_btnW / 2; g_btnY = H / 2 + H * 0.2;
-        as_fnv(m, "_level0.mmcover.createEmptyMovieClip", "sn", "b", 2.0);
-        as_fnv(m, "_level0.mmcover.b.lineStyle", "nnn", 2.0, (double)0xE2C36B, 100.0);
-        as_fnv(m, "_level0.mmcover.b.beginFill", "nn", (double)0x3a2a14, 100.0);
-        as_fnv(m, "_level0.mmcover.b.moveTo", "nn", g_btnX, g_btnY); as_fnv(m, "_level0.mmcover.b.lineTo", "nn", g_btnX + g_btnW, g_btnY);
-        as_fnv(m, "_level0.mmcover.b.lineTo", "nn", g_btnX + g_btnW, g_btnY + g_btnH); as_fnv(m, "_level0.mmcover.b.lineTo", "nn", g_btnX, g_btnY + g_btnH);
-        as_fnv(m, "_level0.mmcover.b.lineTo", "nn", g_btnX, g_btnY); as_fnv(m, "_level0.mmcover.b.endFill", "");
-        as_fnv(m, "_level0.mmcover.b.createTextField", "snnnnn", "t", 1.0, g_btnX, g_btnY + g_btnH * 0.18, g_btnW, g_btnH * 0.8);
-        as_setb(m, "_level0.mmcover.b.t.embedFonts", 1); as_setb(m, "_level0.mmcover.b.t.html", 1); as_setb(m, "_level0.mmcover.b.t.selectable", 0);
-        { wchar_t bt[200]; _snwprintf(bt, 199, L"<p align='center'><font face='$NormalFont' size='%d' color='#E2C36B'>Cancel</font></p>", (int)(H * 0.03));
-          as_setw(m, "_level0.mmcover.b.t.htmlText", bt); }
-        as_setn(m, "_level0.mmcover.b._alpha", 75); g_btnHover = 0; g_btnShown = 1; GetAsyncKeyState(VK_LBUTTON);   // forget clicks made before
-        logmsg("cover shown (stage %.0fx%.0f)", W, H); g_coverOn = 1; g_coverTextTick = 0;
-    }
-    if (!g_coverWant && exists) { as_fnv(m, "_level0.mmcover.removeMovieClip", ""); g_coverOn = 0; logmsg("cover removed"); }
-    if (g_coverWant && exists && GetTickCount() - g_coverTextTick > 500) {
-        g_coverTextTick = GetTickCount();
-        static int dots; dots = (dots + 1) % 4; wchar_t dd[5] = L"...."; dd[dots] = 0;
-        wchar_t h[700];
-        int big = (int)(g_coverH * 0.07), small = (int)(g_coverH * 0.032);
-        _snwprintf(h, 699, L"<p align='center'><font face='$TitleFont' size='%d' color='#E2C36B'>%ls</font></p>"
-                           L"<p align='center'><font face='$NormalFont' size='%d' color='#C9D6CF'>%ls%ls</font></p>", big,
-                   g_noticeUntil ? L"Match Cancelled" : g_state == S_SEARCH ? L"Searching" : L"Match Found", small, g_coverLine, g_noticeUntil ? L"" : dd);
-        as_setw(m, "_level0.mmcover.t1.htmlText", h);
-    }
-    if (g_coverWant && exists) cancel_button(m);
-}
-static void cover(const wchar_t *line) { if (line) wcsncpy(g_coverLine, line, 159); g_coverWant = 1; }
-static int can_cancel(void) { return ((g_state >= S_GO_MAIN && g_state <= S_DONE) || (g_state == S_SEARCH && (g_pre || g_preWant))) && !g_loading && !g_noticeUntil; }
-static void user_cancel(void) {             // the Cancel button: out of the lobby, the match off for everyone (the ladder hears "leave")
-    logmsg("Cancel pressed (state %s, screen %d)", SN[g_state], g_screen);
-    if (g_state == S_SEARCH || g_matchDirect) g_backToMM = 1;      // 0.35: Back (and Yes on "Are you sure?") from the tick
-    else if (g_screen == SC_SETUP) fs(".OnClickBack", "");      // 0.35: back to Find a Game (from my own room / the match's lobby)
-    set_state(S_FAIL); SetEvent(g_wake);
-}
-
 // ---------------- saved choice: race / chapter / hero picked by the player ----------------
 int g_race = -1, g_chapter = -1, g_hero = -1, g_random; static volatile int g_heroCount; static volatile int g_curRace = -1, g_curChapter = -1, g_curHero = -1; static void *g_heroSelf; static int g_heroFlags; static volatile DWORD g_randomTick, g_autoSelTick, g_lastFsTick; static volatile int g_applyMM, g_mmApplied; static volatile DWORD g_heroAt;
 static wchar_t g_ini[MAX_PATH];   // g_heroCount: heroes of the race on screen (from Receive_PopulateHeroList)
@@ -812,66 +544,17 @@ static void apply_hero(void) {
     logmsg("hero: set to %d", g_hero);
 }
 
-// ---------------- host without the "Game Name" box ----------------
-// GameListPanel::OnClickHost (0x46CB44) only opens a text box and passes it a callback 0x46CC53(bool ok, LocString *name);
-// the callback stores the name and calls the real "host a game" (0x46C2C9). While we host for the ladder we skip the box
-// and call the callback ourselves, exactly as if the player typed the name and pressed OK.
-#define FN_ONCLICKHOST 0x0046CB44
-#define FN_HOSTNAME_CB 0x0046CC53
-static const unsigned char HOST_PRO[6] = {0x55, 0x8B, 0xEC, 0x83, 0xE4, 0xF8};
-typedef void (__fastcall *OnClickHostFn)(void *panel, void *edx, int arg);
-typedef void (__fastcall *HostCbFn)(void *panel, void *edx, int ok, void *name);
+// Localizer.dll's LocString (the game's text table: the language of the game, see lang_detect)
 typedef void (__fastcall *LocCtorFn)(void *self, void *edx, const wchar_t *s);
 typedef void (__fastcall *LocDtorFn)(void *self, void *edx);
-static OnClickHostFn g_hostOrig; static volatile int g_hostDirect; static volatile int g_hostDone;
-static void __fastcall host_hook(void *panel, void *edx, int arg) {
-    if (!g_hostDirect) { g_hostOrig(panel, edx, arg); return; }
-    g_hostDirect = 0;
-    HMODULE loc = GetModuleHandleA("Localizer.dll");
-    LocCtorFn ctor = loc ? (LocCtorFn)GetProcAddress(loc, "??0LocString@@QAE@PB_W@Z") : NULL;
-    LocDtorFn dtor = loc ? (LocDtorFn)GetProcAddress(loc, "??1LocString@@UAE@XZ") : NULL;
-    if (!ctor || !dtor) { logmsg("host: Localizer exports not found - falling back to the box"); g_hostOrig(panel, edx, arg); return; }
-    wchar_t w[64]; MultiByteToWideChar(CP_UTF8, 0, g_gameName, -1, w, 64);
-    static __attribute__((aligned(16))) unsigned char ls[64]; memset(ls, 0, sizeof ls);
-    ctor(ls, NULL, w);
-    logmsg("host: direct create '%s' (panel %p)", g_gameName, panel);
-    ((HostCbFn)FN_HOSTNAME_CB)(panel, NULL, 1, ls);
-    dtor(ls, NULL);
-    g_hostDone = 1;
-}
-static void install_host_hook(void) {
-    unsigned char *t = (unsigned char *)FN_ONCLICKHOST;
-    if (IsBadReadPtr(t, 6) || memcmp(t, HOST_PRO, 6)) { logmsg("OnClickHost prologue mismatch - the name box will be used"); return; }
-    unsigned char *tr = VirtualAlloc(NULL, 16, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
-    memcpy(tr, HOST_PRO, 6); tr[6] = 0xE9; *(DWORD *)(tr + 7) = (FN_ONCLICKHOST + 6) - (DWORD)(tr + 11); g_hostOrig = (OnClickHostFn)tr;
-    code_jmp(t, (void *)host_hook, 6);
-    logmsg("hooked OnClickHost (direct host)");
-}
 
-// ---------------- the front-end message box movie (to keep "Connecting..." out of sight during our join) ----------------
+// ---------------- the front-end message box movie (its notice after a native match the server called off gets OK) ----------------
 #define FN_SFMOVIE_CTOR 0x00681B50          // __stdcall SFMovie(this, const char *path)
 static const unsigned char SFM_PRO[7] = {0x6A, 0xFF, 0x68, 0x90, 0x5C, 0xEE, 0x00};
 typedef void *(__stdcall *SfmCtorFn)(void *self, const char *path);
 static SfmCtorFn g_sfmOrig; static void *g_msgWrap;
-// 0.35: "Are you sure you want to leave this multiplayer match?" (Back in a lobby with other people) - answered Yes by us when we
-// leave on a cancel; the box's buttons are fscommands OnButton1 (Yes) / OnButton2 (No) with the box's path from its movie
-static volatile DWORD g_mbTick; static void *g_mbFsSelf, *g_mbMovie;
-static void msgbox_yes(void) {
-    // the movie: SFMovie+4; its fscommand table (FN_FSCMD's this: callbacks at +0x18/+0x1C): SFMovie+0x18 (ctor 0x681B50)
-    void *w = g_msgWrap && !IsBadReadPtr(g_msgWrap, 0x1C) ? g_msgWrap : NULL;
-    void *m = g_mbMovie ? g_mbMovie : w ? *(void **)((char *)w + 4) : NULL;
-    void *h = g_mbFsSelf ? g_mbFsSelf : w ? *(void **)((char *)w + 0x18) : NULL;
-    if (h && IsBadReadPtr(h, 0x20)) h = NULL;
-    if (!m || !h) { logmsg("message box: no movie to answer"); return; }
-    int any = 0;
-    for (int k = 0; k < 8; k++) {                    // every box that is up (two Backs = two boxes): message_box_<k>
-        char path[64]; GFxValue v; snprintf(path, sizeof path, "_level0.container.message_box_%d", k);
-        char vis[80]; snprintf(vis, sizeof vis, "%s._visible", path);
-        if (!as_get(m, vis, &v) || v.type != GFX_BOOL) continue;
-        any = 1; logmsg("message box %d: Yes (leaving the lobby)", k); g_sending++; g_fsOrig(h, NULL, m, "OnButton1", path); g_sending--;
-    }
-    if (!any) logmsg("message box: none up");
-}
+// the box's buttons are fscommands OnButton1 / OnButton2 with the box's path, sent by the box's own movie
+static void *g_mbFsSelf, *g_mbMovie;
 static void *__stdcall sfm_hook(void *self, const char *path) {
     void *r = g_sfmOrig(self, path);
     if (path && !IsBadReadPtr(path, 4) && strstr(path, "front_end\\message_box")) { g_msgWrap = self; logmsg("message box movie wrapper %p", self); }
@@ -906,81 +589,6 @@ static int parse_states(const char *a, unsigned char *st) {       // "0,2,0,..."
     return k;
 }
 
-// ---------------- lobby slots without the pop-up menu ----------------
-// PlayerListPanel: a click on a slot (fscommand OnItemClick / OnObserverItemClick "<slot>") calls 0x491D51(panel, slot), which stores
-// the slot in panel+0x50 and pops up a menu; each menu item is a __thiscall(panel, int, int) handler that reads panel+0x50.
-// For our own actions we keep the menu away and call the handler right away.
-#define FN_SLOTMENU   0x00491D51
-#define CB_MOVE       0x00492E02      // "Move to this slot" (player slot)
-#define CB_MOVE_OBS   0x00492EF1      // "Move to this slot" (observer slot)
-#define CB_OPEN_OBS   0x00493396      // "Open All Observer Slots"
-#define CB_KICK       0x00493183      // "Kick this player"
-#define CB_AI_EASY    0x004933AE      // "Add Easy Computer" (Normal 0x4933CC, Hard 0x4933EA, Expert 0x493408)
-static const DWORD CB_AI[4] = {0x004933AE, 0x004933CC, 0x004933EA, 0x00493408};
-static const unsigned char SLOTMENU_PRO[6] = {0x55, 0x8B, 0xEC, 0x83, 0xE4, 0xF8};
-typedef void (__stdcall *SlotMenuFn)(void *panel, int slot);
-typedef void (__fastcall *SlotCbFn)(void *panel, void *edx, int a, int b);
-static SlotMenuFn g_slotMenuOrig; static volatile DWORD g_slotCb;
-static void __stdcall slotmenu_hook(void *panel, int slot) {
-    if (!g_slotCb) { g_slotMenuOrig(panel, slot); return; }
-    DWORD cb = g_slotCb; g_slotCb = 0;
-    *(int *)((char *)panel + 0x50) = slot;
-    logmsg("slot %d: action %08lX", slot, cb);
-    ((SlotCbFn)cb)(panel, NULL, 0, 0);
-}
-static void install_slot_hook(void) {
-    unsigned char *t = (unsigned char *)FN_SLOTMENU;
-    if (IsBadReadPtr(t, 6) || memcmp(t, SLOTMENU_PRO, 6)) { logmsg("slot menu prologue mismatch - no slot control"); return; }
-    unsigned char *tr = VirtualAlloc(NULL, 16, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
-    memcpy(tr, SLOTMENU_PRO, 6); tr[6] = 0xE9; *(DWORD *)(tr + 7) = (FN_SLOTMENU + 6) - (DWORD)(tr + 11); g_slotMenuOrig = (SlotMenuFn)tr;
-    code_jmp(t, (void *)slotmenu_hook, 6);
-    logmsg("hooked slot menu");
-}
-static int team_n(void) { return g_matchMode + 1; }
-static int is_obs_slot(int s) { int n = team_n(); return (s >= n && s < 4) || (s >= 4 + n && s < 8); }
-static void slot_do(int slot, DWORD cb) {
-    char a[8]; snprintf(a, sizeof a, "%d", slot); g_slotCb = cb;
-    fs(is_obs_slot(slot) ? ".player_list_panel_mc.OnObserverItemClick" : ".player_list_panel_mc.OnItemClick", a);
-    if (g_slotCb) { g_slotCb = 0; logmsg("slot %d: the engine did not open the slot handler", slot); }
-}
-
-// who sits where: GameInfo slot array (+0x70, stride 0xC8): +8 SteamID64, +0x98 position = lobby slot (as LobbyStats)
-#define G_SESSION_ 0x01335014
-#define FN_INFO_CTOR_ 0x0040172D
-#define FN_INFO_DTOR_ 0x00401794
-typedef void (__stdcall *Fn1_)(void *);
-typedef void *(__fastcall *GetMatchFn_)(void *self, void *edx);
-typedef char (__stdcall *GetInfoFn_)(void *self, void *info);
-static int lobby_ids(unsigned long long *ids) {         // ids[8] by slot; returns number of occupied slots
-    memset(ids, 0, 8 * sizeof *ids);
-    void **mgr = *(void ***)G_SESSION_; if (!mgr || IsBadReadPtr(mgr, 4)) return -1;
-    void **vt = *(void ***)mgr; if (IsBadReadPtr(vt, 0x28)) return -1;
-    void *m = ((GetMatchFn_)vt[0x24 / 4])(mgr, NULL); if (!m || IsBadReadPtr(m, 8)) return -1;
-    static __attribute__((aligned(16))) unsigned char info[0x2000];
-    memset(info, 0, sizeof info); ((Fn1_)FN_INFO_CTOR_)(info);
-    int found = 0;
-    if (((GetInfoFn_)(*(void ***)m)[1])(m, info)) {
-        unsigned char *base = *(unsigned char **)(info + 0x70); int n = *(int *)(info + 0x78);
-        if (base && n > 0 && n <= 64 && !IsBadReadPtr(base, n * 0xC8))
-            for (int i = 0; i < n; i++) {
-                unsigned char *sl = base + i * 0xC8; unsigned long long id = *(unsigned long long *)(sl + 8); int pos = *(int *)(sl + 0x98);
-                if (id != ~0ULL && id && pos >= 0 && pos < 8) { ids[pos] = id; found++; }
-            }
-    }
-    ((Fn1_)FN_INFO_DTOR_)(info);
-    return found;
-}
-// a lobby slot holds the Relic profile id (sometimes the SteamID) - match both; the name is a second check
-static int is_me(unsigned long long id) { return id && (id == g_mySteam || id == g_myPid); }
-static int in_roster(unsigned long long id) { for (int i = 0; i < g_nR; i++) if (id && (g_rSteam[i] == id || g_rPid[i] == id)) return i; return -1; }
-static int is_watcher(unsigned long long id) { for (int i = 0; i < g_nW; i++) if (id && (g_wSteam[i] == id || g_wPid[i] == id)) return 1; return 0; }
-static int name_known(const wchar_t *n) {
-    if (!n || !n[0]) return 1;                         // no name seen yet - do not treat as a stranger
-    for (int i = 0; i < g_nR; i++) if (!wcscmp(n, g_rName[i])) return 1;
-    for (int i = 0; i < g_nW; i++) if (!wcscmp(n, g_wName[i])) return 1;
-    return 0;
-}
-
 // ---------------- replay upload after a multiplayer match ----------------
 // The game writes the last match to Documents\My Games\Dawn of War II - Retribution\Playback\temp.rec. Back in the menu after a match
 // with other people we send it to the replay site (rts.fintebtc.de/replay, same mirrors as the ladder); its id is in MMFind.log.
@@ -994,7 +602,7 @@ static int send_rec(const char *buf, DWORD size, const char *fname, const char *
     char out[512];
     for (int k = 0; k < g_nHosts; k++) {                              // the analysis runs while we wait: long receive timeout
         int h = (g_curHost + k) % g_nHosts; out[0] = 0; int n = 0; DWORD code = 0, sz = sizeof code;
-        HINTERNET s = WinHttpOpen(L"MMFind/0.41", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, NULL, NULL, 0); if (!s) break;
+        HINTERNET s = WinHttpOpen(L"MMFind/" MMF_VER_W, WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, NULL, NULL, 0); if (!s) break;
         WinHttpSetTimeouts(s, 4000, 8000, 60000, 300000);
         HINTERNET c = WinHttpConnect(s, g_hosts[h], INTERNET_DEFAULT_HTTPS_PORT, 0);
         HINTERNET r = c ? WinHttpOpenRequest(c, L"POST", L"/replay/api/upload", NULL, NULL, NULL, WINHTTP_FLAG_SECURE) : NULL;
@@ -1033,66 +641,173 @@ static void replay_after_match(void) {
 }
 
 // ---------------- hooks ----------------
-static wchar_t g_st1[128], g_st2[128], g_st3[128], g_btn[64];
-static void status_text(void) {
-    DWORD s = (GetTickCount() - g_searchTick) / 1000;
-    switch (g_state) {
-    case S_SEARCH:
-        _snwprintf(g_st1, 127, L"Searching for an opponent... %u:%02u", s / 60, s % 60);
-        if (g_queue >= 0) _snwprintf(g_st2, 127, L"Players searching %ls: %d", MODE_W[g_mode], g_queue); else wcscpy(g_st2, L"Connecting to the ladder...");
-        wcscpy(g_st3, L"Elite ladder automatch"); break;
-    default:
-        _snwprintf(g_st1, 127, L"Opponent found: %ls", g_oppName[0] ? g_oppName : L"player");
-        wcscpy(g_st2, g_role == 1 ? L"Creating the game..." : L"Joining the game..."); g_st3[0] = 0;
-    }
-}
-static int searching_ui(void) { return g_state == S_SEARCH || (g_state >= S_GO_MAIN && g_state <= S_GO_LIST); }
-
-static void on_player_list(GFxValue *a, unsigned n) {
+static void on_player_list(GFxValue *a, unsigned n) {     // a Custom Games lobby: how many people (the replay after its match)
     if (n < 5 || (n - 5) % 20) return;
-    int humans = 0, opp = 0; for (int i = 0; i < 8; i++) g_slotName[i][0] = 0;
-    { static char last[4000]; char cur[4000]; int L = 0;                // log the slot fields when they change (ready flag position)
-      for (unsigned i = 0; i < (n - 5) / 20 && L < 3800; i++) { GFxValue *q = a + 5 + i * 20; if (q[0].type != GFX_BOOL || !q[0].v.b) continue;
-          L += snprintf(cur + L, sizeof cur - L, " |s%d", i);
-          for (int k = 0; k < 20 && L < 3800; k++) { if (q[k].type == GFX_BOOL) L += snprintf(cur + L, sizeof cur - L, " %d:%c", k, q[k].v.b ? 'T' : 'F');
-              else if (q[k].type == GFX_NUMBER) L += snprintf(cur + L, sizeof cur - L, " %d:%g", k, q[k].v.num); } }
-      cur[L] = 0; if (strcmp(cur, last)) { strcpy(last, cur); logmsg("slots:%s", cur); } }
-    if (g_testBots == 2) { static char last2[4000]; char cur[4000]; int L = 0;        // AI tests: every row (computers are not in the list above)
-      for (unsigned i = 0; i < (n - 5) / 20 && L < 3800; i++) { GFxValue *q = a + 5 + i * 20;
-          L += snprintf(cur + L, sizeof cur - L, " |r%u", i);
-          for (int k = 0; k < 8 && L < 3800; k++) { if (q[k].type == GFX_BOOL) L += snprintf(cur + L, sizeof cur - L, " %d:%c", k, q[k].v.b ? 'T' : 'F');
-              else if (q[k].type == GFX_NUMBER) L += snprintf(cur + L, sizeof cur - L, " %d:%g", k, q[k].v.num);
-              else if (q[k].type == GFX_WSTRING && q[k].v.ws) { char u[64]; WideCharToMultiByte(CP_UTF8, 0, q[k].v.ws, -1, u, sizeof u, NULL, NULL); L += snprintf(cur + L, sizeof cur - L, " %d:'%s'", k, u); } } }
-      cur[L] = 0; if (strcmp(cur, last2)) { strcpy(last2, cur); logmsg("rows:%s", cur); } }
-    { int all = 1, cnt = 0; if (g_readyIdx >= 0) for (unsigned i = 0; i < (n - 5) / 20; i++) { GFxValue *q = a + 5 + i * 20;
-          if (q[0].type != GFX_BOOL || !q[0].v.b || q[4].type != GFX_NUMBER || (int)q[4].v.num != 1) continue;   // other humans (the host itself has no ready mark)
-          if (q[3].type == GFX_NUMBER && is_obs_slot((int)q[3].v.num)) continue;            // observers don't ready up
-          cnt++; if (q[g_readyIdx].type != GFX_BOOL || !q[g_readyIdx].v.b) all = 0; }
-      g_allReady = g_readyIdx >= 0 && all && (cnt >= 1 || g_bots); }
+    int humans = 0;
     for (unsigned i = 0; i < (n - 5) / 20; i++) {
         GFxValue *s = a + 5 + i * 20;
         if (s[0].type != GFX_BOOL || !s[0].v.b || s[4].type != GFX_NUMBER) continue;
-        int st = (int)s[4].v.num;
-        if (s[0].type == GFX_BOOL && s[0].v.b && s[3].type == GFX_NUMBER && s[5].type == GFX_WSTRING && s[5].v.ws) { int si = (int)s[3].v.num; if (si >= 0 && si < 8) { wcsncpy(g_slotName[si], s[5].v.ws, 63); g_slotName[si][63] = 0; } }
-        if (st == 0 && s[6].type == GFX_NUMBER) g_lobbyRace = (int)s[6].v.num;
-        if (st != 0 && st != 1) continue;       // 0 me, 1 other human (2.. AI / open / closed)
-        humans++;
-        if (st == 1 && s[5].type == GFX_WSTRING && s[5].v.ws && g_oppName[0] && !wcsncmp(s[5].v.ws, g_oppName, 63)) opp = 1;
+        int st = (int)s[4].v.num; if (st == 0 || st == 1) humans++;      // 0 me, 1 other human (2.. AI / open / closed)
     }
-    if (humans != g_humans || opp != g_oppIn) logmsg("lobby: humans=%d opponent_in=%d", humans, opp);
-    g_humans = humans; g_oppIn = opp;
+    if (humans != g_humans) logmsg("lobby: humans=%d", humans);
+    g_humans = humans;
 }
-static void on_game_list(GFxValue *a, unsigned n) {
-    g_listSeen = 1;
-    if (!g_gameName[0] || n < 2) return;
-    wchar_t want[48]; MultiByteToWideChar(CP_UTF8, 0, g_gameName, -1, want, 48);
-    int row = -1;
-    for (unsigned i = 0; 2 + i * 11 < n; i++) {
-        GFxValue *r = a + 2 + i * 11;
-        if (r[0].type == GFX_WSTRING && r[0].v.ws && !wcscmp(r[0].v.ws, want)) { row = i; break; }
+
+// ---------------- 0.42: the kind of search on Find a Game (see g_showMode) ----------------
+static const char *native_no(void);
+static int has_cyr(const wchar_t *w) { for (; w && *w; w++) if (*w >= 0x400 && *w < 0x500) return 1; return 0; }
+// the language of the game's own texts, as EliteAI does it: Russian if they are Cyrillic (Localizer.dll, the game's text table)
+static void lang_detect(void) {
+    if (g_lang >= 0) return;
+    if (g_langCfg >= 0) { g_lang = g_langCfg; logmsg("search kind: language %s (Lang=)", g_lang ? "ru" : "en"); return; }
+    HMODULE lz = GetModuleHandleA("Localizer.dll");
+    typedef unsigned char (__stdcall *GetStrB)(int id, void *out); typedef const wchar_t *(__fastcall *CstrFn)(const void *self, void *edx);
+    LocCtorFn ctor = lz ? (LocCtorFn)GetProcAddress(lz, "??0LocString@@QAE@PB_W@Z") : NULL;
+    LocDtorFn dtor = lz ? (LocDtorFn)GetProcAddress(lz, "??1LocString@@UAE@XZ") : NULL;
+    GetStrB get = lz ? (GetStrB)GetProcAddress(lz, "?GetString@Localizer@@SG_NHAAVLocString@@@Z") : NULL;
+    CstrFn cstr = lz ? (CstrFn)GetProcAddress(lz, "?c_str@LocString@@QBEPB_WXZ") : NULL;
+    int ru = 0, got = 0;
+    if (ctor && dtor && get && cstr) {
+        static const int IDS[] = {555027, 555036};                   // "Add Normal Computer", "Normal Computer Player" (as EliteAI)
+        static __attribute__((aligned(16))) unsigned char ls[64];
+        for (int i = 0; i < 2; i++) { memset(ls, 0, sizeof ls); ctor(ls, NULL, L"");
+            if (get(IDS[i], ls)) { got = 1; ru |= has_cyr(cstr(ls, NULL)); } dtor(ls, NULL); }
     }
-    if (row != g_rowFound) logmsg("game list: %u rows, %s at row %d", (n - 2) / 11, g_gameName, row);
-    g_rowFound = row;
+    g_lang = ru;
+    logmsg("search kind: language %s (%s)", ru ? "ru" : "en", got ? "the game's text table" : "no text table - English");
+}
+// the ladder's / our own reasons in the player's words, with what to do (0.45: no other search runs instead)
+static const wchar_t *why_text(const char *w, int ru) {
+    static const struct { const char *k; const wchar_t *ru, *en; } T[] = {
+        {"not signed in through our lobby", L"перезапустите игру через лаунчер Elite (игра вошла не через наш сервер лобби)",
+                                            L"restart the game from the Elite launcher (the game did not sign in through our lobby server)"},
+        {"no OwnLobby.dll",                 L"перезапустите игру через лаунчер Elite", L"restart the game from the Elite launcher"},
+        {"lobby server unreachable",        L"наш сервер лобби не отвечает \x2014 попробуйте через минуту", L"our lobby server does not answer - try again in a minute"},
+        {"did not answer",                  L"наш сервер не отвечает \x2014 попробуйте через минуту", L"our server does not answer - try again in a minute"},
+        {"native automatch off",            L"выключен на сервере \x2014 попробуйте позже", L"switched off on the server - try again later"},
+        {"native search",                   L"сервер не увидел поиск \x2014 нажмите Start Searching ещё раз", L"the server did not see the search - press Start Searching again"},
+        {"was not ours",                    L"поиск шёл мимо нашего сервера \x2014 нажмите Start Searching ещё раз", L"the search did not go through our server - press Start Searching again"},
+        {"mode",                            L"Team FFA не входит в автоматч \x2014 выберите 1v1, 2v2 или 3v3", L"Team FFA is not in the automatch - pick 1v1, 2v2 or 3v3"},
+    };
+    if (!w || !w[0]) return L"";
+    for (unsigned i = 0; i < sizeof T / sizeof T[0]; i++) if (strstr(w, T[i].k)) return ru ? T[i].ru : T[i].en;
+    static wchar_t raw[96]; MultiByteToWideChar(CP_UTF8, 0, w, -1, raw, 96); return raw;
+}
+static const char *native_no(void);
+// 1 our servers, 2 not available (*why), 0 not known yet
+static int mode_kind(const char **why) {
+    *why = NULL;
+    if (g_state == S_NATIVE) return 1;
+    const char *no = native_no(); if (no) { *why = no; return 2; }                    // nothing to ask: what Start Searching would get
+    if (g_state == S_IDLE && g_runWhy[0]) { *why = g_runWhy; return 2; }              // the last Start Searching could not search
+    if (g_peekAns == 2) *why = g_peekWhy;
+    return g_peekAns;
+}
+// Two text fields of the Find a Game panel itself (they go and come with the panel; its units = the stage, 2134 x 1200, seen
+// with ModeProbe=1 on the stand): the head right of the screen's own title "Find a Game", and the info block in the free space
+// under "Your Party" (no button of the game there): the kind of search, MMFind's version, the queue and who is online.
+// [MMFind] HeadX/HeadY/HeadSize, ModeX/ModeY/ModeSize move them (read again on every new field).
+static double g_hx = 600, g_hy = 30, g_hsz = 34;
+static void head_html(wchar_t *h, int cap) {
+    const char *why; int k = mode_kind(&why), ru = g_lang == 1;
+    const wchar_t *t = k == 1 ? (ru ? L"ELITE: АВТОМАТЧ НА НАШИХ СЕРВЕРАХ" : L"ELITE: AUTOMATCH ON OUR SERVERS")
+                     : k == 2 ? (ru ? L"ELITE: АВТОМАТЧ V2.0 НЕДОСТУПЕН" : L"ELITE: AUTOMATCH V2.0 NOT AVAILABLE") : (ru ? L"ELITE: АВТОМАТЧ" : L"ELITE: AUTOMATCH");
+    _snwprintf(h, cap - 1, L"<font face='%ls' size='%d' color='%ls'>%ls</font>", ru ? L"$NormalFont" : L"$TitleFont", (int)(g_hsz + 0.5),
+               k == 2 ? L"#E8A06A" : L"#E2C36B", t);
+    h[cap - 1] = 0;   // the game's title font has no Cyrillic in every install: Russian in $NormalFont
+}
+static void mode_html(wchar_t *h, int cap) {
+    const char *why; int k = mode_kind(&why), ru = g_lang == 1;
+    int s1 = (int)(g_msz + 0.5), s2 = (int)(g_msz * 0.78 + 0.5);
+    if (k == 2) {                                                     // 0.45: nothing searches - why, and what to do
+        _snwprintf(h, cap - 1, L"<font face='$NormalFont' size='%d' color='#E8A06A'>%ls</font><br>"
+                               L"<font face='$NormalFont' size='%d' color='#D8D2BC'>%ls</font><br>"
+                               L"<font face='$NormalFont' size='%d' color='#8E9A94'>MMFind " MMF_VER_W L"</font>",
+                   s1, ru ? L"Автоматч v2.0 недоступен:" : L"Automatch v2.0 is not available:", s2, why_text(why, ru), s2);
+        h[cap - 1] = 0; return;
+    }
+    const wchar_t *lab = ru ? L"Автопоиск:" : L"Automatch:";
+    const wchar_t *val = k == 1 ? (ru ? L"наши серверы" : L"our servers") : (ru ? L"проверяем..." : L"checking...");
+    const wchar_t *col = k == 1 ? L"#8FE3B4" : L"#A9B4AE";
+    wchar_t q[160] = L"", n[64] = L"", o[64] = L"";
+    int searching = g_state == S_NASK || g_state == S_NATIVE;
+    int qn = g_liveQueue >= 0 ? g_liveQueue : g_queue;
+    if (qn >= 0) _snwprintf(n, 63, ru ? L"в очереди: %d" : L"in the queue: %d", qn);
+    if (g_liveOnline >= 0) _snwprintf(o, 63, ru ? L"онлайн: %d" : L"online: %d", g_liveOnline);
+    if (searching) { DWORD s = (GetTickCount() - g_searchTick) / 1000;
+        _snwprintf(q, 159, L"%ls %u:%02u%ls%ls%ls%ls", ru ? L"Ищем..." : L"Searching...", (unsigned)(s / 60), (unsigned)(s % 60), n[0] ? L" \x00B7 " : L"", n, o[0] ? L" \x00B7 " : L"", o); }
+    else if (n[0] || o[0]) { _snwprintf(q, 159, L"%ls%ls%ls", n, n[0] && o[0] ? L" \x00B7 " : L"", o); if (q[0] >= L'a' && q[0] <= L'z') q[0] -= 32; else if (q[0] >= 0x430 && q[0] <= 0x44F) q[0] -= 32; }
+    _snwprintf(h, cap - 1, L"<font face='$NormalFont' size='%d' color='#D8D2BC'>%ls</font><font face='$NormalFont' size='%d' color='%ls'> %ls</font><br>"
+                           L"<font face='$NormalFont' size='%d' color='#8E9A94'>MMFind " MMF_VER_W L"</font><br>"
+                           L"<font face='$NormalFont' size='%d' color='#C9D6CF'>%ls</font>",
+               s1, lab, s1, col, val, s2, s2, q);
+    h[cap - 1] = 0;
+}
+static void field_make(void *m, const char *nm, double depth, double x, double y, double w, double hgt) {
+    char fn[240], p[240]; snprintf(fn, sizeof fn, "%s.createTextField", g_panel);
+    as_fnv(m, fn, "snnnnn", nm, depth, x, y, w, hgt);
+    static const char *B[] = {"embedFonts", "html", "multiline", "wordWrap", "selectable"}; static const int BV[] = {1, 1, 1, 1, 0};
+    for (int i = 0; i < 5; i++) { snprintf(p, sizeof p, "%s.%s.%s", g_panel, nm, B[i]); as_setb(m, p, BV[i]); }
+}
+static void mode_make(void *m) {
+    { wchar_t t[16]; static const wchar_t *K[6] = {L"ModeX", L"ModeY", L"ModeSize", L"HeadX", L"HeadY", L"HeadSize"};
+      double *V[6] = {&g_mx, &g_my, &g_msz, &g_hx, &g_hy, &g_hsz};
+      for (int i = 0; i < 6; i++) { GetPrivateProfileStringW(L"MMFind", K[i], L"", t, 16, g_ini); if (t[0]) *V[i] = _wtof(t); }
+      g_modeProbe = GetPrivateProfileIntW(L"MMFind", L"ModeProbe", 0, g_ini); }
+    field_make(m, "mmf_head", 16122.0, g_hx, g_hy, 1500, g_hsz * 1.6);
+    field_make(m, "mmf_mode", 16123.0, g_mx, g_my, 1000, g_msz * 6.4);   // 0.45: room for a wrapped reason
+    logmsg("search kind: fields made in %s (head %g,%g, info %g,%g)", g_panel, g_hx, g_hy, g_mx, g_my);
+    if (g_modeProbe) {                                          // debug (ModeProbe=1): labels every 200 x 100 panel units
+        int n = 0; char fn[240], p[240]; snprintf(fn, sizeof fn, "%s.createTextField", g_panel);
+        for (int y = 0; y <= 1200; y += 100) for (int x = 0; x <= 2000; x += 200) {
+            char nm[32]; wchar_t w[96]; snprintf(nm, sizeof nm, "mmf_p%d", n);
+            as_fnv(m, fn, "snnnnn", nm, 16200.0 + n, (double)x, (double)y, 160.0, 30.0);
+            snprintf(p, sizeof p, "%s.%s.html", g_panel, nm); as_setb(m, p, 1);
+            snprintf(p, sizeof p, "%s.%s.embedFonts", g_panel, nm); as_setb(m, p, 1);
+            _snwprintf(w, 95, L"<font face='$NormalFont' size='14' color='#FF60FF'>+%d,%d</font>", x, y);
+            snprintf(p, sizeof p, "%s.%s.htmlText", g_panel, nm); as_setw(m, p, w); n++;
+        }
+    }
+}
+// right after the engine's own per-frame call into the Find a Game panel (Receive_ShowSearchingAnimation): the panel and its
+// movie are alive at that moment, on the game's UI thread
+static void mode_ui(void) {
+    static DWORD last, tries, triesScr; DWORD now = GetTickCount();
+    if (!g_showMode || now - last < 250) return; last = now;
+    void *m = g_fsMovie;
+    if (!m || g_loading || g_screen != SC_MM || !g_panel[0] || now - g_scrTick < 300) return;
+    lang_detect();
+    char p[240], ph[240]; GFxValue v; snprintf(p, sizeof p, "%s.mmf_mode._visible", g_panel); snprintf(ph, sizeof ph, "%s.mmf_head._visible", g_panel);
+    static int shown = -1; static wchar_t lastH[900], lastT[300];
+    if (!(as_get(m, p, &v) && v.type == GFX_BOOL)) {
+        if (triesScr != g_scrTick) { triesScr = g_scrTick; tries = 0; }
+        if (tries >= 3) return;
+        tries++; mode_make(m); shown = -1; lastH[0] = lastT[0] = 0;
+        if (!(as_get(m, p, &v) && v.type == GFX_BOOL)) { logmsg("search kind: the fields were not made (try %lu)", tries); return; }
+    }
+    int hv = g_heroUp, mv = g_mapUp, over = hv || mv;
+    if ((!over) != shown) { shown = !over; as_setb(m, p, shown); as_setb(m, ph, shown);
+        logmsg("search kind: %s (hero panel %d, map preferences %d, hero shown %d)", shown ? "shown" : "hidden", hv, mv, g_heroShown); }
+    wchar_t h[900], t[300]; mode_html(h, 900); head_html(t, 300);
+    if (wcscmp(t, lastT)) { wcscpy(lastT, t); snprintf(ph, sizeof ph, "%s.mmf_head.htmlText", g_panel); as_setw(m, ph, t); }
+    if (wcscmp(h, lastH)) {
+        static int lastK = -1; const char *why; int k = mode_kind(&why);
+        wcscpy(lastH, h); snprintf(p, sizeof p, "%s.mmf_mode.htmlText", g_panel); as_setw(m, p, h);
+        if (k != lastK) { lastK = k; logmsg("search kind shown: %s%s%s (state %s)", k == 1 ? "our servers" : k == 2 ? "not available" : "checking",
+                                            why && why[0] ? " - " : "", why ? why : "", SN[g_state]); }
+    }
+}
+// on the game's thread (tick): ask the ladder which search Start Searching would take - on entering Find a Game, every 20 s
+// there and on a match type change; only while idle and nothing of a native search is pending (an older ladder without "peek"
+// would drop the "cancelled" note the search again needs)
+static void mode_peek(DWORD now) {
+    static DWORD scr;
+    if (!g_showMode || g_screen != SC_MM || g_loading || !g_mySteam) return;
+    if (scr != g_scrTick) { scr = g_scrTick; g_peekAns = 0; g_peekLast = 0; }
+    int idle = g_state == S_IDLE || g_state == S_DONE;
+    if (!idle || native_no() || g_reWant || g_natCancelled || (g_natWatchUntil && (int)(g_natWatchUntil - now) > 0) || now - g_scrTick < 300) return;
+    if (g_peekLast && now - g_peekLast < 20000) return;
+    g_peekLast = now; g_peekWant = 1; SetEvent(g_wake);
 }
 
 static char __fastcall inv_hook(void *self, void *edx, const char *method, int flags, GFxValue *args, unsigned count) {
@@ -1109,116 +824,75 @@ static char __fastcall inv_hook(void *self, void *edx, const char *method, int f
         static char last[700]; if (strcmp(b, last)) { strcpy(last, b); logmsg("%s", b); }
     }
     if (method && args && count < 4096 && !IsBadReadPtr(args, count * sizeof(GFxValue))) {
-        if (!strcmp(method, "Receive_ShowSearchingAnimation")) { g_mmSelf = self; g_mmFlags = flags;
+        if (!strcmp(method, "Receive_ShowSearchingAnimation")) {
             if (count == 1 && (args[0].type == GFX_BOOL || args[0].type == GFX_NUMBER)) {      // 0.38: the engine's own search on / off
                 int on = args[0].type == GFX_BOOL ? args[0].v.b != 0 : args[0].v.num != 0;
-                if (on != g_engSearch && (g_state == S_NASK || g_state == S_NATIVE || g_natStopAt)) logmsg("native: the game's own search %s", on ? "ON" : "off");
+                if (on != g_engSearch) logmsg("native: the game's own search %s (state %s)", on ? "ON" : "off", SN[g_state]);
                 g_engSearch = on; } }
-        if (!strcmp(method, "Receive_CreateMessageBox")) { g_mbTick = GetTickCount(); logmsg("message box created (%u args%s)", count, count && args[0].type == GFX_NUMBER ? "" : ""); }
-        if (!strcmp(method, "Receive_PopulateDropDownListEx") && count > 2 && args[0].type == GFX_NUMBER && args[0].v.num == 0) {
+        if (!strcmp(method, "Receive_CreateMessageBox")) logmsg("message box created (%u args)", count);
+        if (!strcmp(method, "Receive_PopulateDropDownListEx") && count > 2 && args[0].type == GFX_NUMBER && args[0].v.num == 0 && g_screen != SC_SETUP) {
             int n = 0;                                                  // map list: name, enabled, name, enabled...
             for (unsigned i = 0; 2 + i * 2 < count && n < MAXMAPS; i++)
-                if (args[2 + i * 2].type == GFX_WSTRING && args[2 + i * 2].v.ws) { wcsncpy(g_lmaps[n], args[2 + i * 2].v.ws, 63); g_lmaps[n][63] = 0; n++; }
-            g_nlmaps = n;
-            if (g_screen != SC_SETUP) {
-                memcpy(g_maps, g_lmaps, sizeof g_maps);
-                if (n != g_nmaps) { g_nmaps = n; load_prefs(); logmsg("map catalog: %d maps", n); }
-            } else logmsg("lobby map list: %d maps", n);
+                if (args[2 + i * 2].type == GFX_WSTRING && args[2 + i * 2].v.ws) { wcsncpy(g_maps[n], args[2 + i * 2].v.ws, 63); g_maps[n][63] = 0; n++; }
+            if (n != g_nmaps) { g_nmaps = n; load_prefs(); logmsg("map catalog: %d maps", n); }
         }
-        if (!strcmp(method, "Receive_PopulateDropDownList") && g_screen == SC_MM && count == 6 && args[0].type == GFX_NUMBER && args[0].v.num == 0
-            && args[5].type == GFX_WSTRING) { static wchar_t w[] = L"Watch a match"; args[5].v.ws = w; }
         if (!strcmp(method, "Receive_CreateMapList") && g_nmaps) {
             g_relicN = count > 1 ? (int)(count - 1) / 2 : 10;
             g_mpSelf = self; g_mpFlags = flags; int n = build_maplist();
             logmsg("map preferences: %d maps for %s", g_mpN, MODE_KEY[g_mode]);
             return g_invOrig(self, edx, method, flags, g_mpArgs, n);
         }
-        if (!strcmp(method, "Receive_UpdateButtonText") && count >= 1 && args[0].type == GFX_WSTRING && args[0].v.ws && wcscmp(g_btnText, args[0].v.ws)) {
-            wcsncpy(g_btnText, args[0].v.ws, 63); g_btnText[63] = 0; if (g_state == S_SETUP_HERO || g_state == S_HOST_NAME) wcscpy(g_aloneTxt, g_btnText); /* host alone: "Start Skirmish" */ char b[96]; WideCharToMultiByte(CP_UTF8, 0, g_btnText, -1, b, sizeof b, NULL, NULL); logmsg("lobby button: %s", b); }
-        if (!strcmp(method, "Receive_SetEnabledState") && count >= 1 && args[0].type == GFX_BOOL) g_btnEnabled = args[0].v.b;
-        if (!strcmp(method, "Receive_SetReadyState") && count >= 1 && args[0].type == GFX_BOOL && g_readyMe != args[0].v.b) { g_readyMe = args[0].v.b; logmsg("my ready: %d", g_readyMe); }
         if (!strcmp(method, "Receive_SetGamerTag") && count >= 1 && args[0].type == GFX_WSTRING && args[0].v.ws) wcsncpy(g_myName, args[0].v.ws, 63);
         else if (!strcmp(method, "Receive_PopulatePlayerList")) on_player_list(args, count);
-        else if (!strcmp(method, "Receive_PopulateDropDownList") && count >= 3 && args[0].type == GFX_NUMBER && g_screen == SC_SETUP) {
-            int id = (int)args[0].v.num;
-            if (id >= 1 && id <= 4) { g_optSelf = self; g_optWant[id] = -1;
-                for (unsigned i = 2; i < count && g_optWant[id] < 0; i++) if (args[i].type == GFX_WSTRING && args[i].v.ws)
-                    for (int w = 0; w < 3 && OPT_WANT[id][w]; w++) if (!wcscmp(args[i].v.ws, OPT_WANT[id][w])) { g_optWant[id] = (int)i - 2; break; } }
-        }
-        else if (!strcmp(method, "Receive_PopulateGameList")) on_game_list(args, count);
         else if (!strcmp(method, "Receive_SelectHero")) { g_autoSelTick = g_heroTick = GetTickCount(); g_heroSelf = self; g_heroFlags = flags;
             if (count >= 1 && args[0].type == GFX_NUMBER) g_curHero = (int)args[0].v.num; }
-        else if (!strcmp(method, "Receive_PopulateHeroList")) { g_heroSelf = self; g_heroFlags = flags; g_heroTick = GetTickCount();
-            int imgs = 0;                                                 // every hero has two portraits from ...\heroes\ (abilities: other folders)
-            for (unsigned i = 0; i < count; i++) {
-                if (args[i].type == GFX_STRING && args[i].v.s && strstr(args[i].v.s, "\\heroes\\")) imgs++;
-                else if (args[i].type == GFX_WSTRING && args[i].v.ws && wcsstr(args[i].v.ws, L"\\heroes\\")) imgs++;
-            }
-            if (imgs >= 2) g_heroCount = imgs / 2;
-        }
+        else if (!strcmp(method, "Receive_PopulateHeroList")) { g_heroSelf = self; g_heroFlags = flags; g_heroTick = GetTickCount(); }
         else if (!strcmp(method, "Receive_PopulateDropDownListWithImage") && count >= 4 &&      // the race list (race_*_x icons) arrives before
                  ((args[3].type == GFX_WSTRING && args[3].v.ws && wcsstr(args[3].v.ws, L"\\race_")) ||   // the race selection and the hero list
                   (args[3].type == GFX_STRING && args[3].v.s && strstr(args[3].v.s, "\\race_")))) { g_heroSelf = self; g_heroFlags = flags; g_heroTick = GetTickCount(); }
         else if (!strcmp(method, "Receive_SetDropDownSelection") && count == 2 && args[0].type == GFX_NUMBER && args[1].type == GFX_NUMBER) {
             int dd = (int)args[0].v.num, v = (int)args[1].v.num;
             if (self == g_heroSelf) { if (dd == 0) { if (v != g_curRace) g_curChapter = -1; g_curRace = v; } else if (dd == 1) g_curChapter = v; }
-            else if (self == g_optSelf && dd >= 1 && dd <= 4) g_optCur[dd] = v;
             else if (g_screen == SC_MM && dd == 0 && v != g_mode && v >= 0 && v < 4) {   // Match Type: the engine keeps resetting it - show the player's choice
                 static int n; if (n++ < 20) logmsg("match type: engine set %d, keeping %d", v, g_mode);
                 args[1].v.num = g_mode;
             }
         }
-        else if (!strcmp(method, "Receive_ShowHeroSelect")) { g_heroShown = 1; g_heroTick = GetTickCount(); if (g_screen == SC_MM && g_state == S_IDLE && !g_mmApplied) { g_applyMM = 1; g_mmApplied = 1; } }
-        else if (!strcmp(method, "Receive_HideHeroSelect")) g_heroShown = 0;
-        else if (searching_ui() && g_screen == SC_MM) {             // our search: the panel shows our state, not Relic's
-            if (!strcmp(method, "Receive_ShowSearchingAnimation") && count == 1) { args[0].type = GFX_BOOL; args[0].v.b = 1; }
-            else if (!strcmp(method, "Receive_SetMapPreferencesButtonVisible") && count == 1) { args[0].type = GFX_BOOL; args[0].v.b = 0; }
-            else if (!strcmp(method, "Receive_SetStartButtonText") && count == 1) { wcscpy(g_btn, L"Cancel Searching"); args[0].type = GFX_WSTRING; args[0].v.ws = g_btn; }
-            else if (!strcmp(method, "Receive_UpdateSearchStatus") && count == 3) {
-                status_text(); args[0].type = args[1].type = args[2].type = GFX_WSTRING;
-                args[0].v.ws = g_st1; args[1].v.ws = g_st2; args[2].v.ws = g_st3;
-            }
-        }
+        else if (!strcmp(method, "Receive_ShowHeroSelect")) { g_heroShown = 1; g_heroUp = 1; g_heroTick = GetTickCount(); if (g_screen == SC_MM && g_state == S_IDLE && !g_mmApplied) { g_applyMM = 1; g_mmApplied = 1; } }
+        else if (!strcmp(method, "Receive_HideHeroSelect")) g_heroShown = g_heroUp = 0;
     }
+    if (method && !strcmp(method, "Receive_SetStartButtonText") && count == 1 && args && args[0].type == GFX_WSTRING && args[0].v.ws
+        && !IsBadReadPtr(args[0].v.ws, 2) && g_langCfg < 0 && g_lang != 1 && has_cyr(args[0].v.ws)) { g_lang = 1; logmsg("search kind: language ru (the Start button)"); }
     char rc = g_invOrig(self, edx, method, flags, args, count);
-    // our status line: pushed right after the engine's own per-frame call into the Find a Game panel, on its thread
-    if (method && !strcmp(method, "Receive_ShowSearchingAnimation") && g_screen == SC_MM && g_banNote && GetTickCount() - g_banNote < 8000 && !searching_ui()) {
+    if (method && !strcmp(method, "Receive_ShowSearchingAnimation") && g_screen == SC_MM) mode_ui();   // 0.42
+    // a note on the game's own status line, right after the engine's own per-frame call into the Find a Game panel, on its thread
+    if (method && !strcmp(method, "Receive_ShowSearchingAnimation") && g_screen == SC_MM && g_banNote && GetTickCount() - g_banNote < 8000 && g_state == S_IDLE) {
         GFxValue v[3]; memset(v, 0, sizeof v); static wchar_t a1[] = L"Only 3 maps can be banned per mode.", a2[] = L"Можно убрать не больше 3 карт на режим.", a3[] = L"The first 3 unchecked maps are kept.";
         v[0].type = v[1].type = v[2].type = GFX_WSTRING; v[0].v.ws = a1; v[1].v.ws = a2; v[2].v.ws = a3;
         g_invOrig(self, edx, "Receive_UpdateSearchStatus", flags, v, 3);
     }
-    if (method && !strcmp(method, "Receive_ShowSearchingAnimation") && g_screen == SC_MM && g_ffaNote && GetTickCount() - g_ffaNote < 6000 && !searching_ui()) {
-        GFxValue v[3]; memset(v, 0, sizeof v); static wchar_t a1[] = L"Team Free For All is not in the ladder.", a2[] = L"Pick 1v1, 2v2 or Team Battle (3v3).", a3[] = L"";
-        v[0].type = v[1].type = v[2].type = GFX_WSTRING; v[0].v.ws = a1; v[1].v.ws = a2; v[2].v.ws = a3;
-        g_invOrig(self, edx, "Receive_UpdateSearchStatus", flags, v, 3);
-    }
-    if (method && !strcmp(method, "Receive_ShowSearchingAnimation") && searching_ui() && g_screen == SC_MM) {
-        static DWORD last; DWORD now = GetTickCount();
-        if (now - last > 1000) {
-            last = now; GFxValue v[3]; memset(v, 0, sizeof v); status_text();
-            v[0].type = v[1].type = v[2].type = GFX_WSTRING; v[0].v.ws = g_st1; v[1].v.ws = g_st2; v[2].v.ws = g_st3;
-            g_invOrig(self, edx, "Receive_UpdateSearchStatus", flags, v, 3);
-        }
-    }
     return rc;
 }
-// 0.38: why the game's own search is NOT tried (NULL = try it: ask the ladder)
+// 0.38: why Start Searching can not search (NULL = ask the ladder)
 static const char *native_no(void) {
-    if (!g_nativeCfg) return "Native=0";
-    if (g_manual || g_testBots || g_direct) return g_manual ? "Manual=1" : g_testBots ? "TestBots" : "DirectStart";
-    if (g_mode < 0 || g_mode > 2) return "not a ladder mode (watch)";
+    if (g_mode < 0 || g_mode > 2) return "not a ladder mode (Team FFA)";
     if (!GetModuleHandleW(L"OwnLobby.dll")) return "no OwnLobby.dll in the game";
     return NULL;
+}
+// 0.45: no automatch now - the click stays here (Relic's matchmaker matches nobody: the game's search would only hang)
+static void search_blocked(const char *why) {
+    logmsg("native: not possible (%s) - Start Searching NOT passed to the game, the reason is on the screen", why);
+    snprintf(g_runWhy, sizeof g_runWhy, "%s", why);
+    snprintf(g_peekWhy, sizeof g_peekWhy, "%s", why); g_peekAns = 2;
 }
 // Start Searching on Find a Game (the player's click, or 0.38's search again after a cancelled native match)
 static void search_click(void) {
     if (g_curRace >= 0 && !g_random) { g_race = g_curRace; g_chapter = g_curChapter; if (g_curHero >= 0) g_hero = g_curHero; save_choice();
         logmsg("search with race %d chapter %d hero %d (as shown on Find a Game)", g_race, g_chapter, g_hero); }
-    g_noticeUntil = 0; g_coverWant = 0; g_searchTick = GetTickCount(); g_queue = -1; g_lobbyRace = -1; g_role = 0; g_gameName[0] = 0; g_hostMap[0] = 0; g_oppName[0] = 0; g_hostReported = 0; g_wantHost = 0;
-    g_matchMode = g_mode < 3 ? g_mode : 0; g_backToMM = 0;                   // 0.35: my room's player slots follow the searched mode
+    g_searchTick = GetTickCount(); g_queue = -1; g_runWhy[0] = 0;
     const char *no = native_no();
-    if (!no) { g_natAnswer = 0; g_natSeen = g_natCancelled = 0; g_natLobby[0] = 0; g_natStopAt = 0; g_natWatchUntil = 0; set_state(S_NASK); SetEvent(g_wake); }   // 0.38: ask the ladder
-    else { logmsg("native: not tried (%s) - classic flow", no); set_state(S_SEARCH); g_wantJoin = 1; SetEvent(g_wake); }
+    if (!no) { g_natAnswer = 0; g_natSeen = g_natCancelled = 0; g_natLobby[0] = 0; g_natWatchUntil = 0; set_state(S_NASK); SetEvent(g_wake); }   // 0.38: ask the ladder
+    else search_blocked(no);
 }
 static int ends_with(const char *s, const char *t) { size_t a = strlen(s), b = strlen(t); return a >= b && !strcmp(s + a - b, t); }
 static void __fastcall fs_hook(void *self, void *edx, void *movie, const char *cmd, const char *args) {
@@ -1226,28 +900,22 @@ static void __fastcall fs_hook(void *self, void *edx, void *movie, const char *c
         if (g_verbose && strcmp(cmd, "OnPlaySound")) logmsg("fs '%s' '%s'", cmd, args && !IsBadReadPtr(args, 1) ? args : "");
 
         if (!strncmp(cmd, "_level0.display_item", 20) || (!strcmp(cmd, "OnLoadComplete") && args && strstr(args, "name:=_level0.display_item"))) {
-            if (movie != g_fsMovie && (g_state == S_DONE || g_loading)) { marker_set(NULL); g_loadTick = 0; g_state = S_IDLE; g_coverWant = 0; g_coverOn = 0; g_loading = 0; g_wantEnded = 1; replay_after_match(); SetEvent(g_wake); logmsg("back in the menu after the match"); }
+            if (movie != g_fsMovie && (g_state == S_DONE || g_loading)) { g_state = S_IDLE; g_stateTick = GetTickCount(); g_loading = 0; g_wantEnded = 1; replay_after_match(); SetEvent(g_wake); logmsg("back in the menu after the match"); }
             g_fsSelf = self; g_fsMovie = movie;
         }
-        if (movie == g_fsMovie) g_lastFsTick = GetTickCount();
         if (!strncmp(cmd, "OnButton", 8) && args && !IsBadReadPtr(args, 1) && strstr(args, "message_box")) { g_mbFsSelf = self; g_mbMovie = movie;
-            logmsg("message box button: movie %s (%p), handler %p (menu %p), wrapper %p movie %p", movie == g_fsMovie ? "= menu" : "other", movie, self, g_fsSelf, g_msgWrap,
-                   g_msgWrap && !IsBadReadPtr(g_msgWrap, 8) ? *(void **)((char *)g_msgWrap + 4) : NULL); }
+            logmsg("message box button: movie %s (%p), handler %p (menu %p), wrapper %p", movie == g_fsMovie ? "= menu" : "other", movie, self, g_fsSelf, g_msgWrap); }
         if (!strcmp(cmd, "OnLoadMovieComplete") && args && !strncmp(args, "/mp_mc", 6) && !g_loading) {
-            int natLoad = 0;
-            if (g_state == S_NATIVE || g_state == S_NASK) {             // 0.38: the game's own automatch got here by itself
-                natLoad = 1;
+            int natLoad = g_state == S_NATIVE || g_state == S_NASK || (g_state == S_IDLE && g_natWatchUntil && (int)(g_natWatchUntil - GetTickCount()) > 0);
+            if (natLoad) {                                            // 0.38: the game's own automatch got here by itself
                 logmsg("native: loading %lu ms after Start Searching (lobby %s)", GetTickCount() - g_searchTick, g_natLobby[0] ? g_natLobby : "-");
                 native_fast(0);                                       // 0.39: the game as it was (the countdown is over, nothing polls now)
-                strcpy(g_gameName, g_natLobby); g_state = S_DONE; g_stateTick = GetTickCount(); g_reRow = 0; g_natWatchUntil = 0;      // after the match: ended + replay as usual (no ruin marker: not MM-)
+                g_state = S_DONE; g_stateTick = GetTickCount(); g_reRow = 0; g_natWatchUntil = 0;      // after the match: ended + replay as usual
             }
-            // 0.34: the host starts at once - the match may load while a guest is still on the hero or taking the slot
-            if (g_matchDirect && g_state >= S_SETUP_HERO && g_state < S_DONE) { logmsg("direct: loading while %s - done", SN[g_state]); g_state = S_DONE; g_stateTick = GetTickCount(); }
             // release gate 03.11.2026: the native automatch never shows the Custom Games lobby, so g_humans (counted from its player
-            // list) stayed 0 and replay_after_match() skipped every native match - no replay of a native match ever went out
-            g_loading = 1; g_recHumans = natLoad && g_humans < 2 ? 2 : g_humans; g_recBots = g_bots && g_state == S_DONE; GetSystemTimeAsFileTime(&g_recStart);
-            if (g_state == S_DONE && !strncmp(g_gameName, "MM-", 3) && !g_bots) { marker_set(g_gameName); g_loadTick = GetTickCount(); }
-            if (g_gameName[0] && g_state == S_DONE) strcpy(g_recName, g_gameName); else g_recName[0] = 0;
+            // list) stayed 0 and replay_after_match() skipped every native match - a native match always has people
+            g_loading = 1; g_recHumans = natLoad && g_humans < 2 ? 2 : g_humans; g_recBots = 0; GetSystemTimeAsFileTime(&g_recStart);
+            if (natLoad && g_natLobby[0]) strcpy(g_recName, g_natLobby); else g_recName[0] = 0;   // X-Lobby NM-<room>: the ladder finds its replay
             logmsg("loading screen - hands off the menu (%d people in the lobby)", g_humans); }
         if (!strcmp(cmd, "OnLoadComplete") && args) {                 // which full-screen panel is up
             const char *nm = strstr(args, "name:="), *url = strstr(args, "url:=");
@@ -1257,15 +925,15 @@ static void __fastcall fs_hook(void *self, void *edx, void *movie, const char *c
                 int sc = -1;
                 if (strstr(url, "main_menu.gfx")) sc = SC_MAIN; else if (strstr(url, "matchmaking.gfx")) sc = SC_MM;
                 else if (strstr(url, "game_list_movie.gfx")) sc = SC_LIST; else if (strstr(url, "game_setup_movie.gfx")) sc = SC_SETUP;
+                else if (strstr(url, "mp_postgame.gfx")) sc = SC_OTHER;
                 if (sc >= 0 && !strcmp(path + strlen(path) - 9, ".panel_mc")) {
-                    strcpy(g_panel, path); g_screen = sc; g_scrTick = GetTickCount(); g_engSearch = -1; if (sc != SC_MM) g_mmSelf = NULL; else g_mmApplied = 0; if (sc == SC_LIST) { g_listSeen = 0; g_rowFound = -1; }
+                    strcpy(g_panel, path); g_screen = sc; g_scrTick = GetTickCount(); g_engSearch = -1; g_mapUp = 0; if (sc != SC_MM) g_heroUp = 0; else g_mmApplied = 0;
                     logmsg("screen %d panel %s", sc, g_panel);
                 }
             }
         }
-        // the player's own pick - remember it (not while we set up the lobby ourselves: the panel answers our hero pick with its
-        // own OnSelectHero, which turned the saved Random off after a random pick)
-        if (!g_sending && g_state != S_SETUP_HERO && strstr(cmd, "hero_selection_mc.") && args) {
+        // the player's own pick - remember it
+        if (!g_sending && strstr(cmd, "hero_selection_mc.") && args) {
             int a = -1, b = -1;
             if (ends_with(cmd, ".OnClickRandom")) { g_randomTick = GetTickCount(); if (!g_random) { g_random = 1; save_choice(); logmsg("choice: random race and hero"); } }
             else if (ends_with(cmd, ".OnSelectDropDownItem") && sscanf(args, "%d;%d", &a, &b) == 2) {
@@ -1278,6 +946,11 @@ static void __fastcall fs_hook(void *self, void *edx, void *movie, const char *c
                 if (g_random) { g_random = 0; save_choice(); logmsg("choice: random off"); }
                 g_curHero = a; if (a != g_hero) { g_hero = a; save_choice(); logmsg("choice: hero %d", a); }
             }
+        }
+        if (g_screen == SC_MM) {                                      // 0.42: the panel's dialogs over our search kind fields
+            if (ends_with(cmd, "hero_selection_mc.OnClickAccept")) g_heroUp = 0;
+            else if (ends_with(cmd, ".OnClickMapPreferences")) g_mapUp = 1;
+            else if (ends_with(cmd, "map_preferences_mc.OnClickSave") || ends_with(cmd, "map_preferences_mc.OnClickCancel")) g_mapUp = 0;
         }
         if (strstr(cmd, "map_preferences_mc.") && g_mpSelf && g_mpMode >= 0) {          // our dialog - the engine must not see it
             static unsigned char tmp[MAXMAPS]; GFxValue v; memset(&v, 0, sizeof v);
@@ -1308,262 +981,26 @@ static void __fastcall fs_hook(void *self, void *edx, void *movie, const char *c
         if (g_screen == SC_MM && !g_sending && args && !strncmp(cmd, g_panel, strlen(g_panel)) && !strcmp(cmd + strlen(g_panel), ".OnSelectDropDownItem")) {
             int a = -1, b = -1;
             if (sscanf(args, "%d;%d", &a, &b) == 2 && a == 0 && b >= 0 && b < 4 && b != g_mode) {
-                g_mode = b; wchar_t w[8]; _snwprintf(w, 8, L"%d", b); WritePrivateProfileStringW(L"Choice", L"Mode", w, g_ini);
+                g_mode = b; g_peekLast = 0; g_runWhy[0] = 0; wchar_t w[8]; _snwprintf(w, 8, L"%d", b); WritePrivateProfileStringW(L"Choice", L"Mode", w, g_ini);
                 logmsg("mode: %s", MODE_KEY[b]);
             }
         }
-        // our button: "Start Searching" / "Cancel Searching" on the Find a Game screen
+        // the button: "Start Searching" / "Stop Searching" on the Find a Game screen (fs() calls the engine directly - only real clicks here)
         if (g_screen == SC_MM && ends_with(cmd, ".OnClickStart")) {
             if (g_state == S_NATIVE) {                                // 0.38: Stop Searching of the game's own search - the engine does it
                 logmsg("native: Stop Searching by the player"); set_state(S_IDLE); g_wantLeave = 1; SetEvent(g_wake);
                 g_fsOrig(self, edx, movie, cmd, args); return;
             }
             if (g_state == S_NASK) { logmsg("native: cancelled by the player before the answer"); set_state(S_IDLE); return; }
-            if (g_state == S_IDLE || g_state == S_DONE || g_state == S_FAIL) { g_reWant = 0; g_reRow = 0; search_click(); }   // the player's own click else if (g_state == S_SEARCH) { set_state(S_IDLE); g_wantLeave = 1; SetEvent(g_wake); }
-            return;                                                   // never start Relic's own search
+            if (g_engSearch == 1) {                                   // the game searches without us (should not be): this click stops it
+                logmsg("Stop Searching by the player of a search that is not ours"); g_fsOrig(self, edx, movie, cmd, args); return; }
+            g_reWant = 0; g_reRow = 0; search_click();                // the player's own click
+            return;                                                   // the game's search starts only after the ladder's "yes" (tick)
         }
         if (g_screen == SC_MM && ends_with(cmd, ".OnClickBack") && g_reWant) { g_reWant = 0; logmsg("native: the player left Find a Game - not searching again"); }
-        if (g_screen == SC_MM && ends_with(cmd, ".OnClickBack") && (g_state == S_SEARCH || g_state == S_NATIVE || g_state == S_NASK)) { set_state(S_IDLE); g_wantLeave = 1; SetEvent(g_wake); }
+        if (g_screen == SC_MM && ends_with(cmd, ".OnClickBack") && (g_state == S_NATIVE || g_state == S_NASK)) { set_state(S_IDLE); g_wantLeave = 1; SetEvent(g_wake); }
     }
     g_fsOrig(self, edx, movie, cmd, args);
-}
-
-// ---------------- main-thread state machine ----------------
-static void push_status(void) {
-    if (!g_mmSelf || g_screen != SC_MM) return;
-    GFxValue v[3]; memset(v, 0, sizeof v); status_text();
-    v[0].type = v[1].type = v[2].type = GFX_WSTRING; v[0].v.ws = g_st1; v[1].v.ws = g_st2; v[2].v.ws = g_st3;
-    g_invOrig(g_mmSelf, NULL, "Receive_UpdateSearchStatus", g_mmFlags, v, 3);
-}
-static void stage_line(void) {                 // what the cover says right now
-    const wchar_t *opp = g_oppName[0] && wcscmp(g_oppName, L"Player") ? g_oppName : L"opponent";
-    switch (g_state) {
-    case S_GO_MAIN: case S_GO_LIST: case S_HOST_DIALOG: case S_HOST_NAME:
-        if (g_role == 1) _snwprintf(g_coverLine, 159, L"Opponent: %ls. Creating the game", opp);
-        else _snwprintf(g_coverLine, 159, L"Opponent: %ls. Looking for the host's game", opp); break;
-    case S_GUEST_NAME: _snwprintf(g_coverLine, 159, L"Opponent: %ls. Waiting for the host to create the game", opp); break;
-    case S_SEARCH: {                             // 0.35: my room waits for an opponent
-        DWORD sec = (GetTickCount() - g_searchTick) / 1000;
-        if (g_pre == PRE_READY) _snwprintf(g_coverLine, 159, L"Your game is ready. Looking for an opponent %lu:%02lu", sec / 60, sec % 60);
-        else _snwprintf(g_coverLine, 159, L"Preparing your game. Looking for an opponent %lu:%02lu", sec / 60, sec % 60);
-        break; }
-    case S_GUEST_DJOIN: _snwprintf(g_coverLine, 159, L"Opponent: %ls. Joining the game", opp); break;
-    case S_HOST_OPEN: wcscpy(g_coverLine, L"Game created. Opening the slots"); break;
-    case S_GUEST_FIND: case S_GUEST_JOINED: _snwprintf(g_coverLine, 159, L"Opponent: %ls. Joining the game", opp); break;
-    case S_SETUP_HERO: wcscpy(g_coverLine, L"In the lobby. Setting up your army"); break;
-    case S_HOST_WAIT: wcscpy(g_coverLine, L"Game created. Players are taking their slots"); break;
-    case S_PLACE: wcscpy(g_coverLine, g_role == 3 ? L"Taking an observer slot" : L"Taking your slot"); break;
-    default: break;
-    }
-}
-// ---------------- lobby placement (0.29: by team) ----------------
-// The ladder still sends a slot per player; only its half counts: slots 0..n-1 are one team, 4..4+n-1 the other (start positions are
-// random, so the place inside the team does not matter). Every client works out the same plan from the same lobby:
-//  - wait until every player of the match sits in a player slot;
-//  - the top half belongs to the team that already has more players there (a tie: the team of slot 1) - the teams are equal, the
-//    side doesn't matter, and this way 2v2 and 3v3 need one swap at most;
-//  - players in the wrong half, top ones by slot and bottom ones by slot, make pairs; the top one of a pair asks the bottom one to
-//    swap ("Move to this slot" on a taken slot asks its player), the bottom one's MMFind accepts it (auto-accept in a ladder lobby).
-static int team_of(int slot) { return slot < 4 ? 0 : 1; }
-static int my_team(void) { return g_mySlot < 0 ? -1 : team_of(g_mySlot); }
-static int team_plan(const unsigned long long *ids, int pr[][2]) {     // pairs to swap (top slot, bottom slot); -1: not everyone in yet
-    int n = team_n(), tm[8], seen = 0;
-    for (int i = 0; i < 8; i++) {
-        tm[i] = -1; if (!ids[i]) continue;
-        int r = in_roster(ids[i]), t = r >= 0 ? team_of(g_rSlot[r]) : is_me(ids[i]) ? my_team() : -1;
-        if (t < 0) continue;                                              // a watcher or a stranger
-        if (is_obs_slot(i)) return -1;                                    // a player still in an observer slot
-        tm[i] = t; seen++;
-    }
-    if (seen < g_nR) return -1;
-    int a = 0; for (int i = 0; i < n; i++) if (tm[i] == 0) a++;
-    int top = 2 * a > n ? 0 : 2 * a < n ? 1 : (tm[0] >= 0 ? tm[0] : 0);
-    int bt[4], bb[4], nt = 0, nb = 0;
-    for (int i = 0; i < n; i++) if (tm[i] >= 0 && tm[i] != top) bt[nt++] = i;
-    for (int i = 4; i < 4 + n; i++) if (tm[i] >= 0 && tm[i] == top) bb[nb++] = i;
-    int k = nt < nb ? nt : nb;
-    for (int i = 0; i < k; i++) { pr[i][0] = bt[i]; pr[i][1] = bb[i]; }
-    return k;
-}
-// every 0.5 s until the match loads; returns 1 when the teams are right (my ready mark can go on)
-static int place_step(DWORD now) {
-    static DWORD lastPoll, lastMove, lastAsk; static int inPlace, asks;
-    if (now - lastPoll < 500) return inPlace;
-    lastPoll = now;
-    unsigned long long ids[8]; if (lobby_ids(ids) < 0) return inPlace;
-    int cur = -1; for (int i = 0; i < 8; i++) if (is_me(ids[i])) cur = i;
-    if (my_team() < 0 || cur < 0) return inPlace = 0;
-    if (is_obs_slot(cur)) {                                               // came in as an observer: any free player slot (the plan sorts the teams)
-        if (now - lastMove < 1200 + (unsigned)(g_mySteam % 7) * 100) return inPlace = 0;   // players don't move in lockstep
-        for (int i = 0; i < 8; i++) if (!is_obs_slot(i) && !ids[i]) { lastMove = now; logmsg("place: observer slot %d -> free player slot %d", cur, i); slot_do(i, CB_MOVE); break; }
-        return inPlace = 0;
-    }
-    int pr[4][2], k = team_plan(ids, pr);
-    if (k < 0) return inPlace = 0;                                        // wait for everyone
-    if (k == 0) { asks = 0; return inPlace = 1; }
-    for (int i = 0; i < k; i++) {
-        if (pr[i][1] == cur) return inPlace = 0;                          // the top one of my pair asks me
-        if (pr[i][0] != cur) continue;
-        if (now - lastAsk < 4000) return inPlace = 0;                    // the swap needs a moment to show
-        lastAsk = now; asks++;
-        logmsg("place: wrong team half, asking slot %d to swap with my slot %d (pair %d of %d, ask %d)", pr[i][1], cur, i + 1, k, asks);
-        slot_do(pr[i][1], CB_MOVE);
-        return inPlace = 0;
-    }
-    return inPlace = 0;                                                   // my team is right, the others are still swapping
-}
-// host: the ladder's game options, observer slots open, strangers out - until the match loads
-static void host_step(DWORD now) {
-    static DWORD lastOpt, lastObs, lastKick;
-    if (now - lastOpt > 1000) { lastOpt = now;
-        for (int id = 1; id <= 4; id++) if (g_optWant[id] >= 0 && g_optCur[id] >= 0 && g_optCur[id] != g_optWant[id]) {
-            char a[16]; snprintf(a, sizeof a, "%d;%d", id, g_optWant[id]);
-            logmsg("options: %ls (drop-down %d: %d -> %d)", OPT_WANT[id][0], id, g_optCur[id], g_optWant[id]);
-            g_optCur[id] = -1; fs(".game_options_panel_mc.OnSelectDropDownItem", a); break; }      // one at a time, the lobby refreshes after each
-    }
-    unsigned long long ids[8]; if (lobby_ids(ids) < 0) return;
-    int stranger = -1;
-    for (int i = 0; i < 8; i++)
-        if (ids[i] && !is_me(ids[i]) && in_roster(ids[i]) < 0 && !is_watcher(ids[i]) && !name_known(g_slotName[i])) stranger = i;
-    if (stranger >= 0 && now - lastKick > 1500) { lastKick = now; logmsg("kick stranger %llu in slot %d", ids[stranger], stranger); slot_do(stranger, CB_KICK); }
-    if (now - lastObs > 10000 && (!g_matchDirect || g_nW)) { lastObs = now; slot_do(team_n(), CB_OPEN_OBS); }           // map changes close them again (0.35: not without watchers)
-}
-
-
-// ---------------- 0.34 fast automatch: the engine's own calls (research 01.11.2026, research_direct/directjoin.c) ----------------
-// join by room id = the game browser's Join and the old Relic automatch: (*0x01335014)->vtbl[0x20]()->vtbl[0x34](this, midLo, midHi,
-// &joiners, -1, -1), joiners = vector of 0x30-byte entries {own Relic profile id, ...} (ctor 0x455BA9, push_back 0x458416, EDI = vector)
-#define FN_PROFBUF_CTOR 0x00537D40
-#define FN_PROFBUF_DTOR 0x00401DE9
-#define FN_JOINER_CTOR  0x00455BA9
-#define FN_VEC_PUSH     0x00458416
-#define FN_STR_CTOR     0x004132B2      // thiscall std::string(const char*, alloc*)
-#define FN_OP_NEW       0x00DAA9B6      // the game's operator new (the engine frees what it gets)
-#define FN_TO_SETUP     0x0047397D      // stdcall(flag, std::string*, data*): the guest's UI to the lobby, as after a browser join
-typedef void (__stdcall *DjFn1)(void *);
-typedef void *(__fastcall *DjObjFn)(void *self, void *edx);
-typedef char (__stdcall *DjInfoFn)(void *self, void *info);
-typedef void (__stdcall *DjProfFn)(void *self, void *buf);
-typedef void (__stdcall *DjJoinFn)(void *self, unsigned midLo, unsigned midHi, void *joiners, unsigned frLo, unsigned frHi);
-static void *dj_mgr(int off) {
-    void **m = *(void ***)0x01335014; if (!m || IsBadReadPtr(m, 4)) return NULL;
-    void **vt = *(void ***)m; if (IsBadReadPtr(vt, off + 4)) return NULL;
-    return ((DjObjFn)vt[off / 4])(m, NULL);
-}
-// the room we are in (GameInfo+0x8), and whether every occupied player slot has its army/hero picked (slot+0x6C != 255)
-static unsigned long long dj_room(int *heroesOk, int *people) {
-    unsigned long long room = 0; if (heroesOk) *heroesOk = 0; if (people) *people = 0;
-    void *m = dj_mgr(0x24); if (!m || IsBadReadPtr(m, 8)) return 0;
-    static __attribute__((aligned(16))) unsigned char info[0x2000];
-    memset(info, 0, sizeof info); ((DjFn1)0x0040172D)(info);
-    void **mvt = *(void ***)m;
-    if (!IsBadReadPtr(mvt, 8) && ((DjInfoFn)mvt[1])(m, info)) {
-        room = *(unsigned long long *)(info + 0x08);
-        unsigned char *base = *(unsigned char **)(info + 0x70); int n = *(int *)(info + 0x78), ok = 1, np = 0;
-        if (base && n > 0 && n <= 64 && !IsBadReadPtr(base, n * 0xC8)) {
-            for (int i = 0; i < n; i++) {
-                unsigned char *sl = base + i * 0xC8; unsigned long long id = *(unsigned long long *)(sl + 8); int pos = *(int *)(sl + 0x98);
-                if (!id || id == ~0ULL || is_obs_slot(pos)) continue;          // the slot's id: a Steam id or the Relic profile id
-                np++; if ((*(int *)(sl + 0x6C) & 0xFF) == 0xFF) ok = 0;
-                if (g_djDebug) logmsg("direct: slot pos %d id %llu faction %08x race %08x", pos, id, *(unsigned *)(sl + 0x6C), *(unsigned *)(sl + 0x70));
-            }
-        } else ok = 0;
-        if (heroesOk) *heroesOk = ok && np > 0; if (people) *people = np;
-    }
-    ((DjFn1)0x00401794)(info);
-    return room;
-}
-static int dj_join(unsigned long long room) {
-    static __attribute__((aligned(16))) unsigned char prof[0x400], entry[0x40]; static unsigned vec[4];
-    memset(prof, 0, sizeof prof); ((DjFn1)FN_PROFBUF_CTOR)(prof);
-    void *p4 = dj_mgr(0x4); if (!p4) { logmsg("direct join: no profile object"); return 0; }
-    ((DjProfFn)(*(void ***)p4)[0x54 / 4])(p4, prof);
-    unsigned pidLo = *(unsigned *)prof, pidHi = *(unsigned *)(prof + 4);
-    memset(entry, 0, sizeof entry); ((DjFn1)FN_JOINER_CTOR)(entry);
-    *(unsigned *)entry = pidLo; *(unsigned *)(entry + 4) = pidHi; *(unsigned *)(entry + 0x10) = 0; *(unsigned *)(entry + 0x14) = 0;
-    memset(vec, 0, sizeof vec);
-    void *e = entry, *v = vec;
-    __asm__ volatile("push %1\n\tcall *%2" : "+D"(v) : "r"(e), "r"((void *)FN_VEC_PUSH) : "eax", "ecx", "edx", "memory");   // EDI = vector
-    void *j = dj_mgr(0x20); if (!j) { logmsg("direct join: no join object"); ((DjFn1)FN_PROFBUF_DTOR)(prof); return 0; }
-    logmsg("direct join: room %llu (my profile %u)", room, pidLo);
-    ((DjJoinFn)(*(void ***)j)[0x34 / 4])(j, (unsigned)room, (unsigned)(room >> 32), vec, 0xffffffff, 0xffffffff);
-    ((DjFn1)FN_PROFBUF_DTOR)(prof);
-    return 1;
-}
-static void dj_to_lobby(void) {
-    static __attribute__((aligned(16))) unsigned char str[0x40]; static char alloc_dummy;
-    memset(str, 0, sizeof str);
-    void *sp = str; const char *name = "game_list_movie"; void *al = &alloc_dummy;
-    __asm__ volatile("push %2\n\tpush %1\n\tcall *%3" : "+c"(sp) : "r"(name), "r"(al), "r"((void *)FN_STR_CTOR) : "eax", "edx", "memory");
-    typedef void *(__cdecl *NewFn)(size_t);
-    unsigned *data = (unsigned *)((NewFn)FN_OP_NEW)(8); if (!data) { logmsg("direct: no memory"); return; }
-    data[0] = 0x010935FC; data[1] = 3;
-    logmsg("direct: guest screen to the lobby");
-    ((void (__stdcall *)(unsigned, void *, void *))FN_TO_SETUP)(0, str, data);
-}
-#define CB_OPEN_SLOT  0x0049326C      // "Open this slot" (a computer in it goes)
-
-// 0.35: the hero panel as soon as it is up - the race if it differs, the hero once the panel has answered, Accept. 1 = done
-static int hero_quick(DWORD now, DWORD since) {
-    static int step; static DWORD at, entered, sel; if (entered != since) { entered = since; step = 0; at = now; }
-    if (step == 0) {
-        // the setup screen's own panel has spoken (race list, race, heroes, pick) and has been quiet for 150 ms - or 3 s passed
-        int fresh = g_heroSelf && g_screen == SC_SETUP && (int)(g_heroTick - g_scrTick) >= 0 && now - g_heroTick > 150;
-        if (!fresh && now - since < 3000) return 0;
-        logmsg("lobby: hero panel %s after %lu ms", fresh ? "ready" : "silent - going on anyway", now - since);
-        if (g_random) { logmsg("lobby: random race and hero"); fs(".hero_selection_mc.OnClickRandom", ""); step = 3; at = now; return 0; }
-        if (g_lobbyRace >= 0) g_curRace = g_lobbyRace;
-        int shown = g_curRace; sel = g_heroTick; int rc = apply_race(); at = now;   // the panel may answer inside the call
-        logmsg("lobby: race %d (saved %d), hero %d (saved %d)%s", shown, g_race, g_curHero, g_hero, rc ? " - switching race" : "");
-        step = rc ? 1 : 2; return 0;
-    }
-    if (step == 1) { if ((g_heroTick != sel && now - g_heroTick > 80) || now - at > 1200) { logmsg("lobby: race switched after %lu ms", now - at); step = 2; at = now; } return 0; }   // the race's hero list came
-    if (step == 2) { if (g_hero >= 0 && g_curHero != g_hero) { apply_hero(); at = now; } else at = now - 300; step = 3; return 0; }
-    if (step == 3 && now - at > 120) { fs(".hero_selection_mc.OnClickAccept", ""); step = 4; return 1; }
-    return step >= 4;
-}
-// 0.35: every player slot but mine opened, one per tick (the slot menu runs inside the call). 1 = done
-static int open_slots_quick(DWORD now, DWORD since) {
-    static int next; static DWORD entered, last; if (entered != since) { entered = since; next = 0; last = 0; }
-    int n = 2 * team_n(); unsigned long long ids[8]; if (lobby_ids(ids) < 0) return 0;
-    while (next < 8 && (is_obs_slot(next) || (next % 4) >= n / 2 || (ids[next] && is_me(ids[next])))) next++;
-    if (next < 8) { if (now - last > 120) { last = now; logmsg("direct: open slot %d", next); slot_do(next, CB_OPEN_SLOT); next++; } return 0; }
-    return now - last > 150;
-}
-static void pre_abort(const char *why) {
-    logmsg("direct: my room while searching failed (%s) - the search goes on without it", why);
-    if (g_screen == SC_SETUP) fs(".OnClickBack", "");
-    g_pre = PRE_OFF; g_preWant = 0; g_heroDone = g_slotsOpen = 0; g_preRoom = 0; g_backToMM = 1;
-}
-static void pre_step(DWORD now) {                // runs while searching (S_SEARCH) when I am first in the queue
-    static DWORD tick, last;
-    switch (g_pre) {
-    case PRE_OFF:
-        if (!g_preWant) return;
-        g_pre = PRE_GO_MAIN; tick = now; last = 0; g_heroDone = g_slotsOpen = 0; g_preRoom = 0; g_preReported = 0;
-        cover(NULL); stage_line(); break;
-    case PRE_GO_MAIN:
-        if (g_screen == SC_MM && now - last > 1500) { last = now; fs(".OnClickBack", ""); }
-        if (g_screen == SC_MAIN) { fs(".OnClickPrivateMatch", ""); g_pre = PRE_PRIVATE; tick = now; }
-        else if (now - tick > 15000) pre_abort("could not leave Find a Game");
-        break;
-    case PRE_PRIVATE:
-        if (g_screen == SC_SETUP) { g_pre = PRE_HERO; tick = now; }
-        else if (g_screen == SC_MAIN && now - tick > 5000) { fs(".OnClickPrivateMatch", ""); tick = now; }
-        else if (now - tick > 15000) pre_abort("the private room did not open");
-        break;
-    case PRE_HERO:
-        if (hero_quick(now, tick)) { g_heroDone = 1; g_pre = PRE_SLOTS; tick = now; }
-        else if (now - tick > 15000) pre_abort("hero");
-        break;
-    case PRE_SLOTS:
-        if (open_slots_quick(now, tick)) {
-            unsigned long long r = dj_room(NULL, NULL);
-            if (r) { g_preRoom = r; g_slotsOpen = 1; g_pre = PRE_READY; logmsg("direct: my room %llu is ready (%lu ms after the search started)", r, now - g_searchTick); SetEvent(g_wake); }
-            else if (now - tick > 10000) pre_abort("no room id");
-        }
-        break;
-    }
 }
 // 0.38: the message boxes that are up (visible) - count, and press the first button (OK of a notice) on them
 static int msgbox_scan(int press) {
@@ -1582,98 +1019,27 @@ static int msgbox_scan(int press) {
 }
 static int msgbox_up(void) { return msgbox_scan(0); }
 static void msgbox_ok(void) { if (!msgbox_scan(1)) logmsg("message box: none up to press"); }
-static void leave_lobby(DWORD now) {             // 0.35: Back, and Yes on "Are you sure?" if it comes
-    static DWORD lb, sess; static int yes, n;        // the box is not seen from here: still in the lobby 0.4 s after Back = it asks
-    if (sess != g_stateTick) { sess = g_stateTick; n = 0; lb = 0; }
-    if (lb && !yes && now - lb > 400) { yes = 1; msgbox_yes(); return; }
-    if (now - lb > 1500) {
-        if (++n > 4) { if (n == 5) logmsg("direct: still in the lobby after 4 Backs - left to the player"); g_backToMM = 0; return; }
-        lb = now; yes = 0; fs(".OnClickBack", ""); }
-}
-static void msgbox_hide(int hide) {            // message boxes ("Connecting...") live in _level0.container of the message box movie
-    static int cur = -1; static void *wrap; if (wrap != g_msgWrap) { wrap = g_msgWrap; cur = -1; }
-    if (hide == cur || !g_msgWrap || (cur == -1 && !hide)) return;
-    void *m = *(void **)((char *)g_msgWrap + 4); if (!m || IsBadReadPtr(m, 8)) return;
-    as_setb(m, "_level0.container._visible", !hide); cur = hide; logmsg("message boxes %s", hide ? "hidden" : "shown");
+// 0.45: a search of the game on Find a Game that is not our native search (should not happen - MMFind passes Start Searching to
+// the game only after the ladder's "yes"; a click that got past us, an old binding): Relic's matchmaker matches nobody, the
+// player would hang in it - Stop Searching (the same button) once it has been on for 1.5 s, 3 times at most until it is off.
+// Not while the game still ends a native search of ours (g_stopGrace after it) and not while it is in a native match.
+static void stray_stop(DWORD now) {
+    static DWORD on, last; static int n;
+    int stray = g_engSearch == 1 && g_screen == SC_MM && !g_loading && (g_state == S_IDLE || g_state == S_DONE) && !g_reWant
+                && (int)(now - g_stopGrace) > 0 && !(g_natWatchUntil && (int)(g_natWatchUntil - now) > 0);
+    if (!stray) { on = 0; if (g_engSearch == 0) n = 0; return; }
+    if (!on) on = now;
+    if (now - on < 1500 || (last && now - last < 2500) || n >= 3) return;
+    last = now; n++;
+    logmsg("the game searches without our lobby server (Relic matches nobody) - Stop Searching (%d)", n);
+    snprintf(g_runWhy, sizeof g_runWhy, "%s", GetModuleHandleW(L"OwnLobby.dll") ? "the native search was not ours" : "no OwnLobby.dll in the game");
+    fs(".OnClickStart", "");
 }
 static void tick(void) {
-    static DWORD last, lastStatus; DWORD now = GetTickCount(); if (now - last < ((g_direct && (g_pre || g_preWant || g_matchDirect)) || (g_fast && g_state >= S_GO_MAIN && g_state <= S_DONE) ? 50u : 250u)) return; last = now;   // 0.35: fast steps
-    if (g_state == S_SEARCH && g_direct) pre_step(now);
-    if (g_backToMM && !g_loading && (g_state == S_IDLE || g_state == S_FAIL || (g_state == S_SEARCH && !g_pre && !g_preWant))) {      // 0.35: back to Find a Game after my room's search ended
-        static DWORD lb; if (g_screen == SC_MM) g_backToMM = 0;
-        else if (g_screen == SC_SETUP) leave_lobby(now);
-        else if (g_screen == SC_MAIN && now - lb > 700) { lb = now; fs(".OnClickMultiplayer", ""); fs(".OnClickMatchMaking", ""); }
-    }
-    g_autoSwap = g_autoSwapCfg && !(g_state == S_IDLE || g_state == S_SEARCH || g_state == S_FAIL);   // auto-accept slot swaps only inside a ladder/automatch lobby (not in a plain public game)
-    if (g_remoteCancel) {                                             // 0.32: someone cancelled the match (or dropped out) - leave too
-        g_remoteCancel = 0;
-        if (g_state >= S_GO_MAIN && g_state <= S_DONE && !g_loading) {
-            if (g_screen == SC_SETUP && !g_matchDirect) fs(".OnClickBack", "");
-            if (g_matchDirect) g_backToMM = 1;                        // 0.35: back to Find a Game, as after my own Cancel (Back and "Are you sure?" there)
-            set_state(S_FAIL);
-            _snwprintf(g_coverLine, 159, L"%ls left the match. Find a Game to search again", g_cancelBy[0] ? g_cancelBy : L"A player");
-            g_noticeUntil = now + 6000; g_coverTextTick = 0; g_coverWant = 1;
-        }
-    }
-    if (g_noticeUntil && (int)(now - g_noticeUntil) > 0) { g_noticeUntil = 0; g_coverWant = 0; }
-    if (g_coverWant && g_state != S_DONE && !g_noticeUntil) stage_line();
+    static DWORD last; DWORD now = GetTickCount(); if (now - last < 250) return; last = now;
     { static DWORD hb; if (now - hb > 30000) { hb = now; logmsg("tick alive, state %s screen %d", SN[g_state], g_screen); } }
-    (void)lastStatus;
-    if (g_loadTick && now - g_loadTick > 180000) { g_loadTick = 0; marker_set(NULL); }      // past loading: a crash later is not a ruined loading
-    { static LONG seen; if (g_swapCount != seen) { seen = g_swapCount; logmsg("swap request accepted (%ld so far)", seen); } }
-    if (g_state == S_DONE && !g_loading && g_screen == SC_SETUP && in_state() < 180000) {
-        static DWORD lastClick; if (in_state() < 300) lastClick = now;
-        if (g_role == 1 && g_matchDirect) {                           // 0.34: start at once - no "ready", no countdown
-            static unsigned long long sig; static DWORD still, lastStart, entered; static int starts;
-            if (entered != g_stateTick) { entered = g_stateTick; sig = 0; still = now; lastStart = 0; starts = 0; }
-            static DWORD lastDbg; g_djDebug = now - lastDbg > 3000; if (g_djDebug) lastDbg = now;
-            int ok = 0, np = 0; dj_room(&ok, &np); g_djDebug = 0;
-            if (now == lastDbg) logmsg("direct: heroes ok %d, players %d of %d, still %lu ms", ok, np, g_nR, now - still);
-            unsigned long long ids[8], s2 = 0; lobby_ids(ids); for (int i = 0; i < 8; i++) s2 = s2 * 1000003ULL + ids[i] + (unsigned)i;
-            s2 = s2 * 31 + ok; s2 = s2 * 31 + g_allReady;
-            if (s2 != sig) { sig = s2; still = now; }
-            // 0.35: the guests press Ready once their army is picked (a guest still switching race got started with the default one) -
-            // start on everyone ready, or 8 s after everyone is in with a hero (a guest without our Ready)
-            static DWORD okSince; if (!(ok && np >= g_nR)) okSince = 0; else if (!okSince) okSince = now;
-            int armies = g_allReady || g_readyIdx < 0 || (okSince && now - okSince > 8000);
-            if (ok && np >= g_nR && armies && now - still > (g_allReady ? 150u : 300u) && (!lastStart || now - lastStart > 6000) && starts < 3) {   // 0.35: 0.3 s settled (was 1.5)
-                lastStart = now; starts++; logmsg("direct: start now (%d players with heroes, all ready %d, try %d)", np, g_allReady, starts); fs(".OnClickStart", "");
-            }
-            if (starts >= 3 && now - lastStart > 6000) { logmsg("direct: the start did not go - the usual Start"); g_matchDirect = 0; }
-        } else if (g_role == 1) {                                     // host: start as soon as everyone is ready, and keep pressing every 5 s
-            static int wasReady; if (!g_allReady) wasReady = 0;
-            // press only an enabled Start (any language: not the text it had while I was alone - "Start Skirmish");
-            // a press starts a countdown ("Start Now!" / disabled) - pressing again then cancels it, so later presses need the same text
-            if (in_state() < 300) g_startTxt[0] = 0;
-            int canPress = g_btnEnabled && g_btnText[0] && (g_humans >= 2 || g_bots) && (g_bots || wcscmp(g_btnText, g_aloneTxt))
-                           && (!g_startTxt[0] || !wcscmp(g_btnText, g_startTxt));
-            int go = g_allReady && canPress && ((!wasReady && now - lastClick > (g_fast ? 150u : 700u)) || now - lastClick > 15000);
-            if (go) wasReady = 1;
-            if (go) { lastClick = now; if (!g_startTxt[0]) wcscpy(g_startTxt, g_btnText); logmsg("start: pressing Start (all ready %d, button '%ls' enabled %d)", g_allReady, g_btnText, g_btnEnabled); fs(".OnClickReady", ""); }
-        } else if (g_role == 2 && !g_readyMe && now - lastClick > 3000 && !g_manual && place_step(now)) {   // guest in his slot: the ready mark gets reset when someone moves - set it again
-            lastClick = now; logmsg("ready was reset - setting ready again"); fs(".OnClickReady", "");
-        }
-        if (!g_manual) { if (g_role == 2) place_step(now); if (g_role == 1) { host_step(now); place_step(now); } }
-    }
-    if (!g_loading && g_coverWant && (g_state == S_HOST_WAIT || g_state == S_PLACE || g_state == S_DONE)) {
-        static DWORD alone; static int maxH; int left = g_screen != SC_SETUP && in_state() > 3000;     // kicked / host gone: back in the list or menu
-        if (g_state == S_PLACE || (g_state == S_HOST_WAIT && in_state() < 300)) maxH = 0;
-        int inLobby = g_humans; { unsigned long long ids[8]; int n = lobby_ids(ids); if (n > inLobby) inLobby = n; }   // observer slots count too
-        if (inLobby > maxH) maxH = inLobby;
-        // everybody who came in has left again (a crash, a quit): nobody to play with
-        if (g_screen == SC_SETUP && inLobby < 2 && maxH >= 2 && !g_bots) { if (!alone) alone = now; } else alone = 0;
-        if (left || (alone && now - alone > 6000)) {
-            logmsg("match fell apart (%s) - cover off", left ? "not in the lobby any more" : "the other players left");
-            alone = 0; set_state(S_FAIL);
-        }
-    }
-    if (g_state == S_DONE && g_coverWant && !g_loading && g_screen == SC_SETUP && in_state() > 60000 && now - g_lastFsTick < 3000) {
-        logmsg("the game did not start - cover off"); g_coverWant = 0; set_state(S_FAIL);      // the menu movie is alive (it still sends commands)
-    }
-    if (g_natStopAt && now - g_natStopAt > 1500) {                  // 0.38 fallback: the engine's search must be off before ours runs
-        if (g_engSearch == 1 && g_screen == SC_MM && g_natStops < 2) { g_natStops++; g_natStopAt = now; logmsg("native: the game still searches - Stop Searching again"); fs(".OnClickStart", ""); }
-        else { if (g_engSearch == 1) logmsg("native: the game's own search did not stop"); g_natStopAt = 0; }
-    }
+    mode_peek(now);                                                   // 0.42
+    stray_stop(now);                                                  // 0.45
     if (g_natCancelled) {                                             // 0.38: the server called our native match off
         g_natCancelled = 0;
         if (g_state == S_NATIVE || (g_state == S_IDLE && g_natWatchUntil)) {
@@ -1704,9 +1070,9 @@ static void tick(void) {
             fs(".OnClickStart", "");                                  // the game's own Start Searching -> automatch/startpolling on our server
             g_natPass = now; logmsg("native: Start Searching passed to the game %lu ms after the click (%s)", now - g_searchTick, MODE_KEY[g_mode]);
             set_state(S_NATIVE);
-        } else if (g_natAnswer == 2 || in_state() > 3000) {
-            logmsg("native: not used (%s) - classic flow", g_natAnswer == 2 ? g_natWhy : "no answer in 3 s"); g_natAnswer = 0;
-            set_state(S_SEARCH); g_wantJoin = 1; SetEvent(g_wake);
+        } else if (g_natAnswer == 2 || in_state() > 3000) {           // 0.45: no other search - the reason on the screen
+            const char *why = g_natAnswer == 2 ? g_natWhy : "the ladder did not answer in time"; g_natAnswer = 0;
+            set_state(S_IDLE); search_blocked(why);
         }
         break;
     case S_NATIVE: {                                                  // 0.38: the game searches by itself; we only watch the ladder
@@ -1714,200 +1080,21 @@ static void tick(void) {
         if (quiet <= 10000) break;
         const char *why = g_natSeen ? "the ladder lost the native search" : "the ladder never saw the native search";
         if (g_screen != SC_MM) { logmsg("native: %s (%lu ms) and not on Find a Game - idle (the game goes on by itself)", why, quiet); set_state(S_IDLE); g_natWatchUntil = now + 30000; break; }   // no leave: it would call off a match the game may still be setting up
-        logmsg("native: FALLBACK - %s (%lu ms quiet), the game's own search %s - classic flow", why, quiet, g_engSearch == 1 ? "on: stopping it" : g_engSearch == 0 ? "off" : "unknown");
-        if (g_engSearch == 1) { fs(".OnClickStart", ""); g_natStopAt = now; g_natStops = 0; }   // Stop Searching (the same button)
-        g_queue = -1; set_state(S_SEARCH); g_wantJoin = 1; SetEvent(g_wake);
-        break; }
-    case S_GO_MAIN:                                                   // leave Find a Game -> main menu
-        { static DWORD since, lastBack, entered; if (entered != g_stateTick) { entered = g_stateTick; since = now; lastBack = now - 800; }
-          if ((g_screen == SC_MM || (g_screen == SC_SETUP && g_matchDirect)) && now - lastBack > 1500) { lastBack = now; fs(".OnClickBack", ""); }   // pressed again only if the screen did not change; 0.35: out of my own room
-          if (g_screen == SC_MAIN) set_state(g_role == 1 ? S_GO_LIST : S_GUEST_NAME);
-          else if (now - since > 20000) { logmsg("could not leave Find a Game"); set_state(S_FAIL); } }
-        break;
-    case S_GUEST_NAME:                                                // guest waits in the main menu for the host's game name (net_worker)
-        if (in_state() > 90000) set_state(S_FAIL);
-        break;
-    case S_GO_LIST:                                                   // main menu -> Public Games list
-        if (g_matchDirect && g_role == 1) {                           // 0.34: a private room, straight into its lobby (no list, no name)
-            static DWORD lb; if (g_screen == SC_MM && now - lb > 1500) { lb = now; fs(".OnClickBack", ""); }
-            if (g_screen == SC_MAIN && (in_state() > (g_pre ? 5000u : 0u) || g_pre == PRE_GO_MAIN)) { fs(".OnClickPrivateMatch", ""); g_stateTick = now; g_pre = PRE_PRIVATE; }   // 0.35: no 0.8 s wait
-            if (g_screen == SC_SETUP) set_state(S_SETUP_HERO);
-            if (in_state() > 20000) { logmsg("direct: the private room did not open"); set_state(S_FAIL); }
-            break;
-        }
-        if (g_screen == SC_MAIN && in_state() > (g_fast ? 0u : 800u)) { fs(".OnClickPublicMatch", ""); g_stateTick = now; }
-        if (g_screen == SC_LIST && (g_listSeen || g_role == 1)) set_state(g_role == 1 ? S_HOST_DIALOG : S_GUEST_FIND);
-        if (in_state() > 20000 && g_screen != SC_LIST) set_state(S_FAIL);
-        break;
-    case S_HOST_DIALOG:
-        if (in_state() > (g_fast ? 50u : 200u)) { g_hostDirect = 1; g_hostDone = 0; fs(".OnClickHost", ""); set_state(S_HOST_NAME); }
-        break;
-    case S_HOST_NAME:                                                 // the "Game Name" box: type the name and press Enter
-        { static int typed, entered; if (in_state() < 1000) typed = entered = 0;
-          if (!g_hostDone && !typed && in_state() > 600) { typed = 1; type_text(g_gameName); }      // fallback: the box came up after all
-          if (!g_hostDone && !entered && in_state() > 1000) { entered = 1; press_enter(); } }
-        if (g_screen == SC_SETUP) set_state(S_SETUP_HERO);
-        if (in_state() > 15000) set_state(S_FAIL);
-        break;
-    case S_GUEST_DJOIN: {                                             // 0.34: into the host's room by its id, then the lobby screen
-        static int tries; static DWORD lastTry, entered; if (entered != g_stateTick) { entered = g_stateTick; tries = 0; lastTry = 0; g_rowFound = -1; }
-        unsigned long long in = dj_room(NULL, NULL);
-        if (g_screen == SC_SETUP && in == g_room) { set_state(S_SETUP_HERO); break; }
-        if (in && in != g_room) {                     // 0.35: still in my own room (made while searching) - out of it first
-            static DWORD lg; if (now - lg > 1500) { lg = now; logmsg("direct: leaving my room %llu for the host's", in); } leave_lobby(now); break; }
-        if (in && in == g_room) { logmsg("direct: in the room %llu after %lu ms", in, in_state()); dj_to_lobby(); set_state(S_GUEST_JOINED); break; }
-        if (!in && g_screen != SC_SETUP && tries < 3 && (!lastTry || now - lastTry > (tries ? 4000u : 8000u))) {   // 0.35: no 0.5 s wait
-            tries++; lastTry = now; if (!dj_join(g_room)) { set_state(S_FAIL); break; } }
-        if (!g_matchDirect && g_fast && !in && in_state() > 12000 && g_gameName[0] && g_screen == SC_MAIN) {   // 0.37: the list as before
-            logmsg("fast: the room %llu did not let me in directly - looking for %s in the list", (unsigned long long)g_room, g_gameName); g_room = 0; set_state(S_GO_LIST); break; }
-        if (in_state() > 30000) { logmsg("direct: could not get into the room %llu", (unsigned long long)g_room); set_state(S_FAIL); }
-        break; }
-    case S_GUEST_FIND:
-        if (g_rowFound >= 0 && in_state() > 200) {
-            char r[8]; snprintf(r, sizeof r, "%d", g_rowFound);
-            fs(".OnEntryClick", r); fs(".OnClickJoin", ""); set_state(S_GUEST_JOINED);
-        }
-        if (in_state() > 60000) set_state(S_FAIL);
-        break;
-    case S_GUEST_JOINED: {
-        static int tries; static DWORD lastTry; if (in_state() < 300) { tries = 0; lastTry = now; }
-        if (g_screen == SC_SETUP) { set_state(S_SETUP_HERO); break; }
-        if (g_screen == SC_LIST && now - lastTry > 8000 && tries < 3 && g_rowFound >= 0) {     // join did not go through - try again
-            tries++; lastTry = now; char r[8]; snprintf(r, sizeof r, "%d", g_rowFound);
-            logmsg("join retry %d", tries); fs(".OnEntryClick", r); fs(".OnClickJoin", "");
-        }
-        if (in_state() > 35000) set_state(S_FAIL);
-        break; }
-    case S_SETUP_HERO: {                                              // hero selection pops up in the lobby: accept the default once
-        static int step; static DWORD heroT, ent; if (ent != g_stateTick) { ent = g_stateTick; step = 0; }
-        if (QUICK && step < 3) {                                          // 0.35: on the panel's answers; done already in my room (0.37: fast too)
-            if (g_heroDone || hero_quick(now, g_stateTick)) { g_heroDone = 1; step = 3; heroT = 0; }
-            break;
-        }
-        if (step == 0 && in_state() > 1500 && g_random) {             // Random on Find a Game = the same Random in the lobby
-            step = 2; heroT = in_state(); logmsg("lobby: random race and hero"); fs(".hero_selection_mc.OnClickRandom", "");
-        }
-        if (step == 0 && in_state() > 1500) {                         // a fresh join needs a moment; the engine brings the race from Find a Game
-            step = 1; if (g_lobbyRace >= 0) g_curRace = g_lobbyRace; int shown = g_curRace;
-            int rc = apply_race(); heroT = in_state() + (rc ? 1000 : 300);
-            if (!rc && g_curHero == g_hero) heroT = 0;                   // already as saved: don't touch the panel at all
-            logmsg("lobby: race %d (saved %d), hero %d (saved %d)%s", shown, g_race, g_curHero, g_hero, rc ? " - switching race" : "");
-        }
-        if (step == 1 && in_state() > heroT) {
-            step = 2;
-            if (heroT) apply_hero(); else heroT = in_state();
-        }
-        if (step == 2 && in_state() > heroT + 600) { step = 3; fs(".hero_selection_mc.OnClickAccept", ""); }
-        if (step == 3 && (QUICK || in_state() > heroT + 1200)) {
-            step = 4;
-            if (g_role == 1) {                                        // host: 1v1 map right away (nobody else in yet - no swap question)
-                // 0.32: the index goes to the lobby's drop-down, so it is looked up in the list the lobby sent (MM-m10 30.10: a 1v1 played
-                // on a 6p map - no map was found and the lobby kept the host's last one); no map of the match's size = no match
-                int mm = g_matchMode, nl = g_nlmaps ? g_nlmaps : g_nmaps; wchar_t (*lst)[64] = g_nlmaps ? g_lmaps : g_maps;
-                int mi = -1; if (g_mapName[0]) for (int i = 0; i < nl; i++) if (!wcscmp(lst[i], g_mapName)) { mi = i; break; }
-                if (mi < 0) {                                         // server gave no map (or the lobby lacks it) - random one of mine for the mode
-                    int c[MAXMAPS], k = 0;
-                    for (int i = 0; i < nl; i++) if (!wcsncmp(lst[i], MODE_PREFIX[mm], 4)) { int ci = map_index(lst[i]); if (ci < 0 || !g_off[mm][ci]) c[k++] = i; }
-                    if (!k) for (int i = 0; i < nl; i++) if (!wcsncmp(lst[i], MODE_PREFIX[mm], 4)) c[k++] = i;
-                    if (k) mi = c[GetTickCount() % k];
-                }
-                if (mi < 0) { logmsg("no %s map in the lobby list (%d maps) - cancelling the match", MODE_KEY[mm], nl); set_state(S_FAIL); break; }
-                { char a[16]; snprintf(a, sizeof a, "0;%d", mi); logmsg("map: %ls (lobby list %d)", lst[mi], g_nlmaps); fs(".game_options_panel_mc.OnSelectDropDownItem", a);
-                  WideCharToMultiByte(CP_UTF8, 0, lst[mi], -1, g_hostMap, sizeof g_hostMap, NULL, NULL); }
-                if (g_matchDirect) { set_state(S_HOST_OPEN); break; }      // 0.34: the private room's slots hold computers - open them first
-                if (g_fast) { g_room = dj_room(NULL, NULL); logmsg("fast: my room %llu goes to the ladder with its name", (unsigned long long)g_room); }   // 0.37: guests join it directly
-                g_wantHost = 1; SetEvent(g_wake); cover(L"Waiting for the players to connect"); set_state(S_HOST_WAIT);
-            } else if (g_matchDirect && g_role == 2 && g_matchMode == 0) { fs(".OnClickReady", ""); cover(L"In your slot. The host starts the game"); set_state(S_DONE); }   // 0.35: 1v1 - the only open slot is mine: no slot moves
-            else { set_state(S_PLACE); }                            // guest / watcher: take the assigned slot, then ready
-        }
-        break; }
-    case S_HOST_OPEN: {                                               // 0.34: every player slot but mine open, then the room id to the ladder
-        static int next; static DWORD lastOpen, entered; if (entered != g_stateTick) { entered = g_stateTick; next = g_slotsOpen ? 8 : 0; lastOpen = g_slotsOpen ? now - 1000 : now; }   // 0.35
-        int n = 2 * team_n();
-        unsigned long long ids[8]; if (lobby_ids(ids) < 0) break;
-        while (next < 8 && (is_obs_slot(next) || (next % 4) >= n / 2 || (ids[next] && is_me(ids[next])))) next++;
-        if (next < 8 && now - lastOpen > 120) { lastOpen = now; logmsg("direct: open slot %d", next); slot_do(next, CB_OPEN_SLOT); next++; break; }
-        if (next >= 8 && now - lastOpen > 150) {
-            unsigned long long r = g_preRoom ? g_preRoom : dj_room(NULL, NULL);
-            if (!r) { if (in_state() > 15000) { logmsg("direct: no room id"); set_state(S_FAIL); } break; }
-            g_room = r; logmsg("direct: room %llu open for the players", r);
-            g_wantHost = 1; SetEvent(g_wake); cover(L"Waiting for the players to connect"); set_state(S_HOST_WAIT);
-        }
-        break; }
-    case S_HOST_WAIT: {                                               // open observer slots, kick strangers, start when everyone is in place
-        static int obsOpened, aiMask; static DWORD lastKick, allIn, lastLog, lastAi, wSince; if (in_state() < 300) { obsOpened = 0; allIn = 0; aiMask = 0; wSince = 0; }
-        if (g_manual) { if (in_state() > 300000) set_state(S_FAIL); break; }        // test: the person runs the lobby
-        if (in_state() > (QUICK ? 200u : 2000u) && !g_bots) host_step(now);
-        if (!obsOpened && in_state() > 1500 && (!QUICK || g_nW)) { obsOpened = 1; slot_do(team_n(), CB_OPEN_OBS); }   // after the map change (it closes them again); 0.35: none without watchers
-        unsigned long long ids[8]; if (lobby_ids(ids) < 0) break;
-        int placed = 0, wIn = 0, stranger = -1, pr[4][2], plan = team_plan(ids, pr);
-        if (!g_bots && in_state() > 2000) place_step(now);                // the host swaps too when its half is the wrong one
-        for (int i = 0; i < 8; i++) if (ids[i]) {
-            if (is_me(ids[i])) continue;
-            int r = in_roster(ids[i]);
-            if (r >= 0) { if (plan == 0 || (g_bots && g_rSlot[r] == i)) placed++; }
-            else if (is_watcher(ids[i])) { if (is_obs_slot(i)) wIn++; }
-            else if (!name_known(g_slotName[i])) stranger = i;
-        }
-        int aivai = g_bots && g_testBots == 2, mine = -1; for (int i = 0; i < 8; i++) if (ids[i] && is_me(ids[i])) mine = i;
-        if (aivai && obsOpened && mine >= 0 && !is_obs_slot(mine) && in_state() > 2500 && now - lastAi > 2000) {   // AI test: I go watch
-            for (int i = 0; i < 8; i++) if (is_obs_slot(i) && !ids[i]) { lastAi = now; logmsg("AI test: me %d -> observer slot %d", mine, i); slot_do(i, CB_MOVE_OBS); break; }
-        }
-        if (g_bots && obsOpened && in_state() > 3000 && now - lastAi > 800 && (!aivai || (mine >= 0 && is_obs_slot(mine)))) {   // test vs CPU: computers in the empty player slots
-            int d = aivai ? (g_aiDiff < 0 ? 0 : g_aiDiff > 3 ? 3 : g_aiDiff) : 0;
-            for (int i = 0; i < 8; i++) if (!is_obs_slot(i) && !ids[i] && !(aiMask & (1 << i)) && g_slotName[i][0] == 0) {
-                aiMask |= 1 << i; lastAi = now; logmsg("add computer (difficulty %d) to slot %d", d, i); slot_do(i, CB_AI[d]); break; }
-        }
-        if (stranger >= 0 && now - lastKick > 1500) { lastKick = now; logmsg("kick stranger %llu in slot %d", ids[stranger], stranger); slot_do(stranger, CB_KICK); }
-        int need = g_nR - 1;                                          // everyone but me in his slot
-        if (now - lastLog > 3000) { lastLog = now; logmsg("lobby: placed %d/%d (swaps left %d), watchers %d/%d, stranger slot %d", placed, need, plan, wIn, g_nW, stranger); }
-        int nPlayerSlots = 2 * team_n(), aiDone = 0; for (int i = 0; i < 8; i++) if (!is_obs_slot(i) && (aiMask & (1 << i))) aiDone++;
-        int ready = placed >= need && stranger < 0 && (need > 0 || (g_bots && aiDone >= nPlayerSlots - (aivai ? 0 : 1) && now - lastAi > 1500));
-        if (wIn >= g_nW && g_nW) { if (!wSince) wSince = now; } else wSince = 0;
-        if (!ready) allIn = 0; else if (!allIn) allIn = now;
-        if (ready && QUICK && !g_nW) { cover(L"Everyone is in. Starting"); g_wantStarted = 1; SetEvent(g_wake); set_state(S_DONE); break; }   // 0.35: no 2.5 s wait
-        if (ready && (wIn >= g_nW ? now - allIn > 2500 && (!g_nW || now - wSince > 2500) : now - allIn > 25000)) {
-            cover(L"Everyone is in. Waiting for everyone to be ready"); g_wantStarted = 1; SetEvent(g_wake); set_state(S_DONE);
-        }
-        if (in_state() > 120000) { logmsg("players did not come - cover off"); set_state(S_FAIL); }
-        break; }
-    case S_PLACE: {                                                   // guest: take the assigned slot (place_step); watcher: a free observer slot
-        if (g_manual && g_role != 3) { cover(L"Manual test: take your slot yourself"); set_state(S_DONE); break; }
-        if (g_role != 3) {
-            if (in_state() > (g_fast ? 300u : 1200u) && place_step(now)) { fs(".OnClickReady", ""); cover(L"In your slot. Waiting for the host to start"); set_state(S_DONE); }
-            if (in_state() > 90000) set_state(S_FAIL);
-            break;
-        }
-        static DWORD lastMove; if (in_state() < 300) lastMove = 0;
-        unsigned long long ids[8]; if (lobby_ids(ids) < 0) break;
-        int cur = -1; for (int i = 0; i < 8; i++) if (is_me(ids[i])) cur = i;
-        int target = -1; if (cur >= 0 && is_obs_slot(cur)) target = cur; else for (int i = 0; i < 8; i++) if (is_obs_slot(i) && !ids[i]) { target = i; break; }
-        if (cur >= 0 && cur == target) { cover(L"You are an observer. The game starts soon"); set_state(S_DONE); break; }
-        if (target >= 0 && in_state() > 1200 && now - lastMove > 2000) { lastMove = now; logmsg("observer: %d -> %d", cur, target); slot_do(target, CB_MOVE_OBS); }
-        if (in_state() > 60000) set_state(S_FAIL);
+        // 0.45: nothing else to search with - the game's search stopped (it would hang), the reason on the screen
+        logmsg("native: %s (%lu ms quiet) - the game's own search %s, the reason on the screen", why, quiet, g_engSearch == 1 ? "on: stopping it" : g_engSearch == 0 ? "off" : "unknown");
+        if (g_engSearch == 1) fs(".OnClickStart", "");                // Stop Searching (the same button); stray_stop checks it again after 5 s
+        g_queue = -1; set_state(S_IDLE); g_wantLeave = 1; SetEvent(g_wake); search_blocked(why);
         break; }
     }
 }
 static void __stdcall upd_hook(float dt) {
     g_updOrig(dt);
     DWORD now = GetTickCount(); int alive = g_fsMovie && g_state != S_DONE;            // after Start the frontend goes away - hands off
-    if (g_applyMM && alive) { static DWORD t; if (!t) t = now; if (now - t > 400) { g_applyMM = 0; t = 0;
+    if (g_applyMM && alive) { static DWORD t; if (!t) t = now; if (now - t > 400) { g_applyMM = 0; t = 0;      // Find a Game: the saved army and mode
         if (g_random) { g_autoSelTick = now; fs(".hero_selection_mc.OnClickRandom", ""); g_heroAt = 0; } else g_heroAt = now + (apply_race() ? 800 : 1);
         char a[8]; snprintf(a, sizeof a, "0;%d", g_mode); fs(".OnSelectDropDownItem", a); } }
     if (g_heroAt && now >= g_heroAt) { g_heroAt = 0; if (alive && g_screen == SC_MM) apply_hero(); }
     tick();
-    { static DWORD t; if (now - t > 1000 && (g_state == S_IDLE || g_state == S_FAIL) && !g_noticeUntil) { t = now;        // debug: MMFind_cover.txt shows the cover in the menu
-        wchar_t p[MAX_PATH]; _snwprintf(p, MAX_PATH, L"%lsMMFind_cover.txt", g_dir);
-        FILE *f = _wfopen(p, L"r"); if (f) { char b[150] = ""; fgets(b, sizeof b, f); fclose(f); b[strcspn(b, "\r\n")] = 0;
-            MultiByteToWideChar(CP_UTF8, 0, b, -1, g_coverLine, 159); g_coverWant = 1; } else g_coverWant = 0; } }
-    { static DWORD t2; if (now - t2 > 1000) { t2 = now; wchar_t p2[MAX_PATH]; _snwprintf(p2, MAX_PATH, L"%lsMMFind_nocover.txt", g_dir);
-        if (GetFileAttributesW(p2) != INVALID_FILE_ATTRIBUTES && g_coverWant) { g_coverWant = 0; logmsg("debug: cover off"); } } }
-    if (g_uiHidden && g_fsMovie && !g_loading && !(GetAsyncKeyState(VK_LBUTTON) & 0x8000)) {        // the Cancel click is over: the menu back
-        static DWORD up; if (!up) up = now;
-        if (now - up > 300) { as_setb(g_fsMovie, "_level0.display_item._visible", 1); g_uiHidden = 0; up = 0; logmsg("menu shown again after Cancel"); } }
-    int lobbyWait = g_state == S_DONE && g_screen == SC_SETUP && now - g_lastFsTick < 3000;      // in the lobby before Start: the menu is alive (Cancel works)
-    if (g_fsMovie && !g_loading && (alive || lobbyWait || !g_coverWant) && (g_coverWant || g_coverOn)) cover_update();      // S_FAIL also passes here: removes the cover
-    if (!g_loading) msgbox_hide(g_coverWant && ((g_state >= S_GO_MAIN && g_state <= S_GUEST_JOINED) || (g_state == S_SEARCH && g_pre)));
 }
 
 // ---------------- install ----------------
@@ -1950,7 +1137,7 @@ static void install(void) {
     code_jmp(f, (void *)fs_hook, 7);
     FlushInstructionCache(GetCurrentProcess(), NULL, 0);
     logmsg("hooked Invoke + fscommand");
-    install_host_hook(); install_sfm_hook(); install_slot_hook(); install_swap_hook(); marker_check();
+    install_sfm_hook();
     CloseHandle(CreateThread(NULL, 0, installer, NULL, 0, NULL));
     CloseHandle(CreateThread(NULL, 0, net_worker, NULL, 0, NULL));
 }
@@ -1969,27 +1156,21 @@ BOOL WINAPI DllMain(HINSTANCE h, DWORD r, LPVOID _) {
     parse_hosts();
     g_mode = GetPrivateProfileIntW(L"Choice", L"Mode", 0, ini); if (g_mode < 0 || g_mode > 3) g_mode = 0;
     g_maxDiff = GetPrivateProfileIntW(L"MMFind", L"MaxRatingDiff", 0, ini);
-    g_direct = GetPrivateProfileIntW(L"MMFind", L"DirectStart", 0, ini);       // 0.34 experiment, see g_direct
-    g_fast = GetPrivateProfileIntW(L"MMFind", L"Fast", 1, ini) != 0;           // 0.37, see g_fast
-    g_nativeCfg = GetPrivateProfileIntW(L"MMFind", L"Native", 1, ini) != 0;    // 0.38, see g_nativeCfg
     g_fastCfg = GetPrivateProfileIntW(L"MMFind", L"NativeFast", 1, ini) != 0;  // 0.39, see native_fast
+    g_showMode = GetPrivateProfileIntW(L"MMFind", L"ShowMode", 1, ini) != 0;   // 0.42, see g_showMode
+    { wchar_t t[16]; GetPrivateProfileStringW(L"MMFind", L"Lang", L"auto", t, 16, ini); g_langCfg = !_wcsicmp(t, L"ru") ? 1 : !_wcsicmp(t, L"en") ? 0 : -1; }
     { wchar_t t[80]; GetPrivateProfileStringW(L"MMFind", L"TestLadder", L"", t, 80, ini); wchar_t *c = wcsrchr(t, L':');   // 0.38 tests, see g_tlHost
       if (t[0] && c && _wtoi(c + 1) > 0 && _wtoi(c + 1) < 65536) { *c = 0; wcsncpy(g_tlHost, t, 63); g_tlPort = (INTERNET_PORT)_wtoi(c + 1); } }
-    g_testBots = GetPrivateProfileIntW(L"MMFind", L"TestBots", 0, ini);
-    g_aiDiff = GetPrivateProfileIntW(L"MMFind", L"AIDifficulty", 1, ini);    // 0 Easy, 1 Normal, 2 Hard, 3 Expert
-    g_readyIdx = GetPrivateProfileIntW(L"MMFind", L"ReadyField", 12, ini);     // PopulatePlayerList slot field 12 = "ready" (seen 26.10)
     g_verbose = GetPrivateProfileIntW(L"MMFind", L"Verbose", 0, ini);
     g_logInvoke = GetPrivateProfileIntW(L"MMFind", L"LogInvoke", 0, ini);   // debug: every engine -> Flash call
-    g_manual = GetPrivateProfileIntW(L"MMFind", L"Manual", 0, ini);          // test: menus are walked, the lobby is left to the person
-    g_autoSwapCfg = GetPrivateProfileIntW(L"MMFind", L"AutoSwap", 1, ini);   // master: auto-accept "swap slots" (only in a ladder lobby); 0 = always ask
     { wchar_t g[32]; GetPrivateProfileStringW(L"MMFind", L"TestGroup", L"", g, 32, ini); WideCharToMultiByte(CP_UTF8, 0, g, -1, g_group, sizeof g_group, NULL, NULL); }
     wcscpy(g_ini, ini);
     g_race = GetPrivateProfileIntW(L"Choice", L"Race", -1, ini); g_chapter = GetPrivateProfileIntW(L"Choice", L"Chapter", -1, ini); g_hero = GetPrivateProfileIntW(L"Choice", L"Hero", -1, ini); g_random = GetPrivateProfileIntW(L"Choice", L"Random", 0, ini);
     g_mySteam = my_steam();
     { wchar_t p[MAX_PATH], o[MAX_PATH]; _snwprintf(p, MAX_PATH, L"%lsMMFind.log", g_dir); _snwprintf(o, MAX_PATH, L"%lsMMFind.log.old", g_dir);
       WIN32_FILE_ATTRIBUTE_DATA a; if (GetFileAttributesExW(p, GetFileExInfoStandard, &a) && (a.nFileSizeHigh || a.nFileSizeLow > (1u << 20))) MoveFileExW(p, o, MOVEFILE_REPLACE_EXISTING); }
-    logmsg("MMFind 0.41 start, steam=%llu server=%ls%s%s%s", g_mySteam, g_server, g_direct ? ", fast automatch (experiment) on" : "", g_fast ? ", fast steps (public room, direct join)" : "",
-           g_nativeCfg ? ", native search when on our lobby server" : ", native off");
+    logmsg("MMFind " MMF_VER " start, steam=%llu server=%ls - only the native automatch (the game's own search on our lobby server, OwnLobby.dll %s)",
+           g_mySteam, g_server, GetModuleHandleW(L"OwnLobby.dll") ? "loaded" : "not loaded yet");
     if (g_tlHost[0]) logmsg("TEST LADDER: every ladder API call goes to http://%ls:%u (TestLadder=)", g_tlHost, (unsigned)g_tlPort);
     { char n[64]; wsprintfA(n, "Local\\dow2patch_MMFind_%lu", GetCurrentProcessId());          // one copy per game (launcher + dow2-patches)
       HANDLE mx = CreateMutexA(NULL, FALSE, n); if (mx && GetLastError() == ERROR_ALREADY_EXISTS) { logmsg("another MMFind copy is active, this one stays idle"); return TRUE; } }

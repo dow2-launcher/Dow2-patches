@@ -4,7 +4,166 @@ Every version gets an entry here before it reaches `main`. CI then tags `vX.Y.Z`
 version (`X.Y.0`) it also publishes a GitHub Release with the DLLs and the entries since the previous `X.Y.0`.
 The version of the set lives only in `VERSION`; each DLL still writes its own version to its log.
 
-## Unreleased (branch fix/cooldowns-6-timer-apm)
+## MMFind 0.45 (branch feature/mmfind-0.45, staging mmfind-0.45, not released)
+- MMFind 0.45: only the native automatch (owner 03.11.2026: "the automatch is tested - remove the old one, keep only the
+  new one"; "never start Relic's search - it does not work anyway"). Start Searching asks the ladder (mm/native) and, on its
+  "yes", goes to the game: the game's own Find a Game search on our lobby server (OwnLobby.dll), as in 0.38-0.44 (poll 1 s,
+  countdown 2 s, X-Lobby NM- replays, the info block and the queue on the screen, searching again after a match the server
+  called off). On "no" the click is NOT passed to the game - Relic's matchmaker matches nobody - and the screen says why and
+  what to do: "Automatch v2.0 is not available: restart the game from the Elite launcher" (no OwnLobby.dll, or the game did
+  not sign in through our lobby server), "our lobby server does not answer - try again in a minute", "switched off on the
+  server", "Team FFA is not in the automatch"; the next click asks again. A search of the game that runs anyway without our
+  native search behind it (on for 1.5 s on Find a Game while MMFind is idle; 5 s grace after a native search of ours) is
+  stopped at once (Stop Searching, 3 times at most). 10 s without the ladder seeing the native search: the game's search
+  stopped, the reason on the screen (was: the classic flow).
+- Removed with the classic flow (0.12-0.44): mm/join / mm/host / mm/room / mm/started / mm/ruined, the menus walked
+  (Back / Public Match / Host / Join / Private Match), the "Match Found" cover and its Cancel, the host's game options,
+  slots, kicks, swaps and observers (the OnClickHost, slot menu and swap-request detours are no longer installed), the
+  "Watch a match" item (Team FFA is the game's own again), the ruined-loading marker, DirectStart / Fast / Manual / TestBots
+  / AutoSwap / ReadyField / Native=, and the 0.43 menu rematch (RematchMenus / RematchTest; the game's own Continue is
+  Continue.dll). The DLL is 2455 -> about 1180 lines.
+- Package mmfind-0.45 = Elite_DLLs/MMFind.dll + Elite_DLLs/OwnLobby.dll + winmm.dll (EARLY_ONLY), both from ownlobby-3
+  (launcher "Automatch v2.0", one tick).
+
+## Continue 1 + MMFind 0.44 (branch feature/native-continue, staging continue-1 + mmfind-0.44, not released)
+## 2026-11-03 released
+What the launcher store (store3/launcher.json) gives players on 03.11.2026, all in this tree (branch release/consolidate-0311).
+Store id -> the version the DLL writes to its log -> the commit the released DLL was built from. Each module's source here is
+the same as in that commit (`git diff <commit> HEAD -- <module dir> common` is empty); rebuilt with the same compiler (and the
+same image base / link name), the DLLs are byte for byte the released ones but for the PE timestamps.
+- automatch: mmfind-0.44 -> MMFind 0.44 (with 0.39 native fast, 0.42 search kind, 0.43 rematch, off by default) -> fe58795
+  (feature/native-continue). Built as MMFind044.dll and renamed. Continue.dll (Continue 1, same branch) stays in the tree but
+  was taken out of the store on 03.11.
+- relay_r2 / relay_fwd: relay-21 / relayfwd-21 -> Relay 21 (on Relay 20) -> 4693a39 (feature/relay-21, on feature/relay-20 773d547)
+- steamkeep: steamkeep-2 -> SteamKeep 2 -> c6d8d01 (feature/steamkeep)
+- jumpretry: jumpretry-2 -> JumpRetry 2 -> add4085 (feature/jumpretry)
+- roomjoin: roomjoin-1 -> RoomJoin 7 -> 72d832c (feat/roomjoin, PR #10)
+- cooldowns_r2: cooldowns-7 -> Cooldowns 6 -> a38a5a6 (fix/cooldowns-6-timer-apm)
+- matchtimer_r2: matchtimer-8 -> MatchTimer v5 (Place=menu etc.) -> a38a5a6
+- apm: apm-1 -> APM 1 -> a38a5a6
+- ownlobby: ownlobby-3 -> OwnLobby 2 + the early winmm.dll (build/early/winmm.dll) -> 7cc5f42 (fix/ownlobby-2-moscow)
+- reinforcefix: reinforcefix-1 -> ReinforceFix v1 (main)
+- unchanged on main, checked the same way: lobbystats-0.11.0 (LobbyStats 0.11.0), joinsound-1 (JoinSound 1), netprobe-2
+  (NetProbe 2), crashlog-1 (CrashLog 1).
+- loadingratings-4 was built on 02.11 from 0f725df (lobbystats.c with -DLS_LOADING, "LoadingRatings v0.10.1"); the tree now builds
+  LoadingRatings from the later lobbystats.c (0.11.0: the join sound moved to JoinSound.dll), not released as LoadingRatings yet.
+The sections below with "branch ..." in the heading are the details of these versions.
+
+## Relay 21 (branch feature/relay-21; released 2026-11-03 as relay-21 / relayfwd-21)
+- Relay 21 (Relay.dll + RelayForward.dll). No global lock on the hot path: Relay 20 took one critical section and walked 64
+  slots on every send / WSASend of every socket in the game (the IAT of all modules is hooked) and on every connect, so all the
+  game's network threads queued on it. A socket is ours only while its preamble waits (marked lock-free at the redirect, a
+  counter of waiting slots); every other send / WSASend / connect passes with one memory read, the lock is taken only when a
+  preamble is really due. Only TCP connects to 27000-27099 and to our nodes' 47100 are looked at: a UDP socket that connect()s
+  and everything else (launcher / ladder / lobby server API and chat, Relic's HTTPS lobby) pass untouched before any work.
+  NetProbe.dll is never hooked: its TCP 27015 test to our nodes went into our UDP tunnel as if it were the game (stand 03.11).
+  Stand 1: online Private custom game on Relic (relay_r2 on, forwarding off) - pass-through, no "ms between calls".
+  Measured under Wine 11.20 (the send hook path, the original send a stub, 16 threads on their own sockets): Relay 20 mean
+  6.2 us per call, 80% of calls over 1 us, 2.26 M calls/s; Relay 21 0.23 us, 0.007% over 1 us, 27.7 M calls/s; on 4 cores
+  Relay 20 had 1935 calls over 1 ms, Relay 21 99 (the scheduler).
+
+## Relay 20 (branch feature/relay-20; in relay-21, released 2026-11-03)
+- Relay 20 (Relay.dll + RelayForward.dll). Redundancy in the UDP tunnel: the SYN carries version 2; a gateway that knows it
+  answers SYNACK + 2 and both sides send DATA2 (each data packet also carries copies of the newest 2 earlier packets not
+  acknowledged yet) and ACK2 (an ack with such copies; answered only when a copy filled something). The copies go only while
+  the datagram stays within 1240 bytes, so turns and ticks get them and big transfers do not. An old gateway answers a bare
+  SYNACK -> the old DATA, no copies; Relay 18/19 with a new gateway likewise. Native connections of our lobby server's rooms
+  (the game connects to one of our nodes on 47100 itself) now go over UDP to that node's udp_gateway, TCP to the node when
+  UDP does not answer (3 s). Needs udp_gateway with DATA2 (dow2-ladder feature/relay-20) for the copies; works without it.
+  Tested: Linux netns, netem 40 ms each way, the tunnel code of Relay 19 / 20 under Wine against the old / new gateway:
+  loss 10% - p99 game->server 422 -> 141 ms, server->game 242 -> 140 ms (p95 138 -> 41); no loss - no change.
+
+## Continue 1 + MMFind 0.44 (branch feature/native-continue; mmfind-0.44 released 2026-11-03, continue-1 taken out of the store)
+- Continue 1 (new add-on, owner 03.11.2026: "the rematch is mostly a crutch - the game has this logic, the room is put together
+  again: the host presses Continue, the others have it greyed out, everyone goes straight into the room"). The game's own
+  path is all there (PostGameStatsForm::OnClickNext 0x480A71): the host sends PPMT_TransitionToGameSetup over the match
+  session (0x456976), every game goes to game_setup_movie of the SAME session (0x481880; the others get "You have been
+  pulled back to game setup by the host"), and the host puts the room back: SetMatchState 0, SetVisible 1. Why it never ran:
+  canContinue (0x47F7EF) returns false at once for match type 1 = custom game (settings+0xEAC, from GameInfo+0xC0 at the
+  start, 0x447538) - Continue was grey for everyone after every custom game. Continue.dll: canContinue for a custom game is
+  asked again with the type out of the way, only while the match session is connected (host + everybody on the post-game
+  screen, as for the other types); the SetVisible on Continue (0x480C79) keeps a private room private (the game would list
+  it). Guests need nothing (the move is the game's own message). Relic answers [4] to the host's advertisement/update of a
+  started custom room - the room is back for the players, only not in the list; dow2-ladder feature/native-continue
+  (own_lobby "reopen") then sends updateState 0 and the update again -> [0]. Test option `[Continue] KeepSoloSession=1`: a
+  match against computers keeps its session (0x46FE8E), so the host's path runs on one machine.
+  Stand 1 (Elite 3.2, OwnLobby -> a test lobby with reopen): Private Match vs computer, Exit Game, Continue enabled by
+  itself, pressed: game setup of the same room (same session, slots, map), "a private room - stays out of the list",
+  Relic: updateState 0 [0], update [0]; a second match started from that room and its Continue worked again. Without
+  reopen: the same, Relic [4] only logged (LogFailure WorldwideUpdateAdvertisementAsync). Not tested: a real second player.
+- MMFind 0.44: the 0.43 rematch (menus walked, a new room Rematch-xxxxxx) is off by default - `[MMFind] RematchMenus=1`
+  (the old `Rematch=` the launcher wrote is ignored), and it never runs while Continue.dll is in the game.
+
+## MMFind 0.43 (branch feature/mmfind-rematch; in mmfind-0.44, released 2026-11-03)
+- MMFind 0.43: rematch on Continue (owner 03.11.2026: "Continue after a match from an ordinary lobby - a new lobby with the same
+  people"). The game's own post-game Continue only throws everyone to the main menu after a Custom Games match (Relic ~2016).
+  While a lobby that is NOT our automatch is up, MMFind keeps who sits where (room id, slots with Relic profile ids and names,
+  my slot, the map, my race / chapter / hero, whether I made the room: Host in the list or Private Match); when its match
+  loads that lobby is kept. On the post-game screen Continue is switched on (Receive_SetNextEnabled - the game had it off even
+  for the host) and its click (OnClickNext) is taken: the screen is left the way Back leaves it, and the ladder
+  (`mm/rematch`, needs dow2-ladder feature/mm-rematch; the key = the old room id, the same in every player's game) picks who
+  makes the new room: the old host if he pressed Continue within 6 s of the first press, else the first one who pressed (45 s
+  without a room = the next one). He opens a public Custom Games room "Rematch-xxxxxx" (the classic flow: Public Match, Host
+  without the name box), takes his old army, sets the old map if the lobby has another one, gives the ladder the room id; the
+  others get it in their poll and join it by the id (the list by name after 12 s), with their old army, and move to their old
+  slot (free: move; the one sitting there wants mine: a swap, the other MMFind says yes; after 20 s any free slot of the old
+  team). Nobody waits for anybody: no auto-start (the host starts as in any lobby), a later Continue (10 min) still gets in,
+  players without MMFind can find the room by its name; for 3 minutes the host kicks people who were not in the old lobby.
+  Cover "Rematch" with Cancel while the menus are walked; the saved Find a Game choice is back after. When the rematch itself
+  is played its key closes (a late Continue: "This rematch is over already") and a Continue after it makes the next rematch.
+  `[MMFind] Rematch=1` (default; the launcher's option "Rematch on Continue" under Automatch) / 0 = the game's own Continue.
+  `RematchTest=1`: one person is enough (a match against computers), a Private Match against a computer from the main menu.
+  Stand 1 (Elite 3.2, test ladder): Private Match vs computer, Exit Game, post-game Continue enabled and taken, a fake second
+  player pressed first (no old host flag -> he was picked, gave no room, after 45 s the stand took over), the stand made
+  "Rematch-2zcurm" on the old map in 1.7 s and the fake players' poll got its room id. Not tested: a real second player
+  joining (needs two stands), 2v2/3v3 slot moves.
+
+## MMFind 0.42 (branch feature/mmfind-0.42-mode; in mmfind-0.44, released 2026-11-03)
+- MMFind 0.42: the kind of search shown on Find a Game (owner 03.11.2026: "when we press search, show right away which search
+  it is"; "change the search screen so it is clear it is a different one"). Two text fields of the game's own Find a Game panel
+  (Scaleform, docs/UI_RULES.md, no Direct3D), made right after the engine's per-frame call into the panel: right of the screen
+  title "ELITE: AUTOMATCH ON OUR SERVERS" / "ELITE: LADDER AUTOMATCH (CLASSIC)", and under "Your Party" "Automatch: our
+  servers" or "Automatch: classic (MMFind)" with why (not signed in through our lobby, players without OwnLobby are waiting,
+  switched off on the server, the lobby server is unreachable, OwnLobby is off, ...), "MMFind 0.42", and the queue of the
+  match type and who is online (mm/hello every 5 s), while searching "Searching... 0:12". Russian when the game's own texts are
+  Cyrillic (Localizer, as EliteAI; or the Start button). From the moment the screen opens: a peek at mm/native (`"peek":true`:
+  the ladder answers as for Start Searching and changes nothing; on entering, every 20 s and on a match type change, only
+  while idle); after the click by the path really taken. Hidden while the hero panel or Map Preferences is up.
+  `[MMFind] ShowMode=1` (default, 0 = off), `Lang=auto|ru|en`; HeadX/HeadY/HeadSize, ModeX/ModeY/ModeSize, ModeProbe=1 (a grid
+  of panel units) for placing. Needs dow2-ladder feature/mm-native-peek (peek without side effects, per-mode queue in mm/hello);
+  an older ladder answers a peek like a real ask, so no peek is sent while a native search or its search-again is pending.
+  Stand 1 (Elite 3.2, OwnLobby ownlobby-3, production ladder, test group): shown on entering, native search starts and stops.
+
+## SteamKeep 2 (branch feature/steamkeep; released 2026-11-03 as steamkeep-2)
+- SteamKeep 2 (owner 03.11.2026: Steam's servers can be away for an hour - the match must be played to the end): no time
+  limit. Any number of drops and returns (and the every-frame "logged on?" check 0x4E5900) never end the match; Steam's close
+  request (a bare WM_CLOSE) is ignored for the rest of the match once Steam went away in it or while it is not logged on.
+  The player's own exits still work: the game's Alt+F4 / menu Quit (OnQuitFinal, untouched), the close button / taskbar
+  Close (WM_SYSCOMMAND SC_CLOSE, seen by a window procedure put in front of the game's), F4 held at WM_CLOSE, Windows
+  shutdown. After the match the game is not closed, so the result and the replay go out. ini: CloseWindowSec is gone,
+  IgnoreSteamClose=1.
+
+## SteamKeep 1 (branch feature/steamkeep)
+- SteamKeep 1 (new add-on, not in the launcher catalog yet): the match goes on when Steam goes away. DOW2.exe turns a Steam
+  drop (SteamLoginService SetConnected(false) 0x004F6F20 -> bus events 0x0C / 1 / 2) into an end reason in GameObj
+  (0x0041FB0E) and leaves the match (GameQuitForSteamInternal 0x00426D9C); a close request that the Steam client sends
+  with it (players' logs: SteamServerShutdown -> "GameApp::Loop - shutdown requested") quits the game. SteamKeep skips
+  both while a game is running (not menus, not replays); no simulation change. Stand 1 (skirmish vs AI, Steam CM sockets
+  destroyed for 60 s + WM_CLOSE to the window): without it the game left the match (end reason 4) and quit; with it the
+  match went on (clock 1:55, Steam back after 44 s), a later plain WM_CLOSE still closed the game.
+
+## JumpRetry 1-2 (branch feature/jumpretry; released 2026-11-03 as jumpretry-2)
+- JumpRetry 2: the retry goes as soon as the squad can walk again (the ability's own check 0x008645A0/0x00864670, polled
+  every 30 ms; LandTimeoutMs 600 as a fallback) instead of a fixed 600 ms, and an order the game still drops (no Ability
+  state within TakeMs 250) is sent again; MaxRetries 3, RetryDelayMs 0. Stand 1: the jump starts ~400 ms after falling
+  out of the ability (v1 ~1000 ms).
+- JumpRetry 1 (new add-on, own tick): an Autarch jump ordered out of range is lost when he hops an obstacle on the way
+  (the ability order ends while he is in the air, nothing spent). The local player's own order is remembered and sent
+  again after the landing, at most MaxRetries (2) times within WindowSec (10); any other order from the HUD to the squad
+  cancels it. Hooks CommandProxy +0x38/+0x34 (0x00AF51A0/0x00AF53C0) and watches WorldDoCommandSquad(s)/Entity imports;
+  only the game's own orders, no change to the simulation.
+
+## Cooldowns 6, MatchTimer, APM 1 (branch fix/cooldowns-6-timer-apm; released 2026-11-03 as cooldowns-7, matchtimer-8, apm-1)
 - Cooldowns 6 (siritos 03.11.2026: on Catachans one ability's recharge reset another's number, and with no energy the number
   went; the bunker stratagem never got one). Cooldowns 4-5 kept the recharge per button number and its end per ability
   blueprint (the same for every squad of a kind), and right after a cast the squad often lacks the energy, when the game
@@ -20,7 +179,15 @@ The version of the set lives only in `VERSION`; each DLL still writes its own ve
   bottom left corner of the minimap frame, also the fallback in annihilation); "apm" small.
 - Launcher catalog entries with the Place picks: docs/launcher-catalog-timer-apm.json (matchtimer-8, apm-1, cooldowns-6).
 
-## Unreleased (branch feature/mmfind-0.39 only, not released)
+## RoomJoin 1-7 (branch feat/roomjoin; released 2026-11-03 as roomjoin-1)
+- RoomJoin 1 (new add-on, experiment, launcher 1.4.5+): Join on an Elite room without a password in the launcher's Lobbies tab -
+  the game starts (or comes to the front) and walks into the room by itself under a cover that says what goes on; a no from the
+  game (full, closed) is shown with its own text, then the public games list. MMFind is not touched (own DLL, own mutex, hooks
+  chained). Tested 03.11 vs live rooms: joined in 1.2-5 s from the game's start; with the game running - fixed after the tests
+  (the idle main menu sends nothing: mouse moves posted to it once it is in front; a second Join for the same room is dropped;
+  Cancel never leaves a room we got into).
+
+## MMFind 0.39 (branch feature/mmfind-0.39; in mmfind-0.44, released 2026-11-03)
 - MMFind 0.39: the game's own automatch faster (owner 03.11.2026: "the ~12 s polling - make it 1 second; cut the 5 s countdown to
   2 s"). `[MMFind] NativeFast=1` (default; 0 = off): only while a native search runs (Start Searching passed to the game until the
   loading screen) two detours of DOW2.exe 3.19 act, put in once, both or none (every byte checked first, log "native fast: detours

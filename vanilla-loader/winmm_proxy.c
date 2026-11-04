@@ -221,6 +221,9 @@ static DWORD WINAPI load_stats(LPVOID _) {
         wchar_t e[MAX_PATH]; _snwprintf(e, MAX_PATH, L"%lsElite_DLLs\\%ls", dir, EARLY[i]);
         if (GetFileAttributesW(e) != INVALID_FILE_ATTRIBUTES) LoadLibraryW(e);
     }
+#ifndef EARLY_ONLY
+    // (EARLY_ONLY, 03.11.2026: the launcher add-on ownlobby's copy - only Elite_DLLs' early add-ons. The launcher puts aside
+    // a winmm.dll naming the stand-alone package's folder as its leftover before every start, so OwnLobby never loaded.)
     // every *.dll in <game>\dow2-patches\ (ObsFix, LobbyStats, ...)
     wchar_t pat[MAX_PATH], p[MAX_PATH]; WIN32_FIND_DATAW fd;
     _snwprintf(pat, MAX_PATH, L"%lsdow2-patches\\*.dll", dir);
@@ -236,6 +239,7 @@ static DWORD WINAPI load_stats(LPVOID _) {
     // older layout: <game>\LobbyStats\LobbyStats.dll
     _snwprintf(p, MAX_PATH, L"%lsLobbyStats\\LobbyStats.dll", dir);
     if (GetFileAttributesW(p) != INVALID_FILE_ATTRIBUTES && !GetModuleHandleW(L"LobbyStats.dll")) LoadLibraryW(p);
+#endif
     return 0;
 }
 BOOL WINAPI DllMain(HINSTANCE h, DWORD reason, LPVOID _) {

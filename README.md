@@ -34,6 +34,22 @@ reinforcefix/
     kept by the HUD and every tick it drops squads that have no models on the map, which is the case
     while a squad sits inside the gate. ReinforceFix skips such squads instead of dropping them.
 
+continue/
+    The game's own Continue after a Custom Games match: the host presses it, the others have it greyed out, and
+    everyone is back in the same room (game setup, same slots and map) without the main menu or the game list.
+    DOW2.exe still has all of it; canContinue just said "no" for every custom game (match type 1). Continue.dll
+    lets it answer as for the other match types while the match session is connected, and keeps a private room
+    private when it goes back to the lobby. Only the host needs it. Our lobby server puts the room back into the
+    lobby on Relic's side too (own_lobby.py "reopen"). Log: Continue.log.
+
+jumpretry/
+    The Autarch hops over low walls by himself while walking. Ordered to jump to a point out of range, he walks
+    toward it inside the ability order, and a hop on the way ends that order: no jump, no energy spent, he idles.
+    JumpRetry remembers your own jump order and, if the squad fell out of it without jumping and you gave it no
+    other order, sends the same order again as soon as he has landed (up to 3 times within 10 s). The order is the game's
+    own (the HUD's CommandProxy), so the match stays in sync and the other players don't need the DLL. The
+    abilities are a list in JumpRetry.ini (Abilities=).
+
 vanilla-loader/
     winmm.dll loader. Forwards everything to the real winmm.dll and loads every *.dll from
     <game>\dow2-patches\, in vanilla and in Elite. Each patch refuses to load twice, so having the same
@@ -57,7 +73,16 @@ cooldowns/
     (iface vt+0xB4: the share done, with the owner and ability the panel just worked out), so no energy, a busy squad,
     another ability or another squad of the kind don't touch the number. The call is guarded (a fault stops the queries
     for that game). Read-only: no desync.
-    Cooldowns.ini [Cooldowns]: Enabled, DigitSize, Color, Ask (0 = shares only), Trace (each update, in Cooldowns.log).
+    Cooldowns.ini [Cooldowns]: Enabled, DigitSize, Color, Ask (0 = shares only).
+
+roomjoin/
+    RoomJoin.dll (experiment): Join from the launcher's Lobbies tab. The launcher writes Elite_DLLs/RoomJoin.txt (the room id
+    from Relic's list, its name) and starts the game or brings it to the front; in the main menu RoomJoin shows a cover
+    (what goes on: opening the lobby, connecting, try n of 3), joins by the room id (the game browser's own join), opens the
+    lobby screen and steps aside. The game says no (its message box: full, closed...) or 25 s pass: the reason on the cover,
+    then the public games list. Its own add-on next to MMFind - MMFind is not touched: the fscommand / Invoke / Shark frame
+    hooks are chained onto MMFind's (the injector loads Elite_DLLs in name order). The answer: RoomJoin_result.txt, the log
+    RoomJoin.log. Catalog entry: roomjoin/catalog-entry.json.
 
 frameprobe/
     The diagnostics DLL I used to find the observer lag: frame times, sim ticks, a stack sampler on the
@@ -96,10 +121,11 @@ reverse/
     simulation changes, no desync, the other players don't need it. Reverse.ini: Key, StepMeters, LeadMeters.
 
 mmfind/
-    Automatch (launcher add-on "Automatch (test)"): Multiplayer -> Find a Game -> Start Searching queues the player on
-    the ladder service (rts.fintebtc.de/ladder/api/mm); when a match is found the host creates the room, the others
-    join, the lobby options (VP, 500 points, fixed positions, standard resources), swaps and observers are set by the
-    DLL, and the match starts by itself. Settings in MMFind.ini (server, maps, rating spread, chosen race/hero).
+    Automatch v2.0 (launcher add-on "automatch", one tick with OwnLobby.dll and its early winmm.dll): Multiplayer ->
+    Find a Game -> Start Searching asks the ladder (rts.fintebtc.de/ladder/api/mm/native); on "yes" the game's own search
+    runs on our lobby server, which matches it from the ladder's queue, and the game hosts / joins and starts by itself.
+    No menus are walked. On "no" nothing searches (Relic's matchmaker matches nobody) and Find a Game says why.
+    Settings in MMFind.ini (server, map wishes, rating spread, chosen race/hero/mode).
     Published by hand for now (launcher id "automatch", store version mmfind-<ver>), not through addons.json.
 
 Installing with Elite: put the DLL into Elite_DLLs\ and add it to InjectedFiles= in Elite.launchconfig.

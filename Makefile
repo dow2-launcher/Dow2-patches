@@ -6,8 +6,8 @@ OUT = build
 STATS_HOST ?= rts.fintebtc.de
 STATS = $(if $(STATS_HOST),-DSTATS_HOST='L"$(STATS_HOST)"',)
 
-all: $(OUT)/ObsFix.dll $(OUT)/LobbyStats.dll $(OUT)/LoadingRatings.dll $(OUT)/Cooldowns.dll $(OUT)/MatchTimer.dll $(OUT)/winmm.dll $(OUT)/FrameProbe.dll $(OUT)/ReinforceFix.dll $(OUT)/JoinSound.dll $(OUT)/APM.dll
-all: $(OUT)/EliteAI.dll $(OUT)/Reverse.dll $(OUT)/MMFind.dll $(OUT)/Relay.dll
+all: $(OUT)/ObsFix.dll $(OUT)/LobbyStats.dll $(OUT)/LoadingRatings.dll $(OUT)/Cooldowns.dll $(OUT)/MatchTimer.dll $(OUT)/winmm.dll $(OUT)/FrameProbe.dll $(OUT)/ReinforceFix.dll $(OUT)/JumpRetry.dll $(OUT)/JoinSound.dll $(OUT)/APM.dll $(OUT)/SteamKeep.dll
+all: $(OUT)/EliteAI.dll $(OUT)/Reverse.dll $(OUT)/MMFind.dll $(OUT)/RoomJoin.dll $(OUT)/Relay.dll $(OUT)/Continue.dll
 
 $(OUT):
 	mkdir -p $(OUT)
@@ -34,6 +34,10 @@ $(OUT)/Cooldowns.dll: cooldowns/cooldowns_main.c cooldowns/cooldowns.c matchtime
 # 03.11.2026: actions per minute beside the victory point counter, its own add-on (the match core of matchtimer.c)
 $(OUT)/APM.dll: apm/apm.c matchtimer/matchtimer.c common/gfxui.h | $(OUT)
 	$(CC) $(CFLAGS) -DMT_EMBED -shared -o $@ apm/apm.c matchtimer/matchtimer.c -lpsapi -lgdi32 -static-libgcc -Wl,--exclude-all-symbols
+
+# 03.11.2026: the match goes on when Steam goes away (no leaving the match / closing the game on a Steam drop)
+$(OUT)/SteamKeep.dll: steamkeep/steamkeep.c | $(OUT)
+	$(CC) $(CFLAGS) -shared -o $@ $< -static-libgcc
 
 clean:
 	rm -rf $(OUT)
@@ -73,8 +77,26 @@ $(OUT)/OwnLobby.dll: ownlobby/ownlobby.c ownlobby/ca_pem.h | $(OUT)
 $(OUT)/winmm.dll: vanilla-loader/winmm_proxy.c vanilla-loader/winmm.def | $(OUT)
 	$(CC) $(CFLAGS) -shared -o $@ vanilla-loader/winmm_proxy.c vanilla-loader/winmm.def -static-libgcc
 
+# the same loader for the launcher add-on ownlobby (03.11.2026): only the early add-ons in Elite_DLLs, no dow2-patches folder
+# (the launcher takes a winmm.dll naming that folder for the old stand-alone package and puts it aside before every start)
+$(OUT)/early/winmm.dll: vanilla-loader/winmm_proxy.c vanilla-loader/winmm.def | $(OUT)
+	mkdir -p $(OUT)/early
+	$(CC) $(CFLAGS) -DEARLY_ONLY -shared -o $@ vanilla-loader/winmm_proxy.c vanilla-loader/winmm.def -static-libgcc
+
 $(OUT)/FrameProbe.dll: frameprobe/frameprobe.c | $(OUT)
 	$(CC) $(CFLAGS) -Wno-unused-variable -shared -o $@ $< -lpsapi -lwinmm -static-libgcc
 
 $(OUT)/ReinforceFix.dll: reinforcefix/reinforcefix.c | $(OUT)
 	$(CC) $(CFLAGS) -shared -o $@ $< -static-libgcc
+
+# 03.11.2026: the game's own Continue after a custom game (host -> everyone back in the same room)
+$(OUT)/Continue.dll: continue/continue.c | $(OUT)
+	$(CC) $(CFLAGS) -shared -o $@ $< -static-libgcc
+
+# 03.11.2026: a jump order lost on an obstacle hop (Autarch) is sent again - client side, the game's own order
+$(OUT)/JumpRetry.dll: jumpretry/jumpretry.c | $(OUT)
+	$(CC) $(CFLAGS) -shared -o $@ $< -static-libgcc
+
+# 03.11.2026 experiment: joining a room from the launcher (the Lobbies tab), its own add-on next to MMFind
+$(OUT)/RoomJoin.dll: roomjoin/roomjoin.c | $(OUT)
+	$(CC) $(CFLAGS) -shared -o $@ $< -lpsapi -static-libgcc -Wl,--exclude-all-symbols
