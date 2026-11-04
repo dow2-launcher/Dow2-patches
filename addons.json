@@ -498,5 +498,26 @@
     },
     "category": "gameplay",
     "order": 20
+  },
+  "shellfix": {
+    "version": "1",
+    "dll": "ShellFix.dll",
+    "default": false,
+    "name": {
+      "en": "Fix: the game closes when a match starts",
+      "ru": "Исправление: вылет в начале матча",
+      "es": "Arreglo: el juego se cierra al empezar la partida",
+      "fr": "Correctif : le jeu se ferme au début de la partie",
+      "de": "Fix: Spiel schließt sich beim Spielstart"
+    },
+    "description": {
+      "en": "Turn it on if the game closes by itself a second after a match starts. It repairs a part of Elite that sometimes fails to start; when all is well it changes nothing.",
+      "ru": "Включайте, если игра сама закрывается через секунду после начала матча. Чинит часть Elite, которая иногда не запускается; если всё в порядке, ничего не меняет.",
+      "es": "Actívalo si el juego se cierra solo un segundo después de empezar la partida. Repara una parte de Elite que a veces no arranca; si todo va bien, no cambia nada.",
+      "fr": "À activer si le jeu se ferme tout seul une seconde après le début de la partie. Répare une partie d'Elite qui parfois ne démarre pas ; si tout va bien, rien ne change.",
+      "de": "Einschalten, wenn sich das Spiel eine Sekunde nach Spielbeginn von selbst schließt. Repariert einen Teil von Elite, der manchmal nicht startet; sonst ändert sich nichts."
+    },
+    "category": "fixes",
+    "order": 20
   }
 }
