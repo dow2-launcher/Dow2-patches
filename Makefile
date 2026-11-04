@@ -8,12 +8,14 @@ STATS = $(if $(STATS_HOST),-DSTATS_HOST='L"$(STATS_HOST)"',)
 
 all: $(OUT)/ObsFix.dll $(OUT)/LobbyStats.dll $(OUT)/LoadingRatings.dll $(OUT)/Cooldowns.dll $(OUT)/MatchTimer.dll $(OUT)/winmm.dll $(OUT)/FrameProbe.dll $(OUT)/ReinforceFix.dll $(OUT)/JumpRetry.dll $(OUT)/JoinSound.dll $(OUT)/APM.dll $(OUT)/SteamKeep.dll
 all: $(OUT)/EliteAI.dll $(OUT)/Reverse.dll $(OUT)/MMFind.dll $(OUT)/RoomJoin.dll $(OUT)/Relay.dll $(OUT)/Continue.dll
+# released too (04.11.2026: the GitHub Release carries every released DLL; build/early/winmm.dll is built by its own name)
+all: $(OUT)/RelayForward.dll $(OUT)/OwnLobby.dll $(OUT)/CrashLog.dll $(OUT)/NetProbe.dll
 
 $(OUT):
 	mkdir -p $(OUT)
 $(OUT)/ObsFix.dll: obsfix/obsfix.c | $(OUT)
 	$(CC) $(CFLAGS) -shared -o $@ $< -static-libgcc
-# LobbyStats carries the match clock (matchtimer.c with -DMT_EMBED) and the cooldown numbers (cooldowns.c): one Direct3D hook for all
+# LobbyStats 0.11.0: only the lobby ratings (the clock, cooldowns, loading ratings and join sound are add-ons of their own)
 $(OUT)/LobbyStats.dll: lobbystats/lobbystats.c lobbystats/join_sound.h | $(OUT)
 	$(CC) $(CFLAGS) $(STATS) -shared -o $@ lobbystats/lobbystats.c -lwinhttp -lpsapi -lgdi32 -lwinmm -static-libgcc -Wl,--kill-at
 
@@ -69,7 +71,7 @@ $(OUT)/CrashLog.dll: crashlog/crashlog.c | $(OUT)
 $(OUT)/NetProbe.dll: netprobe/netprobe.c | $(OUT)
 	$(CC) $(CFLAGS) -shared -o $@ $< -lws2_32 -lwinhttp -static-libgcc -Wl,--exclude-all-symbols
 
-# experiment: our own lobby server instead of Relic's for the automatch rooms (launcher add-on ownlobby; loaded early by winmm.dll)
+# our lobby server instead of Relic's for the game's own automatch - part of Automatch v2.0 (launcher automatch; loaded early by winmm.dll)
 $(OUT)/OwnLobby.dll: ownlobby/ownlobby.c ownlobby/ca_pem.h | $(OUT)
 	$(CC) $(CFLAGS) -shared -o $@ ownlobby/ownlobby.c -lws2_32 -static-libgcc -Wl,--exclude-all-symbols
 
@@ -77,7 +79,7 @@ $(OUT)/OwnLobby.dll: ownlobby/ownlobby.c ownlobby/ca_pem.h | $(OUT)
 $(OUT)/winmm.dll: vanilla-loader/winmm_proxy.c vanilla-loader/winmm.def | $(OUT)
 	$(CC) $(CFLAGS) -shared -o $@ vanilla-loader/winmm_proxy.c vanilla-loader/winmm.def -static-libgcc
 
-# the same loader for the launcher add-on ownlobby (03.11.2026): only the early add-ons in Elite_DLLs, no dow2-patches folder
+# the same loader for Automatch v2.0 (launcher automatch, was the ownlobby add-on, 03.11.2026): only the early add-ons in Elite_DLLs, no dow2-patches folder
 # (the launcher takes a winmm.dll naming that folder for the old stand-alone package and puts it aside before every start)
 $(OUT)/early/winmm.dll: vanilla-loader/winmm_proxy.c vanilla-loader/winmm.def | $(OUT)
 	mkdir -p $(OUT)/early
