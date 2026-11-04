@@ -346,7 +346,7 @@
     "order": 30
   },
   "apm": {
-    "version": "1",
+    "version": "2",
     "dll": "APM.dll",
     "default": false,
     "name": {
@@ -458,7 +458,7 @@
     "order": 40
   },
   "roomjoin": {
-    "version": "2",
+    "version": "3",
     "dll": "RoomJoin.dll",
     "default": false,
     "name": {
