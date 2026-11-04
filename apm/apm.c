@@ -7,7 +7,10 @@
 // Alt, Win, Caps / Num / Scroll Lock alone are not actions. Read with GetAsyncKeyState once a frame on the game's UI thread
 // (edge: up -> down, plus the "pressed since the last call" bit for a tap shorter than a frame), so it works whatever
 // input path the game uses. Nothing is sent to the game or changed in it: no desync, only this player sees the number.
-// APM = actions in the last Window seconds of game time (60; pauses don't count) per minute; Window=0: the whole match.
+// APM 2 (04.11.2026, owner: "60 s smooths the fights away"): an exponential average of the actions with about Smooth seconds of
+// memory (5: 63% of a jump in 5 s, 86% in 10 s; game time, pauses don't count) - a fight shows within a couple of seconds, the number does not jump like a hard
+// short window. Smooth=0: the old hard window of Window seconds (Window=0: the whole match). The log gets the match average and
+// its peak (the most actions in any 10 s).
 //
 // Shown like the match clock (matchtimer.c): text fields of our own in the game's own HUD movies (common/gfxui.h, no
 // Direct3D - docs/UI_RULES.md). Place=right|left (default right): beside the victory point counter at the top centre, on
@@ -20,6 +23,7 @@
 #include <stdarg.h>
 #include <string.h>
 #include <wchar.h>
+#include <math.h>
 #include "../common/gfxui.h"
 
 void mt_start_for(const wchar_t *dir, const wchar_t *ini, const char *what);
@@ -34,7 +38,7 @@ static void logmsg(const char *fmt, ...) {
 
 // ---------- settings: APM.ini [APM] ----------
 enum { AP_RIGHT, AP_LEFT, AP_MINIMAP };
-static int g_enabled = 1, g_place = AP_RIGHT, g_size = 18, g_shadow = 1, g_offX = 0, g_offY = 0, g_gap = 0, g_window = 60, g_onlineOnly = 0;
+static int g_enabled = 1, g_place = AP_RIGHT, g_size = 18, g_shadow = 1, g_offX = 0, g_offY = 0, g_gap = 0, g_window = 60, g_onlineOnly = 0, g_smooth = 5;
 static DWORD g_color = 0xFFFFFF; static char g_label[16] = "apm"; static int g_labelSize = 13, g_fallbackOn = 1;
 static FILETIME g_iniTime;
 static int ini_int(const wchar_t *k, int def, int lo, int hi) { int v = GetPrivateProfileIntW(L"APM", k, def, g_ini); return v < lo ? lo : v > hi ? hi : v; }
@@ -50,6 +54,7 @@ static void load_ini(void) {
     g_offY = ini_int(L"OffsetY", 0, -800, 800);   // 03.11: +-200 cut the minimap corner short (330 read as 200)
     g_gap = ini_int(L"Gap", 0, -200, 200);
     g_window = ini_int(L"Window", 60, 0, 600);
+    g_smooth = ini_int(L"Smooth", 5, 0, 120);
     g_onlineOnly = ini_int(L"OnlineOnly", 0, 0, 1);
     GetPrivateProfileStringW(L"APM", L"Color", L"FFFFFF", s, 32, g_ini); g_color = wcstoul(s, NULL, 16) & 0xFFFFFF;
     g_labelSize = ini_int(L"LabelSize", 0, 0, 40);   // 0 = 13 at the top, 17 at the minimap
@@ -74,7 +79,7 @@ static void reload_ini(DWORD now) {
 // ---------- counting (UI thread, once a frame) ----------
 #define BUCKETS 600                                   // one per second of game time, up to Window=600
 static unsigned short g_bucket[BUCKETS]; static DWORD g_bucketSec[BUCKETS];
-static DWORD g_total, g_matchMs0; static int g_counting; static unsigned char g_down[256];
+static DWORD g_total, g_matchMs0, g_emaMs, g_peakSec = (DWORD)-1, g_peak; static double g_ema; static int g_counting; static unsigned char g_down[256];
 static DWORD g_lastFrame;
 static int not_action(int vk) {
     return vk == VK_SHIFT || vk == VK_CONTROL || vk == VK_MENU || (vk >= VK_LSHIFT && vk <= VK_RMENU) || vk == VK_CAPITAL
@@ -91,11 +96,11 @@ static void count_frame(void) {
     if (now == g_lastFrame) return;                    // both hooks run in one frame: once
     g_lastFrame = now;
     int live = mt_ticking() && game_in_front();
-    if (!live) { if (g_counting && !mt_ticking()) { logmsg("match over: %lu actions in %lu:%02lu of game time = %lu APM on average", g_total, mt_game_ms() / 60000, mt_game_ms() / 1000 % 60, mt_game_ms() > 10000 ? (unsigned long)((double)g_total * 60000.0 / mt_game_ms()) : 0UL); g_counting = 0; }
+    if (!live) { if (g_counting && !mt_ticking()) { logmsg("match over: %lu actions in %lu:%02lu of game time = %lu APM on average, peak %lu APM (%lu actions in 10 s)", g_total, mt_game_ms() / 60000, mt_game_ms() / 1000 % 60, mt_game_ms() > 10000 ? (unsigned long)((double)g_total * 60000.0 / mt_game_ms()) : 0UL, (unsigned long)g_peak * 6, (unsigned long)g_peak); g_counting = 0; }
                  for (int vk = 1; vk < 256; vk++) g_down[vk] = (GetAsyncKeyState(vk) & 0x8000) != 0;
                  return; }
     if (!g_counting || mt_game_ms() < g_matchMs0) {   // a new match
-        g_counting = 1; g_total = 0; g_matchMs0 = 0; memset(g_bucketSec, 0xFF, sizeof g_bucketSec);
+        g_counting = 1; g_total = 0; g_matchMs0 = 0; memset(g_bucketSec, 0xFF, sizeof g_bucketSec); g_ema = 0; g_emaMs = 0; g_peak = 0; g_peakSec = (DWORD)-1;
         logmsg("match: counting");
     }
     DWORD sec = mt_game_ms() / 1000; int n = 0;
@@ -105,13 +110,28 @@ static void count_frame(void) {
         if (!g_down[vk] && (d || (st & 1))) n++;
         g_down[vk] = d;
     }
+    // the peak: once a second, the actions of the 10 whole seconds before this one
+    if (sec != g_peakSec) {
+        g_peakSec = sec; DWORD m = 0;
+        for (DWORD s2 = sec >= 10 ? sec - 10 : 0; s2 < sec; s2++) { int j = s2 % BUCKETS; if (g_bucketSec[j] == s2) m += g_bucket[j]; }
+        if (m > g_peak) g_peak = m;
+    }
     if (!n) return;
+    { DWORD ms = mt_game_ms(); double tau = g_smooth * 1000.0;   // the exponential average: decay to now, then the new actions
+      if (tau > 0 && ms > g_emaMs) g_ema *= exp(-(double)(ms - g_emaMs) / tau);
+      g_emaMs = ms; g_ema += n; }
     int i = sec % BUCKETS;
     if (g_bucketSec[i] != sec) { g_bucketSec[i] = sec; g_bucket[i] = 0; }
     g_bucket[i] += n; g_total += n;
 }
 static int apm_now(void) {
     DWORD ms = mt_game_ms(), sec = ms / 1000;
+    if (g_smooth) {                                      // APM 2: the exponential average, per minute
+        double tau = g_smooth * 1000.0, e = g_ema;
+        if (ms > g_emaMs) e *= exp(-(double)(ms - g_emaMs) / tau);
+        double norm = 1.0 - exp(-(double)ms / tau);       // the start of the match: no fake history of zeros
+        return norm > 0.05 ? (int)(e * 60000.0 / (tau * norm) + 0.5) : 0;
+    }
     if (!g_window) return ms >= 5000 ? (int)((double)g_total * 60000.0 / ms) : 0;
     DWORD w = (DWORD)g_window, from = sec >= w ? sec - w + 1 : 0, n = 0;
     for (DWORD s = from; s <= sec; s++) { int i = s % BUCKETS; if (g_bucketSec[i] == s) n += g_bucket[i]; }
