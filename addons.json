@@ -221,7 +221,7 @@
     "order": 10
   },
   "cooldowns": {
-    "version": "8",
+    "version": "9",
     "dll": "Cooldowns.dll",
     "default": false,
     "name": {

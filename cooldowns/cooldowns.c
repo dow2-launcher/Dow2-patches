@@ -1,5 +1,8 @@
 // cooldowns.c - seconds left on recharging abilities and global abilities, in the middle of the button over the game's
 // own dark recharge sweep. Cooldowns.dll (cooldowns_main.c; the match state from matchtimer.c with MT_EMBED).
+// Cooldowns 9 (05.11.2026): the number is taken off per HUD movie and button place, not per widget (see cd_show).
+// Cooldowns 9 (05.11.2026): a number only for a recharge the game itself shows (its reasons 0xD / 0xE, see hk_reasons) - none on
+// abilities not bought yet, while something is being built, on a transport's unload button; no engine query any more.
 // cooldowns-3 (02.11.2026): the number is the button's own text in the game's own movie, no Direct3D (see "the number").
 //
 // How the game shows a recharge (found with a probe on 2026-10-29, DOW2.exe 3.19 + Elite 3.2):
@@ -34,6 +37,7 @@ static void logmsg(const char *fmt, ...) {
 
 // ---------- settings: Cooldowns.ini, [Cooldowns] ----------
 static int g_on = 1, g_size = 26;                   // DigitSize: height of the digits in the button's own units (it is 64; the game's count is 16)
+static int g_trace;                                  // (Trace=1, read in cd_start)
 static DWORD g_color = 0xFFFFFF;                     // RRGGBB; white = the game's own colour of the count, left as it is
 
 // ---------- per button: the latest share and the rate ----------
@@ -45,10 +49,12 @@ typedef struct {
     int shown;                                       // seconds on the screen: within one recharge they only go down
     volatile int ready;                              // the latest value said ready (0 or 1), or the button is hidden
     int exact; DWORD exactLeft, exactAt;             // global abilities: game ms left read from the engine at game ms exactAt
-    void *uiMovie; char *uiW; int uiShown;           // UI thread: our copy of the count clip made in this movie on this button, seconds in it
+    struct { void *mv; int shown; DWORD at, pass; } ui[4];   // UI thread: per HUD movie, the seconds our count clip of this button shows there; when / in which pass of the panel its button was last updated
     int ab; unsigned key;                            // the ability (the button update's +0x74) and the recharge (squad + ability) shown
 } Slot;
 static Slot g_slot[SLOTS];
+static int g_upN;                                    // numbers up (any movie): no sweep while none
+static DWORD g_pass; static int g_lastAb = 99;       // passes of the selection panel over its ability buttons (00, 01, ... again: a new pass)
 static CRITICAL_SECTION g_cs;
 static unsigned g_named;                             // slots already written to the log (bit per slot)
 #define GONE_MS 100                                  // a button the game stopped updating (deselected, recharged) for this long is gone
@@ -60,11 +66,7 @@ static int slot_of(const char *path) {
     return -1;
 }
 
-// the start of each recharge per ability of each owner (squad): switching the selection back and forth keeps the rate,
-// so the number comes at once instead of after two sim ticks
-typedef struct { unsigned key; float p0, p; DWORD t0; } Seen;
-static Seen g_seen[64]; static int g_nseen;
-static void cd_share(char *w, float p, unsigned key);
+static void cd_share(char *w, float p);
 // One ability button update (0xB9AF80) calls SetProgress once per reason the ability can't be used: the share for a
 // recharge (reasons 0xD / 0xE) and 0 for every other reason - so an ability recharging while its squad lacks the energy
 // got its share and then a 0 in the same frame, and the number (and the game's own dark sweep) went (siritos 02.11).
@@ -79,9 +81,50 @@ void cd_progress(char *w, float p) {
         g_capN++;
         return;
     }
-    cd_share(w, p, 0);
+    cd_share(w, p);
 }
-static void cd_share(char *w, float p, unsigned key) {
+// Cooldowns 9 (05.11.2026): the reasons the panel itself worked out for the button being updated - 0xB9DA80, called at
+// 0xB9B075 in the ability button update (stdcall + EDI = the button's slot struct; its third argument is a small vector
+// { int *begin, int count, int capacity, inline items }). A detour on that one call copies them after the call: the number is
+// only for what the game itself shows as a recharge (reason 0xD / 0xE), not for an ability not bought yet, a building under
+// construction or a transport's unload button.
+#define REASONS_CALL 0x00B9B075
+#define REASONS_FN   0x00B9DA80
+#define NRS 16
+static int g_rs[NRS]; static int g_rsN = -1;           // reasons of the update running now (-1 = none seen: no reasons call)
+void cd_reasons(int *vec) __asm__("cd_reasons");
+void cd_reasons(int *vec) {
+    if (!g_capW || !vec || IsBadReadPtr(vec, 8)) return;
+    int *b = (int *)vec[0], n = vec[1];
+    if (n < 0 || n > 64 || (n && IsBadReadPtr(b, 4 * (n < NRS ? n : NRS)))) return;
+    g_rsN = n; for (int i = 0; i < n && i < NRS; i++) g_rs[i] = b[i];
+}
+static int rs_has(int r) { for (int i = 0; i < g_rsN && i < NRS; i++) if (g_rs[i] == r) return 1; return 0; }
+__attribute__((naked)) static void hk_reasons(void) {
+    __asm__ volatile(
+        "pushl 12(%esp)\n\t"                         // the vector  (the game's own three arguments again)
+        "pushl 12(%esp)\n\t"                         // the owner
+        "pushl 12(%esp)\n\t"                         // the panel context
+        "movl $0x00B9DA80, %eax\n\t"                 // (EAX: overwritten by the callee's first instruction, EDI kept)
+        "call *%eax\n\t"                             // ret 0xC
+        "pushal\n\t"
+        "pushl 44(%esp)\n\t"                         // the vector: 32 (pushal) + 4 (return) + 8
+        "call cd_reasons\n\t"
+        "addl $4, %esp\n\t"
+        "popal\n\t"
+        "ret $12\n\t");
+}
+static void install_reasons(void) {
+    unsigned char *c = (unsigned char *)REASONS_CALL; DWORD old;
+    if (IsBadReadPtr(c, 5) || c[0] != 0xE8 || (DWORD)(c + 5) + *(DWORD *)(c + 1) != REASONS_FN) {
+        logmsg("reasons call not at %08X: numbers by the shares only", REASONS_CALL); return;
+    }
+    if (!VirtualProtect(c, 5, PAGE_EXECUTE_READWRITE, &old)) return;
+    *(DWORD *)(c + 1) = (DWORD)hk_reasons - (DWORD)(c + 5);
+    VirtualProtect(c, 5, old, &old); FlushInstructionCache(GetCurrentProcess(), c, 5);
+    logmsg("hooked the reasons call at %08X: a number only for the game's own recharge (reason 0xD / 0xE)", REASONS_CALL);
+}
+static void cd_share(char *w, float p) {
     if (!g_on || !w || !mt_ticking()) return;
     const char *path = w + 0xDD0;
     if (IsBadReadPtr(path, 16) || path[0] != '/') return;
@@ -100,14 +143,6 @@ static void cd_share(char *w, float p, unsigned key) {
     float expect = b->p + 0.05f;
     if (b->w != w || now - b->seen > 500 || p < b->p - 0.002f || (b->t != gt && p > expect && gt - b->t < 10)) {
         b->w = w; b->p0 = p; b->t0 = gt; b->shown = 0;
-    }
-    if (key) {                                       // this ability of this owner seen before in this recharge: its start
-        Seen *k = NULL;
-        for (int i = 0; i < g_nseen; i++) if (g_seen[i].key == key) { k = &g_seen[i]; break; }
-        if (!k) { k = &g_seen[g_nseen < 64 ? g_nseen++ : (int)(key % 64)]; k->key = key; k->p0 = p; k->t0 = gt; }
-        else if (p < k->p - 0.002f) { k->p0 = p; k->t0 = gt; }                 // a new recharge
-        k->p = p;
-        if (k->t0 < b->t0 && k->p0 < p) { b->p0 = k->p0; b->t0 = k->t0; }       // an older start: the rate at once
     }
     b->p = p; b->t = gt; b->seen = now;
     LeaveCriticalSection(&g_cs);
@@ -157,22 +192,35 @@ static void cd_show(int s, char *w) {
     EnterCriticalSection(&g_cs);
     int sec = b->w == w && mt_ticking() ? cd_seconds(b, now, mt_game_ms()) : 0;
     LeaveCriticalSection(&g_cs);
-    if (!sec && (b->uiW != w || !b->uiShown)) return;          // nothing on this button and nothing to take off
+    // Cooldowns 9 (siritos 05.11: a generator's number under construction, then the Techmarine selected - the frozen number on
+    // his first ability; the same with the scouts' grenade and any unit with an ability there): our clip lives in the HUD movie
+    // under the button's PATH, but it was taken off only by the button widget it was put on. After a selection change the
+    // panel updates that place through another widget - "not ours", nothing taken off - and the number stayed. Now what is
+    // shown is kept per movie and place (the slot), whatever widget updates it.
+    int any = 0; for (int i = 0; i < 4; i++) if (b->ui[i].mv && b->ui[i].shown) any = 1;
+    if (!sec && !any) return;                                  // nothing to show and nothing shown anywhere
     void *mv = gfx_movie_of_widget(w);
     const char *wp = w + 8;
     if (!mv || IsBadReadPtr(wp, 48) || wp[0] != '/' || !memchr(wp, 0, 48)) return;
     char dot[64], p[96];                                       // "/global_abilities/global_btn00" -> "global_abilities.global_btn00"
     snprintf(dot, sizeof dot, "%s", wp + 1);
     for (char *c = dot; *c; c++) if (*c == '/') *c = '.';
-    if (b->uiMovie != mv || b->uiW != w) {                     // first number on this button (in this HUD): the copy
+    int ui = -1;
+    for (int i = 0; i < 4; i++) if (b->ui[i].mv == mv) ui = i;
+    if (ui < 0) {                                              // nothing of ours in this movie yet
         if (!sec) return;
-        b->uiMovie = mv; b->uiW = w; b->uiShown = 0;
+        for (int i = 0; i < 4 && ui < 0; i++) if (!b->ui[i].mv || !b->ui[i].shown) ui = i;
+        if (ui < 0) ui = 0;                                    // (4 HUD movies with a number on this place: hardly - reuse the first)
+        b->ui[ui].mv = mv; b->ui[ui].shown = 0;
+    }
+    int *shown = &b->ui[ui].shown; b->ui[ui].at = GetTickCount(); b->ui[ui].pass = g_pass;
+    if (sec && *shown <= 0) {                                  // a number comes: the copy, if this movie has none (a new movie at an old address too)
         snprintf(p, sizeof p, "%s.mt_cd", dot);
         if (!gfx_exists(mv, p)) {
             char src[96]; snprintf(src, sizeof src, "%s/count", wp);
             GfxVal a[2] = { gv_str(src), gv_str("mt_cd") }, r; memset(&r, 0, sizeof r);
             gfx_invoke(mv, "Receive_DuplicateMovieClip", &r, a, 2);
-            if (r.type != GV_BOOL || !r.v.b) { logmsg("%s: no count clip to copy - no number on this button", wp); b->uiMovie = NULL; return; }
+            if (r.type != GV_BOOL || !r.v.b) { logmsg("%s: no count clip to copy - no number on this button", wp); b->ui[ui].mv = NULL; return; }
             // count_text sits in its clip at -24.5..0 x -17.5..7.9: its centre, scaled, onto the button's (64 x 64)
             double k = g_size / 16.0;
             GfxVal pa[3] = { gv_str(p), gv_num(32 + 12.2 * k), gv_num(32 + 4.8 * k) }, sa[3] = { gv_str(p), gv_num(k), gv_num(k) };
@@ -186,12 +234,15 @@ static void cd_show(int s, char *w) {
             logmsg("%s: number in the button's own count clip (copied as mt_cd)", wp);
         }
     }
-    if (sec == b->uiShown) return;
+    if (sec == *shown) return;
     char t[16];
     if (sec < 100) snprintf(t, sizeof t, "%d", sec); else snprintf(t, sizeof t, "%d:%02d", sec / 60, sec % 60);
     if (sec) { snprintf(p, sizeof p, "%s.mt_cd.count_text", dot); gfx_set_text(mv, p, t); }
-    if (!sec != !b->uiShown) { snprintf(p, sizeof p, "%s.mt_cd", dot); gfx_set_visible(mv, p, sec != 0); }
-    b->uiShown = sec;
+    // shown -1: from a match before (see cd_match_check) - not known whether the clip is visible: set it either way
+    if (sec ? *shown <= 0 : *shown != 0) { snprintf(p, sizeof p, "%s.mt_cd", dot); gfx_set_visible(mv, p, sec != 0); }
+    if (g_trace && (!sec || *shown <= 0)) logmsg("trace %.40s: number %s (%d -> %d) widget %p movie %p", wp, sec ? "ON" : "off", *shown, sec, (void *)w, mv);
+    *shown = sec;
+    if (sec) g_upN++;                                          // (recounted by the sweep)
 }
 
 // The selection panel's ability button update (virtual, slot 0x0111AFBC = 0xB9AF80; this = the button's slot struct,
@@ -226,6 +277,15 @@ static void set_progress(char *w, float p) {
 // inside it is caught (vectored handler, this thread only), queries stop for the rest of the game, the log says where.
 // The recharge is kept per (owner, ability) - its share, the tick it came, the start of its rate and the whole length -
 // so other squads, other buttons and the selection going back and forth don't touch it.
+// Cooldowns 9 (05.11.2026, owner: numbers on abilities not bought yet, while generators are built, grantovich: on a transport's
+// unload button): the engine query is gone. vt+0xB4 (0xAF41F0) is no "recharge of this squad's ability": when the owner's
+// ability component (0x89C440) has a running instance of that ability (0x8929E0: an active, timed phase - building, unloading,
+// channelling) it answers THAT instance's progress, otherwise a timer of the ability blueprint - and the game asks it only for
+// reason 0xD / 0xE. Asked for every button with reasons, it could give a moving share to an ability locked by its requirements
+// (reason 3: no wargear / upgrade / tier), to a builder's buttons while it builds, and to buttons with no recharge at all.
+// Now the only share is the game's own (SetProgress for reason 0xD / 0xE, seen by the reasons call); a recharge the game has
+// shown goes on from its rate while the reasons are others for a while (no energy right after a cast, the squad busy,
+// targeting), never on a locked ability.
 typedef struct { unsigned key; int ab; float p, p0; DWORD t, t0; float total; DWORD used;
                  float pchg; DWORD tchg; int grown; } Rec;   // ticks; pchg/tchg: the share when it last moved, grown: seen moving
 #define STALL_TICKS 15                               // Cooldowns 8: a share that stays put this long (1.5 s) is no running recharge
@@ -284,77 +344,91 @@ static float rec_left(const Rec *r, DWORD gt) {        // ticks left, <= 0 = ove
     return (1.0f - r->p) * tot - (float)(gt - r->t);
 }
 
-// the guarded engine query: iface vt+0xB4 (__thiscall, float in st0)
-static volatile DWORD g_qThread; static int g_qOff; static DWORD g_qFault; static void *g_qFaultAt;
-DWORD g_qEsp __asm__("cd_q_esp"); DWORD g_qSeh __asm__("cd_q_seh"); unsigned short g_qCw __asm__("cd_q_cw");
-float cd_q_call(void *fn, void *iface, void *owner, int ability) __asm__("cd_q_call");
-void cd_q_fail(void) __asm__("cd_q_fail");
-__asm__(".text\n"
-    "cd_q_call:\n\t"
-    "pushl %ebp\n\t pushl %ebx\n\t pushl %esi\n\t pushl %edi\n\t"
-    "movl %fs:0, %eax\n\t movl %eax, cd_q_seh\n\t fnstcw cd_q_cw\n\t"
-    "movl %esp, cd_q_esp\n\t"
-    "pushl 32(%esp)\n\t"                             // ability (arg 4: esp+16+16)
-    "pushl 32(%esp)\n\t"                             // owner   (arg 3, one push later)
-    "movl 32(%esp), %ecx\n\t"                        // iface   (arg 2) = this
-    "movl 28(%esp), %eax\n\t"                        // fn      (arg 1)
-    "call *%eax\n\t"                                 // callee pops its 2 arguments; the share in st0
-    "movl cd_q_esp, %esp\n\t"
-    "popl %edi\n\t popl %esi\n\t popl %ebx\n\t popl %ebp\n\t ret\n"
-    "cd_q_fail:\n\t"                                 // a fault inside: back here from the handler
-    "movl cd_q_esp, %esp\n\t movl cd_q_seh, %eax\n\t movl %eax, %fs:0\n\t"
-    "fninit\n\t fldcw cd_q_cw\n\t fld1\n\t fchs\n\t" // -1 = no answer (the game's FPU precision kept)
-    "popl %edi\n\t popl %esi\n\t popl %ebx\n\t popl %ebp\n\t ret\n");
-static LONG CALLBACK cd_veh(EXCEPTION_POINTERS *e) {
-    if (!g_qThread || GetCurrentThreadId() != g_qThread) return EXCEPTION_CONTINUE_SEARCH;
-    DWORD c = e->ExceptionRecord->ExceptionCode;
-    if (c != EXCEPTION_ACCESS_VIOLATION && c != EXCEPTION_ILLEGAL_INSTRUCTION && c != EXCEPTION_PRIV_INSTRUCTION
-        && c != EXCEPTION_INT_DIVIDE_BY_ZERO && c != EXCEPTION_ARRAY_BOUNDS_EXCEEDED) return EXCEPTION_CONTINUE_SEARCH;
-    g_qFault = c; g_qFaultAt = e->ExceptionRecord->ExceptionAddress; g_qThread = 0;
-    e->ContextRecord->Eip = (DWORD)cd_q_fail;
-    return EXCEPTION_CONTINUE_EXECUTION;
-}
-static int g_query = 1;                              // Cooldowns.ini [Cooldowns] Ask=0: no engine query (shares only)
 static int g_trace;                                  // Cooldowns.ini [Cooldowns] Trace=1: every change of a button's state in the log
-typedef struct { unsigned sig; DWORD at; } TraceSeen;
-static TraceSeen g_tr[SLOTS];
-static void trace_btn(int s, char *btn, char *w, int ability, float q, int en, int vis, float left, float sweep, const char *what) {
+typedef struct { char *w; unsigned sig; DWORD at; } TraceSeen;
+static TraceSeen g_tr[SLOTS][4];                     // per place and button widget (05.11: two buttons update one place every frame)
+static void trace_btn(int s, char *btn, char *w, int ability, int en, int vis, float left, float sweep, const char *what) {
     if (!g_trace || s < 0 || s >= SLOTS) return;
     const unsigned *o = (const unsigned *)(btn + 0x2A8);
-    unsigned sig = (unsigned)ability * 31u + o[0] * 7u + o[1] * 13u + (unsigned)g_capN * 101u + (unsigned)(g_capMax * 100) * 1009u
-        + (unsigned)((q + 2) * 100) * 10007u + (unsigned)en * 3u + (unsigned)vis * 5u + (unsigned)(left > 0.5f) * 17u + (unsigned)what[0];
+    unsigned own = o[0] == 0 ? o[1] : o[0] == 1 ? o[2] : o[0] == 2 ? o[3] : 0;   // the real owner (rec_key): the other words are stack left-overs
+    unsigned sig = (unsigned)ability * 31u + o[0] * 7u + own * 13u + (unsigned)g_capN * 101u + (unsigned)(g_capMax * 100) * 1009u
+        + (unsigned)en * 3u + (unsigned)vis * 5u + (unsigned)(left > 0.5f) * 17u + (unsigned)what[0];
+    char rs[80] = "-"; int rl = 0;
+    for (int i = 0; i < g_rsN && i < NRS && rl < 70; i++) { rl += snprintf(rs + rl, sizeof rs - rl, "%s%X", i ? "," : "", g_rs[i]); sig = sig * 31u + (unsigned)g_rs[i]; }
+    if (g_rsN == 0) strcpy(rs, "none");
+    sig += (unsigned)(*(unsigned char *)(w + 0xDC8)) * 7919u;
     DWORD now = GetTickCount();
-    if (g_tr[s].sig == sig && now - g_tr[s].at < 2000) return;
-    g_tr[s].sig = sig; g_tr[s].at = now;
-    logmsg("trace %.40s ab %08X owner %08X %08X %08X %08X en %d vis %d calls %d gameshare %.3f last %.3f engine %.3f left %.0f ticks sweep %.3f tick %ld: %s",
-           w + 0xDD0, ability, o[0], o[1], o[2], o[3], en, vis, g_capN, g_capMax, g_capLast, q, left, sweep, mt_ticks(), what);
-}
-static float ask_vt(char *ctx, char *btn, int ability, int off) {   // the engine's answer of iface vt+off, -1 = none
-    if (!g_query || g_qOff || !ctx || IsBadReadPtr(ctx + 0xC, 4)) return -1;
-    void **iface = *(void ***)(ctx + 0xC);
-    if (!iface || IsBadReadPtr(iface, 4) || IsBadReadPtr(*iface, 0xD0)) return -1;
-    void *fn = (*(void ***)iface)[off / 4];
-    static HMODULE exe; static MODULEINFO mi;
-    if (!exe) { exe = GetModuleHandleA(NULL); GetModuleInformation(GetCurrentProcess(), exe, &mi, sizeof mi); }
-    if ((DWORD)fn < (DWORD)mi.lpBaseOfDll || (DWORD)fn >= (DWORD)mi.lpBaseOfDll + mi.SizeOfImage) {
-        g_qOff = 1; logmsg("engine query: vt+0x%X = %p is not in DOW2.exe - shares only", off, fn); return -1;
-    }
-    static unsigned said;
-    if (!(said & 1u << (off / 4 % 32))) { said |= 1u << (off / 4 % 32); logmsg("engine query: iface %p, vtable %p, vt+0x%X = %p (%s)", (void *)iface, *iface, off, fn, "the share of a recharge"); }
-    g_qThread = GetCurrentThreadId();
-    float p = cd_q_call(fn, iface, btn + 0x2A8, ability);
-    if (!g_qThread) {                                  // the handler took us out
-        g_qOff = 1;
-        logmsg("engine query FAULTED (%08lX at %p, ability %p): no more queries this game, shares only", g_qFault, g_qFaultAt, (void *)(UINT_PTR)ability);
-        return -1;
-    }
-    g_qThread = 0;
-    return p != p ? -1 : p;                            // NaN: none
+    TraceSeen *ts = NULL;
+    for (int i = 0; i < 4; i++) if (g_tr[s][i].w == w) ts = &g_tr[s][i];
+    if (!ts) { ts = &g_tr[s][0]; for (int i = 0; i < 4; i++) if (g_tr[s][i].at < ts->at) ts = &g_tr[s][i]; ts->w = w; ts->sig = 0;
+               logmsg("trace slot %d: button widget %p (path %.40s) in movie %p - new on this place", s, (void *)w, w + 8, gfx_movie_of_widget(w)); }
+    if (ts->sig == sig && now - ts->at < 2000) return;
+    ts->sig = sig; ts->at = now;
+    logmsg("trace %.40s w %p ab %08X owner %u:%08X en %d vis %d reasons %s pic %u calls %d gameshare %.3f last %.3f left %.0f ticks sweep %.3f tick %ld: %s",
+           w + 0xDD0, (void *)w, ability, o[0], own, en, vis, rs, *(unsigned char *)(w + 0xDC8), g_capN, g_capMax, g_capLast, left, sweep, mt_ticks(), what);
 }
 
+// A new match (siritos 05.11: "after the game nothing of it must stay or matter"): everything of the match before goes. The keys
+// of the recharges are squad / entity addresses and the HUD movies are addresses too - the next match gets the same addresses
+// again, so a squad there took a recharge of the match before (ticks of that match) and a new movie at an old address was taken
+// as one with our clip in it already (no number on that button for the whole match). The match core counts its sim ticks from
+// 0 in every match: the ticks going back = a new match. What our clips show is not forgotten but marked unknown (-1): a HUD
+// movie kept for the next match gets its clip set visible or not at its first update. Called on the UI thread (button updates).
+static long g_lastTicks;
+static void cd_match_check(void) {
+    long t = mt_ticks();
+    if (t + 10 < g_lastTicks) {
+        EnterCriticalSection(&g_cs);
+        int n = 0;
+        for (int s = 0; s < SLOTS; s++) {
+            Slot *b = &g_slot[s];
+            for (int i = 0; i < 4; i++) { if (b->ui[i].mv && b->ui[i].shown) { b->ui[i].shown = -1; n++; } else b->ui[i].mv = NULL; }
+            b->w = NULL; b->p = b->p0 = 0; b->t = b->t0 = b->seen = 0; b->shown = 0; b->ready = 1; b->exact = 0; b->ab = 0; b->key = 0;
+        }
+        memset(g_rec, 0, sizeof g_rec);
+        memset(g_abLen, 0, sizeof g_abLen); g_nabLen = 0; memset(g_tr, 0, sizeof g_tr);
+        LeaveCriticalSection(&g_cs);
+        logmsg("a new match: the recharges of the match before forgotten (%d numbers to check in a kept HUD movie)", n);
+    }
+    g_lastTicks = t;
+}
+// Cooldowns 9 (siritos 05.11, the log of 15:20: the Techmarine's 75 s on ability_btn01, then the scouts selected - the panel
+// updates only their buttons 03/05/06, never 01 again, so nothing took the number off it; the same with the scouts' grenade on
+// 03 and the Techmarine): a place with our number whose button the game no longer updates (the unit now selected has nothing
+// there) gets it taken off by the update of any other button of the same movie - that movie is alive right now. When the
+// unit comes back its button is updated again and the number comes back with it.
+// siritos 05.11 (0.4 s: "it goes, but you still see it on the other unit"): from the ability buttons - not updated in the last 2
+// passes of the panel (2 frames: a selection of several squads may give their buttons in turns) and 50 ms; from the global
+// ability buttons (a unit with no ability buttons at all: no passes) - 120 ms
+#define STALE_MS 50
+#define STALE_GLOBAL_MS 120
+static void cd_sweep(char *w, int fromGlobal) {
+    if (!g_upN) return;
+    void *mv = gfx_movie_of_widget(w); if (!mv) return;
+    DWORD now = GetTickCount(); int n = 0;
+    for (int s = 0; s < SLOTS; s++) for (int i = 0; i < 4; i++) {
+        if (g_slot[s].ui[i].mv != mv || !g_slot[s].ui[i].shown) continue;
+        if (fromGlobal ? now - g_slot[s].ui[i].at <= STALE_GLOBAL_MS : (g_pass - g_slot[s].ui[i].pass < 2 || now - g_slot[s].ui[i].at <= STALE_MS)) { n++; continue; }
+        char p[64];
+        if (s < 16) snprintf(p, sizeof p, "ability_btn%02d.mt_cd", s); else snprintf(p, sizeof p, "global_abilities.global_btn%02d.mt_cd", s - 16);
+        gfx_set_visible(mv, p, 0);
+        if (g_trace) logmsg("trace slot %d: number off (%d) - its button not updated for %lu ms, %lu passes (the selection changed)", s, g_slot[s].ui[i].shown, now - g_slot[s].ui[i].at, g_pass - g_slot[s].ui[i].pass);
+        g_slot[s].ui[i].shown = 0;
+    }
+    int up = 0; for (int s = 0; s < SLOTS; s++) for (int i = 0; i < 4; i++) if (g_slot[s].ui[i].mv && g_slot[s].ui[i].shown) up++;
+    g_upN = up; (void)n;
+}
+static void cd_trace_dump(void) {                    // Trace=1: every 2 s, where a number is up (by our bookkeeping)
+    static DWORD last; DWORD now = GetTickCount();
+    if (!g_trace || now - last < 2000) return;
+    last = now;
+    for (int s = 0; s < SLOTS; s++) for (int i = 0; i < 4; i++)
+        if (g_slot[s].ui[i].mv && g_slot[s].ui[i].shown) logmsg("trace up: slot %d shows %d in movie %p (recharge widget %p, ready %d)", s, g_slot[s].ui[i].shown, g_slot[s].ui[i].mv, g_slot[s].w, g_slot[s].ready);
+}
 static void __fastcall hk_btnupd(char *btn, void *edx, char *ctx) {
+    cd_match_check(); cd_trace_dump();
     char *w0 = btn ? *(char **)(btn + 0x28) : NULL;
-    g_capMax = 0; g_capLast = -1; g_capN = 0; g_capW = g_on ? w0 : NULL;
+    g_capMax = 0; g_capLast = -1; g_capN = 0; g_rsN = -1; g_capW = g_on ? w0 : NULL;
     o_btnupd(btn, edx, ctx);
     g_capW = NULL;
     if (!g_on || !btn) return;
@@ -364,11 +438,14 @@ static void __fastcall hk_btnupd(char *btn, void *edx, char *ctx) {
     int s = !IsBadReadPtr(path, 16) && path[0] == '/' ? slot_of(path) : -1;
     int vis = *(w + 0x209) == 1;
     if (s >= 0 && w == w0 && ability && vis && mt_ticking()) {
-        // reasons came (SetProgress was called): ask the engine; none: the ability can be used - no recharge
-        // stratagems: asked even with no reasons - the bunker (siritos 03.11) has none 10 s after the cast (the drop is down) while
-        // the engine's 120 s recharge still runs; the number ended there
-        float q = g_capN || s >= 16 ? ask_vt(ctx, btn, ability, 0xB4) : -1;
-        float p = q >= 0 ? q : g_capMax > 0 ? g_capMax : -1;
+        // Cooldowns 9: the reasons the game itself worked out decide (g_rsN < 0: the reasons call was not hooked - then a share
+        // the game sent stands for 0xD / 0xE). Only the game's own share of a recharge counts (it asks vt+0xB4 itself, for 0xD /
+        // 0xE only); reason 3 (requirements not met: no wargear / upgrade / tier) never gets a number.
+        int known = g_rsN >= 0;
+        int gameRech = known ? rs_has(0xD) || rs_has(0xE) : g_capMax > 0;
+        int locked = known && rs_has(3);
+        int none = known ? g_rsN == 0 : !g_capN;           // no reasons at all: the ability can be used
+        float p = gameRech && g_capMax > 0 ? g_capMax : -1;
         int rech = p > 0.0f && p < 0.999f;
         // Cooldowns 8: the game's own verdict of this update - the button is usable (+0x208, set by the update above from the
         // reasons: none, or only the ones 4-8 that don't block). A usable ability gets no number and never the dark sweep: the
@@ -382,9 +459,13 @@ static void __fastcall hk_btnupd(char *btn, void *edx, char *ctx) {
         EnterCriticalSection(&g_cs);
         Rec *r = rec_of(key, ability, rech);
         if (r) {
-            if ((!g_capN && !rech) || (q >= 0 && !rech)) r->p = 0;   // usable, or the engine says no recharge: over
-            else if (rech) rec_share(r, p, gt, g_capMax > 0);
-            left = rec_left(r, gt);                          // only 0s and no answer: the remembered recharge goes on
+            // usable (no reasons) - over; stratagems: a recharge the game has shown goes on (the bunker, siritos 03.11: no reasons
+            // 10 s after the cast while its 120 s recharge still runs)
+            if (rech) rec_share(r, p, gt, 1);
+            else if (none && s < 16) r->p = 0;
+            // other reasons for a while (no energy right after the cast, busy, targeting): the recharge the game has shown goes on
+            // from its rate; locked by its requirements: none
+            left = locked ? 0 : rec_left(r, gt);
             if (en && s < 16) left = 0;
         }
         Slot *b = &g_slot[s];
@@ -397,12 +478,15 @@ static void __fastcall hk_btnupd(char *btn, void *edx, char *ctx) {
         } else { b->ready = 1; b->exact = 0; b->key = key; }
         LeaveCriticalSection(&g_cs);
         // the game's own sweep: its last value of this update is a 0 of another reason (no energy, busy) - put the share back
-        int push = sweep > 0 && !en && (g_capN || s >= 16) && (g_capLast < sweep - 0.002f || g_capLast > sweep + 0.002f);
-        trace_btn(s, btn, w, ability, q, en, vis, left, sweep, push ? "sweep pushed" : left > 0.5f ? "number" : r && r->p > 0 && !rec_running(r) ? "share not moving: none" : "none");
+        int push = sweep > 0 && !en && !none && (g_capLast < sweep - 0.002f || g_capLast > sweep + 0.002f);
+        trace_btn(s, btn, w, ability, en, vis, left, sweep, push ? "sweep pushed" : left > 0.5f ? (gameRech ? "number" : "number (remembered)")
+                  : r && r->p > 0 && locked ? "locked (reason 3): none" : r && r->p > 0 && !rec_running(r) ? "share not moving: none" : "none");
         if (push) set_progress(w, sweep < 0.001f ? 0.001f : sweep > 0.998f ? 0.998f : sweep);
     } else if (!ability || !vis) cd_progress(w, 0.0f);         // no ability or the button is hidden: no number
     // after the match (no sim ticks) cd_show takes a number still there off
+    if (s >= 0 && s < 16) { if (s <= g_lastAb) g_pass++; g_lastAb = s; }   // the panel starts over: a new pass
     if (s >= 0) cd_show(s, w);
+    cd_sweep(w, 0);
 }
 // Global abilities: their panel's button update (virtual, slot 0x01118B4C = 0xB5B850; this = the button's slot struct,
 // +0x28 the widget, arg +0x10 the ability's entity) takes the entity's extension 1 (EntityController::QI through the import
@@ -414,6 +498,7 @@ static void __fastcall hk_btnupd(char *btn, void *edx, char *ctx) {
 typedef void *(__thiscall *QI_t)(void *controller, unsigned id);
 static BtnUpd_t o_globupd;
 static void __fastcall hk_globupd(char *btn, void *edx, char *ctx) {
+    cd_match_check();
     o_globupd(btn, edx, ctx);
     if (!g_on || !btn) return;
     char *w = *(char **)(btn + 0x28);
@@ -431,8 +516,11 @@ static void __fastcall hk_globupd(char *btn, void *edx, char *ctx) {
         if (left > 0) { b->exact = 1; b->exactLeft = (DWORD)(left * mt_ms_per_tick()); b->exactAt = mt_game_ms(); }
         else b->exact = 0;
         LeaveCriticalSection(&g_cs);
+        if (g_trace) { static int was[8]; int k = s - 16, st = left > 0 ? 1 + (left > 10) : 0;
+            if (k >= 0 && k < 8 && was[k] != st) { was[k] = st; logmsg("trace global %.40s w %p ent %p ticks left %d en %d vis %d pic %u", w + 0xDD0, (void *)w, (void *)ent, left, *(w + 0x208), *(w + 0x209), *(unsigned char *)(w + 0xDC8)); } }
     }
     cd_show(s, w);
+    cd_sweep(w, 1);
 }
 static void install_btnupd(void) {
     DWORD *gs = (DWORD *)GLOBUPD_SLOT, go;
@@ -466,6 +554,10 @@ static void install(void) {
 // called by LobbyStats once: dir = its folder (with a trailing backslash), ini = its ini file
 void cd_start(const wchar_t *dir, const wchar_t *ini) {
     _snwprintf(g_log, MAX_PATH, L"%lsCooldowns.log", dir);
+    {   // Cooldowns 9: the log does not grow for ever (05.11: 1 MB) - over 1 MB at the game's start it becomes Cooldowns.log.old
+        WIN32_FILE_ATTRIBUTE_DATA a; wchar_t old[MAX_PATH]; _snwprintf(old, MAX_PATH, L"%lsCooldowns.log.old", dir);
+        if (GetFileAttributesExW(g_log, GetFileExInfoStandard, &a) && (a.nFileSizeHigh || a.nFileSizeLow > 1024 * 1024)) MoveFileExW(g_log, old, MOVEFILE_REPLACE_EXISTING);
+    }
     #ifdef CD_STANDALONE
     g_on = GetPrivateProfileIntW(L"Cooldowns", L"Enabled", 1, ini);   // Cooldowns.dll: its launcher tick is the switch
 #else
@@ -475,12 +567,10 @@ void cd_start(const wchar_t *dir, const wchar_t *ini) {
     if (g_size < 12) g_size = 12; if (g_size > 40) g_size = 40;
     wchar_t c[16]; GetPrivateProfileStringW(L"Cooldowns", L"Color", L"FFFFFF", c, 16, ini);
     g_color = wcstoul(c, NULL, 16) & 0xFFFFFF;
-    g_query = GetPrivateProfileIntW(L"Cooldowns", L"Ask", 1, ini);
     g_trace = GetPrivateProfileIntW(L"Cooldowns", L"Trace", 0, ini);
-    logmsg("Cooldowns 8 (%s): the numbers in the game's own button movie; every recharge per squad and ability%s; no number, no sweep on a usable button",
-           g_on ? "on" : "off, [Cooldowns] Enabled=0", g_query ? ", asked from the engine (guarded)" : ", Ask=0: shares only");
+    logmsg("Cooldowns 9 (%s): the numbers in the game's own button movie; every recharge per squad and ability, only as the game shows it (reason 0xD / 0xE); no number, no sweep on a usable button",
+           g_on ? "on" : "off, [Cooldowns] Enabled=0");
     if (!g_on) return;
     InitializeCriticalSection(&g_cs);
-    if (g_query) AddVectoredExceptionHandler(1, cd_veh);
-    install(); if (g_on) install_btnupd();
+    install(); if (g_on) { install_btnupd(); if (o_btnupd) install_reasons(); }
 }

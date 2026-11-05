@@ -1,0 +1,3 @@
+- Cooldown seconds: the number no longer stays on the screen after you select another unit - it goes at once and comes back when you select the unit again.
+- Cooldown seconds: nothing of the last match is carried into the next one.
+- Cooldown seconds: no number any more on abilities you have not bought yet, on buttons without a recharge (a transport's unload) or while something is being built - only on a real recharge, where the game itself darkens the button.

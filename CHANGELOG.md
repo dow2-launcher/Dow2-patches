@@ -12,6 +12,42 @@ The version of the set lives only in `VERSION`; each DLL still writes its own ve
   A game started past the launcher therefore never loads the vanilla copies into Elite. The folder name is not in the binary
   (ASCII or UTF-16): launchers up to 1.4.10 put aside any winmm.dll naming it as the old stand-alone package. Store: vloader-1,
   launcher.json "vanilla": {"loader": "vloader-1"}; the add-ons that work in vanilla have "games": ["elite", "vanilla"].
+
+## 0.2.8 — 2026-11-05
+Cooldowns 9 (store cooldowns-9; branches fix/cooldowns-9, feature/cooldowns-9).
+- A frozen number on a button after a selection change (siritos 05.11; the trace of 15:20: the Techmarine's 75 s on
+  ability_btn01, then the scouts selected - the panel updated only their buttons 03 / 05 / 06 and never 01 again; the same with
+  the scouts' grenade on 03 and the Techmarine). The number was taken off only in an update of its own button, and the panel does
+  not update a place the selected unit has nothing on. Now a number whose button was not updated in the last 2 passes of the panel over its buttons (and 50 ms; 0.4 s was
+  still seen on the other unit) is taken off by
+  the update of any other button of the same HUD movie (alive at that moment); a unit with no ability buttons at
+  all: by the global ability buttons after 120 ms; it comes back with its button's updates. What is
+  shown is kept per HUD movie and place. Trace=1 logs each number on / off with its widget and movie, and where a number is up
+  every 2 s; it shows the real owner (type + its pointer), not the stack words around it.
+- Nothing of a match stays for the next one (siritos 05.11): the recharges are kept by squad / entity addresses and the next
+  match gets the same addresses again - a squad there could take a recharge of the match before. A new match (the match core's
+  ticks going back to 0) now forgets every recharge, rate and button state; a number still shown in a HUD movie kept for the
+  next match is set right at its first update. After a match the hooks only pass through (no match: no query, no number).
+- The table of recharge starts per owner (unused since Cooldowns 6: its key was always 0) is gone.
+- Cooldowns.log over 1 MB at the game's start becomes Cooldowns.log.old (05.11: it had grown to 1 MB).
+- A number only for a recharge the game itself shows (owner 05.11: numbers on abilities not bought yet - no wargear / upgrade /
+  tier - and while generators are built; grantovich 05.11: a number left hanging on a transport's unload button). Cause: after
+  every button update with any reason Cooldowns 6-8 asked the engine vt+0xB4 (0xAF41F0) for the share of a recharge. That is not
+  this squad's recharge: when the owner's ability component (0x89C440) has a running instance of that ability (0x8929E0: an
+  active, timed phase - building, unloading, channelling) it answers that instance's progress, otherwise a timer of the ability
+  blueprint; the game itself asks it only for reason 0xD / 0xE (recharge). A locked ability (reason 3), a builder's buttons
+  while it builds and buttons with no recharge could thus get a moving share and a number. Now the reasons the panel works out (0xB9DA80, its call at 0xB9B075 detoured; Trace=1 logs them) decide: the share is
+  only the game's own of reason 0xD / 0xE, no engine query any more (Ask= in Cooldowns.ini is gone, so is the guarded call);
+  a recharge the game has shown goes on from its rate while the reasons are others for a moment (no energy right after the
+  cast, busy, targeting) and stratagems keep it while usable (the bunker); with reason 3 never a number. Reasons seen on the
+  stand: 2 targeting, 3 requirements not met, 4/6/8 not blocking, 9 the squad casting, 0xB / 0xC busy with another ability,
+  0xD recharge. The Chimera's unload button is no ability button of 0x0111AFBC (Trace=1 has no update of it): a number there
+  was one left on that place from the unit before - taken off now by the stale place sweep above.
+  Stand 1 (Elite, IG, Trace=1): Kasrkin "Move it!" locked (reason 3, no number), the Sergeant bought - the number at once and
+  down to 0 (35 s), the other Kasrkin squad without the Sergeant - none; the Inquisitor's Crippling Volley (wargear bought) 65 s
+  down; Kasrkin (recharging) into the Chimera, out, in, out - no number on unload, the Kasrkin's number goes on; grenade 75 s;
+  sandbags built by guardsmen - no number. Every number of the session came with reason 0xD; a usable button: no number, no sweep.
+
 ## 0.2.6 — 2026-11-05
 Cooldowns 8 (store cooldowns-8) and APM 3 (apm-3), the reports of 04.11.2026 (siritos, berserk, TvangeS).
 - Cooldowns: the recharge key was a hash of all 16 bytes of ConstOwnerPointer at button+0x2A8. Its constructors (SimEngine.dll)
