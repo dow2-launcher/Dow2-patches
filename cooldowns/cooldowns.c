@@ -47,10 +47,11 @@ typedef struct {
     int shown;                                       // seconds on the screen: within one recharge they only go down
     volatile int ready;                              // the latest value said ready (0 or 1), or the button is hidden
     int exact; DWORD exactLeft, exactAt;             // global abilities: game ms left read from the engine at game ms exactAt
-    struct { void *mv; int shown; } ui[4];           // UI thread: per HUD movie, the seconds our count clip of this button shows there
+    struct { void *mv; int shown; DWORD at; } ui[4]; // UI thread: per HUD movie, the seconds our count clip of this button shows there, when its button was last updated
     int ab; unsigned key;                            // the ability (the button update's +0x74) and the recharge (squad + ability) shown
 } Slot;
 static Slot g_slot[SLOTS];
+static int g_upN;                                    // numbers up (any movie): no sweep while none
 static CRITICAL_SECTION g_cs;
 static unsigned g_named;                             // slots already written to the log (bit per slot)
 #define GONE_MS 100                                  // a button the game stopped updating (deselected, recharged) for this long is gone
@@ -168,7 +169,7 @@ static void cd_show(int s, char *w) {
         if (ui < 0) ui = 0;                                    // (4 HUD movies with a number on this place: hardly - reuse the first)
         b->ui[ui].mv = mv; b->ui[ui].shown = 0;
     }
-    int *shown = &b->ui[ui].shown;
+    int *shown = &b->ui[ui].shown; b->ui[ui].at = GetTickCount();
     if (sec && *shown <= 0) {                                  // a number comes: the copy, if this movie has none (a new movie at an old address too)
         snprintf(p, sizeof p, "%s.mt_cd", dot);
         if (!gfx_exists(mv, p)) {
@@ -197,6 +198,7 @@ static void cd_show(int s, char *w) {
     if (sec ? *shown <= 0 : *shown != 0) { snprintf(p, sizeof p, "%s.mt_cd", dot); gfx_set_visible(mv, p, sec != 0); }
     if (g_trace && (!sec || *shown <= 0)) logmsg("trace %.40s: number %s (%d -> %d) widget %p movie %p", wp, sec ? "ON" : "off", *shown, sec, (void *)w, mv);
     *shown = sec;
+    if (sec) g_upN++;                                          // (recounted by the sweep)
 }
 
 // The selection panel's ability button update (virtual, slot 0x0111AFBC = 0xB9AF80; this = the button's slot struct,
@@ -386,6 +388,28 @@ static void cd_match_check(void) {
     }
     g_lastTicks = t;
 }
+// Cooldowns 9 (siritos 05.11, the log of 15:20: the Techmarine's 75 s on ability_btn01, then the scouts selected - the panel
+// updates only their buttons 03/05/06, never 01 again, so nothing took the number off it; the same with the scouts' grenade on
+// 03 and the Techmarine): a place with our number whose button the game no longer updates (the unit now selected has nothing
+// there) gets it taken off by the update of any other button of the same movie - that movie is alive right now. When the
+// unit comes back its button is updated again and the number comes back with it.
+#define STALE_MS 400
+static void cd_sweep(char *w) {
+    if (!g_upN) return;
+    void *mv = gfx_movie_of_widget(w); if (!mv) return;
+    DWORD now = GetTickCount(); int n = 0;
+    for (int s = 0; s < SLOTS; s++) for (int i = 0; i < 4; i++) {
+        if (g_slot[s].ui[i].mv != mv || !g_slot[s].ui[i].shown) continue;
+        if (now - g_slot[s].ui[i].at <= STALE_MS) { n++; continue; }
+        char p[64];
+        if (s < 16) snprintf(p, sizeof p, "ability_btn%02d.mt_cd", s); else snprintf(p, sizeof p, "global_abilities.global_btn%02d.mt_cd", s - 16);
+        gfx_set_visible(mv, p, 0);
+        if (g_trace) logmsg("trace slot %d: number off (%d) - its button not updated for %lu ms (the selection changed)", s, g_slot[s].ui[i].shown, now - g_slot[s].ui[i].at);
+        g_slot[s].ui[i].shown = 0;
+    }
+    int up = 0; for (int s = 0; s < SLOTS; s++) for (int i = 0; i < 4; i++) if (g_slot[s].ui[i].mv && g_slot[s].ui[i].shown) up++;
+    g_upN = up; (void)n;
+}
 static void cd_trace_dump(void) {                    // Trace=1: every 2 s, where a number is up (by our bookkeeping)
     static DWORD last; DWORD now = GetTickCount();
     if (!g_trace || now - last < 2000) return;
@@ -445,6 +469,7 @@ static void __fastcall hk_btnupd(char *btn, void *edx, char *ctx) {
     } else if (!ability || !vis) cd_progress(w, 0.0f);         // no ability or the button is hidden: no number
     // after the match (no sim ticks) cd_show takes a number still there off
     if (s >= 0) cd_show(s, w);
+    cd_sweep(w);
 }
 // Global abilities: their panel's button update (virtual, slot 0x01118B4C = 0xB5B850; this = the button's slot struct,
 // +0x28 the widget, arg +0x10 the ability's entity) takes the entity's extension 1 (EntityController::QI through the import
@@ -476,6 +501,7 @@ static void __fastcall hk_globupd(char *btn, void *edx, char *ctx) {
         LeaveCriticalSection(&g_cs);
     }
     cd_show(s, w);
+    cd_sweep(w);
 }
 static void install_btnupd(void) {
     DWORD *gs = (DWORD *)GLOBUPD_SLOT, go;

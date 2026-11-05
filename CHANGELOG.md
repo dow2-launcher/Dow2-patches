@@ -6,16 +6,18 @@ The version of the set lives only in `VERSION`; each DLL still writes its own ve
 
 ## 0.2.8 — 2026-11-05
 Cooldowns 9 (store cooldowns-9; branch fix/cooldowns-9).
-- A frozen number on another unit (siritos 05.11: a generator under construction showed a number on its cancel button; with the
-  Techmarine selected next the same number stood on his first ability, and so on - the scouts' grenade on any unit with an
-  ability on that place). Our number is a clip in the HUD movie under the button's path, but it was taken off only through the
-  button widget it was put on; after a selection change the panel updates that place through another widget, so it was
-  "not ours" and the clip stayed. What is shown is now kept per HUD movie and place, whatever widget updates it; before a number
-  is shown the clip is looked for again (a new movie at an old address). Trace=1 logs "number off".
+- A frozen number on a button after a selection change (siritos 05.11; the trace of 15:20: the Techmarine's 75 s on
+  ability_btn01, then the scouts selected - the panel updated only their buttons 03 / 05 / 06 and never 01 again; the same with
+  the scouts' grenade on 03 and the Techmarine). The number was taken off only in an update of its own button, and the panel does
+  not update a place the selected unit has nothing on. Now a number whose button has not been updated for 0.4 s is taken off by
+  the update of any other button of the same HUD movie (alive at that moment); it comes back with its button's updates. What is
+  shown is kept per HUD movie and place. Trace=1 logs each number on / off with its widget and movie, and where a number is up
+  every 2 s; it shows the real owner (type + its pointer), not the stack words around it.
 - Nothing of a match stays for the next one (siritos 05.11): the recharges are kept by squad / entity addresses and the next
   match gets the same addresses again - a squad there could take a recharge of the match before. A new match (the match core's
   ticks going back to 0) now forgets every recharge, rate and button state; a number still shown in a HUD movie kept for the
   next match is set right at its first update. After a match the hooks only pass through (no match: no query, no number).
+- The table of recharge starts per owner (unused since Cooldowns 6: its key was always 0) is gone.
 - Cooldowns.log over 1 MB at the game's start becomes Cooldowns.log.old (05.11: it had grown to 1 MB).
 
 ## 0.2.6 — 2026-11-05
