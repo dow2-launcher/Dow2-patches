@@ -4,6 +4,22 @@ Every version gets an entry here before it reaches `main`. CI then tags `vX.Y.Z`
 version (`X.Y.0`) it also publishes a GitHub Release with the DLLs and the entries since the previous `X.Y.0`.
 The version of the set lives only in `VERSION`; each DLL still writes its own version to its log.
 
+## 0.2.4 — 2026-11-05
+elitefix_wmic 2 (store elitefix-nowmic-2, Elite.exe, released by hand; branch fix/elitefix-nowmic-2): Elite.exe ("Universal
+launcher for Dawn of War II mods") stayed in the task manager after every game - closed from the menu or crashed (BeArD, fb 242).
+- Cause: Elite.exe ends only through its game watch, a detached thread (0x140008f40) started right after the game's window
+  shows up: every second it looks for DOW2.exe and exit(1)s the starter once the game is gone. Its main thread never ends by
+  itself: after 30 s it joins the splash thread (Elite.bmp in a STATIC window, a message loop that never gets WM_QUIT).
+  elitefix-nowmic-1 jumped from 0x14002095d - the start of the watch - straight to the 30 s sleep (0x140020c31), past the wmic
+  check AND the watch: no watch, the starter waited for the splash thread forever. The launcher also counts a running Elite.exe
+  as a running game (add-ons locked, Play refused) until it is killed. None of our DLLs is involved (same without any add-on).
+- Fix: the original jump site is back; `jmp 0x140020c31` now sits at 0x140020976, after the watch thread is started and
+  detached - only the wmic check (0x140007ff0) is skipped. `elitefix/make_elite_exe.py` makes it from Elite's Elite.exe
+  (md5 ba5b6bdd... -> eb6b56d5...).
+- Tested on stand 1 (Wine, Elite.exe the players' way, BeArD's add-on set, quit from the main menu): nowmic-1 - the game is
+  gone in 2 s, Elite.exe still there after 60 s (2 threads: main + splash; the same without any add-on); nowmic-2 - Elite.exe
+  (3 threads, the watch among them) gone 1 s after the game, also when the game process is killed (the crash case).
+
 ## 0.2.3 — 2026-11-04
 ShellFix 1 (store shellfix-1, new add-on, default off; branch fix/shellpatch-hook): BeArD's crash at the start of every match.
 - Cause (CrashLog dump 04.11 23:12, 0xC0000005 at DOW2.exe+0x285450 reading 0x00000209, ecx=0, return to ShellPatch.dll+0x3E65):

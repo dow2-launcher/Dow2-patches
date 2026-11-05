@@ -1,0 +1,1 @@
+- Fix: Elite.exe crash on Windows 11 25H2 - with it on, Elite.exe no longer stays open after the game is closed.
