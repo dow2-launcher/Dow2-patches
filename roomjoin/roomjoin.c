@@ -466,7 +466,7 @@ static void emitf(const char *fmt, ...) {                             // an even
 
 // ---------------- the cover (as MMFind's "Match Found" screen) ----------------
 static wchar_t g_coverLine[200], g_coverTitle[64] = L"Joining the Game"; static DWORD g_noticeUntil; static int g_noticeList; static double g_coverH = 1200; static DWORD g_coverTextTick;
-static double g_btnX, g_btnY, g_btnW, g_btnH; static int g_btnHover;
+static double g_btnX, g_btnY, g_btnW, g_btnH; static int g_btnHover; static DWORD g_coverAt;
 static void rj_cancel(const char *how);
 static void html_esc(wchar_t *o, int cap, const wchar_t *s) {          // a text for htmlText (review 04.11 p.7: a room name with <, &)
     int n = 0;
@@ -545,7 +545,7 @@ static void cover_update(void) {
           as_setw(m, "_level0.rjcover.b.t.htmlText", bt); }
         as_setn(m, "_level0.rjcover.b._alpha", 75); g_btnHover = 0;
         as_setb(m, "_level0.display_item._visible", 0); g_uiHidden = 1;   // the menu under the cover takes no click
-        logmsg("cover shown (stage %.0fx%.0f)", W, H); g_coverOn = 1; g_coverTextTick = 0;
+        logmsg("cover shown (stage %.0fx%.0f)", W, H); g_coverOn = 1; g_coverTextTick = 0; g_coverAt = GetTickCount();
         wnd_wrap(1); GetAsyncKeyState(VK_LBUTTON); GetAsyncKeyState(VK_RBUTTON);
         return;                                                        // (exists above is from before: not "gone by itself")
     }
@@ -574,6 +574,9 @@ static void cover_update(void) {
         click = down && !wasDown; wasDown = down;
     }
     int esc = g_esc; g_esc = 0;
+    // (05.11 stand: a double click on the launcher's Join - its second click came to the game, just brought to the front, right
+    // on the cover's Cancel 0.5 s after it came up) - clicks of the first 0.8 s are not taken; Esc is
+    if (click && in && GetTickCount() - g_coverAt < 800) { logmsg("cover: a click %lu ms after it came up - not taken", GetTickCount() - g_coverAt); click = 0; }
     if ((click && in) || esc) {
         if (g_noticeUntil) g_noticeUntil = GetTickCount();              // a notice: read, close it now
         else rj_cancel(esc ? "Esc" : "the cover's Cancel");

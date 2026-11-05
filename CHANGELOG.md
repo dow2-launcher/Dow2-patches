@@ -22,6 +22,9 @@ RoomJoin 11 (store roomjoin-5; branch fix/roomjoin-11): the review of RoomJoin 1
   presses Back (up to 3 times, 9 s), waits until the game is out of that room, then joins as usual; a `leaving` event tells the
   launcher. An experiment: every command of the lobby screen goes to RoomJoin.log ("lobby screen: ..."), to find its real
   leave command if Back is not it. The status says `"version":"11","proto":2`.
+  On the stand (05.11) leaving a lobby by hand logged `...panel_mc.OnClickBack` on its screen: Back is that command.
+- The cover takes no click in its first 0.8 s (stand 05.11: the second click of a double click on the launcher Join came to
+  the game, just brought to the front, right on the cover Cancel 0.5 s after it came up); Esc still works at once.
 
 ## 0.2.6 — 2026-11-05
 Cooldowns 8 (store cooldowns-8) and APM 3 (apm-3), the reports of 04.11.2026 (siritos, berserk, TvangeS).
