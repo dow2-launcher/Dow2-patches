@@ -181,7 +181,7 @@ static void cd_show(int s, char *w) {
         b->ui[ui].mv = mv; b->ui[ui].shown = 0;
     }
     int *shown = &b->ui[ui].shown;
-    if (sec && !*shown) {                                      // a number comes: the copy, if this movie has none (a new movie at an old address too)
+    if (sec && *shown <= 0) {                                  // a number comes: the copy, if this movie has none (a new movie at an old address too)
         snprintf(p, sizeof p, "%s.mt_cd", dot);
         if (!gfx_exists(mv, p)) {
             char src[96]; snprintf(src, sizeof src, "%s/count", wp);
@@ -205,7 +205,8 @@ static void cd_show(int s, char *w) {
     char t[16];
     if (sec < 100) snprintf(t, sizeof t, "%d", sec); else snprintf(t, sizeof t, "%d:%02d", sec / 60, sec % 60);
     if (sec) { snprintf(p, sizeof p, "%s.mt_cd.count_text", dot); gfx_set_text(mv, p, t); }
-    if (!sec != !*shown) { snprintf(p, sizeof p, "%s.mt_cd", dot); gfx_set_visible(mv, p, sec != 0); }
+    // shown -1: from a match before (see cd_match_check) - not known whether the clip is visible: set it either way
+    if (sec ? *shown <= 0 : *shown != 0) { snprintf(p, sizeof p, "%s.mt_cd", dot); gfx_set_visible(mv, p, sec != 0); }
     if (g_trace && !sec) logmsg("trace %.40s: number off (%d)", wp, *shown);
     *shown = sec;
 }
@@ -368,7 +369,32 @@ static float ask_vt(char *ctx, char *btn, int ability, int off) {   // the engin
     return p != p ? -1 : p;                            // NaN: none
 }
 
+// A new match (siritos 05.11: "after the game nothing of it must stay or matter"): everything of the match before goes. The keys
+// of the recharges are squad / entity addresses and the HUD movies are addresses too - the next match gets the same addresses
+// again, so a squad there took a recharge of the match before (ticks of that match) and a new movie at an old address was taken
+// as one with our clip in it already (no number on that button for the whole match). The match core counts its sim ticks from
+// 0 in every match: the ticks going back = a new match. What our clips show is not forgotten but marked unknown (-1): a HUD
+// movie kept for the next match gets its clip set visible or not at its first update. Called on the UI thread (button updates).
+static long g_lastTicks;
+static void cd_match_check(void) {
+    long t = mt_ticks();
+    if (t + 10 < g_lastTicks) {
+        EnterCriticalSection(&g_cs);
+        int n = 0;
+        for (int s = 0; s < SLOTS; s++) {
+            Slot *b = &g_slot[s];
+            for (int i = 0; i < 4; i++) { if (b->ui[i].mv && b->ui[i].shown) { b->ui[i].shown = -1; n++; } else b->ui[i].mv = NULL; }
+            b->w = NULL; b->p = b->p0 = 0; b->t = b->t0 = b->seen = 0; b->shown = 0; b->ready = 1; b->exact = 0; b->ab = 0; b->key = 0;
+        }
+        memset(g_rec, 0, sizeof g_rec); memset(g_seen, 0, sizeof g_seen); g_nseen = 0;
+        memset(g_abLen, 0, sizeof g_abLen); g_nabLen = 0; memset(g_tr, 0, sizeof g_tr);
+        LeaveCriticalSection(&g_cs);
+        logmsg("a new match: the recharges of the match before forgotten (%d numbers to check in a kept HUD movie)", n);
+    }
+    g_lastTicks = t;
+}
 static void __fastcall hk_btnupd(char *btn, void *edx, char *ctx) {
+    cd_match_check();
     char *w0 = btn ? *(char **)(btn + 0x28) : NULL;
     g_capMax = 0; g_capLast = -1; g_capN = 0; g_capW = g_on ? w0 : NULL;
     o_btnupd(btn, edx, ctx);
@@ -430,6 +456,7 @@ static void __fastcall hk_btnupd(char *btn, void *edx, char *ctx) {
 typedef void *(__thiscall *QI_t)(void *controller, unsigned id);
 static BtnUpd_t o_globupd;
 static void __fastcall hk_globupd(char *btn, void *edx, char *ctx) {
+    cd_match_check();
     o_globupd(btn, edx, ctx);
     if (!g_on || !btn) return;
     char *w = *(char **)(btn + 0x28);
@@ -482,6 +509,10 @@ static void install(void) {
 // called by LobbyStats once: dir = its folder (with a trailing backslash), ini = its ini file
 void cd_start(const wchar_t *dir, const wchar_t *ini) {
     _snwprintf(g_log, MAX_PATH, L"%lsCooldowns.log", dir);
+    {   // Cooldowns 9: the log does not grow for ever (05.11: 1 MB) - over 1 MB at the game's start it becomes Cooldowns.log.old
+        WIN32_FILE_ATTRIBUTE_DATA a; wchar_t old[MAX_PATH]; _snwprintf(old, MAX_PATH, L"%lsCooldowns.log.old", dir);
+        if (GetFileAttributesExW(g_log, GetFileExInfoStandard, &a) && (a.nFileSizeHigh || a.nFileSizeLow > 1024 * 1024)) MoveFileExW(g_log, old, MOVEFILE_REPLACE_EXISTING);
+    }
     #ifdef CD_STANDALONE
     g_on = GetPrivateProfileIntW(L"Cooldowns", L"Enabled", 1, ini);   // Cooldowns.dll: its launcher tick is the switch
 #else

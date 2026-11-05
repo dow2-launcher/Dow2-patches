@@ -12,6 +12,11 @@ Cooldowns 9 (store cooldowns-9; branch fix/cooldowns-9).
   button widget it was put on; after a selection change the panel updates that place through another widget, so it was
   "not ours" and the clip stayed. What is shown is now kept per HUD movie and place, whatever widget updates it; before a number
   is shown the clip is looked for again (a new movie at an old address). Trace=1 logs "number off".
+- Nothing of a match stays for the next one (siritos 05.11): the recharges are kept by squad / entity addresses and the next
+  match gets the same addresses again - a squad there could take a recharge of the match before. A new match (the match core's
+  ticks going back to 0) now forgets every recharge, rate and button state; a number still shown in a HUD movie kept for the
+  next match is set right at its first update. After a match the hooks only pass through (no match: no query, no number).
+- Cooldowns.log over 1 MB at the game's start becomes Cooldowns.log.old (05.11: it had grown to 1 MB).
 
 ## 0.2.6 — 2026-11-05
 Cooldowns 8 (store cooldowns-8) and APM 3 (apm-3), the reports of 04.11.2026 (siritos, berserk, TvangeS).
