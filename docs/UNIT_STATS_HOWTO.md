@@ -3,15 +3,64 @@
 Request: grantovich, Elite Mod - Dev, 04.11.2026 — "dynamic DPS figures and other unit stats to the left of the retreat
 button in that unused space: ranged DPS, melee DPS, melee skill, range, speed, sight radius".
 
+v2 (05.11.2026, after the Discord review - grantovich "15 melee skill banshees", adila "tacs are also wrong",
+nootersnooter "the real melee skill is in leveling_ext", grantovich "icons, not text" and "armor type there as well"):
+melee skill now the one melee combat uses, icons of the game instead of words, the armour type, squad total plus the
+per-model number, range as written in the data, speed with its modifiers. Checked under Elite (the mod the reviewers
+play; v1 was checked only on vanilla data). Section "v2" at the end.
+
 Status: **experiment, archive branch `archive/unitstats-experiment` only.** Not in `addons.json`, not in the store, not
 for players. `make build/UnitStats.dll` (not part of `make all`). Code: `unitstats/unitstats.c`.
 The result of the stand test (screenshots, numbers, what did not work) is at the end of this file.
 
 ## The rule it follows
 
-Only the game's own interface (docs/UI_RULES.md): two text fields of ours inside the game's selection panel movie,
+Only the game's own interface (docs/UI_RULES.md): a clip of ours (text fields + icon clips with the game's own textures) inside the game's selection panel movie,
 written through the movie's own Scaleform API (common/gfxui.h). No Direct3D, no overlay, no new device.
 Only reads: nothing is written into the simulation and no order is sent — no desync possible, only this player sees it.
+
+## What is shown (v2)
+
+```
+[bolter] 44 (3x14.6)   [fist] 57 (3x19)   [red fist] 60          <- ranged DPS, melee DPS, melee skill
+[armour icon] Heavy infantry   [arc] 38   [boot] 5.0   [eye] 40    <- armour type, range, speed, sight
+```
+
+Squad totals; the small "(3x14.6)" is models x per-model number when every model is the same - the number Elite's
+unit tooltips quote ("Bolters (14.58 piercing DPS, 19 melee DPS)"). "-" = the squad has no weapon of that kind / no
+melee extension (vehicles without melee: no melee skill).
+
+Icons - all textures of the game itself, loaded into clips of the panel movie by the movie's own `Receive_LoadMovie`:
+
+| Item | Texture | What it is in the game |
+|---|---|---|
+| ranged DPS | `ui/textures/space_marines/icon_movement/stance_ranged.dds` | the stance button of this panel (ranged): a bolter |
+| melee DPS | `ui/textures/space_marines/icon_movement/stance_melee.dds` | the stance button (melee): a fist |
+| melee skill | `ui/textures/generic/decorators/mod_melee.dds` | the decorator over a unit with a melee modifier: a red fist |
+| armour | `ui/textures/generic/tooltips/ico_l_infantry / ico_h_infantry / ico_vehicles / ico_buildings.dds` | the weapon tooltip's "effective against" icons, by armour class |
+| range | `ui/textures/generic/tooltips/ico_range.dds` | the weapon tooltip's range icon |
+| speed | `ui/textures/eldar/icon_traits/eld_swift.dds` | the "Swift" trait: a boot |
+| sight | `ui/textures/generic/fe/loading/tips/up_detector.dds` | the detector loading tip: an eye |
+
+No exact "melee skill" icon exists in the game; the closest native one is the melee-modifier decorator (a red fist,
+distinct from the yellow stance fist). Other candidates tried and rejected: the campaign attribute atlas
+`ui/textures/generic/bridge/inv/attrib_icons.dds` (frameless bolter / fist - but one texture, and a cell cannot be cut
+out: `setMask` is ignored by this GFx, the mask shows as a white square, screenshot `v2/rejected_atlas_mask.png`);
+the melee attack cursor `ui/cursor/atk_melee.tga` (a fist in a crosshair - .tga is loaded garbled). Every icon path
+can be changed in `UnitStats.ini [Icons]` ("img://data:UI/...dds|scale%"), re-read live.
+
+Texture paths: **`img://data:UI/textures/....dds`** is what this game's GFx loader takes in `MovieClipLoader.loadClip`
+(`Receive_LoadMovie(clip, path)` of every HUD movie); plain `DATA:UI/...` / `data:UI\...` (the form the movies import
+their own bitmaps with) and paths without a prefix load nothing (stand 1, 05.11.2026). The image arrives a frame or
+two later; its size is read back with the movie's `Receive_GetMovieClipWidth/Height`, then the clip is scaled.
+
+Layout: our clip `us_box` in `core_actions` (depth 16110); per item a text field `t<k>` (+ black copy `s<k>` 1.2/1.5
+lower right as a shadow, as the game's own counters) with `autoSize = "left"` and an icon clip `i<k>.h.img`. The rows
+are right aligned 6 units left of Retreat (x 64.9 in core_actions), the first right under the order row (y 136.7),
+line height 1.3 x FontSize + 4; the text widths are read back (`Receive_GetMovieClipWidth`) and the icons placed in
+front of them. FontSize 22, icons 1.2x (26) fit two rows above the panel's bottom edge at 1280x800 in vanilla and
+Elite (both movies have the same `core_actions`; Elite's movie is 2134x1200 instead of 1180x700, everything shifted).
+`_visible` of `us_box` shows/hides the whole thing.
 
 ## Where it is shown
 
@@ -58,9 +107,11 @@ functions: 0 health, 4 sight, 6 combat, 7 production, 0xC upgrades, 0xE infiltra
 |---|---|---|
 | ranged DPS | sum over the squad's entities of every ranged weapon's DPS (all guns of a vehicle fire) | yes — damage, cooldown, reload through the game's modifier function |
 | melee DPS | sum over entities of each entity's best melee weapon DPS (one melee attack at a time) | yes, same |
-| melee skill | entity blueprint, `melee_ext` bag → `MeleeExtInfo + 0x04` (`weapon_skill`, int), max over entities | no (blueprint) |
-| range | max over ranged weapons of `Weapon::GetMaxRange` (weapon vtable slot 7, `+0x1C`, `__thiscall`, float in ST0) | yes (modifier 0x17) |
-| speed | entity blueprint, `moving_ext` bag → `MovingExtInfo + 0x5C` (`speed_max`), min over entities | no (blueprint) |
+| melee skill (v2) | the game's own getter `0x862CB0` (ESI = entity, result EAX): leveling_ext attrib_levels[level].melee_skill, else melee_ext weapon_skill, then the entity modifiers type 0x2F; max over entities; "-" without MeleeExt (QI 0x20) | yes |
+| melee skill (v1, wrong) | entity blueprint, `melee_ext` bag → `MeleeExtInfo + 0x04` (`weapon_skill`) - melee combat does not use it when leveling_ext exists | no |
+| armour (v2) | `type_ext` bag (key 0x01301A84, TypeExtInfo vtable 0x010CFF8C) `+0x24` = armour type id; name: world tuning `armour_type_names` (LocStrings, 8 bytes each at tuning `+0x414..+0x418`, tuning = `0x445F50`, as `0x836F60`; c_str = DOW2.exe import 0x00F874C8), else the internal name `**0x013356B0 + 0xC83C` (0x100 each); the most common over entities | blueprint |
+| range | max over ranged weapons of `Weapon::GetMaxRange` (weapon vtable slot 7, `+0x1C`, `__thiscall`, float in ST0) **minus the engine's range allowance**: at load the weapon bag postload `0x821E60` adds ModTuning CombatInfo `+0x2C` (1.0 in vanilla and Elite; CombatInfo = `0x7E2F50` with ESI = tuning group 7) to every weapon's max range, so the engine's number is the data +1 (bolter 39 for 38) - v1 showed that; v2 shows the range as written and quoted | yes (modifier 0x17) |
+| speed | `moving_ext` `speed_max` through the entity modifier function `0x8A6AC0` (stdcall value, entity, type 6 = speed_maximum_modifier, 0; ret 0x10, xmm0 - what `0x928050` does; type 7 is the retreat speed), min over entities | yes (v2) |
 | sight | `SightExt` (QI 4, vtable 0x010FA130) `+0x28` — what SCAR `Entity_GetSightRadius` (0x8C82B0) returns | yes |
 
 Weapons: `CombatExt` = QI 6 (vtable `0x010DE6F0`): `+0x50` hardpoint pointer array, `+0x54` count; hardpoint `+0x50` =
@@ -112,8 +163,13 @@ weapon on the hardpoint), upgrades and weapon buffs show; dead models drop out o
   own `Util_GetWeaponDPS` gives, i.e. "DPS against no armour, every shot hitting".
 * Melee DPS ignores melee skill contests and sync kills; ranged-in-melee penalties (`in_combat_ranged_damage_modifier`)
   are not applied.
-* Speed and melee skill are blueprint values: speed buffs/slows and melee-skill buffs (`MeleeSkillBuff`) are not
-  applied (the modifier function above is per weapon; the entity-level one was not looked for).
+* (v1 only) Speed and melee skill were blueprint values; v2 takes both through the game's own functions (see above).
+* The level's damage multiplier (leveling_ext `melee_damage_modifier` / `ranged_damage_modifier` at the squad's level)
+  is applied in v2 the way the damage code `0xA27720` does: `0x9688E0` (EDI = entity, byte melee on the stack,
+  `ret 4`, xmm0; squad leveling QI 0xF `+0x2C` melee / `+0x28` ranged level index into the 0x20-byte entries,
+  `+0x10` melee, `+0x1C` ranged multiplier; 1.0 without leveling). 1.0 at level 1 in Elite.
+* Damage by distance (`damage_hp_range_modifier` short..distant, WeaponBag `+0x6C..+0x98`, used by `0xA27720`) is not
+  applied - the game's Util_GetWeaponDPS ignores it too; most weapons have 1.0 everywhere.
 * Abilities' own weapons, grenades and global abilities are not counted unless they sit on a hardpoint.
 * A squad in a vehicle / building, a garrisoned squad: whatever the hardpoints of its entities say.
 
@@ -159,3 +215,58 @@ Found on the way:
 * Melee "skill" of heroes (50) comes from their blueprint; the leveling tuning (`melee_skill` per level in the
   ModTuning tables, 0x886950) is not applied — a hero's skill may be higher in a real match.
 * No faults, no visible frame cost (four reads a second).
+
+## v2 - stand test under Elite, 05.11.2026
+
+`unitstats/stand/session.sh` (stand 1, through stand_lock.sh): Elite `-modname Elite -dev -init`, Eldar (Farseer)
+vs SM AI, Elite_DLLs = Elite's own four + EliteAI.dll (SCAR `unitstats/stand/unitstats_v2.scar` appended to
+elite.scar: spawns 5 Eldar squads for us and 8 squads of 6 other races for the enemy, far away, enemy AI off with
+`AI_Enable(false)`, reveals the map, selects one squad every 9 s) + UnitStats.dll; a screenshot 2 s after every
+selection change. Log: `unitstats/stand/UnitStats_stand1_0511_v2_elite.log` (per weapon: damage, ticks, range).
+Screenshots (media vault): `/var/www/media/dow2_shots/unitstats/v2/` (`full_*.png` 1280x800, `zoom_*.png` the panel
+x3, `overview_*.png`).
+
+Reference ("data"): `unitstats/stand/ref.py <sbps>` computes the same numbers straight from the blueprints (Elite
+attrib over vanilla, gamedata of the stand's Elite 3.19.1): loadout x wargear weapons, the game's Util_GetWeaponDPS
+with times in whole sim ticks, leveling_ext level 0 melee skill, moving_ext speed_max, sight_ext, type_ext armour.
+(rd.py: an exact RBF tree dumper; key names of the dump are shifted in places - `caster_close_in_distance/max` is
+range max, `type_ext/dca_action_name` is armour_type.) In-game = data for every squad below.
+
+| Squad | was (v1 numbers under Elite) | now (v2 on the panel) | data |
+|---|---|---|---|
+| Farseer | ranged 12, melee 35, skill **50**, range **23**, speed 5.5, sight 50 | 12 / 35 / 70 / Commanders / 22 / 5.5 / 50 | 12.25 / 35 / 70 / commander / 22 / 5.5 / 50 |
+| Guardians (5) | 44, 33, 50, **39**, 5.5, 40 | 44 (5x8.8) / 33 (5x6.7) / 50 / Infantry / 38 / 5.5 / 40 | 43.75 / 33.33 / 50 / infantry / 38 / 5.5 / 40 |
+| Howling Banshees (5) | 12, 135, **15**, **23**, 5.5, 40 | 12 (5x2.5) / 135 (5x26.9) / 70 / Infantry / 22 / 5.5 / 40 | 12.35 / 134.62 / 70 / infantry / 22 / 5.5 / 40 |
+| Falcon | 70, 0, **0**, **46**, 7.0, 40 | 70 / - / - / Vehicles / 45 / 7.0 / 40 | 69.63 / - / (no melee) / vehicle / 45 / 7.0 / 40 |
+| Wraithlord | 12, 85, **60**, **39**, 4.5, 40 | 12 / 85 / 70 / Vehicles / 38 / 4.5 / 40 | 12.17 / 85 / 70 / vehicle / 38 / 4.5 / 40 |
+| Warp Spiders (4) | 73, 44, 50, **39**, 5.0, 40 | 73 (4x18.3) / 44 (4x11) / 50 / Infantry / 38 / 5.0 / 40 | 73.04 / 44 / 50 / infantry / 38 / 5.0 / 40 |
+| Tactical Marines (3) | 44, 57, **8**, **39**, 5.0, 40 | 44 (3x14.6) / 57 (3x19) / 60 / Heavy infantry / 38 / 5.0 / 40 | 43.75 / 57 / 60 / heavy_infantry / 38 / 5.0 / 40 |
+| Assault Marines (3) | 23, 81, **10**, **23**, 5.0, 40 | 23 (3x7.7) / 81 (3x26.9) / 70 / Heavy infantry / 22 / 5.0 / 40 | 22.97 / 80.77 / 70 / heavy_infantry / 22 / 5.0 / 40 |
+| Predator | 78, 0, **0**, **45**, 7.25, 40 | 78 / - / - / Vehicles / 44 / 7.2 / 40 | 77.77 / - / (no melee) / vehicle / 44 / 7.25 / 40 |
+| Slugga Boyz (6) | 4.1, 150, **10**, **23**, 5.0, 40 | 4.1 (6x0.7) / 150 (6x25) / 60 / Infantry fire resist / 22 / 5.0 / 40 | 4.08 / 150 / 60 / infantry_fire_resist / 22 / 5.0 / 40 |
+| Chaos Space Marines (3) | 40, 66, **15**, **39**, 5.0, 40 | 40 (3x13.4) / 66 (3x22) / 60 / Heavy infantry / 38 / 5.0 / 40 | 40.25 / 66 / 60 / heavy_infantry / 38 / 5.0 / 40 |
+| Genestealers (6) | 0, 182, **9**, 0, 6.5, 38 | (log) - / 182 / 80 / Infantry fire resist / - / 6.5 / 38 | - / 181.5 / 80 / infantry_fire_resist / - / 6.5 / 38 |
+| Fire Warriors (4) | 70, 10, **8**, **39**, 5.0, 40 | 70 (4x17.5) / 10 (4x2.5) / 50 / Infantry / 38 / 5.0 / 40 | 70 / 10 / 50 / infantry / 38 / 5.0 / 40 |
+| Guardsmen (6) | 26, 12, **30**, **39**, 5.0, 40 | 26 (6x4.3) / 12 (6x2) / 50 / Infantry / 38 / 5.0 / 40 | 25.94 / 12 / 50 / infantry / 38 / 5.0 / 40 |
+
+What was wrong and why:
+* **Melee skill** (all infantry): v1 read melee_ext `weapon_skill`; melee combat uses leveling_ext
+  `attrib_levels[level].melee_skill` whenever the entity has it (0x9762E0: squad leveling QI 0xF `+0x2C` = level index,
+  entries of 0x20 bytes, skill at `+0x14`), plus melee skill modifiers. Tacs 8 -> 60, banshees 15 -> 70, sluggas 10 -> 60.
+  It is live: a retreating squad gets +50 (tuning `on_toggled_retreat_actions_pvp`, skill_melee_modifier), the panel
+  showed tacs 110 / assault 120 while the AI pulled them back.
+* **Range**: v1 showed the engine's range = data + 1 (the range allowance above). v2 subtracts it.
+* **"Tacs are wrong"**: their DPS was already right per model (14.58 / 19, the numbers of the Elite tooltip) but shown
+  only as a squad total (44 / 57) next to a melee skill of 8; v2 shows "44 (3x14.6)" and the real skill. v1's published
+  table was made on vanilla data, not Elite's (e.g. Falcon pulse laser and speed differ in Elite).
+* DPS formula: unchanged, it is the game's Util_GetWeaponDPS (checked against the disassembly of 0x81FC40 again) on the
+  weapon as loaded: times in whole 0.1 s ticks (truncated: wind_down 0.49 s = 4 ticks, bolt pistol 7.66 not 7.30), a
+  `burst_info` table without duration = a 1-tick burst that skips wind up/down (pulse carbine 17.5 per model, not the
+  12.6 a reading of the file without the burst would give). Suppression and buffs show live (suppressed guardsmen
+  ranged 26 -> 2.9, speed 5 -> 1.75).
+
+Not found / notes: genestealers were selected but the panel stayed empty in the final run (burrowed / infiltrated
+squads are not in the selection); numbers from the earlier run's log. One run (e2) froze the game (main thread waiting
+in the game loop, sim stopped) 2.5 min in, right after a dead start squad was deselected by the SCAR; three runs
+(e1, e3, e4, 5-8 min each, the same DLL code) did not - not reproduced, not explained; the engine calls can be
+switched off one by one in the ini (GameSkill / EntityMods / LevelMul) if it shows again.
