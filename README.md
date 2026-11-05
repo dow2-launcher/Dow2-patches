@@ -30,7 +30,7 @@ are client-side, and the other players in the match don't need them.
 | **Reverse (test)** | Ctrl + right-click behind your vehicles: they back off driving backwards, front armour to the enemy. | `reverse_r2` → `reverse-4` | `reverse/` | no (the game's own orders) |
 | **Don't drop out of the match when Steam goes away** | A match is played to the end when Steam loses its connection, however long it is away. | `steamkeep` → `steamkeep-2` | `steamkeep/` | no |
 | **Observer lag fix (experimental)** | Spectating a live game no longer stutters. | `obsfix_r2` → `obsfix-1` | `obsfix/` | no |
-| **Join a lobby from the launcher (test)** | Experiment by siritos: a Join button on the launcher's Lobbies tab; the game starts and walks into the room by itself. | `roomjoin` → `roomjoin-2` | `roomjoin/` | no |
+| **Join a lobby from the launcher (test)** | Experiment by siritos: a Join button on the launcher's Lobbies tab (and elite:// links of the ladder site); the game starts and walks into the room by itself. | `roomjoin` → `roomjoin-4` (staging; live: `roomjoin-3`) | `roomjoin/` | no |
 | **Fix: the game closes when a match starts** (new, not released yet) | Repairs Elite's ShellPatch.dll (the race meter) when it could not hook in at the game's start - then every match crashed a second in. Otherwise does nothing. | `shellfix` → `shellfix-1` (staging) | `shellfix/` | no |
 | **Record game crashes (for the developers)** | Writes where the game crashed and what closed it, for "Send logs". | `crashlog` → `crashlog-1` | `crashlog/` | no |
 | **EXPERIMENT: connection check to our servers** | Once per game start, 1-2 minutes in the background: what gets through from your computer to our game servers; sends us the result. | `netprobe` → `netprobe-2` | `netprobe/` | no |
@@ -116,11 +116,15 @@ obsfix/ - **ObsFix.dll** (ObsFix v1)
     When you spectate a live game the client asks "which slot am I in" dozens of times per frame and rebuilds the whole match
     info every time. ObsFix caches the answer for 500 ms. Write-up: docs/OBSERVER_LAG.md
 
-roomjoin/ - **RoomJoin.dll** (RoomJoin 8, roomjoin-2) - siritos's experiment
-    The launcher writes Elite_DLLs/RoomJoin.txt (room id, name) and starts the game or brings it to the front; in the main menu
-    RoomJoin shows a cover, joins by the room id (the game browser's own join), opens the lobby screen and steps aside. A no from
-    the game or 25 s: the reason, then the public games list. Never during the automatch (MMFind's cover, a search on Find a
-    Game): the Join is dropped. Any load order with MMFind (the fscommand hook is a vtable slot). RoomJoin.ini Enabled=0 = off.
+roomjoin/ - **RoomJoin.dll** (RoomJoin 9, roomjoin-4) - siritos's experiment
+    The launcher (1.4.9+) talks to it over a named pipe, \\.\pipe\EliteRoomJoin-<pid of DOW2.exe> (only the current user, no
+    remote clients; one JSON object per line: join / status / cancel -> accepted, walking, joining, in_lobby, failed + reason,
+    status). The pipe exists only with the add-on working: no pipe in a running game = restart it with the add-on on. In the main
+    menu RoomJoin shows a cover, joins by the room id (the game browser's own join), opens the lobby screen and steps aside. A
+    no from the game: the reason, then the public games list; no answer in 25 s or Cancel: the room is watched 15 s more. Never
+    on Find a Game, in another lobby or in a match. The pipe thread never touches the engine and never holds up the game's exit.
+    For launcher 1.4.8 Elite_DLLs/RoomJoin.txt is still read (to go in RoomJoin 10). Test client: make build/rjpipe.exe.
+    Any load order with MMFind (the fscommand hook is a vtable slot). RoomJoin.ini Enabled=0 = off.
     Store entry: roomjoin/catalog-entry.json.
 
 shellfix/ - **ShellFix.dll** (ShellFix 1)

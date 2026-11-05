@@ -105,6 +105,9 @@ $(OUT)/Continue.dll: continue/continue.c | $(OUT)
 $(OUT)/JumpRetry.dll: jumpretry/jumpretry.c | $(OUT)
 	$(CC) $(CFLAGS) -shared -o $@ $< -static-libgcc
 
-# 03.11.2026 experiment: joining a room from the launcher (the Lobbies tab), its own add-on next to MMFind
+# 03.11.2026 experiment: joining a room from the launcher (the Lobbies tab), its own add-on next to MMFind; RoomJoin 9 (05.11): the pipe
 $(OUT)/RoomJoin.dll: roomjoin/roomjoin.c | $(OUT)
 	$(CC) $(CFLAGS) -shared -o $@ $< -lpsapi -static-libgcc -Wl,--exclude-all-symbols
+# the test client of RoomJoin's pipe (RoomJoin 9; not shipped): make build/rjpipe.exe
+$(OUT)/rjpipe.exe: roomjoin/rjpipe.c | $(OUT)
+	$(CC) $(CFLAGS) -o $@ $< -static-libgcc
