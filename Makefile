@@ -47,6 +47,11 @@ $(OUT)/SteamKeep.dll: steamkeep/steamkeep.c | $(OUT)
 $(OUT)/ShellFix.dll: shellfix/shellfix.c | $(OUT)
 	$(CC) $(CFLAGS) -shared -o $@ $< -static-libgcc
 
+# 05.11.2026 EXPERIMENT (archive branch only, not in all): the selected squad's DPS / melee skill / range / speed / sight
+# left of the Retreat button, in the selection panel movie - docs/UNIT_STATS_HOWTO.md
+$(OUT)/UnitStats.dll: unitstats/unitstats.c common/gfxui.h | $(OUT)
+	$(CC) $(CFLAGS) -shared -o $@ unitstats/unitstats.c -static-libgcc -Wl,--exclude-all-symbols
+
 clean:
 	rm -rf $(OUT)
 .PHONY: all clean
