@@ -1,0 +1,2 @@
+- Cooldown seconds: a ready ability no longer looks dark or shows a number; a number that stood still (seen on the Techmarine's buttons and after clicking other units or buildings) is gone, and a cooldown keeps its count when you switch the selection back and forth.
+- APM: the counter starts from zero in every match, also after leaving a match through the menu.

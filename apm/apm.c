@@ -27,7 +27,7 @@
 #include "../common/gfxui.h"
 
 void mt_start_for(const wchar_t *dir, const wchar_t *ini, const char *what);
-int mt_ticking(void); DWORD mt_game_ms(void); int mt_online(void);
+int mt_ticking(void); DWORD mt_game_ms(void); int mt_online(void); long mt_ticks(void);
 
 static wchar_t g_log[MAX_PATH], g_ini[MAX_PATH];
 static void logmsg(const char *fmt, ...) {
@@ -64,6 +64,7 @@ static void load_ini(void) {
 }
 static void restyle(void);
 static int g_host = -1;
+static void *g_hostMv[3];                                  // the movie of each host the number was made in (UI thread)
 static int fsize(void) { return g_size ? g_size : g_host == 2 ? 24 : 18; }
 static int lsize(void) { return g_labelSize ? g_labelSize : g_host == 2 ? 17 : 13; }
 static void reload_ini(DWORD now) {
@@ -80,7 +81,7 @@ static void reload_ini(DWORD now) {
 #define BUCKETS 600                                   // one per second of game time, up to Window=600
 static unsigned short g_bucket[BUCKETS]; static DWORD g_bucketSec[BUCKETS];
 static DWORD g_total, g_matchMs0, g_emaMs, g_peakSec = (DWORD)-1, g_peak; static double g_ema; static int g_counting; static unsigned char g_down[256];
-static DWORD g_lastFrame;
+static DWORD g_lastFrame; static long g_lastTicks;
 static int not_action(int vk) {
     return vk == VK_SHIFT || vk == VK_CONTROL || vk == VK_MENU || (vk >= VK_LSHIFT && vk <= VK_RMENU) || vk == VK_CAPITAL
         || vk == VK_LWIN || vk == VK_RWIN || vk == VK_APPS || vk == VK_NUMLOCK || vk == VK_SCROLL || vk == 0x07 || vk == 0x0A || vk == 0x0B
@@ -99,7 +100,16 @@ static void count_frame(void) {
     if (!live) { if (g_counting && !mt_ticking()) { logmsg("match over: %lu actions in %lu:%02lu of game time = %lu APM on average, peak %lu APM (%lu actions in 10 s)", g_total, mt_game_ms() / 60000, mt_game_ms() / 1000 % 60, mt_game_ms() > 10000 ? (unsigned long)((double)g_total * 60000.0 / mt_game_ms()) : 0UL, (unsigned long)g_peak * 6, (unsigned long)g_peak); g_counting = 0; }
                  for (int vk = 1; vk < 256; vk++) g_down[vk] = (GetAsyncKeyState(vk) & 0x8000) != 0;
                  return; }
-    if (!g_counting || mt_game_ms() < g_matchMs0) {   // a new match
+    // a new match: the match core counts its sim ticks from 0 again. APM 2 waited for a frame with the match over (no sim ticks)
+    // to start again, but the HUD is gone by then when a match ends through the menu / the game's own end screen, so the next
+    // match went on with the last one's numbers (siritos 04.11; TvangeS' log 04.11: 4 matches, one "match: counting")
+    long ticks = mt_ticks();
+    if (g_counting && ticks + 10 < g_lastTicks) {
+        logmsg("match over (a new match began): %lu actions, peak %lu APM", g_total, (unsigned long)g_peak * 6);
+        g_counting = 0;
+    }
+    g_lastTicks = ticks;
+    if (!g_counting) {
         g_counting = 1; g_total = 0; g_matchMs0 = 0; memset(g_bucketSec, 0xFF, sizeof g_bucketSec); g_ema = 0; g_emaMs = 0; g_peak = 0; g_peakSec = (DWORD)-1;
         logmsg("match: counting");
     }
@@ -151,9 +161,10 @@ static Upd_t o_menuUpd, o_vpUpd, o_mmUpd;
 #define MM_VT_UPD 0x011160E8
 #define MM_UPD_FN 0x00B3F6E0
 static volatile DWORD g_vpSeen; static volatile LONG g_menuSinceVp;   // as in matchtimer.c: alt-tab is not annihilation
-static void *g_hostMv[3];
 static void *g_mv; static int g_shown = -1, g_lastVal = -1; static DWORD g_check;
-static void restyle(void) { g_mv = NULL; }
+// APM.ini changed (the launcher's Place pick, a hand edit): made again where it goes now; the host it was in takes it off at its
+// next update (only a movie that is updating now is touched - a stored one may be gone with the match)
+static void restyle(void) { g_mv = NULL; g_host = -1; }
 static void fields(void *mv, double x, double y, double w, double h) {
     for (int k = 0; k < 2; k++) {
         const char *nm = k ? "mt_apm" : "mt_apm_sh"; char p[64];
@@ -249,7 +260,7 @@ BOOL WINAPI DllMain(HINSTANCE h, DWORD reason, LPVOID _) {
     GetModuleFileNameW(h, dir, MAX_PATH); wchar_t *sl = wcsrchr(dir, L'\\'); if (sl) sl[1] = 0; else dir[0] = 0;
     _snwprintf(g_ini, MAX_PATH, L"%lsAPM.ini", dir); _snwprintf(g_log, MAX_PATH, L"%lsAPM.log", dir);
     load_ini();
-    logmsg("APM 1 (own add-on: actions per minute beside the victory point counter, in the game's own HUD movie)");
+    logmsg("APM 3 (own add-on: actions per minute in the game's own HUD movie; Place=%s)", g_place == AP_LEFT ? "left" : g_place == AP_MINIMAP ? "minimap" : "top");
     if (already_loaded()) { logmsg("another APM copy is already active in this game, this one stays idle"); return TRUE; }
     if (!g_enabled) { logmsg("disabled in APM.ini"); return TRUE; }
     if (gfx_hook_slot(MENU_VT_UPD, NULLSUB_RET4, (void *)hk_menu_upd, (void **)&o_menuUpd)) logmsg("hooked the Menu button's per-frame update%s", (DWORD)o_menuUpd != NULLSUB_RET4 ? " (after another add-on)" : "");
