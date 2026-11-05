@@ -592,7 +592,7 @@ static wchar_t g_mbText[200]; static volatile int g_mbCount; static DWORD g_mbAt
 static unsigned long long g_okRoom; static DWORD g_okAt;             // the room joined last (a second Join for it is no new request)
 static DWORD g_rjAt, g_rjCalled, g_rjKnown, g_rjProbed, g_rjBack, g_rjOther; static int g_rjBacks, g_rjWalk;
 // RoomJoin 11: the player agreed in the launcher to leave the lobby he is in for this one - Back on its screen, then the join
-static int g_rjLeave, g_rjLeaves; static DWORD g_rjLeaveAt, g_rjLeaveBack;
+static int g_rjLeave, g_rjLeaves; static DWORD g_rjLeaveAt, g_rjLeaveBack; static unsigned long long g_rjLeaveRoom;
 // after a timeout or a Cancel with the join call made: the room is watched for a late answer (review 04.11 p.3)
 static unsigned long long g_watchRoom; static DWORD g_watchUntil;
 static void stage(const wchar_t *title, const wchar_t *what) {          // what the cover says now (siritos 03.11: what is going on)
@@ -676,7 +676,7 @@ static void rj_start(unsigned long long room, const wchar_t *name, int leave, DW
     g_noticeUntil = 0; g_noticeList = 0;
     g_rj = RJ_MENU; g_rjAt = now; g_rjKnown = g_rjProbed = g_rjBack = g_rjOther = g_rjCalled = 0; g_rjBacks = 0; g_rjWalk = 0;
     g_mbText[0] = 0; g_mbCount = 0;
-    g_rjLeave = leave; g_rjLeaves = 0; g_rjLeaveAt = g_rjLeaveBack = 0;
+    g_rjLeave = leave; g_rjLeaves = 0; g_rjLeaveAt = g_rjLeaveBack = 0; g_rjLeaveRoom = 0;
     if (leave) logmsg("the player agreed to leave the lobby he is in");
 }
 static void rj_step(DWORD now) {
@@ -700,6 +700,7 @@ static void rj_step(DWORD now) {
     case RJ_MENU: {                                                   // the game may still be starting: up to 90 s
         if (!g_rjWalk) { g_rjWalk = 1; emitf("{\"ev\":\"walking\",\"room\":%llu}", g_rjRoom); }
         if (!g_fsMovie) {
+            if (g_rjKnown) { g_rjKnown = 0; logmsg("the menu movie went (the front end rebuilt, e.g. after leaving a lobby) - looking for the new one"); }   // its 15 s from the new one
             if (now - g_rjAt > 800) nudge_menu(now);
             if (now - g_rjAt > 90000) rj_fail("not_menu", NULL, 0);
             break;
@@ -714,7 +715,16 @@ static void rj_step(DWORD now) {
             break;
         }
         if (g_screen != SC_OTHER) g_rjOther = 0;
-        if (g_rjLeaveAt && g_screen != SC_SETUP && !in) { logmsg("left the lobby (now %s) - on to the join", SC_NAME[g_screen]); g_rjLeaveAt = 0; g_rjLeave = 0; }
+        // leaving (stand 05.11: Back put the games list up in 0.4 s while the game was still in the old room - "another lobby"):
+        // off the lobby screen, still in the room we leave - wait until the game is out of it, then on as from that screen
+        if (g_rjLeaveAt && g_screen != SC_SETUP) {
+            if (in && in == g_rjLeaveRoom) {
+                if (now - g_rjLeaveAt > 9000) { rj_fail("other_lobby", L"Could not leave the lobby you are in. Leave it yourself, then press Join again", 0); break; }
+                break;
+            }
+            logmsg("left the lobby of room %llu after %lu ms (now %s) - on to the join", g_rjLeaveRoom, now - g_rjLeaveAt, SC_NAME[g_screen]);
+            g_rjLeaveAt = 0; g_rjLeave = 0; g_rjBacks = 0; g_rjBack = 0;
+        }
         switch (g_screen) {
         case SC_OTHER:                                                 // Options, Army Painter, Campaign, Replays, a match summary...
             if (!g_rjOther) g_rjOther = now;
@@ -735,7 +745,7 @@ static void rj_step(DWORD now) {
         case SC_SETUP:
             if (in && in == g_rjRoom) { rj_ok(0); break; }
             if (g_rjLeave && (in || g_rjLeaveAt)) {                    // RoomJoin 11: leave this lobby first (the player said yes)
-                if (!g_rjLeaveAt) { g_rjLeaveAt = now; emitf("{\"ev\":\"leaving\",\"room\":%llu}", g_rjRoom); stage(L"Joining the Game", L"Leaving the lobby you are in, then %ls"); g_coverWant = 1; }
+                if (!g_rjLeaveAt) { g_rjLeaveAt = now; g_rjLeaveRoom = in; emitf("{\"ev\":\"leaving\",\"room\":%llu}", g_rjRoom); stage(L"Joining the Game", L"Leaving the lobby you are in, then %ls"); g_coverWant = 1; }
                 if (now - g_rjLeaveAt > 9000) { rj_fail("other_lobby", L"Could not leave the lobby you are in. Leave it yourself, then press Join again", 0); break; }
                 if (in && now - g_rjLeaveBack > 2500 && g_rjLeaves < 3) {   // the lobby screen's Back (its commands are logged, in case it is another one)
                     g_rjLeaveBack = now; g_rjLeaves++; logmsg("leaving the lobby of room %llu (Back, try %d)", in, g_rjLeaves); fs(".OnClickBack", ""); }

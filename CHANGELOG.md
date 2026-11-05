@@ -23,6 +23,10 @@ RoomJoin 11 (store roomjoin-5; branch fix/roomjoin-11): the review of RoomJoin 1
   launcher. An experiment: every command of the lobby screen goes to RoomJoin.log ("lobby screen: ..."), to find its real
   leave command if Back is not it. The status says `"version":"11","proto":2`.
   On the stand (05.11) leaving a lobby by hand logged `...panel_mc.OnClickBack` on its screen: Back is that command.
+- Leaving for another lobby (stand 05.11): Back put the games list up in 0.4 s while the game was still in the old room, and
+  that came out as "another lobby" - the list then, no join. Now off the lobby screen the DLL waits (9 s at most) until the game
+  is out of the room it leaves, then goes on as from that screen (the list: Back, the main menu, the join). The front end is
+  rebuilt after leaving a lobby: the 15 s for finding the menu count from the new menu movie.
 - The cover takes no click in its first 0.8 s (stand 05.11: the second click of a double click on the launcher Join came to
   the game, just brought to the front, right on the cover Cancel 0.5 s after it came up); Esc still works at once.
 
