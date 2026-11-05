@@ -23,6 +23,15 @@ game's lobby service to our lobby server, and the early winmm.dll is only there 
 them is any use without the others, so they ship and switch off together. The separate `ownlobby` add-on is gone.
 The sources stay separate (`mmfind/`, `ownlobby/`, `vanilla-loader/`), each DLL keeps its own log.
 
+## Elite and vanilla (launcher 1.4.11, owner 05.11.2026)
+
+Each store entry says in which game it works: `"games": ["elite", "vanilla"]` or `["elite"]` (no `games` = Elite only). The
+launcher's "Vanilla Retribution" copies an add-on's Elite_DLLs files into `dow2-patches\` only when its entry names "vanilla" -
+whatever the player's tick says; an add-on for Elite only (it patches Elite files or needs Elite: elitefix_wmic, shellfix,
+rusifikator, relay_r2...) is never copied there. Its ini is read next to the DLL, so options work in both folders. The
+vanilla game's loader is `build/launcher/winmm.dll` (store `vloader-<n>`, launcher.json `"vanilla": {"loader": ...}`). A new
+add-on: test it in vanilla 3.19 on the stand before its entry gets "vanilla".
+
 ## What happened (history)
 
 - Up to 0.9.x LobbyStats.dll carried the lobby ratings, the loading screen ratings, the match clock, the cooldown

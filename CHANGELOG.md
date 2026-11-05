@@ -4,6 +4,15 @@ Every version gets an entry here before it reaches `main`. CI then tags `vX.Y.Z`
 version (`X.Y.0`) it also publishes a GitHub Release with the DLLs and the entries since the previous `X.Y.0`.
 The version of the set lives only in `VERSION`; each DLL still writes its own version to its log.
 
+## Next version (not numbered yet: 0.2.7 / 0.2.8 are open PRs)
+- vanilla-loader: -DLAUNCHER_LOADER (`make build/launcher/winmm.dll`) for the launcher's "Vanilla Retribution" (launcher 1.4.11,
+  owner 05.11.2026). One file for both games, decided by the command line: `-modname` (Elite.exe, Elite_Test, old Elite as a mod)
+  - only the early add-ons in Elite_DLLs (OwnLobby.dll), exactly as -DEARLY_ONLY; no -modname (vanilla) - every DLL of
+  dow2-patches\ (OwnLobby.dll first, before RLink), never Elite_DLLs, a fresh dow2-patches\Loader.log with what was loaded.
+  A game started past the launcher therefore never loads the vanilla copies into Elite. The folder name is not in the binary
+  (ASCII or UTF-16): launchers up to 1.4.10 put aside any winmm.dll naming it as the old stand-alone package. Store: vloader-1,
+  launcher.json "vanilla": {"loader": "vloader-1"}; the add-ons that work in vanilla have "games": ["elite", "vanilla"].
+
 ## 0.2.8 — 2026-11-05
 Cooldowns 9 (store cooldowns-9; branches fix/cooldowns-9, feature/cooldowns-9).
 - A frozen number on a button after a selection change (siritos 05.11; the trace of 15:20: the Techmarine's 75 s on
