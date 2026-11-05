@@ -226,7 +226,9 @@ static void set_progress(char *w, float p) {
 // inside it is caught (vectored handler, this thread only), queries stop for the rest of the game, the log says where.
 // The recharge is kept per (owner, ability) - its share, the tick it came, the start of its rate and the whole length -
 // so other squads, other buttons and the selection going back and forth don't touch it.
-typedef struct { unsigned key; int ab; float p, p0; DWORD t, t0; float total; DWORD used; } Rec;   // ticks
+typedef struct { unsigned key; int ab; float p, p0; DWORD t, t0; float total; DWORD used;
+                 float pchg; DWORD tchg; int grown; } Rec;   // ticks; pchg/tchg: the share when it last moved, grown: seen moving
+#define STALL_TICKS 15                               // Cooldowns 8: a share that stays put this long (1.5 s) is no running recharge
 #define NREC 96
 static Rec g_rec[NREC];
 typedef struct { int ab; float total; } AbLen;      // the length of an ability's recharge in ticks, any owner: the
@@ -236,9 +238,16 @@ static void ab_len_set(int ab, float total) {
     for (int i = 0; i < g_nabLen; i++) if (g_abLen[i].ab == ab) { g_abLen[i].total = total; return; }
     AbLen *a = &g_abLen[g_nabLen < 48 ? g_nabLen++ : (unsigned)ab % 48]; a->ab = ab; a->total = total;
 }
-static unsigned rec_key(const char *btn, int ability) {   // the ability and its owner (ConstOwnerPointer, 16 bytes)
+// the ability and its owner. ConstOwnerPointer (SimEngine.dll) is { type, Entity *, Squad *, Player * }: its constructors set
+// the type and the one pointer of that type only, the other words are whatever was on the stack (seen with Trace=1: the same
+// squad came with other words in every second update), and its operator== compares the type's pointer only - so does the key.
+// Cooldowns 1-7 hashed all 16 bytes: one recharge got a new key now and then, so a remembered recharge was lost or a fresh one
+// started on the number of another (the number stuck or did not follow, siritos 04.11: "a generator under construction").
+static unsigned rec_key(const char *btn, int ability) {
+    const unsigned *o = (const unsigned *)(btn + 0x2A8);
+    unsigned type = o[0], ptr = type == 0 ? o[1] : type == 1 ? o[2] : type == 2 ? o[3] : 0;
     unsigned key = (unsigned)ability * 2654435761u;
-    for (int i = 0; i < 4; i++) key = (key ^ ((const unsigned *)(btn + 0x2A8))[i]) * 16777619u;
+    key = (key ^ type) * 16777619u; key = (key ^ ptr) * 16777619u;
     return key | 1;
 }
 static Rec *rec_of(unsigned key, int ab, int make) {
@@ -251,19 +260,27 @@ static Rec *rec_of(unsigned key, int ab, int make) {
     memset(old, 0, sizeof *old); old->key = key; old->ab = ab; old->used = GetTickCount();
     return old;
 }
-// a share p (0..1) of this recharge at sim tick gt
-static void rec_share(Rec *r, float p, DWORD gt) {
+// a share p (0..1) of this recharge at sim tick gt; game = it is the game's own share of this update (reason 0xD/0xE), not
+// only the engine's answer
+static void rec_share(Rec *r, float p, DWORD gt, int game) {
     float tot = r->total > 0 ? r->total : ab_len(r->ab);
     int fresh = !r->t0 || !(r->p > 0) || p < r->p - 0.002f;
     // not where this recharge would be by now (it ended and was cast again while not selected, or got shorter): a new one
     if (!fresh && tot > 0 && gt > r->t) { float expect = r->p + (float)(gt - r->t) / tot; if (p > expect + 0.03f) fresh = 1; }
-    if (fresh) { r->p0 = p; r->t0 = gt ? gt : 1; }
+    if (fresh) { r->p0 = p; r->t0 = gt ? gt : 1; r->pchg = p; r->tchg = gt; r->grown = 0; }
+    else if (p > r->pchg + 0.0001f) { r->pchg = p; r->tchg = gt; r->grown = 1; }
+    if (game) r->grown = 1;
     if (gt > r->t0 && p > r->p0 + 0.0001f) { r->total = (float)(gt - r->t0) / (p - r->p0); ab_len_set(r->ab, r->total); }
     r->p = p; r->t = gt;
 }
+// Cooldowns 8 (siritos 04.11, the Techmarine's mines: "11" instead of a count down): a running recharge grows every sim tick.
+// An answer of the engine that the game itself has not shown as a recharge and that has not moved yet, or a share that stays
+// put for STALL_TICKS of samples, is something else - no number for it (before, the time left was worked out again from the same
+// share at every sample, so the number stood still).
+static int rec_running(const Rec *r) { return r->grown && r->t - r->tchg <= STALL_TICKS; }
 static float rec_left(const Rec *r, DWORD gt) {        // ticks left, <= 0 = over or not known
     float tot = r->total > 0 ? r->total : ab_len(r->ab);
-    if (!(r->p > 0) || tot <= 0) return 0;
+    if (!(r->p > 0) || tot <= 0 || !rec_running(r)) return 0;
     return (1.0f - r->p) * tot - (float)(gt - r->t);
 }
 
@@ -298,6 +315,20 @@ static LONG CALLBACK cd_veh(EXCEPTION_POINTERS *e) {
     return EXCEPTION_CONTINUE_EXECUTION;
 }
 static int g_query = 1;                              // Cooldowns.ini [Cooldowns] Ask=0: no engine query (shares only)
+static int g_trace;                                  // Cooldowns.ini [Cooldowns] Trace=1: every change of a button's state in the log
+typedef struct { unsigned sig; DWORD at; } TraceSeen;
+static TraceSeen g_tr[SLOTS];
+static void trace_btn(int s, char *btn, char *w, int ability, float q, int en, int vis, float left, float sweep, const char *what) {
+    if (!g_trace || s < 0 || s >= SLOTS) return;
+    const unsigned *o = (const unsigned *)(btn + 0x2A8);
+    unsigned sig = (unsigned)ability * 31u + o[0] * 7u + o[1] * 13u + (unsigned)g_capN * 101u + (unsigned)(g_capMax * 100) * 1009u
+        + (unsigned)((q + 2) * 100) * 10007u + (unsigned)en * 3u + (unsigned)vis * 5u + (unsigned)(left > 0.5f) * 17u + (unsigned)what[0];
+    DWORD now = GetTickCount();
+    if (g_tr[s].sig == sig && now - g_tr[s].at < 2000) return;
+    g_tr[s].sig = sig; g_tr[s].at = now;
+    logmsg("trace %.40s ab %08X owner %08X %08X %08X %08X en %d vis %d calls %d gameshare %.3f last %.3f engine %.3f left %.0f ticks sweep %.3f tick %ld: %s",
+           w + 0xDD0, ability, o[0], o[1], o[2], o[3], en, vis, g_capN, g_capMax, g_capLast, q, left, sweep, mt_ticks(), what);
+}
 static float ask_vt(char *ctx, char *btn, int ability, int off) {   // the engine's answer of iface vt+off, -1 = none
     if (!g_query || g_qOff || !ctx || IsBadReadPtr(ctx + 0xC, 4)) return -1;
     void **iface = *(void ***)(ctx + 0xC);
@@ -339,6 +370,12 @@ static void __fastcall hk_btnupd(char *btn, void *edx, char *ctx) {
         float q = g_capN || s >= 16 ? ask_vt(ctx, btn, ability, 0xB4) : -1;
         float p = q >= 0 ? q : g_capMax > 0 ? g_capMax : -1;
         int rech = p > 0.0f && p < 0.999f;
+        // Cooldowns 8: the game's own verdict of this update - the button is usable (+0x208, set by the update above from the
+        // reasons: none, or only the ones 4-8 that don't block). A usable ability gets no number and never the dark sweep: the
+        // sweep put back on a usable button made it look unavailable (Cooldowns 7, berserk 04.11: "the cursor says it can't be
+        // used"). Stratagems keep their number (the bunker: usable buttons while the engine's 120 s recharge runs, siritos 03.11),
+        // without the sweep.
+        int en = *(w + 0x208) != 0;
         unsigned key = rec_key(btn, ability);
         DWORD gt = (DWORD)mt_ticks(), now = GetTickCount();
         float sweep = -1, left = 0;
@@ -346,8 +383,9 @@ static void __fastcall hk_btnupd(char *btn, void *edx, char *ctx) {
         Rec *r = rec_of(key, ability, rech);
         if (r) {
             if ((!g_capN && !rech) || (q >= 0 && !rech)) r->p = 0;   // usable, or the engine says no recharge: over
-            else if (rech) rec_share(r, p, gt);
+            else if (rech) rec_share(r, p, gt, g_capMax > 0);
             left = rec_left(r, gt);                          // only 0s and no answer: the remembered recharge goes on
+            if (en && s < 16) left = 0;
         }
         Slot *b = &g_slot[s];
         if (left > 0.5f) {
@@ -359,7 +397,9 @@ static void __fastcall hk_btnupd(char *btn, void *edx, char *ctx) {
         } else { b->ready = 1; b->exact = 0; b->key = key; }
         LeaveCriticalSection(&g_cs);
         // the game's own sweep: its last value of this update is a 0 of another reason (no energy, busy) - put the share back
-        if (sweep > 0 && (g_capN || s >= 16) && (g_capLast < sweep - 0.002f || g_capLast > sweep + 0.002f)) set_progress(w, sweep < 0.001f ? 0.001f : sweep > 0.998f ? 0.998f : sweep);
+        int push = sweep > 0 && !en && (g_capN || s >= 16) && (g_capLast < sweep - 0.002f || g_capLast > sweep + 0.002f);
+        trace_btn(s, btn, w, ability, q, en, vis, left, sweep, push ? "sweep pushed" : left > 0.5f ? "number" : r && r->p > 0 && !rec_running(r) ? "share not moving: none" : "none");
+        if (push) set_progress(w, sweep < 0.001f ? 0.001f : sweep > 0.998f ? 0.998f : sweep);
     } else if (!ability || !vis) cd_progress(w, 0.0f);         // no ability or the button is hidden: no number
     // after the match (no sim ticks) cd_show takes a number still there off
     if (s >= 0) cd_show(s, w);
@@ -436,7 +476,8 @@ void cd_start(const wchar_t *dir, const wchar_t *ini) {
     wchar_t c[16]; GetPrivateProfileStringW(L"Cooldowns", L"Color", L"FFFFFF", c, 16, ini);
     g_color = wcstoul(c, NULL, 16) & 0xFFFFFF;
     g_query = GetPrivateProfileIntW(L"Cooldowns", L"Ask", 1, ini);
-    logmsg("Cooldowns 6 (%s): the numbers in the game's own button movie; every recharge per squad and ability%s",
+    g_trace = GetPrivateProfileIntW(L"Cooldowns", L"Trace", 0, ini);
+    logmsg("Cooldowns 8 (%s): the numbers in the game's own button movie; every recharge per squad and ability%s; no number, no sweep on a usable button",
            g_on ? "on" : "off, [Cooldowns] Enabled=0", g_query ? ", asked from the engine (guarded)" : ", Ask=0: shares only");
     if (!g_on) return;
     InitializeCriticalSection(&g_cs);

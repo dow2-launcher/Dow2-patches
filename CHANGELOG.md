@@ -4,6 +4,36 @@ Every version gets an entry here before it reaches `main`. CI then tags `vX.Y.Z`
 version (`X.Y.0`) it also publishes a GitHub Release with the DLLs and the entries since the previous `X.Y.0`.
 The version of the set lives only in `VERSION`; each DLL still writes its own version to its log.
 
+## 0.2.6 — 2026-11-05
+Cooldowns 8 (store cooldowns-8) and APM 3 (apm-3), the reports of 04.11.2026 (siritos, berserk, TvangeS).
+- Cooldowns: the recharge key was a hash of all 16 bytes of ConstOwnerPointer at button+0x2A8. Its constructors (SimEngine.dll)
+  set the type and the one pointer of that type only (entity +4, squad +8, player +0xC); the other words are stack left-overs, and
+  Trace=1 showed the same squad coming with two different key words in every second update. One recharge thus had several
+  records, a remembered one was lost after the selection went to another unit or a building, and the number stuck or did not
+  follow ("it blocks the cooldown when you click a generator under construction"). The key is now the type + that pointer,
+  exactly what ConstOwnerPointer::operator== compares.
+- Cooldowns: the time left was worked out again from every sample of the share, also when the share did not move - a share that
+  stands still gave a number that stands still ("11" instead of a count down). A recharge now has to move: an engine answer the
+  game itself has not shown as a recharge (reason 0xD/0xE) counts only after it has grown, and a share that stays put for 15 sim
+  ticks (1.5 s) of samples is no recharge - no number.
+- Cooldowns: the game's own verdict of the update (+0x208: usable - no reasons, or only the non-blocking 4-8) decides. A usable
+  ability gets no number, and the dark sweep is never put back on a usable button. Cooldowns 7 could do that whenever the engine
+  still gave a share for an ability the game called usable (a record under a stale key, charges): the button the player could
+  press looked unavailable. berserk 04.11 ("abilities broke, the cursor says it can't be used"): his log has none of JumpRetry /
+  RoomJoin / SteamKeep (new that evening: NetProbe 2, ReinforceFix 1); on the stand with his exact add-on set the abilities
+  worked and no such push was seen; the HUD button's click checks only +0x208, not the sweep - not reproduced, this closes the
+  one way Cooldowns could make it look so. Stratagems keep their number while usable (the bunker, siritos 03.11), no sweep.
+- Cooldowns: Trace=1 in Cooldowns.ini writes every change of a button's state (owner words, reasons, the game's and the engine's
+  share, the decision) to Cooldowns.log; off by default.
+- The Techmarine's zeal buttons (mines, turret) are not ability buttons of 0x0111AFBC (Trace=1 shows no update of them):
+  Cooldowns puts nothing on them, what is written there is the game's own.
+- APM: a new match was only seen through a frame with no sim ticks (APM 2 g_matchMs0 was always 0); after a match left through
+  the menu or ended on the game's own screen no HUD frame came any more, so the next match went on with the old numbers
+  (TvangeS' log 04.11: four matches, one "match: counting"; stand: quit through the menu - no "match over"). A new match is now
+  the match core's tick count going back to 0. The log names the version (APM 3) and the Place it read.
+- APM: on an APM.ini change the number is made again where Place says (g_host reset too); only a movie updating now is touched.
+  Place at the start and Place changed while the game runs checked on the stand (minimap / top fallback in annihilation).
+
 ## 0.2.5 — 2026-11-05
 RoomJoin 9 (store roomjoin-4, staging; branch feature/roomjoin-9-pipe): the launcher talks to the game over a named pipe instead
 of a request file the DLL polled (owner: no files), and the review of RoomJoin 8 (reports/roomjoin8_review.md) is closed.

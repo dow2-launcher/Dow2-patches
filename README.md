@@ -23,8 +23,8 @@ are client-side, and the other players in the match don't need them.
 | **Ratings on the loading screen** | The Relic rating after each player's name on the loading screen of an online match. | `loadingratings_r3` → `loadingratings-4` | `lobbystats/` (built with `-DLS_LOADING`) | no |
 | **Sound when someone joins the lobby** | A soft or sharp sound and a flashing taskbar button when a player comes into your lobby while the game is minimised. | `joinsound` → `joinsound-1` | `lobbystats/` (built with `-DLS_JOINSOUND`) | no |
 | **Match timer** | Match time in the game's own interface: under the score, under the Menu button, or in it. | `matchtimer_r2` → `matchtimer-8` | `matchtimer/` | no |
-| **Cooldown seconds on ability buttons** | Seconds left on recharging abilities and global abilities, in the middle of the button. | `cooldowns_r2` → `cooldowns-7` | `cooldowns/` | no |
-| **APM** | Your clicks and key presses per minute, next to the match timer or in the minimap corner. Only you see it. | `apm` → `apm-1` | `apm/` | no |
+| **Cooldown seconds on ability buttons** | Seconds left on recharging abilities and global abilities, in the middle of the button. | `cooldowns_r2` → `cooldowns-8` | `cooldowns/` | no |
+| **APM** | Your clicks and key presses per minute, next to the match timer or in the minimap corner. Only you see it. | `apm` → `apm-3` | `apm/` | no |
 | **Auto-reinforce through the webway gate** | A squad that goes through an Eldar webway gate keeps auto-reinforce on. | `reinforcefix` → `reinforcefix-1` | `reinforcefix/` | no (the game's own orders) |
 | **Jumps don't break on obstacles** | An Autarch (or another jumper) whose jump order broke on an obstacle on the way gets it repeated after landing. | `jumpretry` → `jumpretry-2` | `jumpretry/` | no (the game's own orders) |
 | **Reverse (test)** | Ctrl + right-click behind your vehicles: they back off driving backwards, front armour to the enemy. | `reverse_r2` → `reverse-4` | `reverse/` | no (the game's own orders) |
@@ -86,14 +86,17 @@ matchtimer/ - **MatchTimer.dll** (MatchTimer v5, matchtimer-8)
     the match ends. MatchTimer.ini, read again while the game runs: Place=top (under the victory point counter; annihilation:
     under the Menu button) | under | menu; FontSize, Color, OffsetX / OffsetY; OnlineOnly=1 keeps it to live multiplayer.
 
-cooldowns/ - **Cooldowns.dll** (Cooldowns 6, cooldowns-7)
+cooldowns/ - **Cooldowns.dll** (Cooldowns 8, cooldowns-8)
     Seconds left on recharging abilities, global abilities and stratagems, as the button's own count text. Each recharge is kept
-    per squad and ability and asked from the engine with the same read-only question the panel asks (guarded). Read-only.
-    Cooldowns.ini [Cooldowns]: Enabled, DigitSize, Color, Ask.
+    per squad and ability (the owner's own pointer, as ConstOwnerPointer::operator== compares) and asked from the engine with the
+    same read-only question the panel asks (guarded). A button the game itself makes usable gets no number and no sweep; a share
+    that does not move is no recharge. Read-only. Cooldowns.ini [Cooldowns]: Enabled, DigitSize, Color, Ask, Trace (every change
+    of a button's state in Cooldowns.log).
 
-apm/ - **APM.dll** (APM 1)
-    Presses of mouse buttons and keys over the last 60 s of game time while a match runs, read with GetAsyncKeyState; nothing goes
-    to the game. Place=top | left | minimap in APM.ini. Chained with MatchTimer on the per-frame form updates.
+apm/ - **APM.dll** (APM 3)
+    Presses of mouse buttons and keys while a match runs (an exponential average, Smooth=5 s), read with GetAsyncKeyState; nothing
+    goes to the game; starts from 0 in every match (the match core's tick count). Place=top | left | minimap in APM.ini, read
+    again while the game runs. Chained with MatchTimer on the per-frame form updates.
 
 reinforcefix/ - **ReinforceFix.dll** (ReinforceFix v1)
     The HUD's auto-reinforce list drops squads with no models on the map - also a squad sitting inside an Eldar webway gate.
