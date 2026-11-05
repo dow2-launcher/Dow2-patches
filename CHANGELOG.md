@@ -9,8 +9,10 @@ Cooldowns 9 (store cooldowns-9; branch fix/cooldowns-9).
 - A frozen number on a button after a selection change (siritos 05.11; the trace of 15:20: the Techmarine's 75 s on
   ability_btn01, then the scouts selected - the panel updated only their buttons 03 / 05 / 06 and never 01 again; the same with
   the scouts' grenade on 03 and the Techmarine). The number was taken off only in an update of its own button, and the panel does
-  not update a place the selected unit has nothing on. Now a number whose button has not been updated for 0.4 s is taken off by
-  the update of any other button of the same HUD movie (alive at that moment); it comes back with its button's updates. What is
+  not update a place the selected unit has nothing on. Now a number whose button was not updated in the last 2 passes of the panel over its buttons (and 50 ms; 0.4 s was
+  still seen on the other unit) is taken off by
+  the update of any other button of the same HUD movie (alive at that moment); a unit with no ability buttons at
+  all: by the global ability buttons after 120 ms; it comes back with its button's updates. What is
   shown is kept per HUD movie and place. Trace=1 logs each number on / off with its widget and movie, and where a number is up
   every 2 s; it shows the real owner (type + its pointer), not the stack words around it.
 - Nothing of a match stays for the next one (siritos 05.11): the recharges are kept by squad / entity addresses and the next
