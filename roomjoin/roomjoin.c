@@ -20,6 +20,12 @@
 // file handle and WriteFile), so ExitProcess ends it wherever it is.
 // RoomJoin 10 (05.11.2026, owner): no request file at all - Elite_DLLs/RoomJoin.txt of launcher 1.4.8 is not read any more (no
 // disk access in the game's main thread, nothing to be locked), and nothing runs on a timer while no launcher is connected.
+// RoomJoin 11 (05.11.2026, review of RoomJoin 10): a Join for the room still watched for a late answer goes on watching (no
+// second engine join); the cover never stays without a join or a notice; "already in the room" walks to the lobby screen only
+// from the main menu or the games list; long room names kept (cut, not lost); a broken \u escape is not read past; a join whose
+// call is never made gives up after 65 s; {"cmd":"cancel","room":id} cancels only that room; {"cmd":"join",...,"leave":true}
+// (the player said yes in the launcher): from another lobby's screen Back first, then the join (an experiment: the lobby
+// screen's commands are logged, to find its real leave command if Back is not it).
 //
 // In the game, once it is in its main menu: a cover ("Joining the Game", the room's name, Cancel; the menu under it hidden, so
 // clicks and Esc don't reach it), the game browser's own join by the room id (the call MMFind's fast automatch guests use since
@@ -49,7 +55,7 @@
 #include <wchar.h>
 #include <wctype.h>
 
-#define RJ_VERSION  "10"
+#define RJ_VERSION  "11"
 #define HOOK_ADDR   0x0045DB6C                    // Invoke (engine -> Flash), this = SFMovie: +4 the movie, +0x18 its fscommand handler
 #define HOOK_RESUME 0x0045DB71
 static const unsigned char INV_PRO[5] = {0xB8, 0x59, 0x70, 0xEF, 0x00};
@@ -381,7 +387,7 @@ static const char *js_str(const char *p, char *o, int cap) {
             if (v >= 0xD800 && v < 0xDC00 && p[0] == '\\' && p[1] == 'u') {          // a surrogate pair
                 unsigned v2 = 0; const char *q = p + 2; int ok = 1;
                 for (int i = 0; i < 4; i++) { char h = *q++; v2 <<= 4;
-                    if (h >= '0' && h <= '9') v2 |= h - '0'; else if (h >= 'a' && h <= 'f') v2 |= h - 'a' + 10; else if (h >= 'A' && h <= 'F') v2 |= h - 'A' + 10; else ok = 0; }
+                    if (h >= '0' && h <= '9') v2 |= h - '0'; else if (h >= 'a' && h <= 'f') v2 |= h - 'a' + 10; else if (h >= 'A' && h <= 'F') v2 |= h - 'A' + 10; else { ok = 0; break; } }   // (review 05.11 L3: a NUL stops it, never past the line)
                 if (ok && v2 >= 0xDC00 && v2 < 0xE000) { v = 0x10000 + ((v - 0xD800) << 10) + (v2 - 0xDC00); p = q; }
             }
             n = u8_put(o, cap, n, v); continue; }
@@ -409,7 +415,7 @@ static const char *js_skip(const char *p) {                           // past on
     while (*p && *p != ',' && *p != '}' && *p != ']') p++;
     return p;
 }
-typedef struct { char cmd[16]; unsigned long long room; int hasRoom; char name[200]; } Cmd;
+typedef struct { char cmd[16]; unsigned long long room; int hasRoom, leave; char name[200]; } Cmd;
 static int js_command(const char *s, Cmd *c) {                        // one line -> the command; 0 = not an object we read
     memset(c, 0, sizeof *c);
     const char *p = js_ws(s); if (*p != '{') return 0; p = js_ws(p + 1);
@@ -426,7 +432,8 @@ static int js_command(const char *s, Cmd *c) {                        // one lin
             for (i = 0; d[i]; i++) if (d[i] < '0' || d[i] > '9') return 0;
             if (!d[0] || i > 20) return 0;
             c->room = strtoull(d, NULL, 10); c->hasRoom = 1;
-        } else { p = js_skip(p); if (!p) return 0; }
+        } else if (!strcmp(k, "leave") && (!strncmp(p, "true", 4) || !strncmp(p, "false", 5))) { c->leave = *p == 't'; p += c->leave ? 4 : 5; }
+        else { p = js_skip(p); if (!p) return 0; }
         p = js_ws(p);
         if (*p == ',') { p = js_ws(p + 1); continue; }
         if (*p == '}') break;
@@ -437,7 +444,7 @@ static int js_command(const char *s, Cmd *c) {                        // one lin
 
 // ---------------- the queues between the pipe thread and the game's thread ----------------
 enum { CMD_JOIN = 1, CMD_CANCEL };
-typedef struct { int what; unsigned long long room; wchar_t name[64]; DWORD from; } QCmd;
+typedef struct { int what, leave; unsigned long long room; wchar_t name[64]; DWORD from; } QCmd;
 typedef struct { DWORD to; char s[700]; } QOut;                       // to 0 = every client
 static CRITICAL_SECTION g_qlk; static QCmd g_cq[8]; static int g_cqH, g_cqN; static QOut g_oq[32]; static int g_oqH, g_oqN;
 static HANDLE g_outEv;                                                // auto-reset: there is something to send
@@ -581,6 +588,8 @@ static int g_rj; static unsigned long long g_rjRoom; static wchar_t g_rjName[64]
 static wchar_t g_mbText[200]; static volatile int g_mbCount; static DWORD g_mbAt;
 static unsigned long long g_okRoom; static DWORD g_okAt;             // the room joined last (a second Join for it is no new request)
 static DWORD g_rjAt, g_rjCalled, g_rjKnown, g_rjProbed, g_rjBack, g_rjOther; static int g_rjBacks, g_rjWalk;
+// RoomJoin 11: the player agreed in the launcher to leave the lobby he is in for this one - Back on its screen, then the join
+static int g_rjLeave, g_rjLeaves; static DWORD g_rjLeaveAt, g_rjLeaveBack;
 // after a timeout or a Cancel with the join call made: the room is watched for a late answer (review 04.11 p.3)
 static unsigned long long g_watchRoom; static DWORD g_watchUntil;
 static void stage(const wchar_t *title, const wchar_t *what) {          // what the cover says now (siritos 03.11: what is going on)
@@ -610,7 +619,9 @@ static void rj_fail(const char *reason, const wchar_t *shown, int toList) {
     else g_coverWant = 0;
 }
 static void rj_cancel(const char *how) {             // Cancel: our join off; a lobby we are in already stays (03.11: Cancel took the player out)
-    if (!g_rj) return;
+    if (!g_rj) {                                     // no join (review 05.11 M2): a cover left over goes with Cancel / Esc all the same
+        if (g_coverWant && !g_noticeUntil) { logmsg("Cancel (%s) with no join: the cover off", how); g_coverWant = 0; }
+        return; }
     logmsg("Cancel (%s)", how);
     if (dj_room() == g_rjRoom) { rj_ok(0); return; }
     rj_fail("cancelled", NULL, 0);
@@ -636,7 +647,8 @@ static void nudge_menu(DWORD now) {
         POINT c; if (GetCursorPos(&c) && ScreenToClient(w, &c)) PostMessageW(w, WM_MOUSEMOVE, 0, MAKELPARAM(c.x, c.y)); }
 }
 // a Join (from the pipe)
-static void rj_start(unsigned long long room, const wchar_t *name, DWORD now, const char *from) {
+static int lobby_walk_ok(void) { return g_screen == SC_MAIN || g_screen == SC_LIST; }   // (review 05.11 M3: never from Find a Game or another screen)
+static void rj_start(unsigned long long room, const wchar_t *name, int leave, DWORD now, const char *from) {
     char nm[200]; WideCharToMultiByte(CP_UTF8, 0, name, -1, nm, sizeof nm, NULL, NULL); nm[sizeof nm - 1] = 0;
     logmsg("request (%s): room %llu \"%s\"", from, room, nm);
     if (!room) { emitf("{\"ev\":\"failed\",\"room\":0,\"reason\":\"error\",\"text\":\"no room id\"}"); return; }
@@ -645,19 +657,24 @@ static void rj_start(unsigned long long room, const wchar_t *name, DWORD now, co
         emitf("{\"ev\":\"failed\",\"room\":%llu,\"reason\":\"busy_join\",\"text\":\"\"}", room); return;
     }
     if (g_inWorld || g_loading) { emitf("{\"ev\":\"failed\",\"room\":%llu,\"reason\":\"busy_match\",\"text\":\"\"}", room); return; }
-    if (g_watchRoom && (int)(g_watchUntil - now) > 0 && room != g_watchRoom) {     // the last room may still let us in
+    if (g_watchRoom && (int)(g_watchUntil - now) > 0) {                                 // the last room may still let us in
+        if (room == g_watchRoom) {                                                     // (review 05.11 M1) the same room: no second engine join, go on watching
+            logmsg("room %llu is still watched for its answer - no new join", room);
+            emitf("{\"ev\":\"accepted\",\"room\":%llu}", room); emitf("{\"ev\":\"joining\",\"room\":%llu}", room); return; }
         emitf("{\"ev\":\"failed\",\"room\":%llu,\"reason\":\"busy_join\",\"text\":\"waiting for the previous room's answer\"}", room); return; }
     g_watchRoom = 0;
     g_rjRoom = room; wcsncpy(g_rjName, name, 63); g_rjName[63] = 0;
     emitf("{\"ev\":\"accepted\",\"room\":%llu}", room);
     if (g_fsMovie && dj_room() == room) {
-        logmsg("already in room %llu", room);
-        if (g_screen != SC_SETUP) dj_to_lobby();
+        logmsg("already in room %llu (screen %s)", room, SC_NAME[g_screen]);
+        if (g_screen != SC_SETUP && lobby_walk_ok()) dj_to_lobby();
         rj_ok(0); return;
     }
     g_noticeUntil = 0; g_noticeList = 0;
     g_rj = RJ_MENU; g_rjAt = now; g_rjKnown = g_rjProbed = g_rjBack = g_rjOther = g_rjCalled = 0; g_rjBacks = 0; g_rjWalk = 0;
     g_mbText[0] = 0; g_mbCount = 0;
+    g_rjLeave = leave; g_rjLeaves = 0; g_rjLeaveAt = g_rjLeaveBack = 0;
+    if (leave) logmsg("the player agreed to leave the lobby he is in");
 }
 static void rj_step(DWORD now) {
     if (g_watchRoom) {                                                // a late answer to a join we gave up on
@@ -668,7 +685,7 @@ static void rj_step(DWORD now) {
                 lastW = now;
                 if (dj_room() == g_watchRoom) {
                     g_rjRoom = g_watchRoom; g_watchRoom = 0; logmsg("room %llu let us in late - the lobby screen", g_rjRoom);
-                    if (g_screen != SC_SETUP) dj_to_lobby();
+                    if (g_screen != SC_SETUP && lobby_walk_ok()) dj_to_lobby();
                     rj_ok(1);
                 }
             }
@@ -694,26 +711,37 @@ static void rj_step(DWORD now) {
             break;
         }
         if (g_screen != SC_OTHER) g_rjOther = 0;
+        if (g_rjLeaveAt && g_screen != SC_SETUP && !in) { logmsg("left the lobby (now %s) - on to the join", SC_NAME[g_screen]); g_rjLeaveAt = 0; g_rjLeave = 0; }
         switch (g_screen) {
         case SC_OTHER:                                                 // Options, Army Painter, Campaign, Replays, a match summary...
             if (!g_rjOther) g_rjOther = now;
             if (now - g_rjOther > 4000) rj_fail("not_menu", L"Go to the main menu, then press Join again", 0);
             break;
         case SC_MM:                                                    // Find a Game: never Back there (review 04.11 p.4)
+            if (in && in == g_rjRoom) { rj_ok(0); break; }               // in it already (the menu movie came late): nothing to walk
             if (mm_search() || in) rj_fail("busy_search", L"A search is on in Find a Game. Stop it, then press Join again", 0);
             else rj_fail("not_menu", L"Leave Find a Game (Back), then press Join again", 0);
             break;
         case SC_LIST:                                                  // the public games list: Back to the main menu, if in no room
+            if (in && in == g_rjRoom) { dj_to_lobby(); g_rj = RJ_LOBBY; g_rjAt = now; break; }   // in it already: its lobby screen
             if (in) { rj_fail("other_lobby", L"You are in another lobby. Leave it first, then press Join again", 0); break; }
             if (now - g_rjBack > 1500) {
                 if (g_rjBacks >= 3) { rj_fail("not_menu", L"Go to the main menu, then press Join again", 0); break; }
                 g_rjBack = now; g_rjBacks++; logmsg("on the public games list - Back to the main menu"); fs(".OnClickBack", ""); }
             break;
         case SC_SETUP:
-            if (in == g_rjRoom) { rj_ok(0); break; }
+            if (in && in == g_rjRoom) { rj_ok(0); break; }
+            if (g_rjLeave && (in || g_rjLeaveAt)) {                    // RoomJoin 11: leave this lobby first (the player said yes)
+                if (!g_rjLeaveAt) { g_rjLeaveAt = now; emitf("{\"ev\":\"leaving\",\"room\":%llu}", g_rjRoom); stage(L"Joining the Game", L"Leaving the lobby you are in, then %ls"); g_coverWant = 1; }
+                if (now - g_rjLeaveAt > 9000) { rj_fail("other_lobby", L"Could not leave the lobby you are in. Leave it yourself, then press Join again", 0); break; }
+                if (in && now - g_rjLeaveBack > 2500 && g_rjLeaves < 3) {   // the lobby screen's Back (its commands are logged, in case it is another one)
+                    g_rjLeaveBack = now; g_rjLeaves++; logmsg("leaving the lobby of room %llu (Back, try %d)", in, g_rjLeaves); fs(".OnClickBack", ""); }
+                break;
+            }
             if (in || now - g_rjKnown > 1500) rj_fail("other_lobby", L"You are in another lobby. Leave it first, then press Join again", 0);
             break;
         case SC_MAIN:
+            if (in && in == g_rjRoom) { dj_to_lobby(); g_rj = RJ_LOBBY; g_rjAt = now; break; }   // in it already: its lobby screen
             if (in) { rj_fail("busy_search", L"The game is in a room of the automatch. Wait, then press Join again", 0); break; }
             stage(L"Joining the Game", L"Opening the lobby: %ls");
             g_mbText[0] = 0; g_mbCount = 0;
@@ -741,7 +769,10 @@ static void rj_step(DWORD now) {
             else if (!r) { rj_fail("error", L"The game's join did not start. Opening the public games list", 1); break; }
             else if (now - g_rjAt > 60000) { rj_fail("timeout", L"Not signed in to the game's online service. Try again later", 0); break; }   // r < 0: Relic sign-in not done
         }
-        if (g_rjCalled && now - g_rjCalled > 25000) rj_fail("timeout", L"The room did not answer", 0);   // no list: it may still answer (watched)
+        if (g_rjCalled && now - g_rjCalled > 25000) { rj_fail("timeout", L"The room did not answer", 0); break; }   // no list: it may still answer (watched)
+        // (review 05.11 L4) the call never made (the lobby screen of no room, a Relic sign-in that never ends): 65 s from the main
+        // menu - the game's own start is not counted (RJ_MENU waits 90 s for that)
+        if (!g_rjCalled && now - g_rjAt > 65000) rj_fail("timeout", L"The join did not start. Press Join again", 0);
         break; }
     case RJ_LOBBY:
         if (g_screen == SC_SETUP) rj_ok(0);
@@ -766,7 +797,8 @@ static void cmd_take(DWORD now) {
         if (g_cqN) { c = g_cq[g_cqH]; g_cqH = (g_cqH + 1) % 8; g_cqN--; have = 1; }
         LeaveCriticalSection(&g_qlk);
         if (!have) return;
-        if (c.what == CMD_JOIN) rj_start(c.room, c.name, now, "the launcher's pipe");
+        if (c.what == CMD_JOIN) rj_start(c.room, c.name, c.leave, now, "the launcher's pipe");
+        else if (c.what == CMD_CANCEL && c.room && c.room != g_rjRoom && c.room != g_watchRoom) logmsg("Cancel (the launcher) for room %llu - not the join that runs: nothing", c.room);
         else if (c.what == CMD_CANCEL) {
             if (g_rj) rj_cancel("the launcher");
             else if (g_watchRoom) { logmsg("Cancel (the launcher): no more watching room %llu", g_watchRoom); g_watchRoom = 0; }
@@ -803,7 +835,7 @@ static void status_line(char *b, int cap) {
     int sc = g_snap.screen, im = g_snap.inMatch, se = g_snap.searching; unsigned long long room = g_snap.room, jn = g_snap.joining; DWORD at = g_snap.at;
     LeaveCriticalSection(&g_qlk);
     _snprintf(b, cap - 1, "{\"ev\":\"status\",\"screen\":\"%s\",\"in_match\":%s,\"searching\":%s,\"room\":%llu,\"joining\":%llu,"
-              "\"version\":\"" RJ_VERSION "\",\"proto\":1,\"pid\":%lu,\"stalled\":%s}\n",
+              "\"version\":\"" RJ_VERSION "\",\"proto\":2,\"pid\":%lu,\"stalled\":%s}\n",
               sc < 0 ? "match" : sc < (int)(sizeof SC_NAME / sizeof SC_NAME[0]) ? SC_NAME[sc] : "unknown", im ? "true" : "false", se ? "true" : "false",
               room, jn, GetCurrentProcessId(), !at || GetTickCount() - at > 3000 ? "true" : "false");
     b[cap - 1] = 0;
@@ -814,11 +846,12 @@ static void cli_line(Cli *c, char *s) {
     if (!strcmp(cmd.cmd, "status")) { char b[400]; status_line(b, sizeof b); cli_write(c, b); return; }
     QCmd q; memset(&q, 0, sizeof q); q.from = c->id;
     if (!strcmp(cmd.cmd, "join") && cmd.hasRoom && cmd.room) {
-        q.what = CMD_JOIN; q.room = cmd.room;
-        if (!MultiByteToWideChar(CP_UTF8, 0, cmd.name, -1, q.name, 64)) q.name[0] = 0;
-        q.name[63] = 0;
+        q.what = CMD_JOIN; q.room = cmd.room; q.leave = cmd.leave;
+        wchar_t wn[256];                                               // (review 05.11 L2: 64+ UTF-16 units into 64 failed - the name was lost)
+        if (!MultiByteToWideChar(CP_UTF8, 0, cmd.name, -1, wn, 256)) wn[0] = 0;
+        wn[255] = 0; wcsncpy(q.name, wn, 63); q.name[63] = 0;
         for (wchar_t *p = q.name; *p; p++) if (*p < 0x20) *p = L' ';
-    } else if (!strcmp(cmd.cmd, "cancel")) q.what = CMD_CANCEL;
+    } else if (!strcmp(cmd.cmd, "cancel")) { q.what = CMD_CANCEL; q.room = cmd.hasRoom ? cmd.room : 0; }   // with a room: only that join
     else { cli_write(c, "{\"ev\":\"error\",\"reason\":\"bad_command\"}\n"); return; }
     logmsg("pipe: client %lu: %s%s", c->id, cmd.cmd, q.what == CMD_JOIN ? " (queued for the game's thread)" : "");
     EnterCriticalSection(&g_qlk);
@@ -918,6 +951,7 @@ static void __fastcall fs_hook(void *self, void *edx, void *movie, const char *c
         }
         if (!strcmp(cmd, "OnLoadMovieComplete") && args && !IsBadReadPtr(args, 6) && !strncmp(args, "/mp_mc", 6) && !g_loading) {
             g_loading = 1; g_coverWant = 0; menu_forget("a match is loading"); }   // 03.11 review: the lobby screen stayed known after the match
+        if (!g_sending && g_screen == SC_SETUP && strstr(cmd, ".OnClick")) logmsg("lobby screen: %s", cmd);   // RoomJoin 11: its leave command, for the switch
         if (!g_sending && g_screen == SC_MM && strlen(cmd) > 13 && !strcmp(cmd + strlen(cmd) - 13, ".OnClickStart")) {
             g_mmClicked = 1; logmsg("Start / Cancel Searching pressed on Find a Game"); }
         if (!strcmp(cmd, "OnLoadComplete") && args && !IsBadReadPtr(args, 1) && (movie == g_fsMovie || !g_fsMovie)) {     // which full-screen panel is up
@@ -1033,7 +1067,7 @@ static void __stdcall upd_hook(float dt) {
     g_updOrig(dt);
     DWORD now = GetTickCount();
     if (g_worldStart) { g_worldStart = 0; logmsg("a world starts (match or replay)"); g_coverWant = 0; g_noticeUntil = 0; menu_forget("a world starts"); }
-    if (g_movieGone) { g_movieGone = 0; logmsg("the menu movie was deleted (the front end rebuilt?)"); g_noticeUntil = 0; menu_forget("the menu movie deleted"); }
+    if (g_movieGone) { g_movieGone = 0; logmsg("the menu movie was deleted (the front end rebuilt?)"); g_noticeUntil = 0; if (!g_rj) g_coverWant = 0; menu_forget("the menu movie deleted"); }   // (review 05.11 M2: no cover with nothing behind it)
     if (g_noticeUntil && (int)(now - g_noticeUntil) >= 0) {        // the notice was read: cover off (and the list when it was a failed join)
         g_noticeUntil = 0; g_coverWant = 0;
         if (g_noticeList && g_screen == SC_MAIN && !g_watchRoom) fs(".OnClickPublicMatch", "");

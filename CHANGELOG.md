@@ -4,6 +4,25 @@ Every version gets an entry here before it reaches `main`. CI then tags `vX.Y.Z`
 version (`X.Y.0`) it also publishes a GitHub Release with the DLLs and the entries since the previous `X.Y.0`.
 The version of the set lives only in `VERSION`; each DLL still writes its own version to its log.
 
+## 0.2.7 — 2026-11-05
+RoomJoin 11 (store roomjoin-5; branch fix/roomjoin-11): the review of RoomJoin 10 (05.11.2026) and leaving one lobby for another.
+- A second Join for the room still watched for a late answer (after a timeout or a Cancel) was let through and made a second
+  engine join on top of the first; now it says accepted / joining and goes on watching.
+- The cover stayed and took every click and Esc when the menu movie was rebuilt while a "could not join" notice was up (nothing
+  behind it, Cancel did nothing). The rebuild now drops a cover with no join, and Cancel / Esc with no join takes any cover off.
+- "Already in this room": the walk to the lobby screen only from the main menu or the public games list - never from Find a
+  Game or another screen. With the menu movie found late, the same room on the main menu / the games list no longer comes out as
+  "automatch room" / "another lobby".
+- A room name of 64+ UTF-16 units came out as "the custom game" (the conversion into 64 failed); it is cut to 63 now.
+- The JSON reader stopped a broken surrogate escape (`\uD800\u` at the end of a line) only after 4 more bytes: it stops at once.
+- A join whose engine call is never made (the lobby screen of no room, a Relic sign-in that never ends) gives up after 65 s from
+  the main menu (the game's start is not counted: up to 90 s before that).
+- `{"cmd":"cancel","room":<id>}` cancels only that join (a late Cancel no longer stops the next Join); without a room as before.
+- `{"cmd":"join",...,"leave":true}` (launcher 1.4.10, after the player said yes): on the lobby screen of another room the DLL
+  presses Back (up to 3 times, 9 s), waits until the game is out of that room, then joins as usual; a `leaving` event tells the
+  launcher. An experiment: every command of the lobby screen goes to RoomJoin.log ("lobby screen: ..."), to find its real
+  leave command if Back is not it. The status says `"version":"11","proto":2`.
+
 ## 0.2.6 — 2026-11-05
 Cooldowns 8 (store cooldowns-8) and APM 3 (apm-3), the reports of 04.11.2026 (siritos, berserk, TvangeS).
 - Cooldowns: the recharge key was a hash of all 16 bytes of ConstOwnerPointer at button+0x2A8. Its constructors (SimEngine.dll)
