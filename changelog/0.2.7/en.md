@@ -1,0 +1,2 @@
+- Join a lobby from the launcher (test): you can go from one lobby to another - the launcher asks, the game leaves the lobby you are in and joins the new one by itself (needs launcher 1.4.10).
+- Join a lobby from the launcher: fixed the dark "Joining the Game" screen that could stay and block the menu, a second join on top of a slow one, long lobby names shown as "the custom game", and a double click on Join that cancelled it in the game.
