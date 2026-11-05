@@ -4,6 +4,18 @@ Every version gets an entry here before it reaches `main`. CI then tags `vX.Y.Z`
 version (`X.Y.0`) it also publishes a GitHub Release with the DLLs and the entries since the previous `X.Y.0`.
 The version of the set lives only in `VERSION`; each DLL still writes its own version to its log.
 
+## 0.2.9 — 2026-11-05
+RoomJoin 12 (store roomjoin-6; on top of RoomJoin 11 of PR #23, which never reached the store - roomjoin-5 is RoomJoin 10;
+0.2.8 is PR #24). Owner 05.11.2026 after trying Join himself: "не надо там перекрывать весь экран ... и когда в игру зайдёт
+не надо тоже закрывать плашкой".
+- No cover over the game any more by default: the join runs by itself exactly as before (main menu -> the game browser's join
+  by the room id -> the lobby screen), and the player sees the game's own menu, its "Connecting" and the lobby. No click or Esc
+  is taken from the game, nothing of the menu is hidden. What happens and why not is told by the launcher (the pipe events are
+  unchanged). A "no" from the game (full, closed...) opens the public games list at once instead of a 3 s notice on the cover.
+- RoomJoin.ini [RoomJoin] Cover=1 brings the old cover back (tests only); the log says which.
+- Stand 1, 05.11 (RoomJoin 10 binary, the same join): real open Relic lobbies joined in ~4 s from Elite and from vanilla, with
+  and without "Games through our servers" / "Forwarding servers"; the owner's "connecting, nothing happens" of 05.11 evening was
+  the Moscow forwarding bridge closing every forwarded game (du_egress.py, fixed on the server).
 ## 0.2.7 — 2026-11-05
 RoomJoin 11 (store roomjoin-5; branch fix/roomjoin-11): the review of RoomJoin 10 (05.11.2026) and leaving one lobby for another.
 - A second Join for the room still watched for a late answer (after a timeout or a Cancel) was let through and made a second

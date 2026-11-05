@@ -27,6 +27,8 @@
 // (the player said yes in the launcher): from another lobby's screen Back first, then the join (an experiment: the lobby
 // screen's commands are logged, to find its real leave command if Back is not it).
 //
+// RoomJoin 12 (05.11.2026, owner): NO cover by default - what follows about the cover is only with RoomJoin.ini Cover=1; the join
+// itself is the same, the player sees the game's own menu, its "Connecting" and the lobby screen, the launcher tells the rest.
 // In the game, once it is in its main menu: a cover ("Joining the Game", the room's name, Cancel; the menu under it hidden, so
 // clicks and Esc don't reach it), the game browser's own join by the room id (the call MMFind's fast automatch guests use since
 // 0.37), the lobby screen - then the cover goes and the lobby is the player's (hero, ready: as always). The game says no (full,
@@ -55,7 +57,7 @@
 #include <wchar.h>
 #include <wctype.h>
 
-#define RJ_VERSION  "11"
+#define RJ_VERSION  "12"
 #define HOOK_ADDR   0x0045DB6C                    // Invoke (engine -> Flash), this = SFMovie: +4 the movie, +0x18 its fscommand handler
 #define HOOK_RESUME 0x0045DB71
 static const unsigned char INV_PRO[5] = {0xB8, 0x59, 0x70, 0xEF, 0x00};
@@ -104,6 +106,10 @@ static void *g_triedFs[16], *g_triedInv[16]; static int g_ntFs, g_ntInv;     // 
 // the player's Start / Cancel Searching since the panel came up. Both forgotten when another panel comes or a match loads.
 static volatile int g_engSearch = -1, g_mmClicked;
 static int g_coverWant, g_coverOn, g_uiHidden;
+// RoomJoin 12 (owner 05.11.2026: "не надо перекрывать весь экран ... и когда в игру зайдёт не надо закрывать плашкой"): no cover
+// by default - the join runs by itself, the player sees the game's own screens (the menu, the game's "Connecting", the lobby);
+// the launcher shows what happens and why not. RoomJoin.ini [RoomJoin] Cover=1 brings the old cover back (for a test).
+static int g_coverCfg;
 static void screen_reset(const char *why) {
     if (g_screen != SC_UNKNOWN || g_panel[0]) logmsg("screen forgotten (%s)", why);
     g_screen = SC_UNKNOWN; g_panel[0] = 0; g_engSearch = -1; g_mmClicked = 0;
@@ -603,7 +609,7 @@ static void stage(const wchar_t *title, const wchar_t *what) {          // what 
 static void notice(const wchar_t *title, const wchar_t *why, int toList) {   // a text on the cover for 3 s (then the public games list)
     wcsncpy(g_coverTitle, title, 63); g_coverTitle[63] = 0;
     _snwprintf(g_coverLine, 199, L"%ls", why); g_coverLine[199] = 0; g_coverTextTick = 0;
-    g_coverWant = 1; g_noticeUntil = GetTickCount() + 3000; g_noticeList = toList;
+    g_coverWant = 1; g_noticeUntil = GetTickCount() + (g_coverCfg ? 3000 : 0); g_noticeList = toList;   // no cover: the list at once
 }
 static void rj_ok(int late) {
     logmsg("in the lobby of room %llu%s", g_rjRoom, late ? " (a late answer)" : "");
@@ -1093,7 +1099,7 @@ static void __stdcall upd_hook(float dt) {
         if (!g_rj && g_nCli > 0 && g_fsMovie && !g_loading && !g_inWorld && g_screen == SC_UNKNOWN && now - idleProbe > 2000) { idleProbe = now; probe_screen(); }   // only for a connected launcher's status
         snap_update(now);
     }
-    if (g_fsMovie && !g_loading && !g_inWorld && (g_coverWant || g_coverOn)) cover_update();
+    if (g_fsMovie && !g_loading && !g_inWorld && (g_coverWant || g_coverOn) && (g_coverCfg || g_coverOn)) cover_update();
     else if (g_wndOrig && !g_coverOn) wnd_wrap(0);
 }
 static int iat_hook(DWORD slot, void *fn, void **orig) {          // chained: whatever is in the import slot now is called first
@@ -1136,7 +1142,9 @@ BOOL WINAPI DllMain(HINSTANCE h, DWORD r, LPVOID _) {
     { char n[64]; wsprintfA(n, "Local\\dow2patch_RoomJoin_%lu", GetCurrentProcessId());
       HANDLE mx = CreateMutexA(NULL, FALSE, n); if (mx && GetLastError() == ERROR_ALREADY_EXISTS) { logmsg("another RoomJoin copy is active, this one stays idle"); return TRUE; } }
     { wchar_t ini[MAX_PATH]; _snwprintf(ini, MAX_PATH, L"%lsRoomJoin.ini", g_dir); ini[MAX_PATH - 1] = 0;
-      if (!GetPrivateProfileIntW(L"RoomJoin", L"Enabled", 1, ini)) { logmsg("disabled in RoomJoin.ini - no hooks"); return TRUE; } }
+      if (!GetPrivateProfileIntW(L"RoomJoin", L"Enabled", 1, ini)) { logmsg("disabled in RoomJoin.ini - no hooks"); return TRUE; }
+      g_coverCfg = GetPrivateProfileIntW(L"RoomJoin", L"Cover", 0, ini) != 0;
+      logmsg("cover over the game while joining: %s", g_coverCfg ? "on (RoomJoin.ini Cover=1)" : "off - the game's own screens"); }
     g_fsHooked = hook_fscmd();                    // the vtable slot: the same whether MMFind is in the game already or comes later
     if (!g_fsHooked) return TRUE;                 // without it no join can be done: nothing else either
     hook_invoke();

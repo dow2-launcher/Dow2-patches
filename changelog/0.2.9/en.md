@@ -1,0 +1,1 @@
+- Joining a lobby from the launcher: no dark "Joining the Game" screen over the game any more - the game joins by itself and you see its own menu and then the lobby; the launcher shows how it goes and why not.

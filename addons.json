@@ -458,7 +458,7 @@
     "order": 40
   },
   "roomjoin": {
-    "version": "5",
+    "version": "6",
     "dll": "RoomJoin.dll",
     "files": {"rjbridge.exe": "build/rjbridge.exe"},
     "default": false,
