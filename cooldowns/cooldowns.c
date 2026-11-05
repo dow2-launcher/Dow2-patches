@@ -62,11 +62,7 @@ static int slot_of(const char *path) {
     return -1;
 }
 
-// the start of each recharge per ability of each owner (squad): switching the selection back and forth keeps the rate,
-// so the number comes at once instead of after two sim ticks
-typedef struct { unsigned key; float p0, p; DWORD t0; } Seen;
-static Seen g_seen[64]; static int g_nseen;
-static void cd_share(char *w, float p, unsigned key);
+static void cd_share(char *w, float p);
 // One ability button update (0xB9AF80) calls SetProgress once per reason the ability can't be used: the share for a
 // recharge (reasons 0xD / 0xE) and 0 for every other reason - so an ability recharging while its squad lacks the energy
 // got its share and then a 0 in the same frame, and the number (and the game's own dark sweep) went (siritos 02.11).
@@ -81,9 +77,9 @@ void cd_progress(char *w, float p) {
         g_capN++;
         return;
     }
-    cd_share(w, p, 0);
+    cd_share(w, p);
 }
-static void cd_share(char *w, float p, unsigned key) {
+static void cd_share(char *w, float p) {
     if (!g_on || !w || !mt_ticking()) return;
     const char *path = w + 0xDD0;
     if (IsBadReadPtr(path, 16) || path[0] != '/') return;
@@ -102,14 +98,6 @@ static void cd_share(char *w, float p, unsigned key) {
     float expect = b->p + 0.05f;
     if (b->w != w || now - b->seen > 500 || p < b->p - 0.002f || (b->t != gt && p > expect && gt - b->t < 10)) {
         b->w = w; b->p0 = p; b->t0 = gt; b->shown = 0;
-    }
-    if (key) {                                       // this ability of this owner seen before in this recharge: its start
-        Seen *k = NULL;
-        for (int i = 0; i < g_nseen; i++) if (g_seen[i].key == key) { k = &g_seen[i]; break; }
-        if (!k) { k = &g_seen[g_nseen < 64 ? g_nseen++ : (int)(key % 64)]; k->key = key; k->p0 = p; k->t0 = gt; }
-        else if (p < k->p - 0.002f) { k->p0 = p; k->t0 = gt; }                 // a new recharge
-        k->p = p;
-        if (k->t0 < b->t0 && k->p0 < p) { b->p0 = k->p0; b->t0 = k->t0; }       // an older start: the rate at once
     }
     b->p = p; b->t = gt; b->seen = now;
     LeaveCriticalSection(&g_cs);
@@ -207,7 +195,7 @@ static void cd_show(int s, char *w) {
     if (sec) { snprintf(p, sizeof p, "%s.mt_cd.count_text", dot); gfx_set_text(mv, p, t); }
     // shown -1: from a match before (see cd_match_check) - not known whether the clip is visible: set it either way
     if (sec ? *shown <= 0 : *shown != 0) { snprintf(p, sizeof p, "%s.mt_cd", dot); gfx_set_visible(mv, p, sec != 0); }
-    if (g_trace && !sec) logmsg("trace %.40s: number off (%d)", wp, *shown);
+    if (g_trace && (!sec || *shown <= 0)) logmsg("trace %.40s: number %s (%d -> %d) widget %p movie %p", wp, sec ? "ON" : "off", *shown, sec, (void *)w, mv);
     *shown = sec;
 }
 
@@ -333,18 +321,23 @@ static LONG CALLBACK cd_veh(EXCEPTION_POINTERS *e) {
 }
 static int g_query = 1;                              // Cooldowns.ini [Cooldowns] Ask=0: no engine query (shares only)
 static int g_trace;                                  // Cooldowns.ini [Cooldowns] Trace=1: every change of a button's state in the log
-typedef struct { unsigned sig; DWORD at; } TraceSeen;
-static TraceSeen g_tr[SLOTS];
+typedef struct { char *w; unsigned sig; DWORD at; } TraceSeen;
+static TraceSeen g_tr[SLOTS][4];                     // per place and button widget (05.11: two buttons update one place every frame)
 static void trace_btn(int s, char *btn, char *w, int ability, float q, int en, int vis, float left, float sweep, const char *what) {
     if (!g_trace || s < 0 || s >= SLOTS) return;
     const unsigned *o = (const unsigned *)(btn + 0x2A8);
-    unsigned sig = (unsigned)ability * 31u + o[0] * 7u + o[1] * 13u + (unsigned)g_capN * 101u + (unsigned)(g_capMax * 100) * 1009u
+    unsigned own = o[0] == 0 ? o[1] : o[0] == 1 ? o[2] : o[0] == 2 ? o[3] : 0;   // the real owner (rec_key): the other words are stack left-overs
+    unsigned sig = (unsigned)ability * 31u + o[0] * 7u + own * 13u + (unsigned)g_capN * 101u + (unsigned)(g_capMax * 100) * 1009u
         + (unsigned)((q + 2) * 100) * 10007u + (unsigned)en * 3u + (unsigned)vis * 5u + (unsigned)(left > 0.5f) * 17u + (unsigned)what[0];
     DWORD now = GetTickCount();
-    if (g_tr[s].sig == sig && now - g_tr[s].at < 2000) return;
-    g_tr[s].sig = sig; g_tr[s].at = now;
-    logmsg("trace %.40s ab %08X owner %08X %08X %08X %08X en %d vis %d calls %d gameshare %.3f last %.3f engine %.3f left %.0f ticks sweep %.3f tick %ld: %s",
-           w + 0xDD0, ability, o[0], o[1], o[2], o[3], en, vis, g_capN, g_capMax, g_capLast, q, left, sweep, mt_ticks(), what);
+    TraceSeen *ts = NULL;
+    for (int i = 0; i < 4; i++) if (g_tr[s][i].w == w) ts = &g_tr[s][i];
+    if (!ts) { ts = &g_tr[s][0]; for (int i = 0; i < 4; i++) if (g_tr[s][i].at < ts->at) ts = &g_tr[s][i]; ts->w = w; ts->sig = 0;
+               logmsg("trace slot %d: button widget %p (path %.40s) in movie %p - new on this place", s, (void *)w, w + 8, gfx_movie_of_widget(w)); }
+    if (ts->sig == sig && now - ts->at < 2000) return;
+    ts->sig = sig; ts->at = now;
+    logmsg("trace %.40s w %p ab %08X owner %u:%08X en %d vis %d calls %d gameshare %.3f last %.3f engine %.3f left %.0f ticks sweep %.3f tick %ld: %s",
+           w + 0xDD0, (void *)w, ability, o[0], own, en, vis, g_capN, g_capMax, g_capLast, q, left, sweep, mt_ticks(), what);
 }
 static float ask_vt(char *ctx, char *btn, int ability, int off) {   // the engine's answer of iface vt+off, -1 = none
     if (!g_query || g_qOff || !ctx || IsBadReadPtr(ctx + 0xC, 4)) return -1;
@@ -386,15 +379,22 @@ static void cd_match_check(void) {
             for (int i = 0; i < 4; i++) { if (b->ui[i].mv && b->ui[i].shown) { b->ui[i].shown = -1; n++; } else b->ui[i].mv = NULL; }
             b->w = NULL; b->p = b->p0 = 0; b->t = b->t0 = b->seen = 0; b->shown = 0; b->ready = 1; b->exact = 0; b->ab = 0; b->key = 0;
         }
-        memset(g_rec, 0, sizeof g_rec); memset(g_seen, 0, sizeof g_seen); g_nseen = 0;
+        memset(g_rec, 0, sizeof g_rec);
         memset(g_abLen, 0, sizeof g_abLen); g_nabLen = 0; memset(g_tr, 0, sizeof g_tr);
         LeaveCriticalSection(&g_cs);
         logmsg("a new match: the recharges of the match before forgotten (%d numbers to check in a kept HUD movie)", n);
     }
     g_lastTicks = t;
 }
+static void cd_trace_dump(void) {                    // Trace=1: every 2 s, where a number is up (by our bookkeeping)
+    static DWORD last; DWORD now = GetTickCount();
+    if (!g_trace || now - last < 2000) return;
+    last = now;
+    for (int s = 0; s < SLOTS; s++) for (int i = 0; i < 4; i++)
+        if (g_slot[s].ui[i].mv && g_slot[s].ui[i].shown) logmsg("trace up: slot %d shows %d in movie %p (recharge widget %p, ready %d)", s, g_slot[s].ui[i].shown, g_slot[s].ui[i].mv, g_slot[s].w, g_slot[s].ready);
+}
 static void __fastcall hk_btnupd(char *btn, void *edx, char *ctx) {
-    cd_match_check();
+    cd_match_check(); cd_trace_dump();
     char *w0 = btn ? *(char **)(btn + 0x28) : NULL;
     g_capMax = 0; g_capLast = -1; g_capN = 0; g_capW = g_on ? w0 : NULL;
     o_btnupd(btn, edx, ctx);
