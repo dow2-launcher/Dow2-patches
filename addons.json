@@ -3,7 +3,8 @@
     "The add-ons of this repo as the launcher store (store3/launcher.json) has them on 04.11.2026: key = the store id without _r2/_r3, store version = <key>-<version>, texts = the store's.",
     "Publishing: dow2-patches-deploy builds a raised version into the STAGING store only (its timer is off on purpose since 04.11.2026); players get it only through elite-release on rts. See README, Building and releasing.",
     "Not here, released by hand (their store version is not <id>-<version> or they are not one DLL of this repo): automatch (mmfind-<ver>: MMFind.dll + OwnLobby.dll + early winmm.dll), relay_r2 + relay_fwd (relay-<n> / relayfwd-<n>, released as a pair), elitefix_wmic (Elite.exe), rusifikator (text files), eliteai_off.",
-    "Texts for players (name, description, category, order): edit docs/store-texts.json, then scripts/store_texts.py addons (rules: docs/ADDON_TEXTS.md). category goes to the store with a deploy; min_launcher lives in the store only."
+    "Texts for players (name, description, category, order): edit docs/store-texts.json, then scripts/store_texts.py addons (rules: docs/ADDON_TEXTS.md). category goes to the store with a deploy; min_launcher lives in the store only.",
+    "games (launcher 1.4.11: [\"elite\", \"vanilla\"] or [\"elite\"]) and the top-level vanilla.loader (vloader-<n> = make build/launcher/winmm.dll) live in the store only, kept by deploys; see docs/ADDON_RULES.md."
   ],
   "lobbystats": {
     "version": "0.11.0",
