@@ -18,8 +18,8 @@
 // The exit of the game: nothing waits for that thread - no work in DLL_PROCESS_DETACH, all its I/O is overlapped (it only ever
 // waits in WaitForMultipleObjects), it holds no lock of the C runtime or of the heap while it waits (logging goes through one
 // file handle and WriteFile), so ExitProcess ends it wherever it is.
-// For the switch to the pipe (launcher 1.4.9): Elite_DLLs/RoomJoin.txt of launcher 1.4.8 (line 1 the room id, line 2 its name)
-// is still read, once a second in the menu; to be removed in RoomJoin 10. RoomJoin_result.txt is gone (nobody read it).
+// RoomJoin 10 (05.11.2026, owner): no request file at all - Elite_DLLs/RoomJoin.txt of launcher 1.4.8 is not read any more (no
+// disk access in the game's main thread, nothing to be locked), and nothing runs on a timer while no launcher is connected.
 //
 // In the game, once it is in its main menu: a cover ("Joining the Game", the room's name, Cancel; the menu under it hidden, so
 // clicks and Esc don't reach it), the game browser's own join by the room id (the call MMFind's fast automatch guests use since
@@ -49,7 +49,7 @@
 #include <wchar.h>
 #include <wctype.h>
 
-#define RJ_VERSION  "9"
+#define RJ_VERSION  "10"
 #define HOOK_ADDR   0x0045DB6C                    // Invoke (engine -> Flash), this = SFMovie: +4 the movie, +0x18 its fscommand handler
 #define HOOK_RESUME 0x0045DB71
 static const unsigned char INV_PRO[5] = {0xB8, 0x59, 0x70, 0xEF, 0x00};
@@ -635,7 +635,7 @@ static void nudge_menu(DWORD now) {
     if (n % 21 == 20) {                                                // put the game's idea of the cursor back where the cursor is
         POINT c; if (GetCursorPos(&c) && ScreenToClient(w, &c)) PostMessageW(w, WM_MOUSEMOVE, 0, MAKELPARAM(c.x, c.y)); }
 }
-// a Join (from the pipe, or from the old request file of launcher 1.4.8)
+// a Join (from the pipe)
 static void rj_start(unsigned long long room, const wchar_t *name, DWORD now, const char *from) {
     char nm[200]; WideCharToMultiByte(CP_UTF8, 0, name, -1, nm, sizeof nm, NULL, NULL); nm[sizeof nm - 1] = 0;
     logmsg("request (%s): room %llu \"%s\"", from, room, nm);
@@ -658,25 +658,6 @@ static void rj_start(unsigned long long room, const wchar_t *name, DWORD now, co
     g_noticeUntil = 0; g_noticeList = 0;
     g_rj = RJ_MENU; g_rjAt = now; g_rjKnown = g_rjProbed = g_rjBack = g_rjOther = g_rjCalled = 0; g_rjBacks = 0; g_rjWalk = 0;
     g_mbText[0] = 0; g_mbCount = 0;
-}
-// launcher 1.4.8: Elite_DLLs/RoomJoin.txt (to be removed in RoomJoin 10, see the top)
-static void rj_read_file(DWORD now) {
-    static DWORD last; if (now - last < 1000) return; last = now;
-    wchar_t p[MAX_PATH]; _snwprintf(p, MAX_PATH, L"%lsRoomJoin.txt", g_dir); p[MAX_PATH - 1] = 0;
-    WIN32_FILE_ATTRIBUTE_DATA a; if (!GetFileAttributesExW(p, GetFileExInfoStandard, &a)) return;
-    FILETIME ft; GetSystemTimeAsFileTime(&ft);
-    ULARGE_INTEGER n, w; n.LowPart = ft.dwLowDateTime; n.HighPart = ft.dwHighDateTime; w.LowPart = a.ftLastWriteTime.dwLowDateTime; w.HighPart = a.ftLastWriteTime.dwHighDateTime;
-    unsigned long long age = n.QuadPart > w.QuadPart ? (n.QuadPart - w.QuadPart) / 10000000ULL : 0;
-    char l1[64] = "", l2[192] = ""; FILE *f = _wfopen(p, L"r");
-    if (f) { if (fgets(l1, sizeof l1, f)) { if (!fgets(l2, sizeof l2, f)) l2[0] = 0; } fclose(f); }
-    DeleteFileW(p);
-    l2[strcspn(l2, "\r\n")] = 0;
-    unsigned long long room = strtoull(l1, NULL, 10);
-    if (!room) { logmsg("RoomJoin.txt without a room id - dropped"); return; }
-    if (age > 180) { logmsg("RoomJoin.txt for room %llu is %llu s old - dropped", room, age); return; }
-    if (room == g_okRoom && now - g_okAt < 120000) { logmsg("room %llu was joined %lu s ago - RoomJoin.txt dropped", room, (now - g_okAt) / 1000); return; }
-    wchar_t nm[64]; MultiByteToWideChar(CP_UTF8, 0, l2, -1, nm, 63); nm[63] = 0;
-    rj_start(room, nm, now, "RoomJoin.txt of launcher 1.4.8");
 }
 static void rj_step(DWORD now) {
     if (g_watchRoom) {                                                // a late answer to a join we gave up on
@@ -797,12 +778,13 @@ static void cmd_take(DWORD now) {
 #define MAXC 4
 typedef struct { HANDLE h; OVERLAPPED ov; char rb[512]; char line[1024]; int len, drop, rd; DWORD id; } Cli;
 static Cli g_c[MAXC]; static DWORD g_nextId = 1;
+static volatile LONG g_nCli;                      // launchers connected now (the main thread probes the screen only for them)
 static wchar_t g_pipeName[80];
 static void cli_close(Cli *c, const char *why) {
     if (!c->h) return;
     logmsg("pipe: client %lu gone (%s)", c->id, why);
     if (c->rd) { DWORD n; CancelIoEx(c->h, &c->ov); GetOverlappedResult(c->h, &c->ov, &n, TRUE); c->rd = 0; }   // the cancelled read is over before the slot is reused
-    DisconnectNamedPipe(c->h); CloseHandle(c->h); c->h = NULL;
+    DisconnectNamedPipe(c->h); CloseHandle(c->h); c->h = NULL; InterlockedDecrement(&g_nCli);
 }
 static int cli_write(Cli *c, const char *s) {                         // overlapped, at most 1 s - a client that does not read is dropped
     static OVERLAPPED wo; static HANDLE we;
@@ -905,7 +887,7 @@ static DWORD WINAPI pipe_thread(LPVOID _) {
             if (!connNow && !GetOverlappedResult(lis, &lov, &dummy, FALSE)) { DisconnectNamedPipe(lis); continue; }
             int s = -1; for (int i = 0; i < MAXC; i++) if (!g_c[i].h) { s = i; break; }
             if (s < 0) { logmsg("pipe: a fifth client - refused"); DisconnectNamedPipe(lis); continue; }
-            Cli *c = &g_c[s]; c->h = lis; c->len = 0; c->drop = 0; c->rd = 0; c->id = g_nextId++;
+            Cli *c = &g_c[s]; c->h = lis; c->len = 0; c->drop = 0; c->rd = 0; c->id = g_nextId++; InterlockedIncrement(&g_nCli);
             logmsg("pipe: client %lu connected", c->id);
             lis = pipe_new(&sa, 0);                                    // the next one waits on a new instance
             char b[400]; status_line(b, sizeof b);
@@ -1059,10 +1041,9 @@ static void __stdcall upd_hook(float dt) {
     }
     if (g_fsHooked) {
         cmd_take(now);
-        if (g_rj == RJ_NONE && !g_loading && !g_inWorld) rj_read_file(now);
         if (!g_noticeUntil) rj_step(now);
         static DWORD idleProbe;                                        // the screen for "status" while no join runs
-        if (!g_rj && g_fsMovie && !g_loading && !g_inWorld && g_screen == SC_UNKNOWN && now - idleProbe > 2000) { idleProbe = now; probe_screen(); }
+        if (!g_rj && g_nCli > 0 && g_fsMovie && !g_loading && !g_inWorld && g_screen == SC_UNKNOWN && now - idleProbe > 2000) { idleProbe = now; probe_screen(); }   // only for a connected launcher's status
         snap_update(now);
     }
     if (g_fsMovie && !g_loading && !g_inWorld && (g_coverWant || g_coverOn)) cover_update();
