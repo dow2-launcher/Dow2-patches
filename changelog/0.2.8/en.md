@@ -1,0 +1,1 @@
+- Cooldown seconds: a number no longer stays frozen on another unit's ability after you change the selection (seen after a generator under construction and after the scouts' grenade).

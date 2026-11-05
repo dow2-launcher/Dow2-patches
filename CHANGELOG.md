@@ -4,6 +4,15 @@ Every version gets an entry here before it reaches `main`. CI then tags `vX.Y.Z`
 version (`X.Y.0`) it also publishes a GitHub Release with the DLLs and the entries since the previous `X.Y.0`.
 The version of the set lives only in `VERSION`; each DLL still writes its own version to its log.
 
+## 0.2.8 — 2026-11-05
+Cooldowns 9 (store cooldowns-9; branch fix/cooldowns-9).
+- A frozen number on another unit (siritos 05.11: a generator under construction showed a number on its cancel button; with the
+  Techmarine selected next the same number stood on his first ability, and so on - the scouts' grenade on any unit with an
+  ability on that place). Our number is a clip in the HUD movie under the button's path, but it was taken off only through the
+  button widget it was put on; after a selection change the panel updates that place through another widget, so it was
+  "not ours" and the clip stayed. What is shown is now kept per HUD movie and place, whatever widget updates it; before a number
+  is shown the clip is looked for again (a new movie at an old address). Trace=1 logs "number off".
+
 ## 0.2.6 — 2026-11-05
 Cooldowns 8 (store cooldowns-8) and APM 3 (apm-3), the reports of 04.11.2026 (siritos, berserk, TvangeS).
 - Cooldowns: the recharge key was a hash of all 16 bytes of ConstOwnerPointer at button+0x2A8. Its constructors (SimEngine.dll)

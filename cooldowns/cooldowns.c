@@ -1,5 +1,6 @@
 // cooldowns.c - seconds left on recharging abilities and global abilities, in the middle of the button over the game's
 // own dark recharge sweep. Cooldowns.dll (cooldowns_main.c; the match state from matchtimer.c with MT_EMBED).
+// Cooldowns 9 (05.11.2026): the number is taken off per HUD movie and button place, not per widget (see cd_show).
 // cooldowns-3 (02.11.2026): the number is the button's own text in the game's own movie, no Direct3D (see "the number").
 //
 // How the game shows a recharge (found with a probe on 2026-10-29, DOW2.exe 3.19 + Elite 3.2):
@@ -34,6 +35,7 @@ static void logmsg(const char *fmt, ...) {
 
 // ---------- settings: Cooldowns.ini, [Cooldowns] ----------
 static int g_on = 1, g_size = 26;                   // DigitSize: height of the digits in the button's own units (it is 64; the game's count is 16)
+static int g_trace;                                  // (Trace=1, read in cd_start)
 static DWORD g_color = 0xFFFFFF;                     // RRGGBB; white = the game's own colour of the count, left as it is
 
 // ---------- per button: the latest share and the rate ----------
@@ -45,7 +47,7 @@ typedef struct {
     int shown;                                       // seconds on the screen: within one recharge they only go down
     volatile int ready;                              // the latest value said ready (0 or 1), or the button is hidden
     int exact; DWORD exactLeft, exactAt;             // global abilities: game ms left read from the engine at game ms exactAt
-    void *uiMovie; char *uiW; int uiShown;           // UI thread: our copy of the count clip made in this movie on this button, seconds in it
+    struct { void *mv; int shown; } ui[4];           // UI thread: per HUD movie, the seconds our count clip of this button shows there
     int ab; unsigned key;                            // the ability (the button update's +0x74) and the recharge (squad + ability) shown
 } Slot;
 static Slot g_slot[SLOTS];
@@ -157,22 +159,35 @@ static void cd_show(int s, char *w) {
     EnterCriticalSection(&g_cs);
     int sec = b->w == w && mt_ticking() ? cd_seconds(b, now, mt_game_ms()) : 0;
     LeaveCriticalSection(&g_cs);
-    if (!sec && (b->uiW != w || !b->uiShown)) return;          // nothing on this button and nothing to take off
+    // Cooldowns 9 (siritos 05.11: a generator's number under construction, then the Techmarine selected - the frozen number on
+    // his first ability; the same with the scouts' grenade and any unit with an ability there): our clip lives in the HUD movie
+    // under the button's PATH, but it was taken off only by the button widget it was put on. After a selection change the
+    // panel updates that place through another widget - "not ours", nothing taken off - and the number stayed. Now what is
+    // shown is kept per movie and place (the slot), whatever widget updates it.
+    int any = 0; for (int i = 0; i < 4; i++) if (b->ui[i].mv && b->ui[i].shown) any = 1;
+    if (!sec && !any) return;                                  // nothing to show and nothing shown anywhere
     void *mv = gfx_movie_of_widget(w);
     const char *wp = w + 8;
     if (!mv || IsBadReadPtr(wp, 48) || wp[0] != '/' || !memchr(wp, 0, 48)) return;
     char dot[64], p[96];                                       // "/global_abilities/global_btn00" -> "global_abilities.global_btn00"
     snprintf(dot, sizeof dot, "%s", wp + 1);
     for (char *c = dot; *c; c++) if (*c == '/') *c = '.';
-    if (b->uiMovie != mv || b->uiW != w) {                     // first number on this button (in this HUD): the copy
+    int ui = -1;
+    for (int i = 0; i < 4; i++) if (b->ui[i].mv == mv) ui = i;
+    if (ui < 0) {                                              // nothing of ours in this movie yet
         if (!sec) return;
-        b->uiMovie = mv; b->uiW = w; b->uiShown = 0;
+        for (int i = 0; i < 4 && ui < 0; i++) if (!b->ui[i].mv || !b->ui[i].shown) ui = i;
+        if (ui < 0) ui = 0;                                    // (4 HUD movies with a number on this place: hardly - reuse the first)
+        b->ui[ui].mv = mv; b->ui[ui].shown = 0;
+    }
+    int *shown = &b->ui[ui].shown;
+    if (sec && !*shown) {                                      // a number comes: the copy, if this movie has none (a new movie at an old address too)
         snprintf(p, sizeof p, "%s.mt_cd", dot);
         if (!gfx_exists(mv, p)) {
             char src[96]; snprintf(src, sizeof src, "%s/count", wp);
             GfxVal a[2] = { gv_str(src), gv_str("mt_cd") }, r; memset(&r, 0, sizeof r);
             gfx_invoke(mv, "Receive_DuplicateMovieClip", &r, a, 2);
-            if (r.type != GV_BOOL || !r.v.b) { logmsg("%s: no count clip to copy - no number on this button", wp); b->uiMovie = NULL; return; }
+            if (r.type != GV_BOOL || !r.v.b) { logmsg("%s: no count clip to copy - no number on this button", wp); b->ui[ui].mv = NULL; return; }
             // count_text sits in its clip at -24.5..0 x -17.5..7.9: its centre, scaled, onto the button's (64 x 64)
             double k = g_size / 16.0;
             GfxVal pa[3] = { gv_str(p), gv_num(32 + 12.2 * k), gv_num(32 + 4.8 * k) }, sa[3] = { gv_str(p), gv_num(k), gv_num(k) };
@@ -186,12 +201,13 @@ static void cd_show(int s, char *w) {
             logmsg("%s: number in the button's own count clip (copied as mt_cd)", wp);
         }
     }
-    if (sec == b->uiShown) return;
+    if (sec == *shown) return;
     char t[16];
     if (sec < 100) snprintf(t, sizeof t, "%d", sec); else snprintf(t, sizeof t, "%d:%02d", sec / 60, sec % 60);
     if (sec) { snprintf(p, sizeof p, "%s.mt_cd.count_text", dot); gfx_set_text(mv, p, t); }
-    if (!sec != !b->uiShown) { snprintf(p, sizeof p, "%s.mt_cd", dot); gfx_set_visible(mv, p, sec != 0); }
-    b->uiShown = sec;
+    if (!sec != !*shown) { snprintf(p, sizeof p, "%s.mt_cd", dot); gfx_set_visible(mv, p, sec != 0); }
+    if (g_trace && !sec) logmsg("trace %.40s: number off (%d)", wp, *shown);
+    *shown = sec;
 }
 
 // The selection panel's ability button update (virtual, slot 0x0111AFBC = 0xB9AF80; this = the button's slot struct,
@@ -477,7 +493,7 @@ void cd_start(const wchar_t *dir, const wchar_t *ini) {
     g_color = wcstoul(c, NULL, 16) & 0xFFFFFF;
     g_query = GetPrivateProfileIntW(L"Cooldowns", L"Ask", 1, ini);
     g_trace = GetPrivateProfileIntW(L"Cooldowns", L"Trace", 0, ini);
-    logmsg("Cooldowns 8 (%s): the numbers in the game's own button movie; every recharge per squad and ability%s; no number, no sweep on a usable button",
+    logmsg("Cooldowns 9 (%s): the numbers in the game's own button movie; every recharge per squad and ability%s; no number, no sweep on a usable button",
            g_on ? "on" : "off, [Cooldowns] Enabled=0", g_query ? ", asked from the engine (guarded)" : ", Ask=0: shares only");
     if (!g_on) return;
     InitializeCriticalSection(&g_cs);
