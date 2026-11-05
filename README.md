@@ -150,6 +150,13 @@ vanilla-loader/ - **winmm.dll**
     Forwards everything to the real winmm.dll. Full build: loads every *.dll from <game>\dow2-patches\ (vanilla and Elite) and the
     early add-ons in Elite_DLLs. -DEARLY_ONLY (build/early/winmm.dll, in Automatch v2.0): only the early add-ons (OwnLobby.dll) -
     Elite's injector loads Elite_DLLs ~9 s after the start, too late for them.
+    -DLAUNCHER_LOADER (build/launcher/winmm.dll, the launcher's "Vanilla Retribution", launcher 1.4.11; store vanilla.loader
+    vloader-<n>): decides by the game's command line - a mod start (Elite.exe starts DOW2.exe -modname Elite) loads only the early
+    add-ons in Elite_DLLs, like -DEARLY_ONLY; plain DOW2.exe (vanilla) loads only the DLLs of dow2-patches\ (OwnLobby.dll first),
+    never Elite_DLLs, and writes dow2-patches\Loader.log. The launcher fills dow2-patches\ with the copies of the add-ons whose
+    store entry has "games": [..., "vanilla"] and puts this loader next to DOW2.exe only for vanilla; for Elite it goes and
+    Automatch's early one is back. The folder name is put together at run time (launchers up to 1.4.10 put aside a winmm.dll that
+    names it).
 
 continue/ - Continue.dll (Continue 1) - research, not released
     The game's own Continue after a Custom Games match (the host presses it, everyone is back in the same room): canContinue
@@ -165,6 +172,7 @@ frameprobe/ - FrameProbe.dll (off), eliteai/ - EliteAI.dll (removed)
 
     make                          # all DLLs into build/
     make build/early/winmm.dll    # the early loader of Automatch v2.0
+    make build/launcher/winmm.dll # the launcher's loader for vanilla (by -modname)
     make STATS_HOST=other.host    # another stats host baked into LobbyStats (default rts.fintebtc.de)
 
 Needs gcc-mingw-w64-i686. By hand: put the DLL into Elite_DLLs\ and add it to InjectedFiles= in Elite.launchconfig; without
