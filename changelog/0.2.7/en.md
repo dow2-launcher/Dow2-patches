@@ -1,0 +1,1 @@
+- Our game servers: 3- and 4-player games no longer flood the connection (lags, "long threads" of shots after a freeze); the tunnel to our servers has limits and gives up on a dead line instead of resending forever.

@@ -4,6 +4,26 @@ Every version gets an entry here before it reaches `main`. CI then tags `vX.Y.Z`
 version (`X.Y.0`) it also publishes a GitHub Release with the DLLs and the entries since the previous `X.Y.0`.
 The version of the set lives only in `VERSION`; each DLL still writes its own version to its log.
 
+## 0.2.7 — not released (branch feature/relay-23, 05.11.2026)
+Relay 23 (relay_r2 / relay_fwd): brakes in the UDP tunnel, after the 2v2 of 05.11.2026 (Fov: ~650 packets/s for 10 minutes,
+sent 399559, sent again 16495, copies 1071947; the other three players the same, the host 2380 packets/s).
+- The flood itself came from the games: our battle server (dow2-ladder battle_relay.py) handed the game's proxy messages
+  (0x10, one message for several peers) to EVERY other peer instead of each listed one - the same with 2 players, with 3+
+  every peer got the messages meant for the others and the reliable layers spun (fixed in dow2-ladder, branch
+  fix/relay-udp-storm). The tunnel had no brakes anywhere, so it carried and multiplied whatever came.
+- The delivery moved to relay/du_tunnel.h, the C twin of dow2-ladder gameserver/du_proto.py (udp_gateway, du_client,
+  du_egress): one resend timer per connection (oldest first, 200 ms .. 3 s doubling, Karn, the round trip only from clean
+  acks); a packet resent 10 times = the connection is dead (FIN, "ev=dead" in Relay.log) instead of resending forever;
+  resends budgeted (20/s or 25% of the fresh); a packet copied at most twice and only while young, an ACK2 at most every
+  RTT/4; a tail probe (the newest packet once more after RTT + 2 x RTTVAR + 10 ms without an ack); 64 packets / 64 KB in flight, the game's socket not read while full (back pressure, its bytes coalesce),
+  250 packets/s paced (bursts of 20 at most), a 256 KB receive buffer on the UDP socket (Windows' default is small -
+  a burst from the node got lost in it and every resend round came as a burst again); in-order data acked at most every 10 ms, duplicates every 20 ms, ACKs never answered at once; a fuse:
+  resends + copies > 3 x fresh or > 300 packets/s out in 5 s -> copies off, resends 20/s, "ev=storm" in Relay.log; bytes
+  for a game that does not read wait in a queue (1 MB) instead of blocking the tunnel.
+- Same wire format: Relay 23 works with old gateways, Relay 15-22 with new ones (tested both ways, and with UDPGW_VERSION=1).
+- relay/test: the tunnel built for Linux (du_harness), a 4-6 player model with netem in two network namespaces against the
+  real udp_gateway.py / battle_relay.py (storm_test.py, run_matrix.sh).
+
 ## 0.2.6 — 2026-11-05
 Cooldowns 8 (store cooldowns-8) and APM 3 (apm-3), the reports of 04.11.2026 (siritos, berserk, TvangeS).
 - Cooldowns: the recharge key was a hash of all 16 bytes of ConstOwnerPointer at button+0x2A8. Its constructors (SimEngine.dll)
