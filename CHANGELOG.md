@@ -4,6 +4,14 @@ Every version gets an entry here before it reaches `main`. CI then tags `vX.Y.Z`
 version (`X.Y.0`) it also publishes a GitHub Release with the DLLs and the entries since the previous `X.Y.0`.
 The version of the set lives only in `VERSION`; each DLL still writes its own version to its log.
 
+## Next version (not numbered yet: 0.2.7 / 0.2.8 are open PRs)
+- vanilla-loader: -DLAUNCHER_LOADER (`make build/launcher/winmm.dll`) for the launcher's "Vanilla Retribution" (launcher 1.4.11,
+  owner 05.11.2026). One file for both games, decided by the command line: `-modname` (Elite.exe, Elite_Test, old Elite as a mod)
+  - only the early add-ons in Elite_DLLs (OwnLobby.dll), exactly as -DEARLY_ONLY; no -modname (vanilla) - every DLL of
+  dow2-patches\ (OwnLobby.dll first, before RLink), never Elite_DLLs, a fresh dow2-patches\Loader.log with what was loaded.
+  A game started past the launcher therefore never loads the vanilla copies into Elite. The folder name is not in the binary
+  (ASCII or UTF-16): launchers up to 1.4.10 put aside any winmm.dll naming it as the old stand-alone package. Store: vloader-1,
+  launcher.json "vanilla": {"loader": "vloader-1"}; the add-ons that work in vanilla have "games": ["elite", "vanilla"].
 ## 0.2.6 — 2026-11-05
 Cooldowns 8 (store cooldowns-8) and APM 3 (apm-3), the reports of 04.11.2026 (siritos, berserk, TvangeS).
 - Cooldowns: the recharge key was a hash of all 16 bytes of ConstOwnerPointer at button+0x2A8. Its constructors (SimEngine.dll)

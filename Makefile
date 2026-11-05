@@ -92,6 +92,12 @@ $(OUT)/early/winmm.dll: vanilla-loader/winmm_proxy.c vanilla-loader/winmm.def | 
 	mkdir -p $(OUT)/early
 	$(CC) $(CFLAGS) -DEARLY_ONLY -shared -o $@ vanilla-loader/winmm_proxy.c vanilla-loader/winmm.def -static-libgcc
 
+# the launcher's copy for its "Vanilla Retribution" mode (launcher 1.4.11, 05.11.2026): by the command line - a mod (-modname Elite)
+# gets only the early add-ons, like build/early/winmm.dll; plain vanilla only the DLLs of the patch folder, never Elite_DLLs
+$(OUT)/launcher/winmm.dll: vanilla-loader/winmm_proxy.c vanilla-loader/winmm.def | $(OUT)
+	mkdir -p $(OUT)/launcher
+	$(CC) $(CFLAGS) -DLAUNCHER_LOADER -shared -o $@ vanilla-loader/winmm_proxy.c vanilla-loader/winmm.def -static-libgcc
+
 $(OUT)/FrameProbe.dll: frameprobe/frameprobe.c | $(OUT)
 	$(CC) $(CFLAGS) -Wno-unused-variable -shared -o $@ $< -lpsapi -lwinmm -static-libgcc
 

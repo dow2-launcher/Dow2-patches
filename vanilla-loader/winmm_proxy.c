@@ -3,6 +3,12 @@
 // Since 02.11.2026 also the launcher's early add-ons from Elite_DLLs (OwnLobby.dll), which Elite's injector would load too late.
 // Game files are not modified: Steam leaves an extra file in the folder alone. If Elite already loaded the same patch from
 // Elite_DLLs, the second copy notices it and stays idle.
+// -DLAUNCHER_LOADER (build/launcher/winmm.dll, 05.11.2026): the launcher's own copy for its "Vanilla Retribution" mode. It decides
+// by the game's command line: started as a mod (Elite.exe starts DOW2.exe -modname Elite; the public test and old Elite the
+// same) - only the early add-ons in Elite_DLLs, exactly like -DEARLY_ONLY; plain DOW2.exe (vanilla) - only the patch folder
+// that the launcher fills with the add-ons that work in vanilla, never Elite_DLLs. So one file is right for both games and a
+// game started past the launcher (Steam, Elite.exe) still gets the right set. The folder name is put together at run time:
+// launchers up to 1.4.10 take a winmm.dll naming it for the old stand-alone package and put it aside before a start.
 #include <windows.h>
 #include <string.h>
 #include <stdio.h>
@@ -209,11 +215,63 @@ __asm__(".text\n"
 static int ends_with_dll(const wchar_t *n) {              // the real extension, not just ".dll" somewhere in the name
     size_t l = wcslen(n); return l > 4 && !_wcsicmp(n + l - 4, L".dll");
 }
+#ifdef LAUNCHER_LOADER
+// "-modname" (or "/modname") anywhere in the command line: the game runs a mod (Elite)
+static int started_as_mod(void) {
+    for (const wchar_t *c = GetCommandLineW(); c && *c; c++)
+        if ((*c == L'-' || *c == L'/') && !_wcsnicmp(c + 1, L"modname", 7)) return 1;
+    return 0;
+}
+// one line to <folder>\Loader.log (written new at every start of vanilla): what was loaded, for "Send logs"
+static void vlog(const wchar_t *dir, const wchar_t *line) {
+    wchar_t p[MAX_PATH]; _snwprintf(p, MAX_PATH, L"%lsLoader.log", dir); p[MAX_PATH - 1] = 0;
+    char u[1800]; int n = WideCharToMultiByte(CP_UTF8, 0, line, -1, u, sizeof u, NULL, NULL);
+    HANDLE h = CreateFileW(p, FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_ALWAYS, 0, NULL);
+    if (h == INVALID_HANDLE_VALUE) return;
+    DWORD w; if (n > 1) { WriteFile(h, u, n - 1, &w, NULL); WriteFile(h, "\r\n", 2, &w, NULL); }
+    CloseHandle(h);
+}
+#endif
 static DWORD WINAPI load_stats(LPVOID _) {
     wchar_t dir[MAX_PATH]; GetModuleFileNameW(NULL, dir, MAX_PATH);
     wchar_t *sl = wcsrchr(dir, L'\\'); if (!sl) return 0;
     if (_wcsicmp(sl + 1, L"DOW2.exe")) return 0;                     // only the game itself
     sl[1] = 0;
+#ifdef LAUNCHER_LOADER
+    if (!started_as_mod()) {
+        // vanilla: every *.dll in the launcher's patch folder, nothing from Elite_DLLs (the launcher puts the vanilla copies of
+        // the early add-ons there too; this thread runs ~50-90 ms after the start, before the game starts its network)
+        static const wchar_t A[] = L"dow2", B[] = L"patches";
+        wchar_t pd[MAX_PATH], pat[MAX_PATH], p[MAX_PATH]; WIN32_FIND_DATAW fd;
+        _snwprintf(pd, MAX_PATH, L"%ls%ls-%ls\\", dir, A, B); pd[MAX_PATH - 1] = 0;
+        if (GetFileAttributesW(pd) == INVALID_FILE_ATTRIBUTES) return 0;
+        DeleteFileW(wcscat(wcscpy(p, pd), L"Loader.log"));
+        wchar_t line[600];
+        vlog(pd, L"launcher loader 1: vanilla (no -modname) - loading every DLL of this folder");
+        // OwnLobby.dll first: it has to be in before RLink starts; the others in the folder's order
+        _snwprintf(p, MAX_PATH, L"%lsOwnLobby.dll", pd); p[MAX_PATH - 1] = 0;
+        if (GetFileAttributesW(p) != INVALID_FILE_ATTRIBUTES) {
+            HMODULE m = LoadLibraryW(p);
+            if (m) _snwprintf(line, 600, L"loaded OwnLobby.dll (first)"); else _snwprintf(line, 600, L"NOT loaded OwnLobby.dll (error %lu)", GetLastError());
+            line[599] = 0; vlog(pd, line);
+        }
+        _snwprintf(pat, MAX_PATH, L"%ls*.dll", pd);
+        HANDLE h = FindFirstFileW(pat, &fd);
+        if (h != INVALID_HANDLE_VALUE) {
+            do {
+                if ((fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) || !ends_with_dll(fd.cFileName) || !_wcsicmp(fd.cFileName, L"OwnLobby.dll")) continue;
+                _snwprintf(p, MAX_PATH, L"%ls%ls", pd, fd.cFileName); p[MAX_PATH - 1] = 0;
+                HMODULE m = LoadLibraryW(p);
+                if (m) _snwprintf(line, 600, L"loaded %ls", fd.cFileName);
+                else _snwprintf(line, 600, L"NOT loaded %ls (error %lu)", fd.cFileName, GetLastError());
+                line[599] = 0; vlog(pd, line);
+            } while (FindNextFileW(h, &fd));
+            FindClose(h);
+        }
+        return 0;
+    }
+    // a mod (Elite): the early add-ons below, as -DEARLY_ONLY
+#endif
     // early launcher add-ons in Elite_DLLs: they must be in before the game starts its network (Elite's injector loads
     // Elite_DLLs ~9 s after the start - too late for them). The launcher keeps such a DLL there only while its tick is on.
     static const wchar_t *EARLY[] = {L"OwnLobby.dll"};          // 02.11.2026: our lobby server (experiment)
@@ -221,7 +279,7 @@ static DWORD WINAPI load_stats(LPVOID _) {
         wchar_t e[MAX_PATH]; _snwprintf(e, MAX_PATH, L"%lsElite_DLLs\\%ls", dir, EARLY[i]);
         if (GetFileAttributesW(e) != INVALID_FILE_ATTRIBUTES) LoadLibraryW(e);
     }
-#ifndef EARLY_ONLY
+#if !defined(EARLY_ONLY) && !defined(LAUNCHER_LOADER)
     // (EARLY_ONLY, 03.11.2026: the launcher add-on ownlobby's copy - only Elite_DLLs' early add-ons. The launcher puts aside
     // a winmm.dll naming the stand-alone package's folder as its leftover before every start, so OwnLobby never loaded.)
     // every *.dll in <game>\dow2-patches\ (ObsFix, LobbyStats, ...)
