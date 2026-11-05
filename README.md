@@ -34,7 +34,7 @@ are client-side, and the other players in the match don't need them.
 | **Fix: the game closes when a match starts** (new, not released yet) | Repairs Elite's ShellPatch.dll (the race meter) when it could not hook in at the game's start - then every match crashed a second in. Otherwise does nothing. | `shellfix` → `shellfix-1` (staging) | `shellfix/` | no |
 | **Record game crashes (for the developers)** | Writes where the game crashed and what closed it, for "Send logs". | `crashlog` → `crashlog-1` | `crashlog/` | no |
 | **EXPERIMENT: connection check to our servers** | Once per game start, 1-2 minutes in the background: what gets through from your computer to our game servers; sends us the result. | `netprobe` → `netprobe-2` | `netprobe/` | no |
-| **Fix: Elite.exe crash on Windows 11 25H2** | An Elite.exe without its wmic check (wmic is gone in 25H2, Elite.exe crashed on it). | `elitefix_wmic` → `elitefix-nowmic-1` | not in this repo (one jump patched in Elite.exe) | no |
+| **Fix: Elite.exe crash on Windows 11 25H2** | An Elite.exe without its wmic check (wmic is gone in 25H2, Elite.exe crashed on it); it still closes itself when the game ends. | `elitefix_wmic` → `elitefix-nowmic-1`, `elitefix-nowmic-2` (staging) | `elitefix/make_elite_exe.py` (one jump patched in Elite's Elite.exe) | no |
 | **Russian translation (by Gosudar)** | Russian text for Dawn of War II and Elite 3.2; the English files come back when it is off. | `rusifikator` → `rusifikator-text-1` | not in this repo (Gosudar's text files) | no |
 | Developer diagnostics (off) | Turned off for everyone. | `frameprobe_r2` → `frameprobe-off` | `frameprobe/` | no |
 | New AI (removed) | Removed, turned off for everyone. | `eliteai_off` → `eliteai-off` | `eliteai/` | was skirmish-only |
