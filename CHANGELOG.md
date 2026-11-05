@@ -4,7 +4,19 @@ Every version gets an entry here before it reaches `main`. CI then tags `vX.Y.Z`
 version (`X.Y.0`) it also publishes a GitHub Release with the DLLs and the entries since the previous `X.Y.0`.
 The version of the set lives only in `VERSION`; each DLL still writes its own version to its log.
 
-## Next version (not numbered yet: 0.2.7 / 0.2.8 are open PRs)
+## 0.2.9 — 2026-11-05
+RoomJoin 12 (store roomjoin-6; on top of RoomJoin 11 of PR #23, which never reached the store - roomjoin-5 is RoomJoin 10;
+0.2.8 is PR #24). Owner 05.11.2026 after trying Join himself: "не надо там перекрывать весь экран ... и когда в игру зайдёт
+не надо тоже закрывать плашкой".
+- No cover over the game any more by default: the join runs by itself exactly as before (main menu -> the game browser's join
+  by the room id -> the lobby screen), and the player sees the game's own menu, its "Connecting" and the lobby. No click or Esc
+  is taken from the game, nothing of the menu is hidden. What happens and why not is told by the launcher (the pipe events are
+  unchanged). A "no" from the game (full, closed...) opens the public games list at once instead of a 3 s notice on the cover.
+- RoomJoin.ini [RoomJoin] Cover=1 brings the old cover back (tests only); the log says which.
+- Stand 1, 05.11 (RoomJoin 10 binary, the same join): real open Relic lobbies joined in ~4 s from Elite and from vanilla, with
+  and without "Games through our servers" / "Forwarding servers"; the owner's "connecting, nothing happens" of 05.11 evening was
+  the Moscow forwarding bridge closing every forwarded game (du_egress.py, fixed on the server).
+## vanilla-loader (merged 05.11 without a number of its own, PR #25; in 0.2.9)
 - vanilla-loader: -DLAUNCHER_LOADER (`make build/launcher/winmm.dll`) for the launcher's "Vanilla Retribution" (launcher 1.4.11,
   owner 05.11.2026). One file for both games, decided by the command line: `-modname` (Elite.exe, Elite_Test, old Elite as a mod)
   - only the early add-ons in Elite_DLLs (OwnLobby.dll), exactly as -DEARLY_ONLY; no -modname (vanilla) - every DLL of
@@ -47,6 +59,31 @@ Cooldowns 9 (store cooldowns-9; branches fix/cooldowns-9, feature/cooldowns-9).
   down to 0 (35 s), the other Kasrkin squad without the Sergeant - none; the Inquisitor's Crippling Volley (wargear bought) 65 s
   down; Kasrkin (recharging) into the Chimera, out, in, out - no number on unload, the Kasrkin's number goes on; grenade 75 s;
   sandbags built by guardsmen - no number. Every number of the session came with reason 0xD; a usable button: no number, no sweep.
+## 0.2.7 — 2026-11-05
+RoomJoin 11 (store roomjoin-5; branch fix/roomjoin-11): the review of RoomJoin 10 (05.11.2026) and leaving one lobby for another.
+- A second Join for the room still watched for a late answer (after a timeout or a Cancel) was let through and made a second
+  engine join on top of the first; now it says accepted / joining and goes on watching.
+- The cover stayed and took every click and Esc when the menu movie was rebuilt while a "could not join" notice was up (nothing
+  behind it, Cancel did nothing). The rebuild now drops a cover with no join, and Cancel / Esc with no join takes any cover off.
+- "Already in this room": the walk to the lobby screen only from the main menu or the public games list - never from Find a
+  Game or another screen. With the menu movie found late, the same room on the main menu / the games list no longer comes out as
+  "automatch room" / "another lobby".
+- A room name of 64+ UTF-16 units came out as "the custom game" (the conversion into 64 failed); it is cut to 63 now.
+- The JSON reader stopped a broken surrogate escape (`\uD800\u` at the end of a line) only after 4 more bytes: it stops at once.
+- A join whose engine call is never made (the lobby screen of no room, a Relic sign-in that never ends) gives up after 65 s from
+  the main menu (the game's start is not counted: up to 90 s before that).
+- `{"cmd":"cancel","room":<id>}` cancels only that join (a late Cancel no longer stops the next Join); without a room as before.
+- `{"cmd":"join",...,"leave":true}` (launcher 1.4.10, after the player said yes): on the lobby screen of another room the DLL
+  presses Back (up to 3 times, 9 s), waits until the game is out of that room, then joins as usual; a `leaving` event tells the
+  launcher. An experiment: every command of the lobby screen goes to RoomJoin.log ("lobby screen: ..."), to find its real
+  leave command if Back is not it. The status says `"version":"11","proto":2`.
+  On the stand (05.11) leaving a lobby by hand logged `...panel_mc.OnClickBack` on its screen: Back is that command.
+- Leaving for another lobby (stand 05.11): Back put the games list up in 0.4 s while the game was still in the old room, and
+  that came out as "another lobby" - the list then, no join. Now off the lobby screen the DLL waits (9 s at most) until the game
+  is out of the room it leaves, then goes on as from that screen (the list: Back, the main menu, the join). The front end is
+  rebuilt after leaving a lobby: the 15 s for finding the menu count from the new menu movie.
+- The cover takes no click in its first 0.8 s (stand 05.11: the second click of a double click on the launcher Join came to
+  the game, just brought to the front, right on the cover Cancel 0.5 s after it came up); Esc still works at once.
 
 ## 0.2.6 — 2026-11-05
 Cooldowns 8 (store cooldowns-8) and APM 3 (apm-3), the reports of 04.11.2026 (siritos, berserk, TvangeS).

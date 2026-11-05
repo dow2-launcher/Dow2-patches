@@ -1,7 +1,7 @@
 {
-  "_readme": "The launcher catalog (launcher.json) entry for RoomJoin, by hand like JoinSound. With it on (or RoomJoin.dll in Elite_DLLs) the launcher's Lobbies tab shows Join on Elite rooms without a password. RoomJoin 9 (roomjoin-4): the launcher talks to it over the pipe EliteRoomJoin-<pid> (launcher 1.4.9); the request file of launcher 1.4.8 is still read.",
+  "_readme": "The launcher catalog (launcher.json) entry for RoomJoin, by hand like JoinSound. With it on (or RoomJoin.dll in Elite_DLLs) the launcher's Lobbies tab shows Join on Elite rooms without a password. RoomJoin 11 (roomjoin-5): the launcher talks to it over the pipe EliteRoomJoin-<pid> (launcher 1.4.9+; leaving the current lobby for another one and Cancel of one room need launcher 1.4.10). The request file of launcher 1.4.8 is not read any more (RoomJoin 10).",
   "id": "roomjoin",
-  "version": "roomjoin-4",
+  "version": "roomjoin-5",
   "inject": "RoomJoin.dll",
   "default": false,
   "category": "experiment",
