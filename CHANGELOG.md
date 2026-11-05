@@ -4,6 +4,67 @@ Every version gets an entry here before it reaches `main`. CI then tags `vX.Y.Z`
 version (`X.Y.0`) it also publishes a GitHub Release with the DLLs and the entries since the previous `X.Y.0`.
 The version of the set lives only in `VERSION`; each DLL still writes its own version to its log.
 
+## 0.2.5 — 2026-11-05
+RoomJoin 9 (store roomjoin-4, staging; branch feature/roomjoin-9-pipe): the launcher talks to the game over a named pipe instead
+of a request file the DLL polled (owner: no files), and the review of RoomJoin 8 (reports/roomjoin8_review.md) is closed.
+- The pipe: `\\.\pipe\EliteRoomJoin-<pid of DOW2.exe>` - one per game process (two copies of the game = two pipes, the launcher
+  picks the one in the main menu). DACL: only the user the game runs as (D:P(A;;GA;;;<user SID>)), PIPE_REJECT_REMOTE_CLIENTS,
+  FILE_FLAG_FIRST_PIPE_INSTANCE (nobody can hold the name before us); the launcher checks GetNamedPipeServerProcessId and opens
+  it with SECURITY_IDENTIFICATION. Up to 4 clients at once. One JSON object per line:
+  launcher -> game `{"cmd":"join","room":<id>,"name":"..."}`, `{"cmd":"status"}`, `{"cmd":"cancel"}`;
+  game -> launcher `accepted` / `walking` / `joining` / `in_lobby` (`"late":true` for a late answer) / `failed` with `reason`
+  (full, closed, password, version, timeout, busy_search, busy_match, busy_join, not_menu, other_lobby, cancelled, error) and the
+  game's own message in `text`; `status` (screen main / find_game / games_list / lobby / other / unknown / match, in_match,
+  searching, room, joining, version "9", proto 1, pid, stalled). A status line goes out as soon as a client connects - the
+  launcher's heartbeat: no pipe in a running game = no RoomJoin 9 in it. The reasons "full" etc. come from the game's message box,
+  matched against its own texts in its language (Localizer::GetString of the DOW2.ucs ids 550050...), English words as a fallback.
+- Linux (launcher native, the game under Proton): roomjoin/rjbridge.c = Elite_DLLs/rjbridge.exe, shipped with the add-on
+  (addons.json "files"). The launcher starts it with the environment of the game's own wine process (/proc/<pid>/environ:
+  the prefix, ESYNC/FSYNC - a wine client with other sync settings is refused by the game's wineserver - DLL paths; without
+  WINESERVERSOCKET / WINELOADERNOEXEC / WINEPRELOADRESERVE) and its loader, so it joins the game's wineserver; it opens the
+  game's pipe (server process id checked, SECURITY_IDENTIFICATION) and passes bytes stdin -> pipe, pipe -> stdout unchanged.
+  Ends when the pipe closes or stdin ends; no game / no pipe: one line {"ev":"bridge","error":"no_game|no_pipe"}, exit 2.
+  Chosen after checking the others (owner: no port if possible): AF_UNIX works in Wine 11.20 (the socket file is a real
+  host socket a native process connects to; Windows' sun_path is 107 characters) but Proton 9 / 10 (GE-Proton9-27 = Wine 9.0,
+  GE-Proton10-34 = Wine 10.0) answer socket(AF_UNIX) with WSAEAFNOSUPPORT; `proton run` does not pass a program's stdout
+  (its steam.exe starts it). TCP 127.0.0.1 with a key was not needed. Measured from the bridge's start to the game's status
+  line: 23-29 ms on stand 1 (Wine 11.20, the real game), 30-62 ms with GE-Proton 9 / 10 (a stand-in game with the same pipe).
+- The pipe thread never touches the engine: join / cancel go into a queue the game's thread takes in its frame hook (as the
+  request file before); "status" is answered from what that thread noted last ("stalled": no frame for 3 s). Clean exit (BeArD's
+  exit hang is being looked into, RoomJoin was a suspect): nothing in DLL_PROCESS_DETACH, all I/O overlapped (the thread only
+  ever waits in WaitForMultipleObjects), no C runtime or heap lock held by it (the log is one handle + WriteFile, rotated at
+  512 KB), 64 KB stack. The pipe thread is the frame-hook installer thread: no frame hook = no pipe.
+- The old file: Elite_DLLs/RoomJoin.txt of launcher 1.4.8 is still read (once a second in the menu, 3 minutes at most) so 1.4.8
+  keeps working with roomjoin-4; launcher 1.4.9 only uses the pipe and deletes a leftover file. RoomJoin_result.txt is gone.
+  The file goes in RoomJoin 10.
+- Review p.1: a panel that is not one of ours (Options, Army Painter, Campaign, Replays, the match summary) is SC_OTHER, not the
+  last screen; the probe looks at every visible panel (Options sits over a transition movie) and skips the transition movie; no
+  "after 6 s taken as the main menu" - an unknown screen for 15 s, or another one for 4 s, is "not_menu".
+- p.3: one join call per request; no second one on top of a slow first; after a timeout or Cancel with the call made, the room is
+  watched 15 s: if the game lets us in late, the lobby screen opens and "in_lobby" late goes out. No public games list on a timeout.
+- p.4: never Back on Find a Game (with or without a search: "busy_search" / "not_menu"), nor anywhere while in a room; the dead
+  mm_cover() (no _level0.mmcover in MMFind 0.45) is gone.
+- p.5: the menu movie is forgotten at World::SimulatePre (a match or a replay starts; the world flag ends at SimulatePost or when a
+  menu panel loads) and - new - the moment it is deleted: the movie class's deleting destructor (vtable 0x0104BBFC slot 0 =
+  0x00DCE310) is wrapped. Found on the stand: after Options a Join crashed the game (the front end had been rebuilt, the old
+  movie pointer dangled).
+- p.6: the import-slot hooks set *orig before the slot points to them. p.7: the room name and the game's message are
+  HTML-escaped on the cover. p.8: the cover takes clicks and Esc - the menu under it is hidden (_visible = 0) and the game
+  window's procedure is wrapped while the cover is up (Esc = Cancel; a click = the logical primary button, so a left-handed
+  mouse works; fallback GetAsyncKeyState with SM_SWAPBUTTON). p.10 (launcher): the game window by its process id. p.11: the
+  log rotates, no profile id in it, the name buffers end with a NUL.
+- roomjoin/rjpipe.c: a console test client of the pipe (make build/rjpipe.exe; works under Wine in the game's prefix).
+- Linux path on stand 1: the launcher's own bridge code (roomjoin.rs BridgeConn, a test build) from the Linux host with an
+  empty environment -> rjbridge.exe -> the game: status in 28 ms, join, events, cancel; the game closed through its menu in
+  2.3 s with the bridge attached, the bridge ended with it.
+- Tested on stand 1 (Wine, Elite 3.2, MMFind 0.36, LobbyStats, Relay, EliteAI): status; join of a room that does not exist
+  (timeout after 25 s, 15 s watch, cover gone, the menu back); cancel from a second client, from Esc and from the cover's Cancel
+  button; a click on the hidden menu under the cover does nothing; busy_join; not_menu from Options and from Find a Game (no Back
+  pressed); from the public games list: Back, then the join; a live public Elite room (3v3, 6 players): in the lobby 4.6 s after
+  the join, a second join of it = in_lobby at once, another room meanwhile = other_lobby; the launcher's own Rust client
+  (roomjoin.rs) under Wine; the old RoomJoin.txt; the game closed through its menu (Exit, Yes) in 2.4 s twice - with a client
+  connected and with a 15 s watch running; the wrapped destructor ran at the exit. Not on the stand: busy_search with a real
+  search (it would match real players), busy_match.
 ## 0.2.4 — 2026-11-05
 elitefix_wmic 2 (store elitefix-nowmic-2, Elite.exe, released by hand; branch fix/elitefix-nowmic-2): Elite.exe ("Universal
 launcher for Dawn of War II mods") stayed in the task manager after every game - closed from the menu or crashed (BeArD, fb 242).

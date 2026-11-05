@@ -1,0 +1,1 @@
+- Join a lobby from the launcher (test): the launcher now talks to the game directly and shows what is going on - the game took the request, is going to the main menu, connecting, you are in the lobby, or why not (the lobby is full, it needs a password, a search is on...). Works with launcher 1.4.9; 1.4.8 keeps working as before.
