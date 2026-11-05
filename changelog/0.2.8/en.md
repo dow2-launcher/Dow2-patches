@@ -1,1 +1,2 @@
-- Cooldown seconds: a number no longer stays frozen on another unit's ability after you change the selection (seen after a generator under construction and after the scouts' grenade).
+- Cooldown seconds: the number no longer stays on the screen after you select another unit - it goes at once and comes back when you select the unit again.
+- Cooldown seconds: nothing of the last match is carried into the next one.
