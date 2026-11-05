@@ -123,6 +123,8 @@ roomjoin/ - **RoomJoin.dll** (RoomJoin 9, roomjoin-4) - siritos's experiment
     menu RoomJoin shows a cover, joins by the room id (the game browser's own join), opens the lobby screen and steps aside. A
     no from the game: the reason, then the public games list; no answer in 25 s or Cancel: the room is watched 15 s more. Never
     on Find a Game, in another lobby or in a match. The pipe thread never touches the engine and never holds up the game's exit.
+    Linux (the game under Proton): Elite_DLLs/rjbridge.exe (roomjoin/rjbridge.c, shipped with the add-on) - the launcher starts
+    it with the game process's own Wine environment and talks JSON lines to its stdin/stdout, it passes them to the pipe.
     For launcher 1.4.8 Elite_DLLs/RoomJoin.txt is still read (to go in RoomJoin 10). Test client: make build/rjpipe.exe.
     Any load order with MMFind (the fscommand hook is a vtable slot). RoomJoin.ini Enabled=0 = off.
     Store entry: roomjoin/catalog-entry.json.

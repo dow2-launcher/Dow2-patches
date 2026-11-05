@@ -460,6 +460,7 @@
   "roomjoin": {
     "version": "4",
     "dll": "RoomJoin.dll",
+    "files": {"rjbridge.exe": "build/rjbridge.exe"},
     "default": false,
     "name": {
       "en": "Join a lobby from the launcher",

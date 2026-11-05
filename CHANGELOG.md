@@ -18,6 +18,17 @@ of a request file the DLL polled (owner: no files), and the review of RoomJoin 8
   searching, room, joining, version "9", proto 1, pid, stalled). A status line goes out as soon as a client connects - the
   launcher's heartbeat: no pipe in a running game = no RoomJoin 9 in it. The reasons "full" etc. come from the game's message box,
   matched against its own texts in its language (Localizer::GetString of the DOW2.ucs ids 550050...), English words as a fallback.
+- Linux (launcher native, the game under Proton): roomjoin/rjbridge.c = Elite_DLLs/rjbridge.exe, shipped with the add-on
+  (addons.json "files"). The launcher starts it with the environment of the game's own wine process (/proc/<pid>/environ:
+  the prefix, ESYNC/FSYNC - a wine client with other sync settings is refused by the game's wineserver - DLL paths; without
+  WINESERVERSOCKET / WINELOADERNOEXEC / WINEPRELOADRESERVE) and its loader, so it joins the game's wineserver; it opens the
+  game's pipe (server process id checked, SECURITY_IDENTIFICATION) and passes bytes stdin -> pipe, pipe -> stdout unchanged.
+  Ends when the pipe closes or stdin ends; no game / no pipe: one line {"ev":"bridge","error":"no_game|no_pipe"}, exit 2.
+  Chosen after checking the others (owner: no port if possible): AF_UNIX works in Wine 11.20 (the socket file is a real
+  host socket a native process connects to; Windows' sun_path is 107 characters) but Proton 9 / 10 (GE-Proton9-27 = Wine 9.0,
+  GE-Proton10-34 = Wine 10.0) answer socket(AF_UNIX) with WSAEAFNOSUPPORT; `proton run` does not pass a program's stdout
+  (its steam.exe starts it). TCP 127.0.0.1 with a key was not needed. Measured from the bridge's start to the game's status
+  line: 23-29 ms on stand 1 (Wine 11.20, the real game), 30-62 ms with GE-Proton 9 / 10 (a stand-in game with the same pipe).
 - The pipe thread never touches the engine: join / cancel go into a queue the game's thread takes in its frame hook (as the
   request file before); "status" is answered from what that thread noted last ("stalled": no frame for 3 s). Clean exit (BeArD's
   exit hang is being looked into, RoomJoin was a suspect): nothing in DLL_PROCESS_DETACH, all I/O overlapped (the thread only
@@ -43,6 +54,9 @@ of a request file the DLL polled (owner: no files), and the review of RoomJoin 8
   mouse works; fallback GetAsyncKeyState with SM_SWAPBUTTON). p.10 (launcher): the game window by its process id. p.11: the
   log rotates, no profile id in it, the name buffers end with a NUL.
 - roomjoin/rjpipe.c: a console test client of the pipe (make build/rjpipe.exe; works under Wine in the game's prefix).
+- Linux path on stand 1: the launcher's own bridge code (roomjoin.rs BridgeConn, a test build) from the Linux host with an
+  empty environment -> rjbridge.exe -> the game: status in 28 ms, join, events, cancel; the game closed through its menu in
+  2.3 s with the bridge attached, the bridge ended with it.
 - Tested on stand 1 (Wine, Elite 3.2, MMFind 0.36, LobbyStats, Relay, EliteAI): status; join of a room that does not exist
   (timeout after 25 s, 15 s watch, cover gone, the menu back); cancel from a second client, from Esc and from the cover's Cancel
   button; a click on the hidden menu under the cover does nothing; busy_join; not_menu from Options and from Find a Game (no Back

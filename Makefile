@@ -10,6 +10,7 @@ all: $(OUT)/ObsFix.dll $(OUT)/LobbyStats.dll $(OUT)/LoadingRatings.dll $(OUT)/Co
 all: $(OUT)/EliteAI.dll $(OUT)/Reverse.dll $(OUT)/MMFind.dll $(OUT)/RoomJoin.dll $(OUT)/Relay.dll $(OUT)/Continue.dll
 # released too (04.11.2026: the GitHub Release carries every released DLL; build/early/winmm.dll is built by its own name)
 all: $(OUT)/RelayForward.dll $(OUT)/OwnLobby.dll $(OUT)/CrashLog.dll $(OUT)/NetProbe.dll
+all: $(OUT)/rjbridge.exe
 all: $(OUT)/ShellFix.dll
 
 $(OUT):
@@ -108,6 +109,9 @@ $(OUT)/JumpRetry.dll: jumpretry/jumpretry.c | $(OUT)
 # 03.11.2026 experiment: joining a room from the launcher (the Lobbies tab), its own add-on next to MMFind; RoomJoin 9 (05.11): the pipe
 $(OUT)/RoomJoin.dll: roomjoin/roomjoin.c | $(OUT)
 	$(CC) $(CFLAGS) -shared -o $@ $< -lpsapi -static-libgcc -Wl,--exclude-all-symbols
+# RoomJoin's pipe for a launcher outside Wine (Linux): shipped with the add-on as Elite_DLLs/rjbridge.exe
+$(OUT)/rjbridge.exe: roomjoin/rjbridge.c | $(OUT)
+	$(CC) $(CFLAGS) -o $@ $< -static-libgcc
 # the test client of RoomJoin's pipe (RoomJoin 9; not shipped): make build/rjpipe.exe
 $(OUT)/rjpipe.exe: roomjoin/rjpipe.c | $(OUT)
 	$(CC) $(CFLAGS) -o $@ $< -static-libgcc
