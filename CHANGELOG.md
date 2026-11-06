@@ -4,6 +4,21 @@ Every version gets an entry here before it reaches `main`. CI then tags `vX.Y.Z`
 version (`X.Y.0`) it also publishes a GitHub Release with the DLLs and the entries since the previous `X.Y.0`.
 The version of the set lives only in `VERSION`; each DLL still writes its own version to its log.
 
+## Unreleased — ReplayTakeover 1 (feature/replay-takeover, 2026-11-06, experiment, store replaytakeover-1)
+Owner 06.11.2026: "a replay - from any minute/tick continue it, as any player". New add-on ReplayTakeover.dll (its own tick,
+category experiment, off by default; option Others = ai | idle, Elite_DLLs/ReplayTakeover.ini).
+- In a replay the pause menu's hidden "Concede match" button (BindingConcedeMatchButton, vtable 0x0110C16C: IsActive slot 3,
+  Update slot 6, click delegate 0xAD2EB0 from 0xAD2E63) is shown as "Continue as <owner of the selected unit>" ("Продолжить за:"
+  with a Russian Windows UI). In every other game it is the game's own button.
+- The press switches the replay into a skirmish between two ticks (threaded sim: the frame's call 0x4242AA once the sim job is
+  done; otherwise the frame start, call 0x40E53C): the SimulationController's PlaybackSynchronization (GameState+0x154 -> +4) is
+  replaced by a new EchoSynchronization (ctor 0x404B74), game type 0x800 -> 4, GameInfo slots (0 local / 1 computer with the
+  game's own AI 0x426875 / 3 standing human), GameState+0x6C = the chosen player, world+0x174 = 0, sim rate 10, HUD rebuilt
+  (GameUI vtbl+0x68/+0x64), the minimap texture re-announced (*(0x013351A0)+0xAEC off 3 frames).
+- Tested on stand 1 (Elite 3.2): 1v1 and 3v3 replays (take at 0:05 .. 6:25), both sides, -init and the normal menu path
+  (Game History -> Load Replay), two replays in one game, with MatchTimer/APM/Cooldowns/ObsFix/JumpRetry/ReinforceFix/SteamKeep;
+  orders, production, the computer players, end of game (Defeat dialog, post-game screen, main menu) work. Vanilla not tested.
+
 ## 0.2.10 — 2026-11-05
 Automatch with our UDP transport inside (store automatch mmfind-0.46, relay_fwd relayfwd-23; relay_r2 removed from the store).
 Owner 05.11.2026: "the tick 'Games through our servers' is named stupidly, remove it. Two variants only: Automatch - always

@@ -327,5 +327,23 @@
       "fr": "À activer si le jeu se ferme tout seul une seconde après le début de la partie. Répare une partie d'Elite qui parfois ne démarre pas ; si tout va bien, rien ne change.",
       "de": "Einschalten, wenn sich das Spiel eine Sekunde nach Spielbeginn von selbst schließt. Repariert einen Teil von Elite, der manchmal nicht startet; sonst ändert sich nichts."
     }
+  },
+  "replaytakeover": {
+    "category": "experiment",
+    "name": {
+      "en": "EXPERIMENT: continue a game from a replay",
+      "ru": "ЭКСПЕРИМЕНТ: продолжить игру из реплея",
+      "es": "EXPERIMENTO: continuar una partida desde una repetición",
+      "fr": "EXPÉRIENCE : reprendre une partie depuis un replay",
+      "de": "EXPERIMENT: ein Spiel aus einem Replay fortsetzen"
+    },
+    "description": {
+      "en": "While watching a replay, click any unit of a player, open Menu and press \"Continue as ...\": from that moment it is your game, the others are played by the computer.",
+      "ru": "В реплее кликните любой юнит игрока, откройте Menu и нажмите «Продолжить за …»: с этого момента это ваша игра, за остальных играет компьютер.",
+      "es": "En una repetición, haz clic en una unidad de un jugador, abre el Menú y pulsa \"Continue as ...\": desde ahí la partida es tuya, el resto lo juega el ordenador.",
+      "fr": "Dans un replay, cliquez sur une unité d'un joueur, ouvrez le Menu et appuyez sur « Continue as ... » : la partie est à vous, l'ordinateur joue les autres.",
+      "de": "Im Replay eine Einheit eines Spielers anklicken, Menü öffnen, \"Continue as ...\" drücken: ab da ist es dein Spiel, die anderen spielt der Computer."
+    },
+    "order": 20
   }
 }

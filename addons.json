@@ -499,5 +499,68 @@
     },
     "category": "fixes",
     "order": 20
+  },
+  "replaytakeover": {
+    "version": "1",
+    "dll": "ReplayTakeover.dll",
+    "default": false,
+    "name": {
+      "en": "EXPERIMENT: continue a game from a replay",
+      "ru": "ЭКСПЕРИМЕНТ: продолжить игру из реплея",
+      "es": "EXPERIMENTO: continuar una partida desde una repetición",
+      "fr": "EXPÉRIENCE : reprendre une partie depuis un replay",
+      "de": "EXPERIMENT: ein Spiel aus einem Replay fortsetzen"
+    },
+    "description": {
+      "en": "While watching a replay, click any unit of a player, open Menu and press \"Continue as ...\": from that moment it is your game, the others are played by the computer.",
+      "ru": "В реплее кликните любой юнит игрока, откройте Menu и нажмите «Продолжить за …»: с этого момента это ваша игра, за остальных играет компьютер.",
+      "es": "En una repetición, haz clic en una unidad de un jugador, abre el Menú y pulsa \"Continue as ...\": desde ahí la partida es tuya, el resto lo juega el ordenador.",
+      "fr": "Dans un replay, cliquez sur une unité d'un joueur, ouvrez le Menu et appuyez sur « Continue as ... » : la partie est à vous, l'ordinateur joue les autres.",
+      "de": "Im Replay eine Einheit eines Spielers anklicken, Menü öffnen, \"Continue as ...\" drücken: ab da ist es dein Spiel, die anderen spielt der Computer."
+    },
+    "conflicts": [
+      "dow2-patches/ReplayTakeover.dll"
+    ],
+    "options": [
+      {
+        "id": "others",
+        "name": {
+          "en": "The other players",
+          "ru": "Остальные игроки",
+          "es": "Los demás jugadores",
+          "fr": "Les autres joueurs",
+          "de": "Die anderen Spieler"
+        },
+        "ini": "Elite_DLLs/ReplayTakeover.ini",
+        "section": "ReplayTakeover",
+        "key": "Others",
+        "default": true,
+        "choices": [
+          {
+            "value": "ai",
+            "name": {
+              "en": "Played by the computer",
+              "ru": "Играет компьютер",
+              "es": "Los juega el ordenador",
+              "fr": "Joués par l'ordinateur",
+              "de": "Spielt der Computer"
+            }
+          },
+          {
+            "value": "idle",
+            "name": {
+              "en": "Stand still",
+              "ru": "Стоят на месте",
+              "es": "Se quedan quietos",
+              "fr": "Restent immobiles",
+              "de": "Stehen still"
+            }
+          }
+        ],
+        "default_value": "ai"
+      }
+    ],
+    "category": "experiment",
+    "order": 20
   }
 }

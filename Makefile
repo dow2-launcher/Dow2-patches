@@ -12,6 +12,7 @@ all: $(OUT)/EliteAI.dll $(OUT)/Reverse.dll $(OUT)/MMFind.dll $(OUT)/RoomJoin.dll
 all: $(OUT)/RelayForward.dll $(OUT)/OwnLobby.dll $(OUT)/CrashLog.dll $(OUT)/NetProbe.dll
 all: $(OUT)/rjbridge.exe
 all: $(OUT)/ShellFix.dll
+all: $(OUT)/ReplayTakeover.dll
 
 $(OUT):
 	mkdir -p $(OUT)
@@ -122,3 +123,8 @@ $(OUT)/rjbridge.exe: roomjoin/rjbridge.c | $(OUT)
 # the test client of RoomJoin's pipe (RoomJoin 9; not shipped): make build/rjpipe.exe
 $(OUT)/rjpipe.exe: roomjoin/rjpipe.c | $(OUT)
 	$(CC) $(CFLAGS) -o $@ $< -static-libgcc
+
+# 06.11.2026 (experiment): continue a replay as a skirmish from any tick, as any of its players (the pause menu's
+# "Concede match" button in a replay becomes "Continue as <name>")
+$(OUT)/ReplayTakeover.dll: replaytakeover/replaytakeover.c common/gfxui.h | $(OUT)
+	$(CC) $(CFLAGS) -shared -o $@ $< -static-libgcc
