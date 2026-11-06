@@ -26,6 +26,11 @@
 // walks to Find a Game, sets the room's mode, race and hero and searches with the room's id (the ladder makes the match from the
 // room). See "a match from a launcher room" below.
 //
+// 0.49 (06.11.2026, players: "the map ban does not work, and it resets after a match"): Map Preferences as the game's own dialog -
+// Save only with at most min(round(0.4 x maps), 4) unchecked (the header says how many), saved exactly as shown (0.48 kept the first
+// 3 of the list when more were unchecked), shown again as saved when the dialog comes back; it lists only the maps of the ladder's
+// pool for the mode (mm/native answers "pool"); mm/native carries "bans" - the ladder takes them as a veto. DebugPipe fs "hook":1.
+//
 // Hooks: Invoke 0x45DB6C (engine -> Flash, to read lists and to show our status), fscommand handler 0x681AB0 (Flash -> engine, to
 // catch the button and to send menu commands), Shark.dll shark::update (main-thread tick).
 #ifndef _WIN32_WINNT
@@ -85,7 +90,15 @@ static const char *MODE_KEY[] = {"1v1", "2v2", "3v3", "ffa"};
 static const wchar_t *MODE_W[] = {L"1v1", L"2v2", L"3v3", L"Watch"};   // [Maps] Off<mode> keys of MMFind.ini (as before)
 static const wchar_t *MODE_PREFIX[] = {L"(2p)", L"(4p)", L"(6p)", L"(6p)"};
 // map catalog: the lobby map list as the game sends it (all Elite maps, same order as the lobby drop-down)
-#define MAX_BANS 3                // maps a player may uncheck per mode (ladder rule)
+// 0.49 (06.11.2026, players: "the map ban does not work, and it resets after a match"): up to 0.48 a Save with more than 3 maps
+// unchecked kept the FIRST 3 of the list (alphabetical) - not the player's - and the dialog went on showing what he had clicked
+// until the next Find a Game, which then showed the 3 kept ones ("reset"). Now the game's own rule (MapPreferencesPanel, DOW2.exe
+// 0x48C45E / 0x48C491): Save only with at most min(round(0.4 x maps of the mode), 4) unchecked - the header says how many - and
+// what is saved is exactly what the dialog shows. The engine itself kept its vetoes in the player's profile (LuaConfig
+// "MapPreferences", 0x48BCBE) and sent them with automatch/startpolling (vetoMaps); ours live in MMFind.ini [Maps] and go to the
+// ladder with mm/native ("bans"), where they are a veto: the match's map is one nobody of it banned.
+#define MAX_BANS 4                // at most this many maps unchecked per mode (the game's own cap)
+static int max_bans(int n) { int m = (int)(0.4 * n + 0.5); return m < MAX_BANS ? m : MAX_BANS; }
 #define MAXMAPS 160
 static wchar_t g_maps[MAXMAPS][64]; static int g_nmaps;
 static unsigned char g_off[4][MAXMAPS];  // 1 = player unchecked this map for the mode
@@ -188,8 +201,8 @@ static char g_natLobby[48], g_natWhy[96], g_natLastCancel[32];
 // what to do, "MMFind 0.45", the queue and who is online. Shown from the moment the screen opens (a peek at mm/native: the ladder
 // answers as for Start Searching and changes nothing; again every 20 s and on a match type change while the screen is open), after
 // the click by what really happened. [MMFind] ShowMode=1 (default) / 0 = off, Lang=auto (the game's own text: Cyrillic = Russian) / ru / en.
-#define MMF_VER "0.48"
-#define MMF_VER_W L"0.48"
+#define MMF_VER "0.49"
+#define MMF_VER_W L"0.49"
 static int g_showMode = 1, g_langCfg = -1, g_lang = -1, g_modeProbe;
 static double g_mx = 1065, g_my = 590, g_msz = 30;           // panel units, see mode_make
 static volatile int g_peekWant, g_peekAns; static volatile DWORD g_peekLast; static char g_peekWhy[96];
@@ -445,6 +458,36 @@ static int jint(const char *j, const char *key, int def) {
     return atoi(p + strlen(k));
 }
 static void name_utf8(char *o, int cap) { WideCharToMultiByte(CP_UTF8, 0, g_myName, -1, o, cap, NULL, NULL); }
+// 0.49: the maps a native match of each mode can get - the ladder names them in every mm/native answer ("pool", the names as the
+// game lists them); Map Preferences lists only those (bans of maps no match gets were wasted). Unknown (an older ladder) = all.
+static CRITICAL_SECTION g_plk; static wchar_t g_pool[4][6000]; static volatile int g_poolSeq[4];
+static void pool_from_json(const char *j, int mode) {
+    const char *p = strstr(j, "\"pool\":["); if (!p || mode < 0 || mode > 3) return;
+    static wchar_t w[6000]; int L = 0; p += 8;
+    while (*p && *p != ']' && L < 5900) {
+        if (*p != '"') { p++; continue; }
+        p++; if (L) w[L++] = L'|';
+        while (*p && *p != '"' && L < 5900) {
+            unsigned c = (unsigned char)*p++;
+            if (c == '\\' && *p) { char e = *p++; if (e == 'u' && strlen(p) >= 4) { char h[5] = {p[0], p[1], p[2], p[3], 0}; c = strtoul(h, NULL, 16); p += 4; } else c = e == 'n' ? '\n' : e == 't' ? '\t' : (unsigned char)e; w[L++] = (wchar_t)c; }
+            else if (c < 0x80) w[L++] = (wchar_t)c;
+            else { const char *st = p - 1; int n = c >= 0xF0 ? 4 : c >= 0xE0 ? 3 : 2; wchar_t u[3]; int k = MultiByteToWideChar(CP_UTF8, 0, st, n, u, 3); for (int i = 0; i < k && L < 5900; i++) w[L++] = u[i]; p = st + n; }
+        }
+        if (*p == '"') p++;
+    }
+    w[L] = 0;
+    EnterCriticalSection(&g_plk);
+    if (wcscmp(w, g_pool[mode])) { wcscpy(g_pool[mode], w); g_poolSeq[mode]++; LeaveCriticalSection(&g_plk);
+        int n = 0; for (int i = 0; w[i]; i++) n += w[i] == L'|'; logmsg("map pool of the ladder for %s: %d maps", MODE_KEY[mode], L ? n + 1 : 0); }
+    else LeaveCriticalSection(&g_plk);
+}
+static int in_pool(const wchar_t *pool, const wchar_t *name) {      // pool: name|name|...
+    size_t n = wcslen(name);
+    for (const wchar_t *p = pool; *p; ) { const wchar_t *e = wcschr(p, L'|'); size_t l = e ? (size_t)(e - p) : wcslen(p);
+        if (l == n && !_wcsnicmp(p, name, n)) return 1; if (!e) break; p = e + 1; }
+    return 0;
+}
+static int log_cut(const char *res) { const char *p = strstr(res, ",\"pool\":"); return p ? (int)(p - res) : (int)strlen(res); }   // logs without the pool
 // the body of mm/native: my wishes for the ladder's matchmaker (maps, rating spread, test group, pings to our game servers)
 static void join_body(char *body, int cap) {
     char nm[128]; name_utf8(nm, sizeof nm);
@@ -452,6 +495,11 @@ static void join_body(char *body, int cap) {
     for (int i = 0; i < g_nmaps && L < 5800; i++) if (mode_map(i, g_mode) && !g_off[g_mode][i]) {
         char m8[160]; WideCharToMultiByte(CP_UTF8, 0, g_maps[i], -1, m8, sizeof m8, NULL, NULL);
         L += snprintf(maps + L, sizeof maps - L, "%s\"%s\"", L ? "," : "", m8); }
+    static char bans[2000]; int B = 0; bans[0] = 0;                     // 0.49: the banned ones (the ladder: a veto)
+    for (int i = 0; i < g_nmaps && B < 1800; i++) if (mode_map(i, g_mode) && g_off[g_mode][i]) {
+        char m8[160]; WideCharToMultiByte(CP_UTF8, 0, g_maps[i], -1, m8, sizeof m8, NULL, NULL);
+        for (char *c = m8; *c; c++) if (*c == '"' || *c == '\\') *c = '\'';
+        B += snprintf(bans + B, sizeof bans - B, "%s\"%s\"", B ? "," : "", m8); }
     int own = GetModuleHandleA("Relay.dll") != NULL;      // our own game server: Relay 7 plays only with players who have it,
     char rv[8] = ""; GetEnvironmentVariableA("DOW2_RELAY", rv, sizeof rv);   // Relay 8 "8c": compatible, any lobby (see ladder.py)
     int compat = own && strchr(rv, 'c') != NULL;
@@ -467,8 +515,8 @@ static void join_body(char *body, int cap) {
     }
     detect_game();
     char rm[48] = ""; if (g_rs != RS_NONE && g_rs != RS_DONE && g_room[0]) snprintf(rm, sizeof rm, ",\"room\":\"%s\"", g_room);   // 0.47: a launcher room's search
-    snprintf(body, cap, "{\"steam\":\"%llu\",\"game\":\"%s\",\"mode\":\"%s\",\"name\":\"%s\",\"race\":\"%s\",\"hero\":\"%d\",\"maps\":[%s],\"max_diff\":%d%s%s,\"group\":\"%s\",\"mmf\":\"" MMF_VER "\"%s}",
-             g_mySteam, g_game, MODE_KEY[g_mode], nm, (g_random ? "random" : g_race >= 0 && g_race < 9 ? RACES[g_race] : ""), g_hero, maps, g_maxDiff,
+    snprintf(body, cap, "{\"steam\":\"%llu\",\"game\":\"%s\",\"mode\":\"%s\",\"name\":\"%s\",\"race\":\"%s\",\"hero\":\"%d\",\"maps\":[%s],\"bans\":[%s],\"max_diff\":%d%s%s,\"group\":\"%s\",\"mmf\":\"" MMF_VER "\"%s}",
+             g_mySteam, g_game, MODE_KEY[g_mode], nm, (g_random ? "random" : g_race >= 0 && g_race < 9 ? RACES[g_race] : ""), g_hero, maps, bans, g_maxDiff,
              own ? (compat ? ",\"own_server\":true,\"relay_compat\":true" : ",\"own_server\":true") : "", rp, g_group, rm);
 }
 static DWORD WINAPI net_worker(LPVOID _) {
@@ -485,12 +533,13 @@ static DWORD WINAPI net_worker(LPVOID _) {
                 snprintf(body, sizeof body, "{\"steam\":\"%llu\"}", g_mySteam); http_post(L"alive", body, res, sizeof res); }
         }
         if (g_state == S_NASK && !g_natAnswer) {                          // 0.38: may the game's own search run on our lobby server?
-            join_body(body, sizeof body); DWORD t0 = GetTickCount();
+            join_body(body, sizeof body); DWORD t0 = GetTickCount(); int qm = g_mode;
             int ok = http_quick(L"native", body, res, sizeof res, 1500);
+            if (ok) pool_from_json(res, qm);
             if (ok && jtrue(res, "native")) { g_natWhy[0] = 0; g_natAnswer = 1; }
             else { if (!ok) strcpy(g_natWhy, "the ladder did not answer in time"); else if (!jstr(res, "why", g_natWhy, sizeof g_natWhy)) snprintf(g_natWhy, sizeof g_natWhy, "%.90s", res);
                    g_natAnswer = 2; }
-            logmsg("native: mm/native -> %s (%lu ms): %s", g_natAnswer == 1 ? "yes" : "no", GetTickCount() - t0, ok ? res : "-");
+            logmsg("native: mm/native -> %s (%lu ms): %.*s", g_natAnswer == 1 ? "yes" : "no", GetTickCount() - t0, ok ? log_cut(res) : 1, ok ? res : "-");
         }
         if (g_showMode && g_screen == SC_MM && !g_loading && g_state != S_NASK) {   // 0.42: who is online / searching, for the Find a Game info block
             static DWORD lh; if (!lh || GetTickCount() - lh >= 5000) { lh = GetTickCount();
@@ -499,15 +548,16 @@ static DWORD WINAPI net_worker(LPVOID _) {
                     g_liveOnline = jint(res, "online", -1);
                     const char *q = strstr(res, "\"queue\""); g_liveQueue = q ? jint(q, MODE_KEY[g_mode], -1) : jint(res, "searching", -1); } } }
         if (g_peekWant) {                                                 // 0.42: would Start Searching search now (nothing changes)
-            g_peekWant = 0; join_body(body, sizeof body);
+            g_peekWant = 0; join_body(body, sizeof body); int qm = g_mode;
             size_t bl = strlen(body); if (bl > 1 && bl + 16 < sizeof body) strcpy(body + bl - 1, ",\"peek\":true}");
             DWORD t0 = GetTickCount(); int ok = http_quick(L"native", body, res, sizeof res, 1500); char why[96] = "";
+            if (ok) pool_from_json(res, qm);
             if (ok && jtrue(res, "native")) { g_peekAns = 1; if (g_state == S_IDLE) g_runWhy[0] = 0; }   // it can now: the old reason goes
             else { if (!ok) strcpy(why, "the ladder did not answer in time"); else if (!jstr(res, "why", why, sizeof why)) snprintf(why, sizeof why, "%.90s", res);
                    strcpy(g_peekWhy, why); g_peekAns = 2; }
             static int lastA; static char lastW[96];
             if (g_peekAns != lastA || strcmp(lastW, why)) { lastA = g_peekAns; strcpy(lastW, why);
-                logmsg("search kind: mm/native peek -> %s (%lu ms): %s", g_peekAns == 1 ? "native" : "not available", GetTickCount() - t0, ok ? res : "-"); }
+                logmsg("search kind: mm/native peek -> %s (%lu ms): %.*s", g_peekAns == 1 ? "native" : "not available", GetTickCount() - t0, ok ? log_cut(res) : 1, ok ? res : "-"); }
         }
         if ((g_state == S_NATIVE || (g_state == S_IDLE && g_natWatchUntil && (int)(g_natWatchUntil - GetTickCount()) > 0)) && !g_loading) {   // 0.38: the native search as the ladder sees it, every 2 s
             static DWORD lastn; if (GetTickCount() - lastn >= 2000) { lastn = GetTickCount();
@@ -606,19 +656,35 @@ static void install_sfm_hook(void) {
 
 // ---------------- Map Preferences dialog: all Elite maps of the chosen mode, checked = may be played ----------------
 // The stock dialog shows Relic's ranked pool; we fill it ourselves and answer its commands ourselves (the engine never sees them).
-static void *g_mpSelf; static int g_mpFlags, g_mpMode = -1, g_mpIdx[MAXMAPS], g_mpN;
-static GFxValue g_mpArgs[1 + 2 * MAXMAPS]; static wchar_t g_mpText[200]; static int g_relicN = 10;
+static void *g_mpSelf; static int g_mpFlags, g_mpMode = -1, g_mpIdx[MAXMAPS], g_mpN, g_mpMax = MAX_BANS, g_mpSeq = -1, g_mpVisit = -1, g_visit;
+static GFxValue g_mpArgs[1 + 2 * MAXMAPS]; static wchar_t g_mpText[300]; static int g_relicN = 10;
 static int build_maplist(void) {
     g_mpN = 0; int n = 1;
-    for (int i = 0; i < g_nmaps; i++) if (mode_map(i, g_mode)) g_mpIdx[g_mpN++] = i;
-    _snwprintf(g_mpText, 199, L"%ls: uncheck maps you do not want to play.", MODE_W[g_mode]);
+    static wchar_t pool[6000]; EnterCriticalSection(&g_plk); wcscpy(pool, g_pool[g_mode]); g_mpSeq = g_poolSeq[g_mode]; LeaveCriticalSection(&g_plk);
+    if (pool[0]) for (int i = 0; i < g_nmaps; i++) if (mode_map(i, g_mode) && in_pool(pool, g_maps[i])) g_mpIdx[g_mpN++] = i;   // 0.49: the ladder's pool
+    if (!g_mpN) for (int i = 0; i < g_nmaps; i++) if (mode_map(i, g_mode)) g_mpIdx[g_mpN++] = i;
+    g_mpMax = max_bans(g_mpN);
+    { int k = 0, cut = 0;                                     // bans beyond the cap (an older ini) or of maps not listed: not kept
+      unsigned char shown[MAXMAPS] = {0}; for (int j = 0; j < g_mpN; j++) shown[g_mpIdx[j]] = 1;
+      for (int i = 0; i < g_nmaps; i++) if (mode_map(i, g_mode) && g_off[g_mode][i] && (!shown[i] || ++k > g_mpMax)) { g_off[g_mode][i] = 0; cut++; }
+      if (cut) logmsg("map preferences: %d ban(s) of %s dropped (not in the ladder's pool or beyond %d)", cut, MODE_KEY[g_mode], g_mpMax); }
+    if (g_lang == 1) _snwprintf(g_mpText, 299, L"%ls: снимите галочку с карт, на которых не хотите играть (не больше %d).", MODE_W[g_mode], g_mpMax);
+    else _snwprintf(g_mpText, 299, L"%ls: uncheck the maps you do not want to play (up to %d).", MODE_W[g_mode], g_mpMax);
     memset(g_mpArgs, 0, sizeof g_mpArgs);
     g_mpArgs[0].type = GFX_WSTRING; g_mpArgs[0].v.ws = g_mpText;
     for (int k = 0; k < g_mpN; k++) {
         g_mpArgs[n].type = GFX_WSTRING; g_mpArgs[n].v.ws = g_maps[g_mpIdx[k]]; n++;
         g_mpArgs[n].type = GFX_NUMBER; g_mpArgs[n].v.num = g_off[g_mode][g_mpIdx[k]] ? 2 : 0; n++;
     }
-    g_mpMode = g_mode; return n;
+    if (g_verbose) { char b[1800]; int L = 0; for (int k = 0; k < g_mpN && L < 1700; k++) { char m8[160]; WideCharToMultiByte(CP_UTF8, 0, g_maps[g_mpIdx[k]], -1, m8, sizeof m8, NULL, NULL);
+        L += snprintf(b + L, sizeof b - L, "%s%s%s", k ? " | " : "", g_off[g_mode][g_mpIdx[k]] ? "-" : "", m8); } logmsg("map preferences list (%s pool, up to %d off): %s", pool[0] ? "the ladder's" : "no", g_mpMax, b); }
+    g_mpMode = g_mode; g_mpVisit = g_visit; return n;
+}
+static void push_states(void) {                               // 0.49: the dialog shows what is saved
+    if (!g_mpSelf || g_mpMode < 0 || g_mpVisit != g_visit) return;
+    static GFxValue st[MAXMAPS]; memset(st, 0, sizeof st);
+    for (int i = 0; i < g_mpN; i++) { st[i].type = GFX_NUMBER; st[i].v.num = g_off[g_mpMode][g_mpIdx[i]] ? 2 : 0; }
+    g_invOrig(g_mpSelf, NULL, "Receive_UpdateMapList", g_mpFlags, st, g_mpN);
 }
 static int parse_states(const char *a, unsigned char *st) {       // "0,2,0,..." -> st[k] = 1 if unchecked
     int k = 0; for (const char *p = a; *p && k < g_mpN; ) { st[k++] = atoi(p) == 2; p = strchr(p, ','); if (!p) break; p++; }
@@ -964,7 +1030,9 @@ static char __fastcall inv_hook(void *self, void *edx, const char *method, int f
     if (method && !strcmp(method, "Receive_ShowSearchingAnimation") && g_screen == SC_MM) mode_ui();   // 0.42
     // a note on the game's own status line, right after the engine's own per-frame call into the Find a Game panel, on its thread
     if (method && !strcmp(method, "Receive_ShowSearchingAnimation") && g_screen == SC_MM && g_banNote && GetTickCount() - g_banNote < 8000 && g_state == S_IDLE) {
-        GFxValue v[3]; memset(v, 0, sizeof v); static wchar_t a1[] = L"Only 3 maps can be banned per mode.", a2[] = L"Можно убрать не больше 3 карт на режим.", a3[] = L"The first 3 unchecked maps are kept.";
+        GFxValue v[3]; memset(v, 0, sizeof v); static wchar_t a1[80], a2[80], a3[80];
+        _snwprintf(a1, 79, L"Only %d maps can be banned for this mode.", g_mpMax); _snwprintf(a2, 79, L"Можно убрать не больше %d карт на режим.", g_mpMax);
+        _snwprintf(a3, 79, L"The first %d unchecked maps are kept.", g_mpMax);
         v[0].type = v[1].type = v[2].type = GFX_WSTRING; v[0].v.ws = a1; v[1].v.ws = a2; v[2].v.ws = a3;
         g_invOrig(self, edx, "Receive_UpdateSearchStatus", flags, v, 3);
     }
@@ -1027,6 +1095,7 @@ static void __fastcall fs_hook(void *self, void *edx, void *movie, const char *c
                 else if (strstr(url, "mp_postgame.gfx")) sc = SC_OTHER;
                 if (sc >= 0 && !strcmp(path + strlen(path) - 9, ".panel_mc")) {
                     strcpy(g_panel, path); g_screen = sc; g_scrTick = GetTickCount(); g_engSearch = -1; g_mapUp = 0; if (sc != SC_MM) g_heroUp = 0; else g_mmApplied = 0;
+                    g_visit++;                                       // 0.49: the Map Preferences dialog of an earlier visit is gone
                     if (sc == SC_MM && g_rs == RS_WALK) g_rMMFresh = 1;   // 0.48: Find a Game opened by this walk (its hero panel comes up fresh)
                     logmsg("screen %d panel %s", sc, g_panel);
                 }
@@ -1054,17 +1123,22 @@ static void __fastcall fs_hook(void *self, void *edx, void *movie, const char *c
         }
         if (strstr(cmd, "map_preferences_mc.") && g_mpSelf && g_mpMode >= 0) {          // our dialog - the engine must not see it
             static unsigned char tmp[MAXMAPS]; GFxValue v; memset(&v, 0, sizeof v);
-            if (ends_with(cmd, ".OnClickMap") && args) {
+            if (ends_with(cmd, ".OnClickMap") && args) {             // 0.49: Save as the game's own dialog allows it - at most g_mpMax unchecked
                 int k = parse_states(args, tmp), on = 0; for (int i = 0; i < k; i++) on += !tmp[i];
-                v.type = GFX_BOOL; v.v.b = on > 0; g_invOrig(g_mpSelf, NULL, "Receive_SetSaveButtonEnabled", g_mpFlags, &v, 1);
+                v.type = GFX_BOOL; v.v.b = on > 0 && k - on <= g_mpMax; g_invOrig(g_mpSelf, NULL, "Receive_SetSaveButtonEnabled", g_mpFlags, &v, 1);
+                static int lastOff = -1; if (k - on != lastOff) { lastOff = k - on; if (k - on > g_mpMax) logmsg("map preferences: %d unchecked - Save off (up to %d)", k - on, g_mpMax); }
             } else if (ends_with(cmd, ".OnClickSave") && args) {
-                int k = parse_states(args, tmp);
-                { int bans = 0; for (int i = 0; i < k; i++) if (tmp[i] && ++bans > MAX_BANS) tmp[i] = 0;      // ladder rule: a few bans per mode
-                  if (bans > MAX_BANS) { g_banNote = GetTickCount(); logmsg("map preferences: %d maps unchecked, only %d kept", bans, MAX_BANS); } } for (int i = 0; i < k; i++) g_off[g_mpMode][g_mpIdx[i]] = tmp[i];
+                int k = parse_states(args, tmp), bans = 0, cut = 0;
+                for (int i = 0; i < k; i++) if (tmp[i] && ++bans > g_mpMax) { tmp[i] = 0; cut = 1; }   // Save is off then; a click anyway keeps the first ones
+                if (cut) { g_banNote = GetTickCount(); logmsg("map preferences: %d maps unchecked, only %d kept", bans, g_mpMax); }
+                for (int i = 0; i < k; i++) g_off[g_mpMode][g_mpIdx[i]] = tmp[i];
                 save_prefs(g_mpMode); int on = 0; for (int i = 0; i < k; i++) on += !tmp[i];
-                logmsg("map preferences saved for %s: %d of %d maps", MODE_KEY[g_mpMode], on, k);
+                char bn[600] = ""; int bl = 0;
+                for (int i = 0; i < k && bl < 500; i++) if (tmp[i]) { char m8[160]; WideCharToMultiByte(CP_UTF8, 0, g_maps[g_mpIdx[i]], -1, m8, sizeof m8, NULL, NULL); bl += snprintf(bn + bl, sizeof bn - bl, "%s%s", bl ? " | " : "", m8); }
+                logmsg("map preferences saved for %s: %d of %d maps, banned: %s", MODE_KEY[g_mpMode], on, k, bl ? bn : "none");
                 char z[256] = ""; for (int i = 0; i < g_relicN && i < 100; i++) strcat(z, i ? ",0" : "0");     // the engine closes the dialog
                 g_fsOrig(self, edx, movie, cmd, z);
+                if (cut) push_states();                               // what is kept, if the dialog comes back as it was
             } else if (ends_with(cmd, ".OnClickCancel")) {
                 g_fsOrig(self, edx, movie, cmd, args);                                   // the engine closes the dialog (and resets its own list)
                 GFxValue st[MAXMAPS]; memset(st, 0, sizeof st);
@@ -1073,10 +1147,15 @@ static void __fastcall fs_hook(void *self, void *edx, void *movie, const char *c
             } else { g_fsOrig(self, edx, movie, cmd, args); }
             return;
         }
-        if (g_screen == SC_MM && ends_with(cmd, ".OnClickMapPreferences") && g_mpSelf && g_mpMode != g_mode && g_nmaps) {
-            g_fsOrig(self, edx, movie, cmd, args);                                      // mode changed - refill the list
+        if (g_screen == SC_MM && ends_with(cmd, ".OnClickMapPreferences") && g_mpSelf && g_mpVisit == g_visit && g_nmaps
+            && (g_mpMode != g_mode || g_mpSeq != g_poolSeq[g_mode])) {
+            g_fsOrig(self, edx, movie, cmd, args);                                      // mode / the ladder's pool changed - refill the list
             int n = build_maplist(); g_invOrig(g_mpSelf, NULL, "Receive_CreateMapList", g_mpFlags, g_mpArgs, n);
-            logmsg("map preferences refilled for %s", MODE_KEY[g_mode]); return;
+            logmsg("map preferences refilled for %s: %d maps", MODE_KEY[g_mode], g_mpN); return;
+        }
+        if (g_screen == SC_MM && ends_with(cmd, ".OnClickMapPreferences") && g_mpSelf && g_mpVisit == g_visit && g_mpMode == g_mode) {
+            g_fsOrig(self, edx, movie, cmd, args); push_states();                       // 0.49: opened again - the saved states, not the engine's
+            return;
         }
         if (g_screen == SC_MM && !g_sending && args && !strncmp(cmd, g_panel, strlen(g_panel)) && !strcmp(cmd + strlen(g_panel), ".OnSelectDropDownItem")) {
             int a = -1, b = -1;
@@ -1155,7 +1234,7 @@ static void stray_stop(DWORD now) {
 // stopped first. Never from a Custom Games lobby (the player is in one - his call), a match, or another screen.
 // The pipe thread never touches the engine: commands go into a queue the game's thread takes in its tick (shark::update).
 enum { QC_ROOM = 1, QC_CANCEL, QC_FS };
-typedef struct { int what, mode, race, hero, opt[4], ttl; char room[24]; char path[160], args[48]; } QCmd;
+typedef struct { int what, mode, race, hero, opt[4], ttl, hook; char room[24]; char path[160], args[400]; } QCmd;
 typedef struct { char s[600]; } QOut;
 static QCmd g_cq[8]; static int g_cqH, g_cqN; static QOut g_oq[32]; static int g_oqH, g_oqN;
 static void out_push(const char *s) {
@@ -1302,6 +1381,10 @@ static void room_take(DWORD now) {
         LeaveCriticalSection(&g_qlk);
         if (!have) return;
         if (c.what == QC_ROOM) room_start(&c, now); else if (c.what == QC_CANCEL) room_cancel(c.room);
+        else if (c.what == QC_FS && c.hook) { g_rWantMenu = 1; probe_screen();
+            char cmd[300]; if (c.path[0] == '.') snprintf(cmd, sizeof cmd, "%s%s", g_panel, c.path); else snprintf(cmd, sizeof cmd, "%s", c.path);
+            if (g_fsSelf && g_fsMovie) { logmsg("pipe: fscommand %s '%.60s' as a click", cmd, c.args); fs_hook(g_fsSelf, NULL, g_fsMovie, cmd, c.args); }
+            emitf("{\"ev\":\"fs_done\",\"screen\":%d}", g_screen); }
         else if (c.what == QC_FS) { g_rWantMenu = 1; probe_screen(); fs(c.path, c.args); emitf("{\"ev\":\"fs_done\",\"screen\":%d}", g_screen); }
     }
 }
@@ -1356,6 +1439,7 @@ static void cli_line(Cli *c, char *s) {
     } else if (!strcmp(cmd, "cancel")) { q.what = QC_CANCEL; strcpy(q.room, room); }
     else if (!strcmp(cmd, "fs") && g_debugPipe) {           // [MMFind] DebugPipe=1 (stands only): a menu command as its button sends it
         jstr(s, "path", q.path, sizeof q.path); jstr(s, "args", q.args, sizeof q.args); if (!q.path[0]) { cli_write(c, "{\"ev\":\"error\"}\n"); return; }
+        q.hook = jint(s, "hook", 0) == 1;                   // 0.49: "hook":1 = as the player's own click (through MMFind's handler)
         q.what = QC_FS; }
     else { cli_write(c, "{\"ev\":\"error\",\"reason\":\"bad_command\"}\n"); return; }
     logmsg("pipe: client %lu: %s %s (queued for the game's thread)", c->id, cmd, room);
@@ -1623,7 +1707,7 @@ static DWORD WINAPI relay_load(LPVOID _) {
 BOOL WINAPI DllMain(HINSTANCE h, DWORD r, LPVOID _) {
     if (r != DLL_PROCESS_ATTACH) return TRUE;
     DisableThreadLibraryCalls(h); InitializeCriticalSection(&g_lk); g_wake = CreateEventW(NULL, FALSE, FALSE, NULL);
-    InitializeCriticalSection(&g_qlk); g_outEv = CreateEventW(NULL, FALSE, FALSE, NULL);
+    InitializeCriticalSection(&g_qlk); g_outEv = CreateEventW(NULL, FALSE, FALSE, NULL); InitializeCriticalSection(&g_plk);
     GetModuleFileNameW(h, g_dir, MAX_PATH); wchar_t *s = wcsrchr(g_dir, L'\\'); if (s) s[1] = 0;
     wchar_t ini[MAX_PATH]; _snwprintf(ini, MAX_PATH, L"%lsMMFind.ini", g_dir);
     GetPrivateProfileStringW(L"MMFind", L"Server", MM_HOST, g_server, 128, ini); if (!wcscmp(g_server, L"rts.fintebtc.de")) wcscpy(g_server, MM_HOST);   // old single-host ini -> all mirrors

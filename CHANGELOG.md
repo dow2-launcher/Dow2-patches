@@ -4,6 +4,26 @@ Every version gets an entry here before it reaches `main`. CI then tags `vX.Y.Z`
 version (`X.Y.0`) it also publishes a GitHub Release with the DLLs and the entries since the previous `X.Y.0`.
 The version of the set lives only in `VERSION`; each DLL still writes its own version to its log.
 
+## 0.2.18 — 2026-11-06
+MMFind 0.49 (store automatch mmfind-0.49 = mmfind-0.48 with this MMFind; OwnLobby 2, Relay 25, early winmm, mmbridge as there).
+Players 06.11 (noofancy, siritos): "the map ban does not work, and when you ban, it resets after a game".
+- Cause: MMFind's own Map Preferences kept at most 3 unchecked maps per mode, and a Save with more kept the FIRST 3 of the list
+  (alphabetical: Ashes of Typhon, Ashes Redux, Bay of Grots...) - not the player's - while the dialog went on showing what he had
+  clicked; the next Find a Game showed the 3 kept ones ("reset"). Players' logs: 4, 9 and 36 maps unchecked -> 3 alphabetical kept.
+- The game's own rule (MapPreferencesPanel, DOW2.exe 0x48C45E / 0x48C491): at most min(round(0.4 x maps of the mode), 4) vetoes; the
+  engine kept them in the player's profile (LuaConfig "MapPreferences", 0x48BCBE) and sent them with automatch/startpolling
+  (vetoMapKey / vetoMaps). MMFind 0.49 does the same in its dialog: Save only with at most that many unchecked (the header says how
+  many, in the game's language), saved exactly as shown, shown as saved when the dialog opens again; the bans stay in MMFind.ini
+  [Maps] (as before - across matches and restarts).
+- The dialog lists only the maps a match of the mode can get: the ladder names them in every mm/native answer ("pool"); bans of maps
+  outside it were wasted.
+- mm/native carries "bans"; the ladder (dow2-ladder fix/nm-map-veto) takes them as a veto: the match's map is one nobody of it banned
+  (all banned by someone - one of the least banned); a party member's own bans count.
+- DebugPipe=1 (stands): fs with "hook":1 goes through MMFind's own handler, as the player's click.
+- Stand 1, 06.11 (test lobby / ladder of dow2-ladder #11, a 9-map 1v1 pool): the game's own header of that dialog is "You may
+  deselect up to 4 maps."; with real clicks 5 unchecked = Save off, 4 = saved exactly those; opened again in the same visit, in the
+  next visit and after a restart of the game - the same 4 shown; 4 matches against fake opponents, none on a banned map.
+
 ## 0.2.17 — 2026-11-06
 RoomJoin 13 (store roomjoin-7). Join from the launcher showed nothing of the game between the main menu and the lobby (RoomJoin 12
 has no cover, and its log never had a message box): the game browser's Join (GameListForm 0x0046BF34) makes the same engine call
