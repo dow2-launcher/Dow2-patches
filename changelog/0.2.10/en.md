@@ -1,0 +1,3 @@
+- Automatch v2.0: the whole search and the match now always go through our servers over our UDP connection - the separate tick "Games through our servers" is gone, it is part of Automatch.
+- Our game servers: 3- and 4-player games no longer flood the connection (lags, "long threads" of shots after a freeze); the connection to our servers has limits and gives up on a dead line instead of resending forever.
+- Forwarding servers (if Relic lags): the same limits.

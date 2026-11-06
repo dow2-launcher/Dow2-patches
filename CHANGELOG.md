@@ -4,6 +4,35 @@ Every version gets an entry here before it reaches `main`. CI then tags `vX.Y.Z`
 version (`X.Y.0`) it also publishes a GitHub Release with the DLLs and the entries since the previous `X.Y.0`.
 The version of the set lives only in `VERSION`; each DLL still writes its own version to its log.
 
+## 0.2.10 — 2026-11-05
+Automatch with our UDP transport inside (store automatch mmfind-0.46, relay_fwd relayfwd-23; relay_r2 removed from the store).
+Owner 05.11.2026: "the tick 'Games through our servers' is named stupidly, remove it. Two variants only: Automatch - always
+through our servers and over UDP; Forwarding - through our forwarding servers, over UDP too."
+- MMFind 0.46: loads Relay.dll from its own folder at the start (a thread, never under the loader lock): Elite's injector loads
+  only the DLL an add-on names in InjectedFiles (MMFind.dll for the automatch); in vanilla the launcher's loader loads every
+  DLL of dow2-patches\ anyway. MMFind.log says "Relay.dll loaded" / "already loaded" / "no Relay.dll next to MMFind.dll".
+  Nothing else changed in MMFind; its relay_ping (Relay's pings, "0.0.0.22:22" first) and own_server go to mm/native as before.
+- The automatch package (mmfind-0.46) = MMFind.dll 0.46 + OwnLobby.dll 2 (unchanged, the store's binary) + Relay.dll 23 + the
+  early winmm.dll (unchanged). Store entry: conflicts += dow2-patches/Relay.dll (a hand copy of the stand-alone package is put
+  aside as relay_r2's was), descriptions: "the whole search and the game go through our servers over UDP".
+- Relay 23 (from feature/relay-23, below) is the transport, unchanged code: a native game (the game connects to our node's
+  battle port itself) over UDP to that node or a chain through the nearest; Relic games are never forwarded by Relay.dll
+  (DOW2_RELAY_FWD is set only by RelayForward.dll). With both DLLs the first loaded carries the connections of both (the
+  RelayCore mutex: one hook), so no connection is handled twice.
+- Relay 23 (relay_fwd / Relay.dll): brakes in the UDP tunnel, after the 2v2 of 05.11.2026 (Fov: ~650 packets/s for 10 minutes,
+  sent 399559, sent again 16495, copies 1071947; the other three players the same, the host 2380 packets/s). The flood itself
+  came from our battle server (proxy messages to every peer, fixed in dow2-ladder fix/relay-udp-storm); the tunnel had no brakes,
+  so it carried and multiplied whatever came. The delivery moved to relay/du_tunnel.h, the C twin of dow2-ladder
+  gameserver/du_proto.py: one resend timer per connection (200 ms .. 3 s doubling, Karn), a packet resent 10 times = the
+  connection is dead ("ev=dead"), resends budgeted (20/s or 25% of the fresh), a packet copied at most twice and only while
+  young, an ACK2 at most every RTT/4, a tail probe, 64 packets / 64 KB in flight with back pressure, 250 packets/s paced, a
+  256 KB UDP receive buffer, acks paced, a storm fuse ("ev=storm"), a 1 MB queue for a game that does not read. Same wire
+  format both ways. relay/test: du_harness, storm_test.py (netns + netem, 4-6 player model), run_matrix.sh, wine_smoke.sh.
+- addons.json / docs/store-texts.json: netprobe (removed from the store 05.11 by the owner) and relay_r2 out; relay_fwd's name
+  as in the store.
+- Launcher 1.4.14 (Dow2-elite-launcher): Settings -> Online play shows our game servers and the lobby servers with the Automatch
+  tick; a unit test of the move (relay_r2 on / off, start checks first or a sync first, with forwarding, vanilla, hand copy).
+
 ## 0.2.9 — 2026-11-05
 RoomJoin 12 (store roomjoin-6; on top of RoomJoin 11 of PR #23, which never reached the store - roomjoin-5 is RoomJoin 10;
 0.2.8 is PR #24). Owner 05.11.2026 after trying Join himself: "не надо там перекрывать весь экран ... и когда в игру зайдёт

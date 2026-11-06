@@ -1,17 +1,17 @@
-// Relay 17-23 (02-05.11.2026) - DoW2 Retribution / Elite: online games through OUR game servers. One source, two add-ons
-// (docs/ADDON_RULES.md: one feature - one DLL - one tick), two separate ticks in the launcher (owner 02.11.2026: the old
-// Fallback / Mode / Backup / UDP / Server controls were "убогие" - two clear ticks instead, the server is always automatic):
+// Relay 17-23 (02-05.11.2026) - DoW2 Retribution / Elite: online games through OUR game servers. One source, two DLLs:
 //
-//   Relay.dll         (relay_r2, "Use our servers for games")         - a game goes STRAIGHT through our server (our battle
-//                     server hosts the session, "DWR2") whenever everyone in it reaches our servers: that is known for our
-//                     automatch (the matchmaker has every player's ping to every node and picks the best node for all:
-//                     MMFind sets DOW2_RELAY_USE=1 + DOW2_RELAY_HOST), and for a game whose address already is ours (our
-//                     lobby server's rooms). A custom lobby can't know who will come, so it stays a Relic game.
-//   RelayForward.dll  (relay_fwd, "Use forwarding servers in all games") - every other online game (Relic's) goes through
-//                     our server nearest to the player, which passes it on to the Relic relay the game wanted ("DWR3") -
-//                     for players whose way to Relic (ports 27000-27099) is cut or slow.
-//   Both on: straight through ours when possible, otherwise the nearest forwarding server. One on: only its behaviour.
-//   Both off: as without the add-on (Relic directly).
+//   Relay.dll         part of the automatch package (store "automatch", loaded by MMFind.dll 0.46 from its own folder; owner
+//                     05.11.2026: "the automatch always goes through our servers and over UDP" - the separate tick relay_r2
+//                     "Games through our servers" is gone). A game of our lobby server's room (native automatch: the game
+//                     connects to one of our nodes on the battle port itself) goes over our UDP tunnel to that node, or
+//                     through the player's nearest usable node (Relay 22 chain); a game whose Relic address is one of ours
+//                     too. Its pings to our nodes go to the matchmaker (DOW2_RELAY_PING -> MMFind -> relay_ping), which puts
+//                     the match on the node best for all players. Relic's own games stay Relic's - never forwarded by it.
+//   RelayForward.dll  (relay_fwd, "Forwarding servers (if Relic lags)") - every other online game (Relic's) goes through our
+//                     server nearest to the player, which passes it on to the Relic relay the game wanted ("DWR3") - for
+//                     players whose way to Relic (ports 27000-27099) is cut or slow.
+//   Both loaded: native games over UDP to our node (the same code in both, carried once), Relic games through the forwarding
+//   server. Only Relay.dll: native over UDP, Relic games directly. Only RelayForward.dll: both, as before. Neither: as without.
 //
 // How the two DLLs share the work: each sets its flag in the process environment at load (DOW2_RELAY_OWN=1 /
 // DOW2_RELAY_FWD=1); the first one loaded installs the connect hook and the ping loop for both (a named mutex) and reads

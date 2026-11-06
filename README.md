@@ -8,7 +8,7 @@ does nothing if the exe is a different build.
 Automatch v2.0). **UI rule:** add-ons show things only inside the game's own interface (its Scaleform movies), never drawn over
 the frame through Direct3D — [docs/UI_RULES.md](docs/UI_RULES.md).
 
-## What players get (launcher store, 04.11.2026)
+## What players get (launcher store, 04.11.2026; network add-ons 05.11.2026)
 
 The source of truth is the live store, `store3/launcher.json` on rts; this table is that file on 04.11.2026 (main = 31f3ea5,
 PR #11). "Sync": whether the add-on can affect the game's synchronisation between players. None of the released ones can: they
@@ -16,9 +16,8 @@ are client-side, and the other players in the match don't need them.
 
 | Tick in the launcher | What it does | Store id → version | Folder | Sync |
 |---|---|---|---|---|
-| **Automatch v2.0** (on by default) | Multiplayer → Find a Game → Start Searching finds a 1v1 / 2v2 / 3v3 match by rating on our servers and starts it within seconds. If it can't run, Find a Game says why. | `automatch` → `mmfind-0.45` | `mmfind/` + `ownlobby/` + `vanilla-loader/` | no |
-| **Use our servers for games** (on by default) | Our automatch games go straight through our game server (Poland, Germany, Moscow - the nearest is picked by itself). UDP only. | `relay_r2` → `relay-21` | `relay/` | no |
-| **Use forwarding servers in all games** | Every other online game (ordinary lobbies) goes through our nearest server on its way to Relic - for players whose connection to Relic gets cut or lags. | `relay_fwd` → `relayfwd-21` | `relay/` | no |
+| **Automatch v2.0** (on by default) | Multiplayer → Find a Game → Start Searching finds a 1v1 / 2v2 / 3v3 match by rating on our servers and starts it within seconds; the game itself runs through our game server over our UDP tunnel (since 05.11.2026 - the separate tick "Games through our servers" is gone). If it can't run, Find a Game says why. | `automatch` → `mmfind-0.46` | `mmfind/` + `ownlobby/` + `relay/` (Relay.dll) + `vanilla-loader/` | no |
+| **Forwarding servers (if Relic lags)** | Every other online game (ordinary lobbies) goes through our nearest server on its way to Relic - for players whose connection to Relic gets cut or lags. | `relay_fwd` → `relayfwd-23` | `relay/` | no |
 | **Lobby rating** | Relic rating next to each player in the lobby; on hover - win rate, games, Steam hours. Only shows, kicks nobody. | `lobbystats_r3` → `lobbystats-0.11.0` | `lobbystats/` | no |
 | **Ratings on the loading screen** | The Relic rating after each player's name on the loading screen of an online match. | `loadingratings_r3` → `loadingratings-4` | `lobbystats/` (built with `-DLS_LOADING`) | no |
 | **Sound when someone joins the lobby** | A soft or sharp sound and a flashing taskbar button when a player comes into your lobby while the game is minimised. | `joinsound` → `joinsound-1` | `lobbystats/` (built with `-DLS_JOINSOUND`) | no |
@@ -33,7 +32,6 @@ are client-side, and the other players in the match don't need them.
 | **Join a lobby from the launcher (test)** | Experiment by siritos: a Join button on the launcher's Lobbies tab (and elite:// links of the ladder site); the game starts and walks into the room by itself. | `roomjoin` → `roomjoin-4` (staging; live: `roomjoin-3`) | `roomjoin/` | no |
 | **Fix: the game closes when a match starts** (new, not released yet) | Repairs Elite's ShellPatch.dll (the race meter) when it could not hook in at the game's start - then every match crashed a second in. Otherwise does nothing. | `shellfix` → `shellfix-1` (staging) | `shellfix/` | no |
 | **Record game crashes (for the developers)** | Writes where the game crashed and what closed it, for "Send logs". | `crashlog` → `crashlog-1` | `crashlog/` | no |
-| **EXPERIMENT: connection check to our servers** | Once per game start, 1-2 minutes in the background: what gets through from your computer to our game servers; sends us the result. | `netprobe` → `netprobe-2` | `netprobe/` | no |
 | **Fix: Elite.exe crash on Windows 11 25H2** | An Elite.exe without its wmic check (wmic is gone in 25H2, Elite.exe crashed on it); it still closes itself when the game ends. | `elitefix_wmic` → `elitefix-nowmic-1`, `elitefix-nowmic-2` (staging) | `elitefix/make_elite_exe.py` (one jump patched in Elite's Elite.exe) | no |
 | **Russian translation (by Gosudar)** | Russian text for Dawn of War II and Elite 3.2; the English files come back when it is off. | `rusifikator` → `rusifikator-text-1` | not in this repo (Gosudar's text files) | no |
 | Developer diagnostics (off) | Turned off for everyone. | `frameprobe_r2` → `frameprobe-off` | `frameprobe/` | no |
@@ -67,9 +65,10 @@ mmfind/ + ownlobby/ + vanilla-loader/ - **Automatch v2.0** (`automatch`, mmfind-
     key is only on the server) next to Relic's before RLink starts, so it must be loaded at process start - that is the early
     winmm.dll; loaded later it does nothing. OwnLobby.ini [OwnLobby] Servers=host:port;host:port. Wine/Proton: winmm=n,b.
 
-relay/ - **Relay.dll** (`relay_r2`) and **RelayForward.dll** (`relay_fwd`), Relay 23 (tunnel: `relay/du_tunnel.h`, tests: `relay/test/`)
-    One source, two ticks. Relay.dll: a game goes straight through our game server when everyone in it reaches our servers
-    (our automatch: the matchmaker knows every player's ping and picks the node). RelayForward.dll: every other online game goes
+relay/ - **Relay.dll** (inside `automatch` since 05.11.2026, loaded by MMFind.dll) and **RelayForward.dll** (`relay_fwd`), Relay 23
+    (tunnel: `relay/du_tunnel.h`, tests: `relay/test/`). One source, two DLLs. Relay.dll: an automatch game (our lobby server's room
+    on one of our nodes) goes over our UDP tunnel to that node, or through the player's nearest node; its pings go to the
+    matchmaker, which picks the node best for all. RelayForward.dll: every other online game goes
     through our nearest node, which passes it on to the Relic relay. UDP only (TCP to our servers gets cut in Russia), our own
     delivery with copies of recent packets; the gateway side is dow2-ladder gameserver/udp_gateway.py. From Moscow the way on to
     Relic goes through iggy (dow2-ladder gameserver/egress). No UDP answer: straight to Relic.
@@ -143,7 +142,7 @@ crashlog/ - **CrashLog.dll** (CrashLog 1)
     No hooks into the game: serious exceptions with module+offset and stack, a minidump on a crash, and who called ExitProcess /
     TerminateProcess (the game's built-in BugSplat closes it silently). Elite_DLLs/CrashLog.log, sent only with "Send logs".
 
-netprobe/ - **NetProbe.dll** (NetProbe 2), experiment
+netprobe/ - **NetProbe.dll** (NetProbe 2), experiment - removed from the store 05.11.2026 (owner), the source stays
     No hooks. 15 s after the game starts: TCP and UDP to our servers' probe service (dow2-ladder gameserver/probe_server.py) on
     several ports, ~5 MB, 1-2 minutes; writes NetProbe.log and sends it to us.
 
@@ -199,7 +198,7 @@ Only on rts, by hand, after the DLL has run in a real game (owner's rule 29.10.2
   main, then on rts `dow2-patches-deploy` builds it into the staging store (`store3-staging`, never synced; its timer
   `dow2-patches-deploy.timer` is **off on purpose** - run it by hand). `elite-release` shows what waits, `elite-release apply <id>`
   releases it to the live store, signs, verifies and syncs the mirrors. Players get it on the next launcher refresh (≤ 15 min).
-- **The others** (automatch, relay_r2 / relay_fwd, elitefix_wmic, rusifikator) are published by hand on rts with elite-publish
+- **The others** (automatch, relay_fwd, elitefix_wmic, rusifikator) are published by hand on rts with elite-publish
   into store3 (their store version is not `<id>-<version>`, or they are more than one DLL of this repo).
 - A store version is published once and never changes: new code needs a new version. Going back = the old version back into
   launcher.json (it is still in the store). Urgent: stub the one add-on, the rest keeps working.

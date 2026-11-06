@@ -4,33 +4,15 @@
     "How to write them: docs/ADDON_TEXTS.md. Applied to a launcher.json by scripts/store_texts.py (then sign it as usual); the add-ons of addons.json get the same texts there, so a deploy keeps them.",
     "category = the group on the launcher's Add-ons tab: network, interface, gameplay, fixes, experiment; order = the place inside it (smaller = higher)."
   ],
-  "relay_r2": {
-    "category": "network",
-    "order": 10,
-    "name": {
-      "en": "Play through our servers",
-      "ru": "Игры через наши серверы",
-      "es": "Jugar a través de nuestros servidores",
-      "fr": "Jouer via nos serveurs",
-      "de": "Über unsere Server spielen"
-    },
-    "description": {
-      "en": "Automatch games run through our nearest server (Poland, Germany or Moscow): less lag and fewer disconnects. Ordinary lobbies are not affected.",
-      "ru": "Игры автоматча идут через наш ближайший сервер (Польша, Германия или Москва): меньше лагов и обрывов. Обычные лобби это не затрагивает.",
-      "es": "Las partidas del automatch pasan por nuestro servidor más cercano (Polonia, Alemania o Moscú): menos lag y menos desconexiones. Las salas normales no cambian.",
-      "fr": "Les parties de l'automatch passent par notre serveur le plus proche (Pologne, Allemagne ou Moscou) : moins de lag et de déconnexions. Les salons normaux ne changent pas.",
-      "de": "Automatch-Spiele laufen über unseren nächsten Server (Polen, Deutschland oder Moskau): weniger Lag und Verbindungsabbrüche. Normale Lobbys bleiben, wie sie sind."
-    }
-  },
   "relay_fwd": {
     "category": "network",
     "order": 20,
     "name": {
-      "en": "All games through our server (if Relic lags)",
-      "ru": "Все игры через наш сервер (если Relic лагает)",
-      "es": "Todas las partidas por nuestro servidor (si Relic va mal)",
-      "fr": "Toutes les parties via notre serveur (si Relic rame)",
-      "de": "Alle Spiele über unseren Server (wenn Relic hakt)"
+      "en": "Forwarding servers (if Relic lags)",
+      "ru": "Форвардинг сервера (если Relic лагает)",
+      "es": "Servidores de reenvío (si Relic va mal)",
+      "fr": "Serveurs de relais (si Relic rame)",
+      "de": "Weiterleitungsserver (wenn Relic hakt)"
     },
     "description": {
       "en": "Turn it on if your games on Relic lag or disconnect. Every online game then goes through our nearest server, which passes it on to Relic. If our server can't be reached, the game connects directly as usual.",
@@ -51,11 +33,11 @@
       "de": "Automatch v2.0"
     },
     "description": {
-      "en": "Quick matches by rating on our servers: Multiplayer → Find a Game → Start Searching. 1v1, 2v2 and 3v3, the match starts within seconds. If it can't run, Find a Game says why. Ordinary lobbies are not affected.",
-      "ru": "Быстрый подбор соперника по рейтингу на наших серверах: Мультиплеер → Find a Game → Start Searching. 1v1, 2v2 и 3v3, матч стартует за секунды. Если что-то не так, на экране Find a Game написано, что делать. Обычные лобби не меняются.",
-      "es": "Partidas rápidas por rating en nuestros servidores: Multijugador → Find a Game → Start Searching. 1v1, 2v2 y 3v3, la partida empieza en segundos. Si no puede funcionar, Find a Game dice por qué. Las salas normales no cambian.",
-      "fr": "Parties rapides au classement sur nos serveurs : Multijoueur → Find a Game → Start Searching. 1v1, 2v2 et 3v3, la partie démarre en quelques secondes. En cas de souci, Find a Game explique pourquoi. Les salons normaux ne changent pas.",
-      "de": "Schnelle Spiele nach Rating auf unseren Servern: Mehrspieler → Find a Game → Start Searching. 1v1, 2v2 und 3v3, das Spiel startet in Sekunden. Klappt es nicht, sagt Find a Game warum. Normale Lobbys bleiben, wie sie sind."
+      "en": "Quick matches by rating: Multiplayer → Find a Game → Start Searching. 1v1, 2v2 and 3v3, the match starts within seconds. The whole search and the game go through our servers over UDP. If it can't run, Find a Game says why.",
+      "ru": "Быстрый подбор соперника по рейтингу: Мультиплеер → Find a Game → Start Searching. 1v1, 2v2 и 3v3, матч стартует за секунды. Весь поиск и игра идут через наши серверы по UDP. Если что-то не так, Find a Game скажет, что делать.",
+      "es": "Partidas rápidas por rating: Multijugador → Find a Game → Start Searching. 1v1, 2v2 y 3v3, la partida empieza en segundos. Toda la búsqueda y la partida van por nuestros servidores por UDP. Si no puede funcionar, Find a Game dice por qué.",
+      "fr": "Parties rapides au classement : Multijoueur → Find a Game → Start Searching. 1v1, 2v2 et 3v3, la partie démarre en secondes. La recherche et la partie passent par nos serveurs en UDP. En cas de souci, Find a Game explique pourquoi.",
+      "de": "Schnelle Spiele nach Rating: Mehrspieler → Find a Game → Start Searching. 1v1, 2v2 und 3v3, das Spiel startet in Sekunden. Suche und Spiel laufen komplett über unsere Server per UDP. Klappt es nicht, sagt Find a Game warum."
     }
   },
   "steamkeep": {
@@ -308,24 +290,6 @@
       "es": "Un botón Entrar en la pestaña Salas: el juego se inicia y entra solo en la sala elegida. Aún en pruebas.",
       "fr": "Un bouton Rejoindre dans l'onglet Salons : le jeu démarre et entre seul dans le salon choisi. Encore en test.",
       "de": "Ein Beitreten-Knopf im Tab Lobbys: das Spiel startet und tritt der gewählten Lobby selbst bei. Noch im Test."
-    }
-  },
-  "netprobe": {
-    "category": "experiment",
-    "order": 20,
-    "name": {
-      "en": "Connection check to our servers",
-      "ru": "Проверка связи с нашими серверами",
-      "es": "Prueba de conexión con nuestros servidores",
-      "fr": "Test de connexion à nos serveurs",
-      "de": "Verbindungstest zu unseren Servern"
-    },
-    "description": {
-      "en": "Help us with our servers: turn it on, start the game and wait 2 minutes in the menu. The game checks the connection to our servers (about 5 MB) and sends us the result. It doesn't affect play.",
-      "ru": "Помогите нам с серверами: включите, запустите игру и подождите 2 минуты в меню. Игра проверит связь с нашими серверами (около 5 МБ) и сама пришлёт нам результат. На игру не влияет.",
-      "es": "Ayúdanos con los servidores: actívalo, inicia el juego y espera 2 minutos en el menú. El juego prueba la conexión con nuestros servidores (unos 5 MB) y nos envía el resultado. No afecta al juego.",
-      "fr": "Aidez-nous avec nos serveurs : activez, lancez le jeu et attendez 2 minutes dans le menu. Le jeu teste la connexion à nos serveurs (environ 5 Mo) et nous envoie le résultat. Sans effet sur le jeu.",
-      "de": "Hilf uns bei den Servern: einschalten, Spiel starten und 2 Minuten im Menü warten. Das Spiel prüft die Verbindung zu unseren Servern (etwa 5 MB) und schickt uns das Ergebnis. Kein Einfluss aufs Spiel."
     }
   },
   "rusifikator": {
