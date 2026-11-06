@@ -1,0 +1,1 @@
+- "Watch running matches" (LiveReplay 2): matches with a Random army open without crashing the game (the fix is on our servers), and the first loading waits longer instead of saying the server did not answer.

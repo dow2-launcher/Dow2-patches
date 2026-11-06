@@ -39,7 +39,7 @@
 #include <stdarg.h>
 #include <wchar.h>
 
-#define LR_VERSION "1"
+#define LR_VERSION "2"
 // ---- DOW2.exe 3.19
 #define G_SETTINGS     0x01335A78         // +0x118 game type (0x800 playback)
 #define G_GAMEOBJ_PTR  0x01335A74         // what the replay start takes in EDX ([+4] = the settings)
@@ -388,7 +388,8 @@ static DWORD WINAPI net_thread(LPVOID arg) {
             free(b);
             if (st == 404) { set_state(ST_FAILED, "no_match"); break; }
             fails++; logmsg("the ladder: %s (HTTP %lu, %u bytes)", b ? "no answer we read" : "no connection", st, (unsigned)n);
-            if (g_state == ST_FETCH && fails >= 3) { set_state(ST_FAILED, "server"); break; }
+            // LiveReplay 2: the first answer may take a while (the server's way to a far node): 90 s before "server", the player sees "fetching"
+            if (g_state == ST_FETCH && GetTickCount() - g_startAt > 90000) { set_state(ST_FAILED, "server"); break; }
             if (GetTickCount() - lastOk > 120000) { set_state(ST_FAILED, "server"); break; }
             Sleep(3000); continue;
         }
