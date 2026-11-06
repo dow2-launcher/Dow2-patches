@@ -1,17 +1,17 @@
-// Relay 17-22 (02-04.11.2026) - DoW2 Retribution / Elite: online games through OUR game servers. One source, two add-ons
-// (docs/ADDON_RULES.md: one feature - one DLL - one tick), two separate ticks in the launcher (owner 02.11.2026: the old
-// Fallback / Mode / Backup / UDP / Server controls were "убогие" - two clear ticks instead, the server is always automatic):
+// Relay 17-23 (02-05.11.2026) - DoW2 Retribution / Elite: online games through OUR game servers. One source, two DLLs:
 //
-//   Relay.dll         (relay_r2, "Use our servers for games")         - a game goes STRAIGHT through our server (our battle
-//                     server hosts the session, "DWR2") whenever everyone in it reaches our servers: that is known for our
-//                     automatch (the matchmaker has every player's ping to every node and picks the best node for all:
-//                     MMFind sets DOW2_RELAY_USE=1 + DOW2_RELAY_HOST), and for a game whose address already is ours (our
-//                     lobby server's rooms). A custom lobby can't know who will come, so it stays a Relic game.
-//   RelayForward.dll  (relay_fwd, "Use forwarding servers in all games") - every other online game (Relic's) goes through
-//                     our server nearest to the player, which passes it on to the Relic relay the game wanted ("DWR3") -
-//                     for players whose way to Relic (ports 27000-27099) is cut or slow.
-//   Both on: straight through ours when possible, otherwise the nearest forwarding server. One on: only its behaviour.
-//   Both off: as without the add-on (Relic directly).
+//   Relay.dll         part of the automatch package (store "automatch", loaded by MMFind.dll 0.46 from its own folder; owner
+//                     05.11.2026: "the automatch always goes through our servers and over UDP" - the separate tick relay_r2
+//                     "Games through our servers" is gone). A game of our lobby server's room (native automatch: the game
+//                     connects to one of our nodes on the battle port itself) goes over our UDP tunnel to that node, or
+//                     through the player's nearest usable node (Relay 22 chain); a game whose Relic address is one of ours
+//                     too. Its pings to our nodes go to the matchmaker (DOW2_RELAY_PING -> MMFind -> relay_ping), which puts
+//                     the match on the node best for all players. Relic's own games stay Relic's - never forwarded by it.
+//   RelayForward.dll  (relay_fwd, "Forwarding servers (if Relic lags)") - every other online game (Relic's) goes through our
+//                     server nearest to the player, which passes it on to the Relic relay the game wanted ("DWR3") - for
+//                     players whose way to Relic (ports 27000-27099) is cut or slow.
+//   Both loaded: native games over UDP to our node (the same code in both, carried once), Relic games through the forwarding
+//   server. Only Relay.dll: native over UDP, Relic games directly. Only RelayForward.dll: both, as before. Neither: as without.
 //
 // How the two DLLs share the work: each sets its flag in the process environment at load (DOW2_RELAY_OWN=1 /
 // DOW2_RELAY_FWD=1); the first one loaded installs the connect hook and the ping loop for both (a named mutex) and reads
@@ -28,6 +28,13 @@
 // "nearest" = the lowest delay. DOW2_RELAY_PING "ip:ms,..." (-1 = no answer) goes to the matchmaker only with Relay.dll on.
 // Removed in 17: Mode, Fallback (compatible / strict), Backup, UDP=, Hosts= (the hand pick), TCP to our servers, the
 // "game closed" windows of the strict mode.
+// Relay 23 (05.11.2026): brakes in the UDP tunnel (du_tunnel.h; the 2v2 of 05.11 went to ~650 packets/s per player for 10
+// minutes, 1.07 M copies, the tunnel had no limit anywhere): one resend timer per connection, oldest first, 200 ms .. 3 s; at
+// most 10 resends of a packet, then the connection is dead; resends budgeted (20/s or 25% of the fresh), copies at most twice
+// per packet and only while it is young, an ACK2 at most every RTT/4; 64 packets / 64 KB in flight, the game's socket
+// not read while full, 250 packets/s paced; duplicate acks at most every 20 ms, ACKs never answered at once; a fuse that
+// turns a connection's copies off in a storm ("ev=storm" in Relay.log); bytes for a game that does not read wait in a queue
+// instead of blocking the tunnel. Same wire format: works with old gateways, old Relay.dll works with new ones.
 // Relay 22 (04.11.2026): the relay chain. A native game (our lobby server's room: the game connects to one of our nodes itself)
 // whose node this player can't reach - no UDP answer, or the stream check of Relay 18 failed (DPI) - plays through the
 // player's own nearest usable node: preamble "DWR4" + IPv4 + port (BE) of the room's node, then the game's stream; that node
@@ -131,33 +138,22 @@ static int ini_changed(void) {
     if (CompareFileTime(&a.ftLastWriteTime, &g_iniTime) == 0) return 0;
     g_iniTime = a.ftLastWriteTime; return 1;
 }
-// ---------- UDP to our nodes (protocol: gameserver/udp_gateway.py) ----------
+// ---------- UDP to our nodes (protocol: gameserver/udp_gateway.py, delivery: du_tunnel.h) ----------
 // Relay 20 (03.11.2026): redundancy. SYN carries our version 2; a gateway that knows it answers SYNACK + 2, and then both sides
-// send DATA2 instead of DATA: the packet also carries copies of the previous packets not acknowledged yet (the newest 2 that
-// fit), so a single lost packet (or two in a row) is filled by the next one without waiting for a resend. An old gateway
-// answers a bare SYNACK -> the old DATA, no copies (old Relay 18/19 keep working with a new gateway the same way).
-//   DATA2: "DU" 8 cid | seq u32 | ack u32 | sack u32 | k u8 | k x (seq u32, len u16, bytes) | the packet's own bytes
-//   ACK2:  "DU" 9 cid | ack u32 | sack u32 | k u8 | k x (seq u32, len u16, bytes)  - an ACK with copies (k >= 1; none = ACK)
-// The acks of the other way's packets are carriers too (a game sends turns and gets ticks ~10 times a second each way, so
-// the next packet in the same direction comes about twice as soon). An ACK2 is answered only when a copy in it filled
-// something (a plain DATA always is), so two sides never bounce acks.
-// The copies only go while the whole datagram stays within U_BUDGET (game turns are small: they nearly always fit; a big
-// transfer carries none and is resent as before).
-enum { U_SYN = 1, U_SYNACK, U_DATA, U_ACK, U_FIN, U_PING, U_PONG, U_DATA2, U_ACK2 };
-#define U_MAXP 1200
-#define U_WIN 512
-#define U_VER 2
-#define U_COPIES 2
-#define U_BUDGET 1240
-typedef struct { unsigned char d[U_MAXP]; int n; DWORD first, last; int sends; } UPkt;
+// send DATA2 instead of DATA: the packet also carries copies of the previous packets not acknowledged yet, so a single lost
+// packet is filled by the next one without waiting for a resend. An old gateway answers a bare SYNACK -> the old DATA.
+// Relay 23 (05.11.2026): the delivery moved to du_tunnel.h with the owner's limits (one resend timer, at most 10 resends then
+// the connection is dead, budgets for resends and copies, 64 packets in flight with back pressure, a storm fuse) - the same
+// rules as the gateway's du_proto.py; the wire format is unchanged.
+#include "du_tunnel.h"
 static volatile LONG g_tunSeed;
-static void u_hdr(unsigned char *b, int t, DWORD cid) { b[0] = 'D'; b[1] = 'U'; b[2] = (unsigned char)t; memcpy(b + 3, &cid, 4); }
 static DWORD new_cid(void) { return GetTickCount() ^ (GetCurrentThreadId() << 16) ^ (DWORD)InterlockedIncrement(&g_tunSeed) * 2654435761u; }
 
 static SOCKET udp_to(struct in_addr ip) {
     SOCKET u = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP); if (u == INVALID_SOCKET) return u;
     struct sockaddr_in sa = {0}; sa.sin_family = AF_INET; sa.sin_addr = ip; sa.sin_port = htons((unsigned short)g_port);
-    g_connectOrig(u, (struct sockaddr *)&sa, sizeof sa); return u;
+    int rb = 256 * 1024; setsockopt(u, SOL_SOCKET, SO_RCVBUF, (char *)&rb, sizeof rb);   // Relay 23: a burst from the node must not
+    g_connectOrig(u, (struct sockaddr *)&sa, sizeof sa); return u;                        // overrun Windows' small default buffer
 }
 static int udp_wait(SOCKET u, unsigned char *pk, int cap, int ms) {
     fd_set r; FD_ZERO(&r); FD_SET(u, &r); struct timeval tv = { ms / 1000, (ms % 1000) * 1000 };
@@ -353,132 +349,6 @@ static DWORD WINAPI tunnel(LPVOID pv) {
     } else logmsg("udp: none of our servers answers over UDP - this game can't connect");
     closesocket(g); return 0;
 }
-// copies of the newest unacknowledged packets below number `below` into pk + o while the datagram stays within budget (its own
-// bytes `own` counted); returns the new end, k = how many
-static int u_copies(unsigned char *pk, int o, UPkt *snd, DWORD sbase, DWORD below, int own, int *k) {
-    *k = 0;
-    for (DWORD p = below; p-- > sbase && below - p <= 16 && *k < U_COPIES; ) {
-        UPkt *x = &snd[p % U_WIN]; if (x->n <= 0) continue;     // acknowledged out of order already
-        if (o + 6 + x->n + own > U_BUDGET) continue;
-        unsigned short L = (unsigned short)x->n; memcpy(pk + o, &p, 4); memcpy(pk + o + 4, &L, 2); memcpy(pk + o + 6, x->d, x->n);
-        o += 6 + x->n; (*k)++;
-    }
-    return o;
-}
-// one packet with data: DATA (version 1) or DATA2 with copies of the newest unacknowledged ones before it (version 2)
-static int u_build(unsigned char *pk, DWORD cid, int ver, UPkt *snd, DWORD sbase, DWORD sq, DWORD rnext, DWORD sk, unsigned *copies) {
-    UPkt *q = &snd[sq % U_WIN];
-    u_hdr(pk, ver >= 2 ? U_DATA2 : U_DATA, cid); memcpy(pk + 7, &sq, 4); memcpy(pk + 11, &rnext, 4); memcpy(pk + 15, &sk, 4);
-    if (ver < 2) { memcpy(pk + 19, q->d, q->n); return 19 + q->n; }
-    int k, o = u_copies(pk, 20, snd, sbase, sq, q->n, &k);
-    pk[19] = (unsigned char)k; *copies += k;
-    memcpy(pk + o, q->d, q->n); return o + q->n;
-}
-// an ACK; version 2: an ACK2 with copies of the newest unacknowledged packets when there are any
-static int u_ackpk(unsigned char *pk, DWORD cid, int ver, UPkt *snd, DWORD sbase, DWORD snext, DWORD rnext, DWORD sk, unsigned *copies) {
-    u_hdr(pk, U_ACK, cid); memcpy(pk + 7, &rnext, 4); memcpy(pk + 11, &sk, 4);
-    if (ver < 2) return 15;
-    int k, o = u_copies(pk, 16, snd, sbase, snext, 0, &k);
-    if (!k) return 15;
-    pk[2] = U_ACK2; pk[15] = (unsigned char)k; *copies += k; return o;
-}
-static void udp_carry(SOCKET g, SOCKET u, DWORD cid, int ver, const unsigned char *pre, int plen) {
-    unsigned char pk[U_BUDGET + 64], ak[U_BUDGET + 64];
-    UPkt *snd = calloc(U_WIN, sizeof(UPkt)); UPkt *rcv = calloc(U_WIN, sizeof(UPkt));   // ring buffers by packet number % U_WIN
-    char *rhave = calloc(U_WIN, 1);
-    DWORD snext = 0, sbase = 0, rnext = 0, lastIn = GetTickCount(), lastOut = 0, lastAck = (DWORD)-1; int dup = 0;
-    double srtt = 150, rttvar = 50; unsigned resent = 0, sentn = 0, gotn = 0, gapn = 0, copies = 0, saved = 0; int gameOpen = 1;
-    #define SACK() ({ DWORD m_ = 0; for (int i_ = 0; i_ < 32; i_++) if (rhave[(rnext + 1 + i_) % U_WIN]) m_ |= 1u << i_; m_; })
-    if (plen > 0 && plen <= U_MAXP) {                            // Relay 22: our preamble (DWR4) is the stream's first packet
-        UPkt *q = &snd[0]; memcpy(q->d, pre, plen); q->n = plen; q->first = q->last = GetTickCount(); q->sends = 1;
-        int len = u_build(pk, cid, ver, snd, sbase, snext, rnext, 0, &copies); send(u, (char *)pk, len, 0); snext++; sentn++; lastOut = q->first;
-    }
-    for (;;) {
-        DWORD now = GetTickCount();
-        if (now - lastIn > 30000) { logmsg("udp: %08lX - nothing from the server for 30 s", cid); break; }
-        fd_set rs; FD_ZERO(&rs); FD_SET(u, &rs); if (gameOpen && snext - sbase < U_WIN) FD_SET(g, &rs);
-        struct timeval t3 = {0, 20000};
-        int sel = select(0, &rs, NULL, NULL, &t3); now = GetTickCount();
-        if (sel > 0 && FD_ISSET(g, &rs)) {                       // game -> server
-            UPkt *q = &snd[snext % U_WIN];
-            int n = g_recvOrig(g, (char *)q->d, U_MAXP, 0);
-            if (n <= 0) { gameOpen = 0; }
-            else {
-                q->n = n; q->first = q->last = now; q->sends = 1;
-                int len = u_build(pk, cid, ver, snd, sbase, snext, rnext, SACK(), &copies);
-                send(u, (char *)pk, len, 0); snext++; sentn++; lastOut = now;
-            }
-        }
-        if (sel > 0 && FD_ISSET(u, &rs)) {                       // server -> game
-            int n = recv(u, (char *)pk, sizeof pk, 0);
-            if (n >= 7 && pk[0] == 'D' && pk[1] == 'U' && !memcmp(pk + 3, &cid, 4)) {
-                lastIn = now; int t = pk[2]; DWORD ack = 0, sack = 0;
-                if (t == U_FIN) { logmsg("udp: %08lX closed by the server", cid); break; }
-                if ((t == U_DATA && n >= 19) || (t == U_DATA2 && n >= 20) || (t == U_ACK && n >= 15) || (t == U_ACK2 && n >= 16)) {
-                    int o = t == U_ACK || t == U_ACK2 ? 7 : 11; memcpy(&ack, pk + o, 4); memcpy(&sack, pk + o + 4, 4);
-                    while (sbase < ack && sbase < snext) {           // acknowledged in order
-                        UPkt *q = &snd[sbase % U_WIN];
-                        if (q->sends == 1) { double rt = now - q->first; rttvar = 0.75 * rttvar + 0.25 * fabs(srtt - rt); srtt = 0.875 * srtt + 0.125 * rt; }
-                        q->n = 0; sbase++;
-                    }
-                    for (int i = 0; i < 32; i++) if (sack >> i & 1) {   // arrived out of order: negative length = acknowledged
-                        DWORD sq = ack + 1 + i; if (sq >= sbase && sq < snext && snd[sq % U_WIN].n > 0) snd[sq % U_WIN].n = -snd[sq % U_WIN].n; }
-                    if (ack == lastAck && sack && sbase < snext && snd[sbase % U_WIN].n > 0) { if (dup < 2) dup++; } else dup = 0;   // 2 = send the first one again now
-                    lastAck = ack;
-                }
-                struct { DWORD seq; unsigned char *p; int len; } in[U_COPIES + 2]; int nin = 0, ncopy = 0;
-                if (t == U_DATA && n >= 19) { memcpy(&in[0].seq, pk + 7, 4); in[0].p = pk + 19; in[0].len = n - 19; nin = 1; }
-                if ((t == U_DATA2 && n >= 20) || (t == U_ACK2 && n >= 16)) {   // the copies first (older numbers), then the packet's own bytes
-                    int k = pk[t == U_ACK2 ? 15 : 19], o = t == U_ACK2 ? 16 : 20;
-                    int bad = 0;
-                    for (int i = 0; i < k; i++) {                    // more copies than we keep: skipped, but the offset follows them
-                        unsigned short L; if (o + 6 > n) { bad = 1; break; } memcpy(&L, pk + o + 4, 2); if (L > U_MAXP || o + 6 + L > n) { bad = 1; break; }
-                        if (nin < U_COPIES + 1) { memcpy(&in[nin].seq, pk + o, 4); in[nin].p = pk + o + 6; in[nin].len = L; nin++; }
-                        o += 6 + L;
-                    }
-                    ncopy = nin;
-                    for (int a = 0, b = ncopy - 1; a < b; a++, b--) { __typeof__(in[0]) x = in[a]; in[a] = in[b]; in[b] = x; }   // oldest first
-                    if (t == U_DATA2 && !bad && n - o <= U_MAXP) { memcpy(&in[nin].seq, pk + 7, 4); in[nin].p = pk + o; in[nin].len = n - o; nin++; }
-                }
-                int took = 0;
-                for (int j = 0; j < nin; j++) {
-                    DWORD seq = in[j].seq; int len = in[j].len;
-                    if (seq >= rnext && seq - rnext < U_WIN && !rhave[seq % U_WIN]) {
-                        UPkt *q = &rcv[seq % U_WIN]; memcpy(q->d, in[j].p, len); q->n = len; rhave[seq % U_WIN] = 1; took++;
-                        if (j < ncopy) saved++;                      // its own packet was lost (or is late): the copy filled it
-                        else if (seq != rnext) gapn++;
-                        while (rhave[rnext % U_WIN]) {
-                            UPkt *x = &rcv[rnext % U_WIN]; rhave[rnext % U_WIN] = 0;
-                            for (int off = 0; off < x->n; ) { int w = g_sendOrig(g, (char *)x->d + off, x->n - off, 0); if (w <= 0) { gameOpen = 0; break; } off += w; }
-                            rnext++; gotn++;
-                        }
-                    }
-                }
-                if (t == U_DATA || t == U_DATA2 || (t == U_ACK2 && took)) {   // an ACK2 only when its copy filled something
-                    int len = u_ackpk(ak, cid, ver, snd, sbase, snext, rnext, SACK(), &copies); send(u, (char *)ak, len, 0); lastOut = now;
-                }
-            }
-        }
-        // resend what is overdue (RTO from the measured round trip, doubled per resend) and once on two duplicate acks
-        double rto = srtt + 4 * rttvar; if (rto < 60) rto = 60; if (rto > 1000) rto = 1000;
-        for (DWORD sq = sbase; sq < snext && sq < sbase + 64; sq++) {
-            UPkt *q = &snd[sq % U_WIN]; if (q->n <= 0) continue;
-            int mult = q->sends > 4 ? 8 : 1 << (q->sends - 1);
-            if ((now - q->last > rto * mult) || (dup == 2 && sq == sbase)) {
-                if (dup == 2) dup = 3;
-                int len = u_build(pk, cid, ver, snd, sbase, sq, rnext, SACK(), &copies);
-                send(u, (char *)pk, len, 0); q->last = now; q->sends++; resent++; lastOut = now;
-            }
-        }
-        while (sbase < snext && snd[sbase % U_WIN].n <= 0) { snd[sbase % U_WIN].n = 0; sbase++; }   // acked out of order earlier
-        if (!gameOpen && sbase == snext) break;                  // the game closed and everything got there
-        if (now - lastOut > 1000) { int len = u_ackpk(ak, cid, ver, snd, sbase, snext, rnext, SACK(), &copies); send(u, (char *)ak, len, 0); lastOut = now; }
-    }
-    for (int i = 0; i < 3; i++) { u_hdr(pk, U_FIN, cid); send(u, (char *)pk, 7, 0); }
-    logmsg("udp: %08lX over: sent %u, got %u, sent again %u, out of order in %u, round trip %d ms; copies sent %u, lost ones filled by a copy %u",
-           cid, sentn, gotn, resent, gapn, (int)srtt, copies, saved);
-    closesocket(u); closesocket(g); free(snd); free(rcv); free(rhave);
-}
 static int tunnel_port(int node, int own, int plen, const struct sockaddr_in *relic) {   // a local port for one game connection
     SOCKET l = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP); if (l == INVALID_SOCKET) return 0;
     struct sockaddr_in a = {0}; a.sin_family = AF_INET; a.sin_addr.s_addr = htonl(INADDR_LOOPBACK); int al = sizeof a;
@@ -616,7 +486,7 @@ BOOL WINAPI DllMain(HINSTANCE h, DWORD reason, LPVOID _) {
     n += nx;
     int ns = g_sendOrig ? patch_imports((void *)g_sendOrig, (void *)send_hook) : 0;
     int nw = g_wsaSendOrig ? patch_imports((void *)g_wsaSendOrig, (void *)wsasend_hook) : 0;
-    logmsg("Relay 22 start (%s.dll carries the connections; our servers: %s, forwarding: %s - each tick is read at connect time; "
+    logmsg("Relay 23 start (%s.dll carries the connections; our servers: %s, forwarding: %s - each tick is read at connect time; "
            "UDP only, %d node(s)), connect hooked in %d import(s)%s, send %d, WSASend %d%s", ME,
            flag("DOW2_RELAY_OWN") ? "on" : "off (yet)", flag("DOW2_RELAY_FWD") ? "on" : "off (yet)", g_nHosts, n, nx ? " (the game's own one chained after another add-on)" : "", ns, nw,
            n ? "" : " - another add-on (automatch) already routes the relay, staying idle");

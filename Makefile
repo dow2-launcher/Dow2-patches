@@ -62,12 +62,13 @@ $(OUT)/Reverse.dll: reverse/reverse.c | $(OUT)
 $(OUT)/MMFind.dll: mmfind/mmfind.c | $(OUT)
 	$(CC) $(CFLAGS) -shared -o $@ $< -lwinhttp -lpsapi -lshell32 -lole32 -static-libgcc
 
-# Relay 17: two add-ons from one source, two ticks (docs/ADDON_RULES.md): our servers for games (relay_r2) and the
-# forwarding servers for all other games (relay_fwd); whichever loads first carries the connections for both
-$(OUT)/Relay.dll: relay/relay.c | $(OUT)
+# Relay 17: two DLLs from one source: Relay.dll (since 05.11.2026 part of the automatch package, loaded by MMFind.dll - the
+# tick relay_r2 is gone) and RelayForward.dll (relay_fwd, forwarding servers); whichever loads first carries the connections for both
+# Relay 23: the UDP tunnel's delivery is relay/du_tunnel.h (also built for Linux by relay/test/build.sh)
+$(OUT)/Relay.dll: relay/relay.c relay/du_tunnel.h | $(OUT)
 	$(CC) $(CFLAGS) -shared -o $@ $< -lws2_32 -lpsapi -lwinmm -static-libgcc
 
-$(OUT)/RelayForward.dll: relay/relay.c | $(OUT)
+$(OUT)/RelayForward.dll: relay/relay.c relay/du_tunnel.h | $(OUT)
 	$(CC) $(CFLAGS) -DRELAY_FWD -shared -o $@ $< -lws2_32 -lpsapi -lwinmm -static-libgcc
 
 # what closed the game: serious exceptions with module+offset and stack, a minidump on a crash, ExitProcess / TerminateProcess callers

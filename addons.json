@@ -2,7 +2,7 @@
   "_readme": [
     "The add-ons of this repo as the launcher store (store3/launcher.json) has them on 04.11.2026: key = the store id without _r2/_r3, store version = <key>-<version>, texts = the store's.",
     "Publishing: dow2-patches-deploy builds a raised version into the STAGING store only (its timer is off on purpose since 04.11.2026); players get it only through elite-release on rts. See README, Building and releasing.",
-    "Not here, released by hand (their store version is not <id>-<version> or they are not one DLL of this repo): automatch (mmfind-<ver>: MMFind.dll + OwnLobby.dll + early winmm.dll), relay_r2 + relay_fwd (relay-<n> / relayfwd-<n>, released as a pair), elitefix_wmic (Elite.exe), rusifikator (text files), eliteai_off.",
+    "Not here, released by hand (their store version is not <id>-<version> or they are not one DLL of this repo): automatch (mmfind-<ver>: MMFind.dll + OwnLobby.dll + Relay.dll + early winmm.dll), relay_fwd (relayfwd-<n>; Relay.dll of the same source ships inside automatch since 05.11.2026), elitefix_wmic (Elite.exe), rusifikator (text files), eliteai_off.",
     "Texts for players (name, description, category, order): edit docs/store-texts.json, then scripts/store_texts.py addons (rules: docs/ADDON_TEXTS.md). category goes to the store with a deploy; min_launcher lives in the store only.",
     "games (launcher 1.4.11: [\"elite\", \"vanilla\"] or [\"elite\"]) and the top-level vanilla.loader (vloader-<n> = make build/launcher/winmm.dll) live in the store only, kept by deploys; see docs/ADDON_RULES.md."
   ],
@@ -241,30 +241,6 @@
     "category": "interface",
     "order": 30
   },
-  "netprobe": {
-    "version": "2",
-    "dll": "NetProbe.dll",
-    "default": false,
-    "name": {
-      "en": "Connection check to our servers",
-      "ru": "Проверка связи с нашими серверами",
-      "es": "Prueba de conexión con nuestros servidores",
-      "fr": "Test de connexion à nos serveurs",
-      "de": "Verbindungstest zu unseren Servern"
-    },
-    "description": {
-      "en": "Help us with our servers: turn it on, start the game and wait 2 minutes in the menu. The game checks the connection to our servers (about 5 MB) and sends us the result. It doesn't affect play.",
-      "ru": "Помогите нам с серверами: включите, запустите игру и подождите 2 минуты в меню. Игра проверит связь с нашими серверами (около 5 МБ) и сама пришлёт нам результат. На игру не влияет.",
-      "es": "Ayúdanos con los servidores: actívalo, inicia el juego y espera 2 minutos en el menú. El juego prueba la conexión con nuestros servidores (unos 5 MB) y nos envía el resultado. No afecta al juego.",
-      "fr": "Aidez-nous avec nos serveurs : activez, lancez le jeu et attendez 2 minutes dans le menu. Le jeu teste la connexion à nos serveurs (environ 5 Mo) et nous envoie le résultat. Sans effet sur le jeu.",
-      "de": "Hilf uns bei den Servern: einschalten, Spiel starten und 2 Minuten im Menü warten. Das Spiel prüft die Verbindung zu unseren Servern (etwa 5 MB) und schickt uns das Ergebnis. Kein Einfluss aufs Spiel."
-    },
-    "conflicts": [
-      "dow2-patches/NetProbe.dll"
-    ],
-    "category": "experiment",
-    "order": 20
-  },
   "joinsound": {
     "version": "1",
     "dll": "JoinSound.dll",
@@ -461,7 +437,9 @@
   "roomjoin": {
     "version": "6",
     "dll": "RoomJoin.dll",
-    "files": {"rjbridge.exe": "build/rjbridge.exe"},
+    "files": {
+      "rjbridge.exe": "build/rjbridge.exe"
+    },
     "default": false,
     "name": {
       "en": "Join a lobby from the launcher",

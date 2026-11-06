@@ -17,10 +17,13 @@ Owner's rule (30.10.2026, again 02.11.2026: "каждую фичу старае�
 ## Exception: Automatch v2.0
 
 **Automatch v2.0 is one package of three files by the owner's decision of 03.11.2026** (launcher id `automatch`, store version
-`mmfind-<ver>`, one tick): Elite_DLLs/MMFind.dll + Elite_DLLs/OwnLobby.dll + winmm.dll next to DOW2.exe (the early loader,
-`-DEARLY_ONLY`). They are one feature - the automatch on our servers: MMFind.dll is the Find a Game side, OwnLobby.dll takes the
-game's lobby service to our lobby server, and the early winmm.dll is only there to load OwnLobby.dll at process start. None of
-them is any use without the others, so they ship and switch off together. The separate `ownlobby` add-on is gone.
+`mmfind-<ver>`, one tick): Elite_DLLs/MMFind.dll + Elite_DLLs/OwnLobby.dll + Elite_DLLs/Relay.dll (since mmfind-0.46) +
+winmm.dll next to DOW2.exe (the early loader, `-DEARLY_ONLY`). They are one feature - the automatch on our servers: MMFind.dll is
+the Find a Game side, OwnLobby.dll takes the game's lobby service to our lobby server, Relay.dll carries the match to our game
+server over our UDP tunnel (owner 05.11.2026: "the automatch always goes through our servers and over UDP" - the separate tick
+relay_r2 is gone; MMFind.dll loads Relay.dll, Elite's InjectedFiles names only MMFind.dll), and the early winmm.dll is only
+there to load OwnLobby.dll at process start. None of them is any use without the others, so they ship and switch off together.
+The network ticks are two: Automatch and Forwarding servers (relay_fwd, RelayForward.dll - Relic's games through our node). The separate `ownlobby` add-on is gone.
 The sources stay separate (`mmfind/`, `ownlobby/`, `vanilla-loader/`), each DLL keeps its own log.
 
 ## Elite and vanilla (launcher 1.4.11, owner 05.11.2026)
@@ -28,7 +31,7 @@ The sources stay separate (`mmfind/`, `ownlobby/`, `vanilla-loader/`), each DLL 
 Each store entry says in which game it works: `"games": ["elite", "vanilla"]` or `["elite"]` (no `games` = Elite only). The
 launcher's "Vanilla Retribution" copies an add-on's Elite_DLLs files into `dow2-patches\` only when its entry names "vanilla" -
 whatever the player's tick says; an add-on for Elite only (it patches Elite files or needs Elite: elitefix_wmic, shellfix,
-rusifikator, relay_r2...) is never copied there. Its ini is read next to the DLL, so options work in both folders. The
+rusifikator...) is never copied there. Its ini is read next to the DLL, so options work in both folders. The
 vanilla game's loader is `build/launcher/winmm.dll` (store `vloader-<n>`, launcher.json `"vanilla": {"loader": ...}`). A new
 add-on: test it in vanilla 3.19 on the stand before its entry gets "vanilla".
 

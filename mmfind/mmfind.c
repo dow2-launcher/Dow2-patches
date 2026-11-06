@@ -1,5 +1,15 @@
 // MMFind.dll - the Elite automatch on our servers for DoW2 Retribution / Elite (DOW2.exe 3.19).
 //
+// 0.46 (owner 05.11.2026: "the automatch always goes through our servers and over UDP"; the separate tick "Games through our
+// servers" - relay_r2, Relay.dll - is gone from the store): Relay.dll is part of the automatch package now (store automatch:
+// MMFind.dll + OwnLobby.dll + Relay.dll + the early winmm.dll) and MMFind loads it from its own folder at the start (Elite's
+// injector only loads the one DLL each add-on names in InjectedFiles - for the automatch that is MMFind.dll; in vanilla the
+// launcher's loader loads every DLL of dow2-patches\ anyway, then this is only one more reference). Relay.dll is the same code
+// as before (relay/relay.c, Relay 23): a game of our lobby server's room (the game connects to one of our nodes on the battle
+// port) goes over our UDP tunnel to that node, or through the player's nearest node when he can't reach it; its pings to our
+// nodes go to the matchmaker with mm/native (relay_ping), so the ladder puts the match on the node best for all. Relic's games
+// stay Relic's: forwarding them is RelayForward.dll's job (relay_fwd); whichever of the two loads first carries the connections
+// of both (one hook, never two).
 // 0.45 (owner 03.11.2026: "the automatch is tested - remove the old one, keep only the new one"): only the game's OWN Find a Game
 // search runs, served by our lobby server (OwnLobby.dll + own_lobby.py) from the ladder's matchmaker: the game hosts / joins the
 // AUTOMATCH room and starts by itself. MMFind walks no menus, draws no cover, makes no public rooms - the classic flow of 0.12-0.44
@@ -156,8 +166,8 @@ static char g_natLobby[48], g_natWhy[96], g_natLastCancel[32];
 // what to do, "MMFind 0.45", the queue and who is online. Shown from the moment the screen opens (a peek at mm/native: the ladder
 // answers as for Start Searching and changes nothing; again every 20 s and on a match type change while the screen is open), after
 // the click by what really happened. [MMFind] ShowMode=1 (default) / 0 = off, Lang=auto (the game's own text: Cyrillic = Russian) / ru / en.
-#define MMF_VER "0.45"
-#define MMF_VER_W L"0.45"
+#define MMF_VER "0.46"
+#define MMF_VER_W L"0.46"
 static int g_showMode = 1, g_langCfg = -1, g_lang = -1, g_modeProbe;
 static double g_mx = 1065, g_my = 590, g_msz = 30;           // panel units, see mode_make
 static volatile int g_peekWant, g_peekAns; static volatile DWORD g_peekLast; static char g_peekWhy[96];
@@ -1147,6 +1157,17 @@ static unsigned long long my_steam(void) {                         // Steam writ
         RegQueryValueExW(k, L"ActiveUser", NULL, NULL, (BYTE *)&v, &sz); RegCloseKey(k); }
     return v ? 76561197960265728ULL + v : 0;
 }
+// 0.46: Relay.dll of the automatch package, from MMFind's own folder (Elite_DLLs\ or dow2-patches\). In a thread: never a
+// LoadLibrary under the loader lock of our own DllMain (the thread runs once the injector's LoadLibrary of MMFind is over).
+static DWORD WINAPI relay_load(LPVOID _) {
+    if (GetModuleHandleW(L"Relay.dll")) { logmsg("Relay.dll already loaded - the automatch's games go to our servers over UDP"); return 0; }
+    wchar_t p[MAX_PATH]; _snwprintf(p, MAX_PATH, L"%lsRelay.dll", g_dir);
+    if (GetFileAttributesW(p) == INVALID_FILE_ATTRIBUTES) { logmsg("no Relay.dll next to MMFind.dll - a match on our servers connects without our UDP tunnel"); return 0; }
+    HMODULE m = LoadLibraryW(p);
+    if (m) logmsg("Relay.dll loaded - the automatch's games go to our servers over UDP (its log: Relay.log)");
+    else logmsg("Relay.dll did not load (error %lu) - a match on our servers connects without our UDP tunnel", GetLastError());
+    return 0;
+}
 BOOL WINAPI DllMain(HINSTANCE h, DWORD r, LPVOID _) {
     if (r != DLL_PROCESS_ATTACH) return TRUE;
     DisableThreadLibraryCalls(h); InitializeCriticalSection(&g_lk); g_wake = CreateEventW(NULL, FALSE, FALSE, NULL);
@@ -1174,5 +1195,6 @@ BOOL WINAPI DllMain(HINSTANCE h, DWORD r, LPVOID _) {
     if (g_tlHost[0]) logmsg("TEST LADDER: every ladder API call goes to http://%ls:%u (TestLadder=)", g_tlHost, (unsigned)g_tlPort);
     { char n[64]; wsprintfA(n, "Local\\dow2patch_MMFind_%lu", GetCurrentProcessId());          // one copy per game (launcher + dow2-patches)
       HANDLE mx = CreateMutexA(NULL, FALSE, n); if (mx && GetLastError() == ERROR_ALREADY_EXISTS) { logmsg("another MMFind copy is active, this one stays idle"); return TRUE; } }
+    CloseHandle(CreateThread(NULL, 0, relay_load, NULL, 0, NULL));   // 0.46: the UDP transport of the automatch
     install(); CloseHandle(CreateThread(NULL, 0, nodes_fetch, NULL, 0, NULL)); return TRUE;
 }
