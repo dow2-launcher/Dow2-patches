@@ -1,0 +1,1 @@
+- Joining a lobby from the launcher: while the game connects to the room it shows its own "Connecting" window, as when you press Join in its games list; the window goes once you are in the room, or when the game says no / you press Cancel.

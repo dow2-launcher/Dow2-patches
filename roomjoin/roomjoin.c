@@ -27,6 +27,7 @@
 // (the player said yes in the launcher): from another lobby's screen Back first, then the join (an experiment: the lobby
 // screen's commands are logged, to find its real leave command if Back is not it).
 //
+// RoomJoin 13 (06.11.2026): the game's own "Connecting" box while joining, as its games list shows it (see box_open below).
 // RoomJoin 12 (05.11.2026, owner): NO cover by default - what follows about the cover is only with RoomJoin.ini Cover=1; the join
 // itself is the same, the player sees the game's own menu, its "Connecting" and the lobby screen, the launcher tells the rest.
 // In the game, once it is in its main menu: a cover ("Joining the Game", the room's name, Cancel; the menu under it hidden, so

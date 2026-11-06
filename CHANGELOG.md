@@ -4,6 +4,16 @@ Every version gets an entry here before it reaches `main`. CI then tags `vX.Y.Z`
 version (`X.Y.0`) it also publishes a GitHub Release with the DLLs and the entries since the previous `X.Y.0`.
 The version of the set lives only in `VERSION`; each DLL still writes its own version to its log.
 
+## 0.2.17 — 2026-11-06
+RoomJoin 13 (store roomjoin-7). Join from the launcher showed nothing of the game between the main menu and the lobby (RoomJoin 12
+has no cover, and its log never had a message box): the game browser's Join (GameListForm 0x0046BF34) makes the same engine call
+and then opens a MessageBoxManager box - 550001 "Connecting" / 550002 "Connecting to the game...", no buttons - kept as
+m_joiningMBID and closed by the form (CancelConnection 0x0046B520).
+- RoomJoin opens that box itself where the cover used to come (0x0045A3CD the manager, 0x00AD5FE0 open, texts from Localizer: the
+  game's language) and closes it (0x00AD6200) in the room, in the lobby, on any failure / Cancel / timeout and when a world starts.
+  Our own box is not counted as the game's "no". RoomJoin.ini ConnectingBox=0 turns it off; with Cover=1 there is no box.
+- Stand, 06.11 (siritos): the box shown at the join call, closed "in the room" after 4.9 s, the lobby screen as before.
+
 ## 0.2.16 — 2026-11-06
 LiveReplay 2 (store livereplay-2) after the players' test of 06.11 (siritos, l'Alerion): "the server did not give the game", a long
 wait in the menu, then the game crashed on the map's loading screen.
