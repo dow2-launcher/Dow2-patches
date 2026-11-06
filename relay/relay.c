@@ -1,4 +1,4 @@
-// Relay 17-24 (02-06.11.2026) - DoW2 Retribution / Elite: online games through OUR game servers. One source, two DLLs:
+// Relay 17-25 (02-06.11.2026) - DoW2 Retribution / Elite: online games through OUR game servers. One source, two DLLs:
 //
 //   Relay.dll         part of the automatch package (store "automatch", loaded by MMFind.dll 0.46 from its own folder; owner
 //                     05.11.2026: "the automatch always goes through our servers and over UDP" - the separate tick relay_r2
@@ -28,6 +28,8 @@
 // "nearest" = the lowest delay. DOW2_RELAY_PING "ip:ms,..." (-1 = no answer) goes to the matchmaker only with Relay.dll on.
 // Removed in 17: Mode, Fallback (compatible / strict), Backup, UDP=, Hosts= (the hand pick), TCP to our servers, the
 // "game closed" windows of the strict mode.
+// Relay 25 (06.11.2026): the waiting lines in the middle of the screen, big, in the game's language, and a "Don't wait" button
+// (the server drops the player when every other one has voted) - see rejoin.h.
 // Relay 24 (06.11.2026): back into the match after a network drop (owner: "вернуться в идущий матч", window ~3 min), only for
 // a native game on our server (our automatch / launcher rooms; Relic's games untouched):
 //   - the game's relay client (BattleServerRelay::Process 0x63B910) reconnects by itself after RL_ClientReconnectMS (15 s) of
@@ -503,7 +505,7 @@ BOOL WINAPI DllMain(HINSTANCE h, DWORD reason, LPVOID _) {
     int ns = g_sendOrig ? patch_imports((void *)g_sendOrig, (void *)send_hook) : 0;
     int nw = g_wsaSendOrig ? patch_imports((void *)g_wsaSendOrig, (void *)wsasend_hook) : 0;
     rejoin_install();
-    logmsg("Relay 24 start (%s.dll carries the connections; our servers: %s, forwarding: %s - each tick is read at connect time; "
+    logmsg("Relay 25 start (%s.dll carries the connections; our servers: %s, forwarding: %s - each tick is read at connect time; "
            "UDP only, %d node(s)), connect hooked in %d import(s)%s, send %d, WSASend %d%s", ME,
            flag("DOW2_RELAY_OWN") ? "on" : "off (yet)", flag("DOW2_RELAY_FWD") ? "on" : "off (yet)", g_nHosts, n, nx ? " (the game's own one chained after another add-on)" : "", ns, nw,
            n ? "" : " - another add-on (automatch) already routes the relay, staying idle");

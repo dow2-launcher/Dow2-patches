@@ -42,6 +42,7 @@ static DWORD GetTickCount(void) { struct timespec t; clock_gettime(CLOCK_MONOTON
 #else
 #include "../du_tunnel.h"
 static void du_notice(const unsigned char *m, int n) { (void)m; (void)n; }
+static int du_vote_take(void) { return -1; }
 #endif
 
 int main(int argc, char **argv) {

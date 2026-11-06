@@ -1,0 +1,1 @@
+- Automatch v2.0: the waiting line for a dropped player is now big in the middle of the screen - "Waiting for …" with the time, in the game's language. Under it a "Don't wait" button: once every other player has pressed it, the match goes on without the one who left.

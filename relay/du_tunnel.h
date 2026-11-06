@@ -96,6 +96,7 @@ typedef struct {
     const char *ended;
     unsigned char *outq; int outq_len;                    // in order, for the game, not taken by it yet
     int filt; unsigned char *fq; int fq_len;              // Relay 24: the server's own frames (0x7e) taken out of the stream
+    int up_hn, up_left; unsigned char up_h[2];            // Relay 25: where the game's own frames end (u16 BE length + body)
     unsigned char pk[U_BUDGET + 64];
 } DuConn;
 
@@ -214,6 +215,14 @@ static void du_to_game(DuConn *c, SOCKET g, int *gameOpen) {    // what waits fo
 #define DU_FQ_MAX (DU_OUTQ_MAX + 70000)
 #endif
 static void du_notice(const unsigned char *m, int n);
+static int du_vote_take(void);
+static void du_up_track(DuConn *c, const unsigned char *p, int n) {   // Relay 25: follow the game's frames going up
+    for (int i = 0; i < n; ) {
+        if (c->up_left) { int k = n - i < c->up_left ? n - i : c->up_left; c->up_left -= k; i += k; continue; }
+        c->up_h[c->up_hn++] = p[i++];
+        if (c->up_hn == 2) { c->up_left = c->up_h[0] << 8 | c->up_h[1]; c->up_hn = 0; }
+    }
+}
 static void du_filter(DuConn *c, const unsigned char *p, int len) {
     if (c->fq_len + len > DU_FQ_MAX) return;                       // can't be: du_on_data takes nothing while outq + fq is full
     if (len) { memcpy(c->fq + c->fq_len, p, len); c->fq_len += len; }
@@ -345,9 +354,13 @@ static void udp_carry(SOCKET g, SOCKET u, DWORD cid, int ver, const unsigned cha
         if (gameOpen && du_room(c) && !canread) { long w = (long)((1.0 - c->pace.tok) / DU_PACE * 1e6) + 500; if (w < us) us = w; }
         struct timeval tv = {0, us};
         int sel = select(DU_NFDS(g, u), &rs, c->outq_len ? &ws : NULL, NULL, &tv); now = du_now();
+        if (c->filt && !c->up_hn && !c->up_left && du_room(c)) {   // Relay 25: our "don't wait" between two of the game's frames
+            int v = du_vote_take();
+            if (v >= 0) { unsigned char f[4] = {0, 2, 0x7d, (unsigned char)v}; ub_take(&c->pace, now); du_fresh(c, f, 4, now); }
+        }
         if (sel > 0 && canread && FD_ISSET(g, &rs)) {           // game -> server
             int n = g_recvOrig(g, (char *)buf, U_MAXP, 0);
-            if (n > 0) { ub_take(&c->pace, now); du_fresh(c, buf, n, now); }
+            if (n > 0) { ub_take(&c->pace, now); if (c->filt) du_up_track(c, buf, n); du_fresh(c, buf, n, now); }
             else {
 #ifdef _WIN32
                 if (!(n < 0 && WSAGetLastError() == WSAEWOULDBLOCK)) gameOpen = 0;

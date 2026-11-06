@@ -4,6 +4,21 @@ Every version gets an entry here before it reaches `main`. CI then tags `vX.Y.Z`
 version (`X.Y.0`) it also publishes a GitHub Release with the DLLs and the entries since the previous `X.Y.0`.
 The version of the set lives only in `VERSION`; each DLL still writes its own version to its log.
 
+## 0.2.13 — 2026-11-06
+Relay 25 (store automatch mmfind-0.47-relay25, relay_fwd relayfwd-25). Owner 06.11.2026: "не видно совсем - больше и в центр",
+"кнопка «Не ждать»; если все оставшиеся нажали - игра продолжается без ушедшего; голоса согласованы у всех".
+- The waiting lines moved from the minimap movie to the middle of the screen: the game's own full-screen HUD movie
+  ui\\movies\\hud\\resource_notifications (stage 1600 x 1200; its form vtable 0x01116478, slot 4 = an empty per-frame update,
+  chained): "Waiting for <name>" (44, orange) and "0:13 – 2:41 left" (30, white), each over a black copy for any ground;
+  en / ru / es / fr / de by the game's language (its own text of ucs 9032352 "Resume"; Relay.ini Language= overrides).
+- "Don't wait" under them: a text field with a background and border; the player's own left click released over it
+  (GetAsyncKeyState + the movie's _xmouse/_ymouse, only while the game is the foreground window) queues frame 7d <number>;
+  du_tunnel.h follows the game's frames going up and puts ours between two of them. battle_relay (dow2-ladder, votes) counts
+  the votes of the other connected players; all of them -> the player is out of the next tick for everyone at once (as when
+  the window runs out), his reconnect refused. The notices carry "votes / asked" -> "Don't wait: 1 of 3" under the button.
+- Stands 1+2 (1280x800 and 1024x768, en and ru): the lines in the middle, the click -> vote 1 of 1 -> dropped at the same
+  tick for both; a server test with three players (1 of 2 shown, both -> out).
+
 ## 0.2.12 — 2026-11-06
 Back into a running match after a network drop (owner 06.11.2026: "вернуться в идущий матч ... окно ~3 мин, надпись «Ждём игрока»"):
 Relay 24 (store automatch mmfind-0.47-relay24 = 0.47's files with Relay.dll 24; relay_fwd relayfwd-24 - the same source).
