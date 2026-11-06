@@ -4,6 +4,26 @@ Every version gets an entry here before it reaches `main`. CI then tags `vX.Y.Z`
 version (`X.Y.0`) it also publishes a GitHub Release with the DLLs and the entries since the previous `X.Y.0`.
 The version of the set lives only in `VERSION`; each DLL still writes its own version to its log.
 
+## 0.2.15 — 2026-11-06
+Watch a running match (owner 06.11.2026: "зритель открывает матч в лаунчере и смотрит его как реплей, который не заканчивается и
+подтягивается вживую, с задержкой, заданной сервером"): LiveReplay.dll 1 (store livereplay-1, experiment, Elite and vanilla) +
+Elite_DLLs/lrbridge.exe (its pipe for the Linux launcher: rjbridge.c with -DPIPE_PREFIX=L"EliteLiveReplay"). Launcher 1.4.18: "Watch"
+on a running match of our servers in the Online block. Nothing in the players' games: our battle server builds the replay.
+- Server (dow2-ladder gameserver/live_rec.py, battle_relay "DWRL", ladder /ladder/api/live/<match>/rec?from=N): the .rec of the match
+  from the ticks the node sends and the host's lobby state; LIVE_DELAY s behind (120 by default, the node's floor). Byte for byte the
+  host's own temp.rec on six stand matches (Elite / vanilla, VPC / annihilate / hero assault).
+- LiveReplay.dll: the pipe \\.\pipe\EliteLiveReplay-<pid> (RoomJoin's code; {"cmd":"watch","match","base"}, "stop", "status";
+  events accepted / fetching / starting / playing / over / failed); its network thread writes Playback\live_watch.rec (the replay so
+  far) and fetches the rest every 2 s; the game's thread starts the file as Game History -> Load Replay does (0x40F526 with
+  "playback:live_watch.rec", EDX 0x01335A74) once the menu is up; the playback reader's "next record" (vtable 0x0108BA30 slot 1)
+  takes the new records (parsed by the game's own 0x42B451 from a byte stream of ours); with nothing new yet
+  PlaybackSynchronization::GetSyncCommand (0x010B9E2C slot 4) answers "no step now" and SimulateInternal's replay end (call 0x42761A
+  at 0x43809B) is skipped for it; the replay panel's length (world+0x174) follows the data; a faster start (CatchUp, 4x) up to the
+  live edge. Sync check: each step's crc (slot 7) against the players' turn crc of that step - LiveReplay.log and the status.
+- Stand 1: stand matches served as running ones: the replay starts from the menu, 2841 and 1040 steps in sync with the players,
+  a 20 s stall of the data waited out; end to end: stands 1+2 play a vanilla 1v1 on a test node, a second game on stand 1 (its own
+  network namespace, no sign-in) watches it 30 s behind - every checked step in sync.
+
 ## 0.2.14 — 2026-11-06
 MMFind 0.48 (store automatch mmfind-0.48 = mmfind-0.47-relay25 with this MMFind; Relay 25, OwnLobby 2, mmbridge as there).
 Live 06.11 (room d59lrf): a player's room said Space Marines, his game searched with the army it had on Find a Game (Eldar / Farseer).

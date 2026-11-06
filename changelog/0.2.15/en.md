@@ -1,0 +1,1 @@
+- New add-on (experiment) "Watch running matches": a Watch button in the launcher on a match running on our servers opens it in the game as a replay that keeps going, a couple of minutes behind the players.
