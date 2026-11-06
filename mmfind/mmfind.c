@@ -165,7 +165,8 @@ static const char *RSN[] = {"none", "stop", "walk", "army", "search", "done"};
 static volatile int g_rs; static char g_room[24]; static int g_rMode, g_rRace = -1, g_rHero = -1, g_rTries, g_rWalked;
 static DWORD g_rAt, g_rStepAt; static volatile int g_rEvMatched, g_rEvRoom;
 static CRITICAL_SECTION g_qlk; static HANDLE g_outEv;
-static int g_pipeCfg = 1;
+static int g_pipeCfg = 1, g_debugPipe;
+static int g_rOpt[4] = {-1, -1, -1, -1};      // 0.47: the room's options for the host: victory condition, VPTK, SLOC, RSST (-1 = the game's)
 static void room_set(int rs); static void room_ev(const char *ev);
 // 0.38 (owner 03.11.2026: "Start Searching straight to the loading screen, fully on our servers"): with OwnLobby.dll in the game and
 // our lobby server able to do it (the ladder says so: mm/native), Start Searching goes to the game: its own Find a Game search runs
@@ -1139,8 +1140,8 @@ static void stray_stop(DWORD now) {
 // keeps this search in the room's own pool and makes the match from the room (its host, map, teams). A normal search that runs is
 // stopped first. Never from a Custom Games lobby (the player is in one - his call), a match, or another screen.
 // The pipe thread never touches the engine: commands go into a queue the game's thread takes in its tick (shark::update).
-enum { QC_ROOM = 1, QC_CANCEL };
-typedef struct { int what, mode, race, hero; char room[24]; } QCmd;
+enum { QC_ROOM = 1, QC_CANCEL, QC_FS };
+typedef struct { int what, mode, race, hero, opt[4]; char room[24]; char path[160], args[48]; } QCmd;
 typedef struct { char s[600]; } QOut;
 static QCmd g_cq[8]; static int g_cqH, g_cqN; static QOut g_oq[32]; static int g_oqH, g_oqN;
 static void out_push(const char *s) {
@@ -1167,9 +1168,12 @@ static void room_start(const QCmd *c, DWORD now) {
     if (g_rs != RS_NONE && g_rs != RS_DONE && strcmp(c->room, g_room)) {      // another room's launch runs: that one goes on
         emitf("{\"ev\":\"failed\",\"room\":\"%s\",\"reason\":\"busy_room\",\"text\":\"%s\"}", c->room, g_room); return; }
     if (g_rs != RS_NONE && g_rs != RS_DONE) { room_ev("accepted"); return; }      // the same room again: it goes on
+    if (g_rs == RS_DONE && !strcmp(c->room, g_room)) { room_ev("loading"); return; }  // its match loads / runs already (a launcher restarted)
     EnterCriticalSection(&g_qlk); strcpy(g_room, c->room); LeaveCriticalSection(&g_qlk);
+    for (int i = 0; i < 4; i++) g_rOpt[i] = c->opt[i];
     g_rMode = c->mode; g_rRace = c->race; g_rHero = c->hero; g_rAt = now; g_rTries = 0; g_rWalked = 0; g_rEvMatched = g_rEvRoom = 0; g_rMenuOk = 0; g_rWantMenu = 1;
-    logmsg("room %s: the launcher's match - %s, race %d, hero %d (screen %d, state %s)", g_room, MODE_KEY[g_rMode], g_rRace, g_rHero, g_screen, SN[g_state]);
+    logmsg("room %s: the launcher's match - %s, race %d, hero %d, options win %d vptk %d sloc %d rsst %d (screen %d, state %s)", g_room, MODE_KEY[g_rMode], g_rRace, g_rHero,
+           g_rOpt[0], g_rOpt[1], g_rOpt[2], g_rOpt[3], g_screen, SN[g_state]);
     room_ev("accepted");
     if (g_loading) { room_fail("busy_match", "the game is in a match"); return; }
     if (!GetModuleHandleW(L"OwnLobby.dll")) { room_fail("no_ownlobby", "no OwnLobby.dll in the game (Automatch v2.0 off?)"); return; }
@@ -1249,6 +1253,7 @@ static void room_take(DWORD now) {
         LeaveCriticalSection(&g_qlk);
         if (!have) return;
         if (c.what == QC_ROOM) room_start(&c, now); else if (c.what == QC_CANCEL) room_cancel(c.room);
+        else if (c.what == QC_FS) { g_rWantMenu = 1; probe_screen(); fs(c.path, c.args); emitf("{\"ev\":\"fs_done\",\"screen\":%d}", g_screen); }
     }
 }
 
@@ -1295,8 +1300,13 @@ static void cli_line(Cli *c, char *s) {
         q.race = jint(s, "race", -1); q.hero = jint(s, "hero", -1);
         if (q.race < -1 || q.race > 8) q.race = -1;
         if (q.hero < -1 || q.hero > 2) q.hero = -1;
+        static const char *OK[4] = {"win", "vptk", "sloc", "rsst"};
+        for (int i = 0; i < 4; i++) { q.opt[i] = jint(s, OK[i], -1); if (q.opt[i] < -1 || q.opt[i] > 20) q.opt[i] = -1; }
         q.what = QC_ROOM; strcpy(q.room, room);
     } else if (!strcmp(cmd, "cancel")) { q.what = QC_CANCEL; strcpy(q.room, room); }
+    else if (!strcmp(cmd, "fs") && g_debugPipe) {           // [MMFind] DebugPipe=1 (stands only): a menu command as its button sends it
+        jstr(s, "path", q.path, sizeof q.path); jstr(s, "args", q.args, sizeof q.args); if (!q.path[0]) { cli_write(c, "{\"ev\":\"error\"}\n"); return; }
+        q.what = QC_FS; }
     else { cli_write(c, "{\"ev\":\"error\",\"reason\":\"bad_command\"}\n"); return; }
     logmsg("pipe: client %lu: %s %s (queued for the game's thread)", c->id, cmd, room);
     EnterCriticalSection(&g_qlk);
@@ -1381,12 +1391,64 @@ static DWORD WINAPI pipe_thread(LPVOID _) {
     }
 }
 
+// ---------------- 0.47: the match options of a launcher room's match (only the host's count) ----------------
+// The host owns the options: the game builds "<victory condition> -1 <n> <key> <value> ... <extra>" (keys as fourcc numbers: VPTK
+// 1448105035, SLOC 1397509955, RSST 1381192532, MATY 1296127065) and gives it to the match object (*0x01335014)->vtbl[0x24]() ->
+// match->vtbl[0x48] (stdcall this, {char *p, cap, len}; 0x5F74A0 in DOW2.exe 3.19); the host sends that matchinfo to everybody.
+// The native automatch writes its defaults there (research 04.11.2026: lmatch/MatchOpts, RSST=1 -> High Resources in the match).
+// The entry is swapped once (only when it is 0x5F74A0); a string is rewritten only while this game searches for a launcher room
+// that has options, and only one with MATY (a match's options) - everything else passes as it is (and is logged with Verbose=1).
+typedef struct { char *p; unsigned cap; unsigned len; } OptBlob;
+typedef int (__stdcall *SetOptFn)(void *self, OptBlob *b);
+static SetOptFn g_optOrig; static volatile int g_optHooked;
+#define FN_SETOPTS 0x005F74A0
+static int __stdcall opts_hook(void *self, OptBlob *b) {
+    char in[512] = {0}; unsigned n = (b && b->p && b->len < sizeof in && !IsBadReadPtr(b->p, b->len)) ? b->len : 0;
+    if (n) memcpy(in, b->p, n);
+    int want = (g_rs == RS_SEARCH || g_rs == RS_ARMY) && (g_rOpt[0] >= 0 || g_rOpt[1] >= 0 || g_rOpt[2] >= 0 || g_rOpt[3] >= 0);
+    if (g_verbose || want) logmsg("options: \"%s\"", in);
+    if (!want || !n || !strstr(in, "1296127065")) return g_optOrig(self, b);
+    long v[64]; int k = 0; char *q = in, *e;
+    while (k < 64) { long x = strtol(q, &e, 10); if (e == q) break; v[k++] = x; q = e; }
+    if (k < 4 || v[2] < 0 || v[2] > 20 || 3 + 2 * v[2] + 1 > k) { logmsg("options: not parsed (%d numbers) - left as the game made them", k); return g_optOrig(self, b); }
+    if (g_rOpt[0] >= 0) v[0] = g_rOpt[0];
+    for (int i = 0; i < v[2]; i++) {
+        long key = v[3 + 2 * i], *val = &v[4 + 2 * i];
+        if (key == 0x5650544B && g_rOpt[1] >= 0) *val = g_rOpt[1];
+        if (key == 0x534C4F43 && g_rOpt[2] >= 0) *val = g_rOpt[2];
+        if (key == 0x52535354 && g_rOpt[3] >= 0) *val = g_rOpt[3];
+    }
+    char *out = (char *)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, 512); int o = 0;   // the game keeps it (a few bytes, never freed)
+    if (!out) return g_optOrig(self, b);
+    for (int i = 0; i < 3 + 2 * v[2] + 1 && o < 480; i++) o += _snprintf(out + o, 512 - o, "%ld ", v[i]);
+    OptBlob nb = { out, 0, (unsigned)o };
+    logmsg("options: the launcher room's -> \"%s\"", out);
+    return g_optOrig(self, &nb);
+}
+static void opts_install(void) {                     // on the game's thread, once the RLink manager is there
+    static DWORD last; static int tries;
+    if (g_optHooked || tries > 600 || GetTickCount() - last < 1000) return; last = GetTickCount(); tries++;
+    void **m = *(void ***)0x01335014; if (!m || IsBadReadPtr(m, 4) || IsBadReadPtr(*m, 0x28)) return;
+    typedef void *(__fastcall *GetFn)(void *self, void *edx);
+    void *match = ((GetFn)((*(void ***)m)[0x24 / 4]))(m, 0);
+    if (!match || IsBadReadPtr(match, 4)) return;
+    void **vt = *(void ***)match; if (IsBadReadPtr(vt, 0x4C)) return;
+    if ((DWORD)vt[0x48 / 4] != FN_SETOPTS) { logmsg("options: the match's set-options entry is %p, not 0x%X (not DOW2.exe 3.19?) - room options off", vt[0x48 / 4], FN_SETOPTS); g_optHooked = -1; return; }
+    g_optOrig = (SetOptFn)vt[0x48 / 4]; void *fn = (void *)opts_hook;
+    HANDLE mx = patch_lock(); DWORD o; SIZE_T w = 0;
+    if (VirtualProtect(&vt[0x48 / 4], 4, PAGE_READWRITE, &o)) { WriteProcessMemory(GetCurrentProcess(), &vt[0x48 / 4], &fn, 4, &w); VirtualProtect(&vt[0x48 / 4], 4, o, &o); }
+    patch_unlock(mx);
+    g_optHooked = w == 4 ? 1 : -1;
+    logmsg(w == 4 ? "options: the match's set-options entry hooked (vtable %p) - a launcher room's host sets its options" : "options: the entry could not be written (vtable %p)", vt);
+}
+
 static void tick(void) {
     static DWORD last; DWORD now = GetTickCount(); if (now - last < 250) return; last = now;
     { static DWORD hb; if (now - hb > 30000) { hb = now; logmsg("tick alive, state %s screen %d", SN[g_state], g_screen); } }
     mode_peek(now);                                                   // 0.42
     stray_stop(now);                                                  // 0.45
     room_take(now); room_step(now);                                   // 0.47: the launcher's room
+    opts_install();
     if (g_natCancelled) {                                             // 0.38: the server called our native match off
         g_natCancelled = 0;
         if (g_rs == RS_SEARCH) { g_natAgain = 0; room_fail("server_cancelled", "the server called the match off (the launcher room says why)"); }
@@ -1524,7 +1586,8 @@ BOOL WINAPI DllMain(HINSTANCE h, DWORD r, LPVOID _) {
     { wchar_t t[80]; GetPrivateProfileStringW(L"MMFind", L"TestLadder", L"", t, 80, ini); wchar_t *c = wcsrchr(t, L':');   // 0.38 tests, see g_tlHost
       if (t[0] && c && _wtoi(c + 1) > 0 && _wtoi(c + 1) < 65536) { *c = 0; wcsncpy(g_tlHost, t, 63); g_tlPort = (INTERNET_PORT)_wtoi(c + 1); } }
     g_verbose = GetPrivateProfileIntW(L"MMFind", L"Verbose", 0, ini);
-    g_pipeCfg = GetPrivateProfileIntW(L"MMFind", L"Pipe", 1, ini) != 0;   // 0.47: the launcher rooms' pipe (0 = none)
+    g_pipeCfg = GetPrivateProfileIntW(L"MMFind", L"Pipe", 1, ini) != 0;
+    g_debugPipe = GetPrivateProfileIntW(L"MMFind", L"DebugPipe", 0, ini) != 0;   // stands only: menu commands over the pipe   // 0.47: the launcher rooms' pipe (0 = none)
     g_logInvoke = GetPrivateProfileIntW(L"MMFind", L"LogInvoke", 0, ini);   // debug: every engine -> Flash call
     { wchar_t g[32]; GetPrivateProfileStringW(L"MMFind", L"TestGroup", L"", g, 32, ini); WideCharToMultiByte(CP_UTF8, 0, g, -1, g_group, sizeof g_group, NULL, NULL); }
     wcscpy(g_ini, ini);
