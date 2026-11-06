@@ -12,6 +12,12 @@ play; v1 was checked only on vanilla data). Section "v2" at the end.
 v3 / 0.3 (05-06.11.2026, grantovich: "further left, active buffs, resists, auras and so on - like in DoW1"): the active
 effects on the squad as a third block left of the stat rows. Section "v3" at the end.
 
+v4 / 0.4 (06.11.2026, grantovich: "the armour type's name is so long that not all the modifiers fit"; "the DPS is not
+what I count by hand - shotgun 20 damage, cooldown 1.5, wind_down 0.5, 9 shots, reload 3 s: 8.6, not 10.3"): DPS by the
+weapon's real firing cycle (the engine's weapon state machine, checked against the shots the engine fires on stand 1),
+the armour type as icon + short name in the game's language, the effects in three compact rows when two do not hold
+them. Section "v4" at the end; the old formula below is now only logged as "tooltip".
+
 Status: **experiment, archive branch `archive/unitstats-experiment` only.** Not in `addons.json`, not in the store, not
 for players. `make build/UnitStats.dll` (not part of `make all`). Code: `unitstats/unitstats.c`.
 The result of the stand test (screenshots, numbers, what did not work) is at the end of this file.
@@ -134,7 +140,7 @@ The key is the address of a .data slot holding the bag's name: `moving_ext 0x013
 0x01301A84..0x01301BF8 hold the names; `0x436CDE` is the game's lookup for weapon_bag). Check the bag's vtable before
 reading it (MovingExtInfo 0x010F1404, MeleeExtInfo 0x010F8F7C, SightExtInfo 0x010FA8F8, WeaponBag 0x010D68B4).
 
-## DPS formula (the game's own)
+## DPS formula (the game's own tooltip formula; v1-v3 showed it, v4 shows the real cycle - section v4)
 
 The game has it: Lua `Util_GetWeaponDPS(weaponPBG)` = `0x934D70`. Melee: `damage / (wind_down + wind_up + cooldown) * 10`.
 Ranged: `0x81FC40` (usercall, EAX = WeaponBag, result in xmm0), constants 0.5 (0x0105BB74), 1.0, 10 (0x0107D78C):
@@ -381,3 +387,93 @@ game/Wine reaction to a script selection right after the selected squad died, no
 pointers are checked with VirtualQuery instead of IsBadReadPtr (inside the guard our own vectored handler would take
 IsBadReadPtr's fault), a fault skips one update instead of ending the numbers (20 end them), and a watchdog thread logs if
 the panel update stops ("watchdog: ..." in UnitStats.log, says where).
+
+## v4 - DPS of the real firing cycle, short armour names, compact effects (0.4, 06.11.2026)
+
+### Why the tooltip formula is not what a weapon does
+
+grantovich counted by hand a shotgun of the newest Elite ("Hardened Veterans": 20 damage, cooldown 1.5 s, wind_down 0.5 s,
+9 shots, reload 3 s) at 8.6 DPS; 0.3 showed 10.3. 0.3 used the game's own `Util_GetWeaponDPS` (0x81FC40): a weapon with a
+`burst_info` table (even a one-tick one) goes through its burst branch, which has no wind_up / wind_down at all:
+180 / (30 + (15 + 1) x 9) x 10 = 10.3. The engine's weapon does otherwise.
+
+### The engine's firing cycle (DOW2.exe 3.19)
+
+Ranged weapons: classes RangedWeapon (vtable 0x010FC38C, type 1) and ProjectileWeapon (0x010FC434, type 2), both with
+the update `0xA4AA10` (vtable +0x5C); the state at weapon +0x58 (names from the debug printer 0xA4C8D0):
+
+| State | Handler | What happens |
+|---|---|---|
+| 4 ready | 0xA4AE30 | aimed at the target (+0xD4 = 0, +0xB4 = 4): windup counter (+0x130) = wind_up, state 6 at once |
+| 6 windup | 0xA4B590 | counter > 0: count down, return; else set up the burst - B = trunc(random(burst min, max)) ticks (>= 1), rate = burst rate_of_fire per tick (+0x150), the rest accumulator +0x154 = 1 - rate when rate < 1; no burst_info: B = 1, rate 1; state 7 (fires nothing this tick) |
+| 7 firing | 0xA4B810 | per tick floor(acc + rate) shots (vtable +0x74, one call per shot), acc keeps the rest; ProjectileWeapon: projectiles_per_shot (bag +0x114) shots and the burst ends after this one tick; B ticks counted down (+0x14C), then vtable +0x78 = 0xA4A9C0 |
+| burst end | 0xA4A9C0 -> 0xA4CB90 | reload due if the counter +0x148 <= 1 (and reload frequency min != 0); winddown end = now + wind_down; reload end = winddown end (+ reload); cooldown end = reload end + cooldown |
+| 8 winddown | 0xA4B9A0 | at winddown end: counter +0x148 - 1, then reload (9) or cooldown (10) or, both over, ready (4: one more tick) |
+| 9 reload | 0xA4BB60 | at reload end: counter = new F, cooldown |
+| 10 cooldown | 0xA4BC30 | at cooldown end: windup (6) in the same tick |
+
+* cooldown = trunc(trunc(cooldown x cooldown modifiers) x random(weapon_cooldown_randomization_min, _max) / 100)
+  (`0x96E5A0`; tuning combat 80 / 120 in vanilla and Elite, CombatInfo +0xB8 / +0xBC) - on average about half a tick
+  less than written;
+* reload = trunc(min) + trunc(random x (trunc(max) - trunc(min))) (`0xA48F10`, both through the reload modifier);
+* F (bursts per reload) = min + Random::GetMax(max - min) (`0x8221E0`; Util.dll `GetMax(n)` = rand % n, so max itself
+  never comes: frequency 8-10 gives 8 or 9). The counter is checked at the burst's end and counted down at the
+  winddown's end: a reload after every F-th burst - F, not F + 1;
+* wind_up / wind_down are used as loaded (whole ticks), no modifier.
+
+So per reload: F x (wind_up + B + wind_down + cooldown) ticks + reload, F x shots-per-burst x damage; without reloads
+one burst per (wind_up + B + wind_down + cooldown) ticks, plus one tick when the cooldown is 0. Melee (MeleeWeapon,
+update 0x9AAC70: 6 windup, 7 strike 0x9AAE10, 8 winddown 0x9AAEA0, 10 cooldown 0x9AAF20, start 0x9AB020):
+max(wind_up, 1) + 1 + max(wind_down - 1, 0) + cooldown ticks per strike - the same as the tooltip's wind_up + wind_down
++ cooldown when wind_up and wind_down are >= 1. UnitStats takes the exact expectation over every random value the
+engine can draw (`weapon_dps` in unitstats.c), damage / cooldown / reload through the modifier function as before, the
+level multiplier as before; the tooltip number is still in the log ("tooltip").
+
+grantovich's shotgun by this (wind_up 0 assumed): 1 + 5 + 14.5 = 20.5 ticks per shot, 9 x 20.5 + 30 = 214.5 ticks per
+180 damage = **8.39 DPS** (his 8.6 has no firing tick and no cooldown truncation).
+
+### Checked on stand 1 (06.11.2026)
+
+`unitstats/stand/session_v4.sh` + `unitstats_v4.scar`: IG vs Eldar, AI off; nine of our squads (wargear / upgrade
+applied by script: commander shotgun, devils with the guardsmen shotgun, scouts with shotguns), each attacking its own
+target that cannot die (`SGroup_SetInvulnerable`) nor shoot (`shoot_enable_modifier` MUT_Enable -1); our squads take no
+suppression (`Modify_ReceivedSuppression` 0). `ShotProbe.dll` (`unitstats/stand/shotprobe.c`, stand only) hooks the
+fire-one-shot slots of both ranged classes and the weapon updates and logs every shot / strike / windup / reload with the
+sim tick; `shots.py` gives the DPS per weapon over whole magazines (first windup after the first reload to the first
+after the last). 4.5 minutes; logs `unitstats/stand/ShotProbe_stand1_0611_v4.log.gz`, `UnitStats_stand1_0611_v4_elite.log`,
+table `shots_stand1_0611_v4.txt`.
+
+| Weapon (squad) | kind | was (0.3, tooltip) | now (0.4) | measured | shots |
+|---|---|---|---|---|---|
+| ig_guardsmen_shotgun (devils, 12 weapons) | single, no reload | 8.82 | 8.57 | 8.57 | 1786 |
+| ig_commander_shotgun (commander) | single, reload 8-10 x 4 s | 11.74 | 11.32 | 11.29 | 111 |
+| sm_shotgun (scouts, 3) | single, reload 8-10 x 4 s | 14.67 | 14.15 | 14.12 | 325 |
+| ig_guardsmen_lasgun (guardsmen, 12) | burst 1 s, reload 6-8 | 4.32 | 4.35 | 4.35 | 2366 |
+| sm_bolter (tactical, 3) | burst 2 s, reload 6-8 | 14.58 | 14.66 | 14.63 / 14.78 / 11.72 | 736 |
+| sm_bolter_devastator (2) | the same | 7.00 | 7.03 | 7.04 | 516 |
+| sm_heavy_bolter (devastator, setup) | burst 2 s, reload 10-12 | 216.39 | 219.32 | 219.51 | 2400 |
+| sm_autocannon_predator | projectile, reload every shot | 32.43 | 31.58 | 31.58 | 67 |
+| sm_chain_sword_assault (assault, 3) | melee | 26.92 | 26.92 | 21.03 (86 % of strikes exactly 13 ticks apart) | 460 |
+| ork_choppa (sluggas, 6) | melee | 25.00 | 25.00 | 22.56 (95 % exactly 10 ticks apart) | 1389 |
+
+Ranged: within 0.3 % wherever the weapon kept firing (one tactical marine's 11.72: pauses in its fire, the other two
+14.6 / 14.8). Melee: the strike cycle is exactly the formula's (13 / 10 ticks); the measured mean is lower because now
+and then a melee unit stops striking for 3-5 s (repositioning, special attacks) - not a part of a weapon's own cycle,
+not counted. The heavy bolter's setup is spent once per engagement, not in the cycle (not counted).
+
+### Short armour names, language
+
+`ARM_SHORT` in unitstats.c: infantry "Infantry / Пехота", infantry_fire_resist "Inf. (fire) / Пех. (огн.)",
+heavy_infantry "Heavy inf. / Тяж. пех.", super_heavy_infantry, commander "Commander / Командир", vehicle "Vehicle /
+Техника", building, building_light, building_defence, building_ig_turret. Russian when the game's own armour type names
+(the LocStrings of the world tuning) contain Cyrillic, else English; `[UnitStats] Language=auto|en|ru`;
+`[ArmourNames] <internal>=<text>` (UTF-8) overrides. The effect tags ("heavy", "vs veh", "no retreat") follow the same
+language. The English game's $NormalFont draws Cyrillic (stand, `Language=ru`).
+
+### Effects in three rows
+
+Two rows at `[Effects] FontSize` (18) beside the stat rows hold about four cells; when a dry run at that size does not
+hold all of them, the block switches to three rows at `CompactFontSize` (14) in the same height (back to two rows when
+they fit again, 5 % margin). Grantovich's case (CQC infantry, fire resist, six effects): 0.3 showed 3 (his screenshot), two rows with the short
+armour name 4 (`zoom_v4a_two_rows_4of6.png`), 0.4 all six
+(screenshots `/var/www/media/dow2_shots/unitstats/v4/zoom_*`). Switching re-makes the cells on the next update (250 ms).

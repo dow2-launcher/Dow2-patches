@@ -65,11 +65,19 @@
 // v3 also: the selection is read with the selection mutex's TryEnter (never waits on it - one of four v2 runs froze the
 // game; the panel update must not block on a lock the simulation holds), pointers are checked with VirtualQuery (an
 // IsBadReadPtr fault inside the guard was caught by our own handler).
+// v4 / 0.4 (06.11.2026, grantovich: "the armour type's name is so long that not all the effects fit"; "your DPS is not what I
+// count by hand - the shotgun: 20 damage, cooldown 1.5, wind_down 0.5, 9 shots, reload 3 s - 8.6, not 10.3"):
+//   * DPS by the weapon's REAL firing cycle (the engine's weapon state machine: windup, the firing ticks, winddown, reload
+//     every F bursts, the randomised cooldown - see weapon_dps), not the game's tooltip formula Util_GetWeaponDPS (no
+//     wind_down for bursts, no firing tick, the mean of reload count / cooldown as written); checked on stand 1 against the
+//     shots the engine really fires (unitstats/stand/shotprobe.c);
+//   * the armour type: its icon + a short name ("Heavy inf." / "Tyazh. pekh."), English or Russian as the game is.
 #include <windows.h>
 #include <stdio.h>
 #include <stdarg.h>
 #include <string.h>
 #include <wctype.h>
+#include <math.h>
 #include "../common/gfxui.h"
 
 static wchar_t g_log[MAX_PATH], g_ini[MAX_PATH];
@@ -144,9 +152,11 @@ static const wchar_t *EICON_DEF[NEICON] = {
     L"" TRAIT "stun.dds",                                           // cannot fire
 };
 static Icon g_eicon[NEICON];
+static int g_esizeC = 14;   // v4: [Effects] CompactFontSize
 static int g_effOn = 1, g_effMax = 6, g_esize = 18, g_eisize = 0, g_effX = -470, g_effGap = 14;
 
 // ---------- settings: UnitStats.ini [UnitStats], [Icons], [Effects], [EffectIcons] (re-read while the game runs) ----------
+static int g_lang, g_ruSeen, g_langSeen;                  // v4: [UnitStats] Language: 0 auto (the game's own strings), 1 en, 2 ru
 static int g_useSkill = 1, g_useEmod = 1, g_useLvl = 1;   // [UnitStats] GameSkill / EntityMods / LevelMul: the engine calls, each can be switched off
 static int g_enabled = 1, g_size = 22, g_isize = 0, g_offX = 0, g_offY = 0, g_perModel = 1, g_verbose = 1;
 static FILETIME g_iniTime;
@@ -170,12 +180,15 @@ static void load_ini(void) {
     g_offY = ini_int(L"OffsetY", 0, -800, 800);
     g_perModel = ini_int(L"PerModel", 1, 0, 1);
     g_verbose = ini_int(L"Verbose", 1, 0, 1);
+    { wchar_t l[16]; GetPrivateProfileStringW(L"UnitStats", L"Language", L"auto", l, 16, g_ini);
+      g_lang = !_wcsicmp(l, L"en") ? 1 : !_wcsicmp(l, L"ru") ? 2 : 0; }
     g_useSkill = ini_int(L"GameSkill", 1, 0, 1); g_useEmod = ini_int(L"EntityMods", 1, 0, 1); g_useLvl = ini_int(L"LevelMul", 1, 0, 1);
     for (int k = 0; k < NITEMS; k++) if (k != I_ARMOUR) ini_icon(ITEM_KEY[k], ITEM_DEF[k], &g_icon[k]);
     for (int k = 0; k < NARM; k++) ini_icon(ARM_KEY[k], ARM_DEF[k], &g_armIcon[k]);
     g_effOn = GetPrivateProfileIntW(L"Effects", L"Enabled", 1, g_ini) != 0;
     g_effMax = GetPrivateProfileIntW(L"Effects", L"Max", 6, g_ini); if (g_effMax < 0) g_effMax = 0; if (g_effMax > 10) g_effMax = 10;
     g_esize = GetPrivateProfileIntW(L"Effects", L"FontSize", 18, g_ini); if (g_esize < 8 || g_esize > 40) g_esize = 18;
+    g_esizeC = GetPrivateProfileIntW(L"Effects", L"CompactFontSize", 14, g_ini); if (g_esizeC < 8 || g_esizeC > g_esize) g_esizeC = g_esize;
     g_eisize = GetPrivateProfileIntW(L"Effects", L"IconSize", 0, g_ini); if (g_eisize < 0 || g_eisize > 60) g_eisize = 0;
     g_effX = GetPrivateProfileIntW(L"Effects", L"Left", -470, g_ini);
     g_effGap = GetPrivateProfileIntW(L"Effects", L"Gap", 14, g_ini);
@@ -353,36 +366,112 @@ static void *pbg_bag(const char *pbg, DWORD key) {
 // ---------- the numbers ----------
 typedef struct {
     float rdps, mdps, range, speed, sight, rdps1, mdps1;      // squad totals; *1 = per model when every model is the same
+    float rtip, mtip;                                         // v4: the game's tooltip formula (v1-v3's number), for the log
     int skill, skillOld, models, weapons, armour, sameR, sameM, nRanged, nMelee;
     float range0, speed0;                                     // blueprint values (the log)
-    char armourName[96];
+    char armourName[96], armourShort[64];                     // v4: the game's name (log) and the short one shown
 } Stats;
 static float ticks(int t) { return (float)t; }
-// one weapon: the game's DPS formula on the weapon's current values
-static float weapon_dps(char *w, char *bag, char *ent, int *melee) {
-    float dmg = us_mod(w, *(float *)(bag + 0x64), ent, MOD_DAMAGE);
-    float cd = us_mod(w, ticks(*(int *)(bag + 0xF0)), ent, MOD_COOLDOWN);
-    float rl0 = us_mod(w, ticks(*(int *)(bag + 0x11C)), ent, MOD_RELOAD), rl1 = us_mod(w, ticks(*(int *)(bag + 0x120)), ent, MOD_RELOAD);
-    float wu = ticks(*(int *)(bag + 0x10C)), wd = ticks(*(int *)(bag + 0x110));
-    float half = 0.5f, tps = 10.0f;                   // 0x0105BB74, 0x0107D78C
-    float freq = (*(int *)(bag + 0x124) + *(int *)(bag + 0x128)) * half, time, total;
-    *melee = *(bag + 0xC8) != 0;
-    if (*melee) { time = wd + wu + cd; total = dmg; }                     // Util_GetWeaponDPS, is_melee
-    else if (*(bag + 0x170)) {                                            // bursts (0x81FC40, the first branch)
-        float burst = (*(int *)(bag + 0x174) + *(int *)(bag + 0x178)) * half, shots, rate = *(float *)(bag + 0x17C);
-        if (freq > 0) { time = (rl0 + rl1) * half + (cd + burst) * freq; shots = freq; }
-        else { time = cd + burst; shots = 1.0f; }
-        if (rate > 0) dmg *= rate;
-        total = shots * dmg * burst;
-    } else {                                                              // single shots
-        time = wd + wu + cd;
-        if (freq > 0) { time = time * freq + (rl0 + rl1) * half; total = freq * dmg; } else total = dmg;
+// v4: DPS of the weapon's REAL firing cycle - the weapon state machine of DOW2.exe 3.19, ticks of 0.1 s, as it fires in a
+// fight against a target it keeps shooting (no target changes, no movement):
+//   ranged (RangedWeapon / ProjectileWeapon, update 0xA4AA10; states 6 windup 0xA4B590, 7 firing 0xA4B810, 8 winddown
+//   0xA4B9A0, 9 reload 0xA4BB60, 10 cooldown 0xA4BC30, 4 ready 0xA4AE30):
+//     windup: wind_up ticks, the first shot one tick after it (the state that sets up the burst fires nothing);
+//     firing: B ticks, B = trunc(random(burst min, max)) (>= 1; 1 without burst_info), per tick floor(acc + rate) shots
+//       with acc = 1 - rate at the start when rate < 1 (so a burst starts with a shot); a ProjectileWeapon fires
+//       projectiles_per_shot (bag +0x114) once and ends the burst after that one tick;
+//     at the burst's end (0xA4CB90): winddown ends at now + wind_down, the reload (if due) after it, the cooldown after that:
+//       cooldown = trunc(trunc(cooldown x modifiers) x random(weapon_cooldown_randomization_min, _max) / 100) (0x96E5A0,
+//       tuning combat +0xB8/+0xBC: 80..120 % in vanilla and Elite), reload = trunc(min) + trunc(random x (max - min))
+//       (0xA48F10, both through the reload modifier);
+//     the next windup starts in the tick the cooldown ends; with a cooldown of 0 and no reload one tick later (ready
+//       state first);
+//     reload: after every F-th burst, F = min + random 0..max-min-1 (0x8221E0, Random::GetMax: max itself never comes) -
+//       the counter (+0x148) is checked at the burst's end (<= 1: reload) and counted down when the winddown ends, so F
+//       bursts per reload, not F + 1;
+//     so per reload: F x (wind_up + B + wind_down + cooldown) + reload ticks, F x shots x damage.
+//   melee (MeleeWeapon update 0x9AAC70: 6 windup, 7 strike 0x9AAE10, 8 winddown 0x9AAEA0, 10 cooldown 0x9AAF20, start
+//   0x9AB020): max(wind_up, 1) + 1 + max(wind_down - 1, 0) + cooldown ticks per strike (cooldown randomised the same way).
+// Expectations over the random parts are exact (the integer values the engine can draw, each equally likely).
+// The game's own tooltip number (Util_GetWeaponDPS 0x81FC40, v1-v3 showed it) is still computed for the log ("tooltip").
+#define VT_RANGEDW 0x010FC38Cu        // RangedWeapon (type 1)
+#define VT_PROJW   0x010FC434u        // ProjectileWeapon (type 2)
+static float g_cdLo = 0.8f, g_cdHi = 1.2f;  // tuning combat weapon_cooldown_randomization_min / _max (CombatInfo +0xB8/+0xBC) / 100
+static double cd_expect(int c, double *p0) {  // E[trunc(c x U[lo, hi])] and the chance it is 0
+    *p0 = 0;
+    if (c <= 0) { *p0 = 1; return 0; }
+    double lo = c * (double)g_cdLo, hi = c * (double)g_cdHi;
+    if (hi - lo < 1e-9) { if (lo < 1) *p0 = 1; return floor(lo); }
+    double s = 0;
+    for (int k = (int)floor(lo); k <= (int)floor(hi); k++) {
+        double a = k > lo ? k : lo, b = k + 1 < hi ? k + 1 : hi;
+        if (b > a) { s += k * (b - a); if (k == 0) *p0 += b - a; }
     }
-    float dps = time > 0 ? total / time * tps : 0;
-    if (g_haveLvl && g_useLvl) dps *= us_lvlmul(ent, *melee);                         // the level's damage multiplier (0xA27720)
-    return dps > 0 ? dps : 0;
+    *p0 /= hi - lo; return s / (hi - lo);
 }
-static char g_detail[3072]; static int g_detailN;
+static int burst_shots(int nt, float rate) {   // 0xA4B810: per tick floor(acc + rate) shots, acc keeps the rest (x87 sum, float store)
+    float acc = rate < 1.0f ? 1.0f - rate : 0.0f; int n = 0;
+    for (int t = 0; t < nt && t < 2000; t++) {
+        double s = (double)rate + (double)acc; int k = (int)floor(s); if (k < 0) k = 0;
+        n += k; acc = (float)(s - k);
+    }
+    return n;
+}
+typedef struct { float tip, period, shots, F, R, cd, B; int kind; } Cyc;   // for the log: tooltip DPS, ticks per burst, shots per burst ...
+static float weapon_dps(char *w, char *bag, char *ent, int *melee, Cyc *cy) {
+    float dmg = us_mod(w, *(float *)(bag + 0x64), ent, MOD_DAMAGE);
+    float cdf = us_mod(w, ticks(*(int *)(bag + 0xF0)), ent, MOD_COOLDOWN);
+    float rl0 = us_mod(w, ticks(*(int *)(bag + 0x11C)), ent, MOD_RELOAD), rl1 = us_mod(w, ticks(*(int *)(bag + 0x120)), ent, MOD_RELOAD);
+    int wu = *(int *)(bag + 0x10C), wd = *(int *)(bag + 0x110), cdi = (int)cdf, fmin = *(int *)(bag + 0x124), fmax = *(int *)(bag + 0x128);
+    float half = 0.5f, tps = 10.0f;                   // 0x0105BB74, 0x0107D78C
+    memset(cy, 0, sizeof *cy);
+    *melee = *(bag + 0xC8) != 0;
+    // the game's tooltip formula (Util_GetWeaponDPS), for the log
+    {
+        float cd = cdf, wuf = ticks(wu), wdf = ticks(wd), freq = (fmin + fmax) * half, time, total, d = dmg;
+        if (*melee) { time = wdf + wuf + cd; total = d; }
+        else if (*(bag + 0x170)) {
+            float burst = (*(int *)(bag + 0x174) + *(int *)(bag + 0x178)) * half, shots, rate = *(float *)(bag + 0x17C);
+            if (freq > 0) { time = (rl0 + rl1) * half + (cd + burst) * freq; shots = freq; } else { time = cd + burst; shots = 1.0f; }
+            if (rate > 0) d *= rate;
+            total = shots * d * burst;
+        } else {
+            time = wdf + wuf + cd;
+            if (freq > 0) { time = time * freq + (rl0 + rl1) * half; total = freq * d; } else total = d;
+        }
+        cy->tip = time > 0 && total > 0 ? total / time * tps : 0;
+    }
+    double p0, ecd = cd_expect(cdi, &p0), dps;
+    cy->cd = (float)ecd;
+    if (*melee) {
+        double per = (wu > 1 ? wu : 1) + 1 + (wd > 1 ? wd - 1 : 0) + ecd;
+        cy->period = (float)per; cy->shots = 1; cy->kind = 3;
+        dps = dmg / per * tps;
+    } else {
+        DWORD vt = rd(w, 4) ? *(DWORD *)w : 0;
+        double eB, eS;                                   // ticks of firing, shots per burst
+        if (vt == VT_PROJW) { int pps = *(int *)(bag + 0x114); eB = 1; eS = pps > 0 && pps < 1000 ? pps : 1; cy->kind = 2; }
+        else if (*(bag + 0x170)) {
+            int b0 = *(int *)(bag + 0x174), b1 = *(int *)(bag + 0x178), n = 0; float rate = *(float *)(bag + 0x17C);
+            if (b0 < 1) b0 = 1; if (b1 < b0) b1 = b0; if (b1 > b0 + 200) b1 = b0 + 200;
+            eB = eS = 0;
+            for (int b = b0; b < (b1 > b0 ? b1 : b0 + 1); b++) { eB += b; eS += burst_shots(b, rate); n++; }
+            eB /= n; eS /= n; cy->kind = 1;
+        } else { eB = 1; eS = 1; cy->kind = 0; }
+        double per = wu + eB + wd + ecd, eF = 1, eR = 0, time;
+        if (fmin > 0) {                                  // reload after F bursts
+            int r0 = (int)rl0, r1 = (int)rl1; if (r0 < 0) r0 = 0; if (r1 < r0) r1 = r0;
+            eF = fmax > fmin ? fmin + (fmax - fmin - 1) * 0.5 : fmin;
+            eR = r0 + (r1 > r0 ? (r1 - r0 - 1) * 0.5 : 0);
+            time = eF * per + (eF - 1) * p0 + eR + (r0 > 0 ? 0 : p0);
+        } else time = per + p0;
+        cy->period = (float)per; cy->shots = (float)eS; cy->F = (float)eF; cy->R = (float)eR; cy->B = (float)eB;
+        dps = time > 0 ? eF * eS * dmg / time * tps : 0;
+    }
+    if (g_haveLvl && g_useLvl) { float lm = us_lvlmul(ent, *melee); dps *= lm; cy->tip *= lm; }   // the level's damage multiplier (0xA27720)
+    return dps > 0 ? (float)dps : 0;
+}
+static char g_detail[8192]; static int g_detailN;
 static void detail(const char *fmt, ...) {
     if (g_detailN >= (int)sizeof g_detail - 2) return;
     va_list a; va_start(a, fmt); int n = vsnprintf(g_detail + g_detailN, sizeof g_detail - g_detailN, fmt, a); va_end(a);
@@ -400,7 +489,8 @@ static void armour_name(int id, char *out, int n) {
             if (b && e > b && (e - b) / 8 > id && rd(b + id * 8, 8)) {
                 const wchar_t *ws = (*(W0_t *)IAT_LOC_CSTR)(b + id * 8);
                 if (ws && rd(ws, 2) && ws[0]) {
-                    wchar_t t[64]; int k = 0; for (; k < 63 && ws[k]; k++) t[k] = ws[k]; t[k] = 0;
+                    wchar_t t[64]; int k = 0; for (; k < 63 && ws[k]; k++) { t[k] = ws[k]; if (ws[k] >= 0x400 && ws[k] <= 0x4FF) g_ruSeen = 1; }
+                    t[k] = 0; g_langSeen = 1;
                     t[0] = towupper(t[0]);
                     WideCharToMultiByte(CP_UTF8, 0, t, -1, out, n, NULL, NULL);
                     return;
@@ -415,6 +505,35 @@ static void armour_name(int id, char *out, int n) {
     snprintf(out, n, "%.60s", names + id * 0x100);
     for (char *c = out; *c; c++) if (*c == '_') *c = ' ';
     if (out[0] >= 'a' && out[0] <= 'z') out[0] -= 32;
+}
+// v4 (grantovich: "the armour type's name is so long that not all the effects fit"): a short name next to the icon, in
+// the game's language - Russian when the game's own armour type names (the LocStrings above) are Cyrillic, else English;
+// [UnitStats] Language=auto|en|ru, [ArmourNames] <internal name>=<text> in the ini override.
+static const struct { const char *id, *en, *ru; } ARM_SHORT[] = {
+    { "infantry",             "Infantry",     "\xD0\x9F\xD0\xB5\xD1\x85\xD0\xBE\xD1\x82\xD0\xB0" },
+    { "infantry_fire_resist", "Inf. (fire)",  "\xD0\x9F\xD0\xB5\xD1\x85. (\xD0\xBE\xD0\xB3\xD0\xBD.)" },
+    { "heavy_infantry",       "Heavy inf.",   "\xD0\xA2\xD1\x8F\xD0\xB6. \xD0\xBF\xD0\xB5\xD1\x85." },
+    { "super_heavy_infantry", "S-heavy inf.", "\xD0\xA1\xD0\xB2\xD0\xB5\xD1\x80\xD1\x85\xD1\x82\xD1\x8F\xD0\xB6." },
+    { "commander",            "Commander",    "\xD0\x9A\xD0\xBE\xD0\xBC\xD0\xB0\xD0\xBD\xD0\xB4\xD0\xB8\xD1\x80" },
+    { "vehicle",              "Vehicle",      "\xD0\xA2\xD0\xB5\xD1\x85\xD0\xBD\xD0\xB8\xD0\xBA\xD0\xB0" },
+    { "building",             "Building",     "\xD0\x97\xD0\xB4\xD0\xB0\xD0\xBD\xD0\xB8\xD0\xB5" },
+    { "building_light",       "Light bldg",   "\xD0\x9B\xD1\x91\xD0\xB3\xD0\xBA. \xD0\xB7\xD0\xB4." },
+    { "building_defence",     "Defence",      "\xD0\x9E\xD0\xB1\xD0\xBE\xD1\x80\xD0\xBE\xD0\xBD\xD0\xB0" },
+    { "building_ig_turret",   "Turret",       "\xD0\xA2\xD1\x83\xD1\x80\xD0\xB5\xD0\xBB\xD1\x8C" },
+};
+static int is_ru(void) { return g_lang == 2 || (g_lang == 0 && g_ruSeen); }
+static void armour_short(const char *internal, const char *gameName, char *out, int n) {
+    char ini[MAX_PATH * 2], u[128];                      // the A version: the ini's bytes as they are (UTF-8 text)
+    WideCharToMultiByte(CP_ACP, 0, g_ini, -1, ini, sizeof ini, NULL, NULL);
+    if (*internal && GetPrivateProfileStringA("ArmourNames", internal, "", u, sizeof u, ini) > 0) { snprintf(out, n, "%s", u); return; }
+    for (unsigned i = 0; i < sizeof ARM_SHORT / sizeof ARM_SHORT[0]; i++)
+        if (!strcmp(internal, ARM_SHORT[i].id)) { snprintf(out, n, "%s", is_ru() ? ARM_SHORT[i].ru : ARM_SHORT[i].en); return; }
+    // not one of the ten types of vanilla / Elite: the game's own name if short, else the internal one cut to 12 letters
+    if (gameName && *gameName && MultiByteToWideChar(CP_UTF8, 0, gameName, -1, NULL, 0) <= 13) { snprintf(out, n, "%s", gameName); return; }
+    char t[64]; snprintf(t, sizeof t, "%s", internal); for (char *c = t; *c; c++) if (*c == '_') *c = ' ';
+    if (t[0] >= 'a' && t[0] <= 'z') t[0] -= 32;
+    if (strlen(t) > 12) { t[11] = '.'; t[12] = 0; }
+    snprintf(out, n, "%s", t);
 }
 static int armour_class(const char *internal) {
     if (strstr(internal, "vehicle")) return A_VEHICLE;
@@ -437,7 +556,12 @@ static void squad_stats(void *arg) {
     if (!allowDone && g_haveComb) {                      // the engine's range allowance, once (a tuning value, 1.0 in vanilla and Elite)
         allowDone = 1; char *c = us_combat();
         if (rd(c + 0x2C, 4)) { float a = *(float *)(c + 0x2C); if (a >= 0 && a <= 10) g_rangeAllow = a; }
-        logmsg("range allowance of the combat tuning (added to every weapon's max range at load): %.2f", g_rangeAllow);
+        if (rd(c + 0xB8, 8)) {                           // v4: weapon_cooldown_randomization_min / _max (percent; 0x96E5A0)
+            float lo = *(float *)(c + 0xB8) * 0.01f, hi = *(float *)(c + 0xBC) * 0.01f;
+            if (lo > 0 && hi >= lo && hi < 10) { g_cdLo = lo; g_cdHi = hi; }
+        }
+        logmsg("range allowance of the combat tuning (added to every weapon's max range at load): %.2f; cooldown randomisation %.2f..%.2f",
+               g_rangeAllow, g_cdLo, g_cdHi);
     }
     char *grp = p_allEnts(j->squad); if (!grp) return;
     char **b = p_begin(grp), **e = p_end(grp);
@@ -447,7 +571,7 @@ static void squad_stats(void *arg) {
         void *ctrl = *(void **)(ent + 0x3C); if (!ctrl) continue;
         st->models++;
         detail(" [%s:", p_entName ? p_entName(ent) : "?");
-        float erd = 0, emd = 0;
+        float erd = 0, emd = 0, ert = 0, emt = 0;
         char *ce = p_qi(ctrl, EXT_COMBAT);
         if (vt_is(ce, VT_COMBATEXT)) {
             char **hp = *(char ***)(ce + 0x50); int n = *(int *)(ce + 0x54);
@@ -456,25 +580,26 @@ static void squad_stats(void *arg) {
                 char *w = *(char **)(h + 0x50); if (!rd(w, 0xB0)) continue;
                 char *bag = *(char **)(w + 0x54); if (!vt_is(bag, VT_WEAPONBAG)) continue;
                 char *went = rd(*(char **)(w + 0xAC), 0x18) ? *(char **)(*(char **)(w + 0xAC) + 0x14) : ent;
-                int melee; float dps = weapon_dps(w, bag, went, &melee);
+                int melee; Cyc cy; float dps = weapon_dps(w, bag, went, &melee, &cy);
                 float rng = melee ? 0 : (*(Range_t *)(*(char **)w + 0x1C))(w) - g_rangeAllow;   // the weapon's range as written (and quoted)
                 float rng0 = *(float *)(bag + 0xC4), rngW = melee ? 0 : us_mod(w, rng0, NULL, MOD_RANGE);
                 st->weapons++; if (melee) st->nMelee++; else st->nRanged++;
-                if (melee) { if (dps > emd) emd = dps; }                  // one melee attack at a time
-                else { erd += dps; if (rng > st->range) st->range = rng; if (rng0 - g_rangeAllow > st->range0) st->range0 = rng0 - g_rangeAllow; }   // every gun fires
+                if (melee) { if (dps > emd) { emd = dps; emt = cy.tip; } }      // one melee attack at a time
+                else { erd += dps; ert += cy.tip; if (rng > st->range) st->range = rng; if (rng0 - g_rangeAllow > st->range0) st->range0 = rng0 - g_rangeAllow; }   // every gun fires
                 const char *wf = p_pbgFile && rd(*(char **)(w + 0x4C), 4) ? p_pbgFile(*(char **)(w + 0x4C)) : "?";
                 const char *sl = wf ? strrchr(wf, '\\') : NULL; if (!sl && wf) sl = strrchr(wf, '/');
-                detail(" %s%s %.2f dps (dmg %.2f->%.2f, ticks cd %d wu %d wd %d reload %d-%d x%d-%d burst %d %d-%d rof %.3f, lvl x%.2f, range bag %.1f weapon %.1f shown %.1f)",
-                       melee ? "melee " : "", sl ? sl + 1 : wf, dps,
+                detail(" %s%s %.2f dps (tooltip %.2f; cycle %s %.2f ticks, %.2f shots x%.2f, reload %.1f, cooldown %.2f; dmg %.2f->%.2f, ticks cd %d wu %d wd %d reload %d-%d x%d-%d burst %d %d-%d rof %.3f pps %d, lvl x%.2f, range bag %.1f weapon %.1f shown %.1f)",
+                       melee ? "melee " : "", sl ? sl + 1 : wf, dps, cy.tip, cy.kind == 3 ? "melee" : cy.kind == 2 ? "projectile" : cy.kind == 1 ? "burst" : "single",
+                       cy.period, cy.shots, cy.F, cy.R, cy.cd,
                        *(float *)(bag + 0x64), us_mod(w, *(float *)(bag + 0x64), went, MOD_DAMAGE), *(int *)(bag + 0xF0),
                        *(int *)(bag + 0x10C), *(int *)(bag + 0x110), *(int *)(bag + 0x11C), *(int *)(bag + 0x120), *(int *)(bag + 0x124),
-                       *(int *)(bag + 0x128), *(bag + 0x170), *(int *)(bag + 0x174), *(int *)(bag + 0x178), *(float *)(bag + 0x17C),
+                       *(int *)(bag + 0x128), *(bag + 0x170), *(int *)(bag + 0x174), *(int *)(bag + 0x178), *(float *)(bag + 0x17C), *(int *)(bag + 0x114),
                        g_haveLvl && g_useLvl ? us_lvlmul(went, melee) : 1.0f, rng0, rngW, rng);
             }
         }
         if (st->models == 1) { st->rdps1 = erd; st->mdps1 = emd; }
         else { if (erd < st->rdps1 - 0.05f || erd > st->rdps1 + 0.05f) st->sameR = 0; if (emd < st->mdps1 - 0.05f || emd > st->mdps1 + 0.05f) st->sameM = 0; }
-        st->rdps += erd; st->mdps += emd;
+        st->rdps += erd; st->mdps += emd; st->rtip += ert; st->mtip += emt;
         char *se = p_qi(ctrl, EXT_SIGHT);
         if (vt_is(se, VT_SIGHTEXT)) { float s = *(float *)(se + 0x28); if (s > st->sight) st->sight = s; }
         int sk = -1;
@@ -500,6 +625,7 @@ static void squad_stats(void *arg) {
     }
     for (int q = 0, best = 0; q < nArm; q++) if (armN[q] > best) { best = armN[q]; st->armour = armId[q]; }   // most of the models
     armour_name(st->armour, st->armourName, sizeof st->armourName);
+    armour_short(armour_internal(st->armour), st->armourName, st->armourShort, sizeof st->armourShort);
 }
 
 // ---------- v3: the effects on the squad (the engine's modifiers, as the game applies them) ----------
@@ -817,7 +943,7 @@ static void set_stats(void *mv, const Stats *s) {
     set_item_text(mv, I_MELEE, v, sm);
     if (s->skill >= 0) snprintf(v, sizeof v, "%d", s->skill); else snprintf(v, sizeof v, "-");
     set_item_text(mv, I_SKILL, v, NULL);
-    set_item_text(mv, I_ARMOUR, s->armourName[0] ? s->armourName : "-", NULL);
+    set_item_text(mv, I_ARMOUR, s->armourShort[0] ? s->armourShort : "-", NULL);
     if (s->nRanged) fmtnum(v, sizeof v, s->range); else snprintf(v, sizeof v, "-");
     set_item_text(mv, I_RANGE, v, NULL);
     fmtnum(v, sizeof v, s->speed); set_item_text(mv, I_SPEED, v, NULL);
@@ -830,8 +956,9 @@ static void set_stats(void *mv, const Stats *s) {
 typedef struct { int def; float mul, add, sum, score; char html[240], plain[64]; } Cell;
 static Cell g_cell[MAXEFF]; static int g_nCell = -1;
 static char g_cellIcon[MAXEFF][200]; static int g_cellDone[MAXEFF], g_cellGen[MAXEFF], g_cellSc[MAXEFF];
-static double g_eIconS, g_eLineH;
+static double g_eIconS, g_eLineH; static int g_efs = 18, g_eCompact;   // v4: the font size now, three compact rows
 static void make_eff_fields(void *mv) {
+    g_eCompact = 0; g_efs = g_esize;
     g_eIconS = g_eisize ? g_eisize : 1.3 * g_esize; g_eLineH = 1.3 * g_esize + 4;
     for (int k = 0; k < MAXEFF; k++) {
         char nm[16], p[96];
@@ -887,6 +1014,34 @@ static void pct(char *o, size_t n, float d) {                   // +50% / -30% /
     if (a < 0.095f && a >= 0.005f) snprintf(o, n, "%+.1f%%", d * 100); else snprintf(o, n, "%+.0f%%", d * 100);
 }
 static void num(char *o, size_t n, float v) { if (v - (int)v > 0.05f || (int)v - v > 0.05f) snprintf(o, n, "%+.1f", v); else snprintf(o, n, "%+.0f", v); }
+// v4: the effect tags in Russian when the game is Russian (see is_ru)
+static const char *TAG_RU[][2] = {
+    { "hidden", "\xD1\x81\xD0\xBA\xD1\x80\xD1\x8B\xD1\x82" },
+    { "no fire", "\xD0\xBD\xD0\xB5 \xD1\x81\xD1\x82\xD1\x80\xD0\xB5\xD0\xBB\xD1\x8F\xD0\xB5\xD1\x82" },
+    { "no retreat", "\xD0\xB1\xD0\xB5\xD0\xB7 \xD0\xBE\xD1\x82\xD1\x85\xD0\xBE\xD0\xB4\xD0\xB0" },
+    { "light", "\xD0\xBB\xD1\x91\xD0\xB3\xD0\xBA." },
+    { "heavy", "\xD1\x82\xD1\x8F\xD0\xB6." },
+    { "power", "\xD1\x81\xD0\xB8\xD0\xBB." },
+    { "pierce", "\xD0\xBF\xD1\x80\xD0\xBE\xD0\xB1\xD0\xB8\xD0\xB2." },
+    { "flame", "\xD0\xBE\xD0\xB3\xD0\xBE\xD0\xBD\xD1\x8C" },
+    { "expl", "\xD0\xB2\xD0\xB7\xD1\x80\xD1\x8B\xD0\xB2" },
+    { "plasma", "\xD0\xBF\xD0\xBB\xD0\xB0\xD0\xB7\xD0\xBC\xD0\xB0" },
+    { "det", "\xD0\xB4\xD0\xB5\xD1\x82\xD0\xBE\xD0\xBD." },
+    { "vs bld", "\xD0\xBF\xD0\xBE \xD0\xB7\xD0\xB4." },
+    { "vs hero", "\xD0\xBF\xD0\xBE \xD0\xBA\xD0\xBE\xD0\xBC." },
+    { "vs heavy", "\xD0\xBF\xD0\xBE \xD1\x82\xD1\x8F\xD0\xB6." },
+    { "vs inf", "\xD0\xBF\xD0\xBE \xD0\xBF\xD0\xB5\xD1\x85." },
+    { "vs veh", "\xD0\xBF\xD0\xBE \xD1\x82\xD0\xB5\xD1\x85\xD0\xBD." },
+    { "melee", "\xD0\xB1\xD0\xBB\xD0\xB8\xD0\xB6\xD0\xBD." },
+    { "reload", "\xD0\xBF\xD0\xB5\xD1\x80\xD0\xB5\xD0\xB7\xD0\xB0\xD1\x80." },
+    { "burst", "\xD0\xBE\xD1\x87\xD0\xB5\xD1\x80\xD0\xB5\xD0\xB4\xD1\x8C" },
+    { "max", "\xD0\xBC\xD0\xB0\xD0\xBA\xD1\x81." },
+};
+static const char *tag_tr(const char *t) {
+    if (!is_ru() || !*t) return t;
+    for (unsigned i = 0; i < sizeof TAG_RU / sizeof TAG_RU[0]; i++) if (!strcmp(t, TAG_RU[i][0])) return TAG_RU[i][1];
+    return t;
+}
 // the cell's text: the value (coloured by what it means for the squad), the tag and the seconds left in small type
 static void cell_text(Cell *c) {
     const EffDef *d = &EFFDEF[c->def]; char v[32] = ""; float delta = 0;
@@ -896,16 +1051,16 @@ static void cell_text(Cell *c) {
         if (m > 0.01f && !addOnly) { delta = 1 / m - 1; pct(v, sizeof v, delta); } else { delta = -a; num(v, sizeof v, a); } break;
     case EM_ADD:  if (!addOnly && (a < 0.005f && a > -0.005f)) { delta = m - 1; pct(v, sizeof v, delta); } else { delta = a; num(v, sizeof v, a); } break;
     case EM_ADDP: if (!addOnly && (a < 0.005f && a > -0.005f)) { delta = m - 1; pct(v, sizeof v, delta); } else { delta = a; snprintf(v, sizeof v, "%+.0f%%", a); } break;
-    case EM_ON:   delta = 1; snprintf(v, sizeof v, "%s", d->tag); break;
-    case EM_OFF:  delta = -1; snprintf(v, sizeof v, "%s", d->tag); break;
+    case EM_ON:   delta = 1; snprintf(v, sizeof v, "%s", tag_tr(d->tag)); break;
+    case EM_OFF:  delta = -1; snprintf(v, sizeof v, "%s", tag_tr(d->tag)); break;
     default:      if (addOnly) { delta = a; num(v, sizeof v, a); } else { delta = m - 1; pct(v, sizeof v, delta); } break;
     }
     const char *col = delta * d->good > 0 ? C_GOOD : delta * d->good < 0 ? C_BAD : C_NEUTRAL;
     const char *tag = d->mode == EM_ON || d->mode == EM_OFF ? "" : d->tag;
-    char sm[48]; snprintf(sm, sizeof sm, "%s", tag);
+    char sm[48]; snprintf(sm, sizeof sm, "%s", tag_tr(tag));
     if (*sm) snprintf(c->html, sizeof c->html, "<font face=\"$NormalFont\" size=\"%d\" color=\"%s\">%s<font size=\"%d\" color=\"%s\"> %s</font></font>",
-                      g_esize, col, v, g_esize * 3 / 4, C_SMALL, sm);
-    else snprintf(c->html, sizeof c->html, "<font face=\"$NormalFont\" size=\"%d\" color=\"%s\">%s</font>", g_esize, col, v);
+                      g_efs, col, v, g_efs * 3 / 4, C_SMALL, sm);
+    else snprintf(c->html, sizeof c->html, "<font face=\"$NormalFont\" size=\"%d\" color=\"%s\">%s</font>", g_efs, col, v);
     snprintf(c->plain, sizeof c->plain, "%s %s%s%s", mod_name(d->cls, d->type), v, *sm ? " " : "", sm);
 }
 static int cell_cmp(const void *x, const void *y) {           // the biggest change first
@@ -930,24 +1085,61 @@ static int compose(const Effs *fx, Cell *out) {
     return n;
 }
 static int g_effShown;                                         // cells laid out (the rest did not fit)
+// v4: two rows of cells at [Effects] FontSize beside the two stat rows; when they do not hold all the cells, three rows at
+// CompactFontSize in the same height (grantovich: "not all the modifiers fit"). A dry run with the widths at the normal
+// size decides; switching changes the font, so the cells are re-made and placed on the next update.
+static int eff_rows(int compact) { return compact ? 3 : 2; }
+static double eff_row_y(int compact, int r) { return 134.7 + 2 + g_offY + r * (compact ? 2 * g_lineH / 3 : g_lineH); }
+static double eff_row_h(int compact) { return compact ? 2 * g_lineH / 3 : g_lineH; }
+static double eff_row_right(int compact, int r) {      // the stats of the row(s) the cell row lies beside
+    if (!compact) return g_rowLeft[r];
+    if (r == 0) return g_rowLeft[0];
+    if (r == 2) return g_rowLeft[1];
+    return g_rowLeft[0] < g_rowLeft[1] ? g_rowLeft[0] : g_rowLeft[1];
+}
+// place the cells with text widths w[] at font fs: x / row of each, how many fit
+static int eff_place(int compact, int fs, const double *w, int n, double *xs, int *rs) {
+    double iconS = g_eisize ? g_eisize * fs / (double)g_esize : 1.3 * fs, gapI = 0.2 * fs, gapItem = 0.6 * fs;
+    double x0 = g_effX + g_offX, x = x0; int row = 0, fit = 0;
+    for (int k = 0; k < n; k++) {
+        double cw = iconS + gapI + w[k];
+        for (; row < eff_rows(compact); row++, x = x0) {
+            double right = eff_row_right(compact, row);
+            if (x + cw <= right - g_effGap || (x == x0 && right == 0)) break;
+        }
+        if (row >= eff_rows(compact)) break;
+        xs[k] = x; rs[k] = row; x += cw + gapItem; fit++;
+    }
+    return fit;
+}
 static void layout_eff(void *mv) {
-    double gapI = 0.2 * g_esize, gapItem = 0.6 * g_esize, x = g_effX + g_offX;
-    int row = 0; g_effShown = 0;
+    int fs = g_efs; double iconS = g_eisize ? g_eisize * fs / (double)g_esize : 1.3 * fs, gapI = 0.2 * fs;
+    double w[MAXEFF], wn[MAXEFF], xs[MAXEFF]; int rs[MAXEFF], n = g_nCell < MAXEFF ? g_nCell : MAXEFF;
+    for (int k = 0; k < n; k++) {
+        char p[96]; snprintf(p, sizeof p, BOX ".f%d", k);
+        w[k] = clip_w(mv, p); if (w[k] < 0) w[k] = 0.55 * fs * 5;
+        wn[k] = w[k] * g_esize / (double)fs * (g_eCompact ? 1.05 : 1.0);   // at the normal size (a margin before going back)
+    }
+    int want = g_esizeC < g_esize && n > 0 && eff_place(0, g_esize, wn, n, xs, rs) < n;
+    if (want != g_eCompact) {                                 // re-made at the other size on the next update
+        g_eCompact = want; g_efs = want ? g_esizeC : g_esize;
+        g_eIconS = g_eisize ? g_eisize * g_efs / (double)g_esize : 1.3 * g_efs; g_eLineH = 1.3 * g_efs + 4;
+        for (int k = 0; k < MAXEFF; k++) { g_cell[k].html[0] = 0; if (g_cellDone[k] > 0) g_cellDone[k] = 0; }
+        g_effDirty = 1;
+        if (g_verbose) logmsg("effects: %d cells - %s", n, want ? "three compact rows" : "two rows");
+        return;
+    }
+    int fit = eff_place(g_eCompact, fs, w, n, xs, rs); g_effShown = 0;
+    double lh = 1.3 * fs + 4, rh = eff_row_h(g_eCompact);
     for (int k = 0; k < MAXEFF; k++) {
-        char p[96]; int vis = 0;
-        if (k < g_nCell) {
-            snprintf(p, sizeof p, BOX ".f%d", k);
-            double w = clip_w(mv, p); if (w < 0) w = 0.55 * g_esize * 5;
-            double cw = g_eIconS + gapI + w;
-            for (; row < 2; row++, x = g_effX + g_offX) if (x + cw <= g_rowLeft[row] - g_effGap || (x == g_effX + g_offX && g_rowLeft[row] == 0)) break;
-            if (row < 2) {
-                double yr = 134.7 + 2 + g_offY + row * g_lineH, yt = yr + (g_lineH - g_eLineH) / 2;
-                double ov = g_eIconS * (g_cellSc[k] - 100) / 200.0;
-                setnum(mv, BOX ".e%d", k, "._x", x - ov); setnum(mv, BOX ".e%d", k, "._y", yr + (g_lineH - g_eIconS) / 2 + 1 - ov);
-                setnum(mv, BOX ".f%d", k, "._x", x + g_eIconS + gapI); setnum(mv, BOX ".f%d", k, "._y", yt);
-                setnum(mv, BOX ".g%d", k, "._x", x + g_eIconS + gapI + 1.1); setnum(mv, BOX ".g%d", k, "._y", yt + 1.3);
-                x += cw + gapItem; vis = 1; g_effShown++;
-            }
+        char p[96]; int vis = k < fit;
+        if (vis) {
+            double x = xs[k], yr = eff_row_y(g_eCompact, rs[k]), yt = yr + (rh - lh) / 2;
+            double ov = iconS * (g_cellSc[k] - 100) / 200.0;
+            setnum(mv, BOX ".e%d", k, "._x", x - ov); setnum(mv, BOX ".e%d", k, "._y", yr + (rh - iconS) / 2 + 1 - ov);
+            setnum(mv, BOX ".f%d", k, "._x", x + iconS + gapI); setnum(mv, BOX ".f%d", k, "._y", yt);
+            setnum(mv, BOX ".g%d", k, "._x", x + iconS + gapI + 1.1); setnum(mv, BOX ".g%d", k, "._y", yt + 1.3);
+            g_effShown++;
         }
         snprintf(p, sizeof p, BOX ".e%d._visible", k); gfx_setvar(mv, p, gv_bool(vis && g_cellDone[k] > 0));
         snprintf(p, sizeof p, BOX ".f%d._visible", k); gfx_setvar(mv, p, gv_bool(vis));
@@ -1024,17 +1216,17 @@ static void frame(char *form) {
     AT("stats panel"); set_stats(mv, &st);
     show(mv, 1);
     if (g_verbose && s.squad != g_lastSq) {
-        logmsg("sel %s: ranged %.2f, melee %.2f, skill %d (v1 %d), %s, range %.1f, speed %.2f, sight %.1f",
-               p_sqName ? p_sqName(s.squad) : "?", st.rdps, st.mdps, st.skill, st.skillOld, st.armourName, st.range, st.speed, st.sight);
+        logmsg("sel %s: ranged %.2f (tooltip %.2f), melee %.2f (tooltip %.2f), skill %d (v1 %d), %s, range %.1f, speed %.2f, sight %.1f",
+               p_sqName ? p_sqName(s.squad) : "?", st.rdps, st.rtip, st.mdps, st.mtip, st.skill, st.skillOld, st.armourName, st.range, st.speed, st.sight);
     }
     g_lastSq = s.squad;
     int seen = 0; for (int i = 0; i < g_nLogged; i++) if (g_loggedSq[i] == s.squad) seen = 1;
     if (g_verbose && !seen) {
         g_loggedSq[g_nLogged++ % 32] = s.squad; if (g_nLogged > 32) g_nLogged = 32;
-        logmsg("squad %s: %d models, %d weapons - ranged DPS %.2f (per model %.2f%s), melee DPS %.2f (per model %.2f%s), melee skill %d (melee_ext %d), "
+        logmsg("squad %s: %d models, %d weapons - ranged DPS %.2f (per model %.2f%s; tooltip %.2f), melee DPS %.2f (per model %.2f%s; tooltip %.2f), melee skill %d (melee_ext %d), "
                "armour %d %s / %s, range %.1f (blueprint %.1f), speed %.2f (blueprint %.2f), sight %.1f |%s",
-               p_sqName ? p_sqName(s.squad) : "?", st.models, st.weapons, st.rdps, st.rdps1, st.sameR ? "" : " differ", st.mdps, st.mdps1,
-               st.sameM ? "" : " differ", st.skill, st.skillOld, st.armour, armour_internal(st.armour), st.armourName, st.range, st.range0,
+               p_sqName ? p_sqName(s.squad) : "?", st.models, st.weapons, st.rdps, st.rdps1, st.sameR ? "" : " differ", st.rtip, st.mdps, st.mdps1,
+               st.sameM ? "" : " differ", st.mtip, st.skill, st.skillOld, st.armour, armour_internal(st.armour), st.armourName, st.range, st.range0,
                st.speed, st.speed0, st.sight, g_detail);
     }
     // v3: the effects
@@ -1108,7 +1300,7 @@ BOOL WINAPI DllMain(HINSTANCE h, DWORD reason, LPVOID _) {
     GetModuleFileNameW(h, dir, MAX_PATH); wchar_t *sl = wcsrchr(dir, L'\\'); if (sl) sl[1] = 0; else dir[0] = 0;
     _snwprintf(g_ini, MAX_PATH, L"%lsUnitStats.ini", dir); _snwprintf(g_log, MAX_PATH, L"%lsUnitStats.log", dir);
     load_ini();
-    logmsg("UnitStats 0.3 EXPERIMENT (selected squad's DPS / melee skill / armour / range / speed / sight and its active effects with the game's icons left of Retreat, in the game's own selection panel movie)");
+    logmsg("UnitStats 0.4 EXPERIMENT (selected squad's DPS / melee skill / armour / range / speed / sight and its active effects with the game's icons left of Retreat, in the game's own selection panel movie)");
     if (!g_enabled) { logmsg("disabled in UnitStats.ini"); return TRUE; }
     CloseHandle(CreateThread(NULL, 0, worker, NULL, 0, NULL));
     return TRUE;
