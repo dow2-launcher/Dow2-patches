@@ -4,6 +4,24 @@ Every version gets an entry here before it reaches `main`. CI then tags `vX.Y.Z`
 version (`X.Y.0`) it also publishes a GitHub Release with the DLLs and the entries since the previous `X.Y.0`.
 The version of the set lives only in `VERSION`; each DLL still writes its own version to its log.
 
+## 0.2.12 — 2026-11-06
+Back into a running match after a network drop (owner 06.11.2026: "вернуться в идущий матч ... окно ~3 мин, надпись «Ждём игрока»"):
+Relay 24 (store automatch mmfind-0.47-relay24 = 0.47's files with Relay.dll 24; relay_fwd relayfwd-24 - the same source).
+- The game's relay client (BattleServerRelay::Process 0x63B910) reconnects by itself after RL_ClientReconnectMS (15 s) of
+  silence with "15 sid 0 id 02 <ticks got>" and gives the match up after 40 s (cmp eax, 40000 at 0x63B979). For a native game
+  on our node (g_native: set at the redirect of a connect to our battle port, cleared at a connect to a Relic relay) the cmp
+  calls rejoin_stub: reconnect after 5 s (Relay.ini ReconnectSec), give up after 180 s (RejoinSec); Rejoin=0 = all off.
+- A native stream starts with "DWR5" + 6 bytes (dow2-ladder 9fd52fb+ on the nodes BEFORE this release: an older
+  battle_relay refuses DWR5): the server keeps such a player in the ticks as silent 170 s after the drop (45 s for others),
+  answers the reconnect hello with its count of his game messages and sends the missed ticks; to DWR5 games it sends 0x7e
+  frames once a second (number, s left / 0xFFFE = connected but silent, s away, name from his peer announce) - du_tunnel.h
+  takes them out of the stream (du_filter), rejoin.h shows them in the minimap panel's movie (its per-frame update chained,
+  vtable 0x011160D8 slot 4): "Ждём <name>… 0:23 (ещё 2:37)" / "Waiting: <name>… 0:23 (2:37 left)".
+- Stands 1+2, a real 1v1 from a launcher room on a TEST battle_relay + udp_gateway (rts, units rr-test-*) through udpcut.py
+  (all UDP of one stand's game dropped): 30 s, 45 s, 40 s, 129 s outages -> back into the match; 230 s -> the returning game
+  gave up at 180 s, the other one got the drop at ~220 s (server grace then 200 s, now 170 s); per-tick sync hashes of both
+  replays identical (1311 ticks). After the return BOTH games fast-forward the gap at ~60 ticks/s (129 s gap -> ~30 s).
+
 ## 0.2.11 — 2026-11-06
 Launcher rooms (store automatch mmfind-0.47; launcher 1.4.15, ladder lroom.py). Owner 05.11.2026: "a lobby in the launcher like the
 game's own - map, places, race and hero, everybody Ready, a 10 s countdown, then the game starts for everyone and they are in one match".

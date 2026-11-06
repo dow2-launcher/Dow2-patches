@@ -1,4 +1,4 @@
-// Relay 17-23 (02-05.11.2026) - DoW2 Retribution / Elite: online games through OUR game servers. One source, two DLLs:
+// Relay 17-24 (02-06.11.2026) - DoW2 Retribution / Elite: online games through OUR game servers. One source, two DLLs:
 //
 //   Relay.dll         part of the automatch package (store "automatch", loaded by MMFind.dll 0.46 from its own folder; owner
 //                     05.11.2026: "the automatch always goes through our servers and over UDP" - the separate tick relay_r2
@@ -28,6 +28,16 @@
 // "nearest" = the lowest delay. DOW2_RELAY_PING "ip:ms,..." (-1 = no answer) goes to the matchmaker only with Relay.dll on.
 // Removed in 17: Mode, Fallback (compatible / strict), Backup, UDP=, Hosts= (the hand pick), TCP to our servers, the
 // "game closed" windows of the strict mode.
+// Relay 24 (06.11.2026): back into the match after a network drop (owner: "вернуться в идущий матч", window ~3 min), only for
+// a native game on our server (our automatch / launcher rooms; Relic's games untouched):
+//   - the game's relay client (BattleServerRelay::Process 0x63B910) reconnects by itself after RL_ClientReconnectMS (15 s) of
+//     silence and gives the match up after 40 s of it (cmp eax, 40000 at 0x63B979). For a native game: reconnect after 5 s
+//     (Relay.ini ReconnectSec), give up after 180 s (RejoinSec) - the cmp goes through rejoin_stub, the field +0x20 is set.
+//   - the native stream starts with "DWR5" + 6 bytes: battle_relay (dow2-ladder 3e29aba+) keeps such a player in the ticks
+//     as silent for 200 s (others 45 s), sends the missed ticks when he is back, and tells the other "DWR5" games once a
+//     second who is away: its own frame 0x7e (number, seconds left, seconds away, name), taken out of the stream here.
+//   - the others see it in the game's own HUD, above the minimap (a text field of the minimap panel's movie, its per-frame
+//     update chained, as MatchTimer's Place=minimap): "Ждём игрока <name>… 0:23 (ещё 2:37)". Nothing drawn over the game.
 // Relay 23 (05.11.2026): brakes in the UDP tunnel (du_tunnel.h; the 2v2 of 05.11 went to ~650 packets/s per player for 10
 // minutes, 1.07 M copies, the tunnel had no limit anywhere): one resend timer per connection, oldest first, 200 ms .. 3 s; at
 // most 10 resends of a packet, then the connection is dead; resends budgeted (20/s or 25% of the fresh), copies at most twice
@@ -75,6 +85,8 @@ typedef int (WSAAPI *RecvFn)(SOCKET, char *, int, int);
 typedef int (WSAAPI *WSASendFn)(SOCKET, LPWSABUF, DWORD, LPDWORD, DWORD, LPWSAOVERLAPPED, LPWSAOVERLAPPED_COMPLETION_ROUTINE);
 static ConnectFn g_connectOrig; static SendFn g_sendOrig; static WSASendFn g_wsaSendOrig; static RecvFn g_recvOrig;
 static int g_port = 47100;                                       // our nodes: udp_gateway (UDP) in front of battle_relay
+static volatile LONG g_native;                                   // Relay 24: the game's latest relay connection went to our node natively
+static int g_rejoin = 1;                                         // Relay 24: Relay.ini Rejoin=0 turns the whole rejoin part off
 // local sockets whose preamble is not sent yet. Relay 21: written only under g_pk (a redirected connect - rare), READ without
 // any lock: g_npend = filled slots; 0 (nearly always: a slot lives from the redirect to the game's first send, milliseconds)
 // = every send / WSASend / connect of the process passes the hook with one memory read, no lock, no loop
@@ -146,6 +158,7 @@ static int ini_changed(void) {
 // the connection is dead, budgets for resends and copies, 64 packets in flight with back pressure, a storm fuse) - the same
 // rules as the gateway's du_proto.py; the wire format is unchanged.
 #include "du_tunnel.h"
+#include "rejoin.h"
 static volatile LONG g_tunSeed;
 static DWORD new_cid(void) { return GetTickCount() ^ (GetCurrentThreadId() << 16) ^ (DWORD)InterlockedIncrement(&g_tunSeed) * 2654435761u; }
 
@@ -330,9 +343,10 @@ static DWORD WINAPI tunnel(LPVOID pv) {
     for (int i = ta.node; i >= 0; i = ta.own == 1 ? nearest(tried) : -1) {
         tried |= 1u << i;
         if ((ver = udp_open(g_hosts[i], &u, &cid))) {
-            logmsg("udp: connection %08lX to %s%s (handshake %lu ms, %s)", cid, inet_ntoa(g_hosts[i]), ta.own == 2 ? ", native" : "",
+            logmsg("udp: connection %08lX to %s%s (handshake %lu ms, %s)", cid, inet_ntoa(g_hosts[i]), ta.own == 2 ? ", native, DWR5" : "",
                    GetTickCount() - t0, ver >= 2 ? "with copies" : "old gateway, no copies");
-            udp_carry(g, u, cid, ver, NULL, 0); return 0;
+            static const unsigned char pre5[10] = {'D', 'W', 'R', '5'};   // Relay 24: long rejoin window + the server's notices
+            udp_carry(g, u, cid, ver, ta.own == 2 && g_rejoin ? pre5 : NULL, ta.own == 2 && g_rejoin ? 10 : 0); return 0;
         }
         g_ms[i] = -1;                                           // until the next ping round
         logmsg("udp: %s does not answer over UDP", inet_ntoa(g_hosts[i]));
@@ -381,6 +395,7 @@ static int relay_connect(ConnectFn pass, SOCKET sock, const struct sockaddr *nam
     if (p != g_port && (p < 27000 || p > 27099)) return pass(sock, name, len);
     { int ty = 0, tl = sizeof ty; if (getsockopt(sock, SOL_SOCKET, SO_TYPE, (char *)&ty, &tl) || ty != SOCK_STREAM) return pass(sock, name, len); }
     if (p == g_port && node_of(a->sin_addr) >= 0) {              // Relay 20: native - our lobby server gave one of our nodes as the room's relay
+        g_native = 1;                                              // Relay 24: the game's relay is ours - the long rejoin window
         int lp = tunnel_port(node_of(a->sin_addr), 2, 0, a);       // that node over UDP, TCP to it when UDP does not answer; no preamble
         if (!lp) { logmsg("relay: the UDP tunnel did not start - %s:%u over TCP", inet_ntoa(a->sin_addr), p); return pass(sock, name, len); }
         logmsg("relay: %s:%u (native: our lobby server's room) -> over UDP", inet_ntoa(a->sin_addr), p);
@@ -388,6 +403,7 @@ static int relay_connect(ConnectFn pass, SOCKET sock, const struct sockaddr *nam
         return pass(sock, (const struct sockaddr *)&b, sizeof b);
     }
     if (p < 27000 || p > 27099) return pass(sock, name, len);   // not Relic's battleserverrelay
+    g_native = 0;                                                  // Relay 24: a Relic relay - the game's own timeouts
     int own = flag("DOW2_RELAY_OWN"), fwd = flag("DOW2_RELAY_FWD"), automatch = flag("DOW2_RELAY_USE");
     char ip[32]; snprintf(ip, sizeof ip, "%s", inet_ntoa(a->sin_addr));
     int node = node_of(a->sin_addr), straight = 0;
@@ -486,7 +502,8 @@ BOOL WINAPI DllMain(HINSTANCE h, DWORD reason, LPVOID _) {
     n += nx;
     int ns = g_sendOrig ? patch_imports((void *)g_sendOrig, (void *)send_hook) : 0;
     int nw = g_wsaSendOrig ? patch_imports((void *)g_wsaSendOrig, (void *)wsasend_hook) : 0;
-    logmsg("Relay 23 start (%s.dll carries the connections; our servers: %s, forwarding: %s - each tick is read at connect time; "
+    rejoin_install();
+    logmsg("Relay 24 start (%s.dll carries the connections; our servers: %s, forwarding: %s - each tick is read at connect time; "
            "UDP only, %d node(s)), connect hooked in %d import(s)%s, send %d, WSASend %d%s", ME,
            flag("DOW2_RELAY_OWN") ? "on" : "off (yet)", flag("DOW2_RELAY_FWD") ? "on" : "off (yet)", g_nHosts, n, nx ? " (the game's own one chained after another add-on)" : "", ns, nw,
            n ? "" : " - another add-on (automatch) already routes the relay, staying idle");

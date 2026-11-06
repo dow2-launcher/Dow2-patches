@@ -95,6 +95,7 @@ typedef struct {
     unsigned sentn, gotn, resent, gapn, copies, saved, acks, dupin, paced, bskip;
     const char *ended;
     unsigned char *outq; int outq_len;                    // in order, for the game, not taken by it yet
+    int filt; unsigned char *fq; int fq_len;              // Relay 24: the server's own frames (0x7e) taken out of the stream
     unsigned char pk[U_BUDGET + 64];
 } DuConn;
 
@@ -207,15 +208,36 @@ static void du_to_game(DuConn *c, SOCKET g, int *gameOpen) {    // what waits fo
     }
     if (off) { memmove(c->outq, c->outq + off, c->outq_len - off); c->outq_len -= off; }
 }
+// Relay 24: the stream from the server is u16 BE length + message; a message starting with 0x7e is the server's own (who is
+// away and for how long) - it goes to du_notice, never to the game; every other frame goes on whole, in order
+#ifndef DU_FQ_MAX
+#define DU_FQ_MAX (DU_OUTQ_MAX + 70000)
+#endif
+static void du_notice(const unsigned char *m, int n);
+static void du_filter(DuConn *c, const unsigned char *p, int len) {
+    if (c->fq_len + len > DU_FQ_MAX) return;                       // can't be: du_on_data takes nothing while outq + fq is full
+    if (len) { memcpy(c->fq + c->fq_len, p, len); c->fq_len += len; }
+    int o = 0;
+    while (c->fq_len - o >= 2) {
+        int n = c->fq[o] << 8 | c->fq[o + 1];
+        if (c->fq_len - o < 2 + n) break;
+        if (n >= 1 && c->fq[o + 2] == 0x7e) du_notice(c->fq + o + 2, n);
+        else if (c->outq_len + 2 + n <= DU_OUTQ_MAX) { memcpy(c->outq + c->outq_len, c->fq + o, 2 + n); c->outq_len += 2 + n; }
+        else break;                                              // the game hangs: the rest waits here
+        o += 2 + n;
+    }
+    if (o) { memmove(c->fq, c->fq + o, c->fq_len - o); c->fq_len -= o; }
+}
 // one data packet's bytes (its own or a copy): 1 = new
 static int du_on_data(DuConn *c, DWORD seq, const unsigned char *p, int len, int copy) {
     if (seq < c->rnext || seq - c->rnext >= U_RWIN || c->rhave[seq % U_RWIN]) return 0;
-    if (c->outq_len + len > DU_OUTQ_MAX) return 0;               // the game hangs that long: not taken (it comes again)
+    if (c->outq_len + c->fq_len + len > DU_OUTQ_MAX) return 0;   // the game hangs that long: not taken (it comes again)
     memcpy(c->rcv[seq % U_RWIN], p, len); c->rlen[seq % U_RWIN] = len; c->rhave[seq % U_RWIN] = 1;
     if (copy) c->saved++; else if (seq != c->rnext) c->gapn++;
     while (c->rhave[c->rnext % U_RWIN]) {
         int i = c->rnext % U_RWIN; c->rhave[i] = 0;
-        if (c->outq_len + c->rlen[i] <= DU_OUTQ_MAX) { memcpy(c->outq + c->outq_len, c->rcv[i], c->rlen[i]); c->outq_len += c->rlen[i]; }
+        if (c->filt) du_filter(c, c->rcv[i], c->rlen[i]);
+        else if (c->outq_len + c->rlen[i] <= DU_OUTQ_MAX) { memcpy(c->outq + c->outq_len, c->rcv[i], c->rlen[i]); c->outq_len += c->rlen[i]; }
         c->rnext++; c->gotn++;
     }
     return 1;
@@ -311,6 +333,7 @@ static void udp_carry(SOCKET g, SOCKET u, DWORD cid, int ver, const unsigned cha
     du_nonblock(g); du_nonblock(u);
     int gameOpen = 1; unsigned char buf[U_MAXP], in[U_BUDGET + 64];
     if (plen > 0 && plen <= U_MAXP) { ub_take(&c->pace, now); du_fresh(c, pre, plen, now); }   // Relay 22: the DWR4 preamble first
+    if (plen >= 4 && !memcmp(pre, "DWR5", 4)) { c->filt = 1; c->fq = malloc(DU_FQ_MAX); if (!c->fq) c->filt = 0; }   // Relay 24
     for (;;) {
         now = du_now();
         ub_fill(&c->pace, now);
@@ -342,6 +365,7 @@ static void udp_carry(SOCKET g, SOCKET u, DWORD cid, int ver, const unsigned cha
             if (r) break;
         }
         if (c->outq_len) du_to_game(c, g, &gameOpen);
+        if (c->filt && c->fq_len) du_filter(c, NULL, 0);           // frames that waited for room in outq
         if (du_tick(c, now) < 0) break;
         if (!gameOpen && c->sbase == c->snext && !c->outq_len) { c->ended = "game"; break; }   // the game closed and all got there
     }
@@ -352,5 +376,5 @@ static void udp_carry(SOCKET g, SOCKET u, DWORD cid, int ver, const unsigned cha
            cid, c->sentn, c->gotn, c->resent, c->gapn, (int)(c->srtt * 1000), c->copies, c->saved,
            c->acks, c->dupin, c->paced, c->bskip, c->fuse, c->ended ? c->ended : "?");
     closesocket(u); closesocket(g);
-    free(c->snd); free(c->rcv); free(c->rlen); free(c->rhave); free(c->outq); free(c);
+    free(c->snd); free(c->rcv); free(c->rlen); free(c->rhave); free(c->outq); free(c->fq); free(c);
 }

@@ -1,0 +1,2 @@
+- Automatch v2.0: if a player's network drops in a match on our servers, the game reconnects by itself and gets back into the same match (up to 3 minutes). Meanwhile the others see "Waiting: <player>…" with a timer above the minimap; after the return the game quickly catches up.
+- Forwarding: the same connection code, nothing changes in how it works.
