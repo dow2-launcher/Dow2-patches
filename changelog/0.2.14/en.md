@@ -1,0 +1,1 @@
+- Automatch v2.0 (MMFind 0.48): in a match from a launcher room the room's race and hero are set reliably - the game enters Find a Game afresh, the army is committed and checked against the room before the search.

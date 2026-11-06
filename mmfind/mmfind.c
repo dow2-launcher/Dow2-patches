@@ -166,6 +166,11 @@ static volatile int g_rs; static char g_room[24]; static int g_rMode, g_rRace = 
 static DWORD g_rAt, g_rStepAt; static volatile int g_rEvMatched, g_rEvRoom;
 static CRITICAL_SECTION g_qlk; static HANDLE g_outEv;
 static int g_pipeCfg = 1, g_debugPipe;
+// 0.48 (06.11.2026, live: a player's room said Space Marines, his game searched as Eldar / Farseer - the army he had on Find a Game):
+// the army the game really searches with is the one COMMITTED on Find a Game - its own "Your Party" row (Receive_PopulateList: name,
+// race, hero, the hero's xs image) changes only after the hero panel's Ready. g_partyImg = that image of my row; the room's army is
+// checked against it before Start Searching (the image names come from the game data, the same in every language).
+static char g_partyImg[200]; static volatile DWORD g_partyTick; static DWORD g_rAcceptAt, g_rDeadline; static int g_rMMFresh, g_rWalks;
 static int g_rOpt[4] = {-1, -1, -1, -1};      // 0.47: the room's options for the host: victory condition, VPTK, SLOC, RSST (-1 = the game's)
 static void room_set(int rs); static void room_ev(const char *ev);
 // 0.38 (owner 03.11.2026: "Start Searching straight to the loading screen, fully on our servers"): with OwnLobby.dll in the game and
@@ -183,8 +188,8 @@ static char g_natLobby[48], g_natWhy[96], g_natLastCancel[32];
 // what to do, "MMFind 0.45", the queue and who is online. Shown from the moment the screen opens (a peek at mm/native: the ladder
 // answers as for Start Searching and changes nothing; again every 20 s and on a match type change while the screen is open), after
 // the click by what really happened. [MMFind] ShowMode=1 (default) / 0 = off, Lang=auto (the game's own text: Cyrillic = Russian) / ru / en.
-#define MMF_VER "0.47"
-#define MMF_VER_W L"0.47"
+#define MMF_VER "0.48"
+#define MMF_VER_W L"0.48"
 static int g_showMode = 1, g_langCfg = -1, g_lang = -1, g_modeProbe;
 static double g_mx = 1065, g_my = 590, g_msz = 30;           // panel units, see mode_make
 static volatile int g_peekWant, g_peekAns; static volatile DWORD g_peekLast; static char g_peekWhy[96];
@@ -926,6 +931,14 @@ static char __fastcall inv_hook(void *self, void *edx, const char *method, int f
             logmsg("map preferences: %d maps for %s", g_mpN, MODE_KEY[g_mode]);
             return g_invOrig(self, edx, method, flags, g_mpArgs, n);
         }
+        if (!strcmp(method, "Receive_PopulateList") && count >= 4 && g_screen == SC_MM && args[0].type == GFX_WSTRING && args[0].v.ws
+            && (!g_myName[0] || !wcscmp(args[0].v.ws, g_myName))) {        // 0.48: my row of Your Party - the army the game searches with
+            char img[200] = "";
+            if (args[3].type == GFX_STRING && args[3].v.s && !IsBadReadPtr(args[3].v.s, 1)) snprintf(img, sizeof img, "%s", args[3].v.s);
+            else if (args[3].type == GFX_WSTRING && args[3].v.ws && !IsBadReadPtr(args[3].v.ws, 2)) WideCharToMultiByte(CP_UTF8, 0, args[3].v.ws, -1, img, sizeof img, NULL, NULL);
+            img[sizeof img - 1] = 0; _strlwr(img);
+            if (img[0]) { if (strcmp(img, g_partyImg)) { strcpy(g_partyImg, img); if (g_rs) logmsg("room: Your Party says %s", img); } g_partyTick = GetTickCount(); }
+        }
         if (!strcmp(method, "Receive_SetGamerTag") && count >= 1 && args[0].type == GFX_WSTRING && args[0].v.ws) wcsncpy(g_myName, args[0].v.ws, 63);
         else if (!strcmp(method, "Receive_PopulatePlayerList")) on_player_list(args, count);
         else if (!strcmp(method, "Receive_SelectHero")) { g_autoSelTick = g_heroTick = GetTickCount(); g_heroSelf = self; g_heroFlags = flags;
@@ -1014,6 +1027,7 @@ static void __fastcall fs_hook(void *self, void *edx, void *movie, const char *c
                 else if (strstr(url, "mp_postgame.gfx")) sc = SC_OTHER;
                 if (sc >= 0 && !strcmp(path + strlen(path) - 9, ".panel_mc")) {
                     strcpy(g_panel, path); g_screen = sc; g_scrTick = GetTickCount(); g_engSearch = -1; g_mapUp = 0; if (sc != SC_MM) g_heroUp = 0; else g_mmApplied = 0;
+                    if (sc == SC_MM && g_rs == RS_WALK) g_rMMFresh = 1;   // 0.48: Find a Game opened by this walk (its hero panel comes up fresh)
                     logmsg("screen %d panel %s", sc, g_panel);
                 }
             }
@@ -1141,7 +1155,7 @@ static void stray_stop(DWORD now) {
 // stopped first. Never from a Custom Games lobby (the player is in one - his call), a match, or another screen.
 // The pipe thread never touches the engine: commands go into a queue the game's thread takes in its tick (shark::update).
 enum { QC_ROOM = 1, QC_CANCEL, QC_FS };
-typedef struct { int what, mode, race, hero, opt[4]; char room[24]; char path[160], args[48]; } QCmd;
+typedef struct { int what, mode, race, hero, opt[4], ttl; char room[24]; char path[160], args[48]; } QCmd;
 typedef struct { char s[600]; } QOut;
 static QCmd g_cq[8]; static int g_cqH, g_cqN; static QOut g_oq[32]; static int g_oqH, g_oqN;
 static void out_push(const char *s) {
@@ -1171,6 +1185,7 @@ static void room_start(const QCmd *c, DWORD now) {
     if (g_rs == RS_DONE && !strcmp(c->room, g_room)) { room_ev("loading"); return; }  // its match loads / runs already (a launcher restarted)
     EnterCriticalSection(&g_qlk); strcpy(g_room, c->room); LeaveCriticalSection(&g_qlk);
     for (int i = 0; i < 4; i++) g_rOpt[i] = c->opt[i];
+    g_rMMFresh = 0; g_rAcceptAt = 0; g_rWalks = 0; g_rDeadline = c->ttl > 0 ? now + (DWORD)c->ttl * 1000 : 0;
     g_rMode = c->mode; g_rRace = c->race; g_rHero = c->hero; g_rAt = now; g_rTries = 0; g_rWalked = 0; g_rEvMatched = g_rEvRoom = 0; g_rMenuOk = 0; g_rWantMenu = 1;
     logmsg("room %s: the launcher's match - %s, race %d, hero %d, options win %d vptk %d sloc %d rsst %d (screen %d, state %s)", g_room, MODE_KEY[g_rMode], g_rRace, g_rHero,
            g_rOpt[0], g_rOpt[1], g_rOpt[2], g_rOpt[3], g_screen, SN[g_state]);
@@ -1194,9 +1209,30 @@ static void room_choice(void) {
     if (g_rRace < 0) g_random = 1;
     else { g_random = 0; if (g_rRace != g_race) g_chapter = -1; g_race = g_rRace; g_hero = g_rHero; }
 }
+// 0.48: the hero xs images of the game data (racebps hero_list, Elite 3.2 / vanilla 3.19 - the same order), by Elite's race index
+static const char *RACE_XS[8] = {"csm_", "eldar_", "ig_", "gk_", "ork_", "sm_", "tau_", "tyranid_"};
+static const char *HERO_XS[8][3] = {{"csm_lord", "csm_plaguemarine", "csm_sorceror"}, {"eldar_warlock", "eldar_spyder", "eldar_farseer"},
+    {"ig_inquisitor", "ig_commissar_lord", "ig_commander"}, {"gk_brother_captain", "gk_eversor_assassin", "gk_daemonhunter"},
+    {"ork_warboss", "ork_kommando", "ork_mekboy"}, {"sm_f", "sm_apothecary", "sm_techmarine"}, {"tau_commander", "tau_ethereal", NULL},
+    {"tyranid_hive_tyrant", "tyranid_ravener", "tyranid_lictor"}};
+static int elite_race(int ui) {
+    if (strcmp(g_game, "vanilla")) return ui >= 0 && ui < 8 ? ui : -1;
+    static const int V[6] = {0, 1, 2, 4, 5, 7}; return ui >= 0 && ui < 6 ? V[ui] : -1;   // vanilla: Chaos, Eldar, IG, Orks, SM, Tyranids
+}
+// the room's army against my Your Party row: 1 the same, 0 another one, -1 not known (no row, Random)
+static int army_check(void) {
+    if (g_rRace < 0) return 1;
+    int r = elite_race(g_rRace); if (r < 0 || !g_partyImg[0]) return -1;
+    char want[64]; snprintf(want, sizeof want, "hero_xs_%s", RACE_XS[r]);
+    if (!strstr(g_partyImg, want)) return 0;
+    if (g_rHero >= 0 && g_rHero < 3 && HERO_XS[r][g_rHero]) { snprintf(want, sizeof want, "hero_xs_%s", HERO_XS[r][g_rHero]); if (!strstr(g_partyImg, want)) return 0; }
+    return 1;
+}
 static void room_step(DWORD now) {
     if (g_rEvMatched == 1) { g_rEvMatched = 2; room_ev("matched"); }
     if (g_rEvRoom == 1) { g_rEvRoom = 2; room_ev("in_room"); }
+    if (g_rDeadline && (g_rs == RS_STOP || g_rs == RS_WALK || g_rs == RS_ARMY) && (int)(now - g_rDeadline) > 0) {   // 0.48: the room's start is over
+        room_fail("expired", "the room's start is over (its time ran out)"); return; }
     switch (g_rs) {
     case RS_STOP:                                                             // a normal search first: Stop Searching
         if (g_state == S_NASK) set_state(S_IDLE);
@@ -1211,7 +1247,11 @@ static void room_step(DWORD now) {
         if (!g_rMenuOk && now - g_rAt < 3000) break;
         if (!g_scrTick || now - g_rStepAt > 2500) { static DWORD lp; if (now - lp > 500) { lp = now; probe_screen(); } }   // the screen we came in on
         if (!g_scrTick) break;                                               // the menu is not up yet (the game is still starting)
-        if (g_screen == SC_MM && now - g_scrTick > 800) {
+        // 0.48: Find a Game that was open before this walk (an army committed there; its hero panel closed - a race set into it then was
+        // never committed, and on the stand it crashed the game): Back to the main menu first, then in again - the hero panel comes up fresh
+        if (g_screen == SC_MM && !g_rMMFresh && now - g_scrTick > 500 && now - g_rStepAt > 1500) {
+            g_rStepAt = now; logmsg("room %s: Find a Game was open already - Back, then in again", g_room); fs(".OnClickBack", ""); break; }
+        if (g_screen == SC_MM && g_rMMFresh && now - g_scrTick > 800) {
             g_rWantMenu = 0; room_choice(); g_applyMM = 1; g_mmApplied = 1; room_set(RS_ARMY); room_ev("army"); break; }
         // the game's question on the first Multiplayer of an account ("Play against CPU? ... an offline game against the CPU?"):
         // its menu ignores every command while a box is up (stand 2, 06.11) - No (OnButton2), then Multiplayer again
@@ -1234,9 +1274,18 @@ static void room_step(DWORD now) {
             room_fail("race", "the race could not be set on Find a Game"); break; }
         if (g_rRace >= 0 && g_rHero >= 0 && g_curHero >= 0 && g_curHero != g_rHero && g_rTries < 3) {
             g_rTries++; logmsg("room %s: hero shown %d, wanted %d - again", g_room, g_curHero, g_rHero); apply_hero(); g_rStepAt = now; break; }
-        if (g_heroUp) {                                                       // the hero panel's own Ready: the panel closes, as after a click
-            logmsg("room %s: army set - the hero panel's Ready", g_room); fs(".hero_selection_mc.OnClickAccept", ""); g_heroUp = 0; g_rStepAt = now - 1000; break; }
-        logmsg("room %s: army on screen race %d hero %d (random %d) - Start Searching", g_room, g_curRace, g_curHero, g_random);
+        if (!g_rAcceptAt) {                                                   // the hero panel's own Ready commits the army (0.48: always)
+            logmsg("room %s: army set (race %d hero %d shown) - the hero panel's Ready", g_room, g_curRace, g_curHero);
+            fs(".hero_selection_mc.OnClickAccept", ""); g_heroUp = 0; g_rAcceptAt = now; g_rStepAt = now; break; }
+        {   // 0.48: what the game will search with - its Your Party row after the Ready (it comes every 2 s), 6 s at most
+            int ok = army_check(); int fresh = (int)(g_partyTick - g_rAcceptAt) > 0;
+            if ((!fresh || ok == 0) && now - g_rAcceptAt < 6000) break;
+            if (ok == 0) {
+                logmsg("room %s: Your Party says %s - not the room's army (race %d hero %d)", g_room, g_partyImg, g_rRace, g_rHero);
+                if (g_rWalks++ < 2) { g_rMMFresh = 0; g_rAcceptAt = 0; g_rTries = 0; room_set(RS_WALK); room_ev("walking"); break; }   // out and in again
+                room_fail("army", "the room's race / hero could not be set on Find a Game"); break; }
+            logmsg("room %s: Your Party %s (%s) - Start Searching", g_room, g_partyImg[0] ? g_partyImg : "-", ok == 1 ? "the room's army" : fresh ? "not checked" : "no row");
+        }
         g_reWant = 0; g_reRow = 0; search_click(); room_set(RS_SEARCH); room_ev("searching");
         break;
     case RS_SEARCH:
@@ -1302,6 +1351,7 @@ static void cli_line(Cli *c, char *s) {
         if (q.hero < -1 || q.hero > 2) q.hero = -1;
         static const char *OK[4] = {"win", "vptk", "sloc", "rsst"};
         for (int i = 0; i < 4; i++) { q.opt[i] = jint(s, OK[i], -1); if (q.opt[i] < -1 || q.opt[i] > 20) q.opt[i] = -1; }
+        q.ttl = jint(s, "ttl", 0); if (q.ttl < 0 || q.ttl > 600) q.ttl = 0;          // 0.48: seconds the room's start lasts (0 = no limit)
         q.what = QC_ROOM; strcpy(q.room, room);
     } else if (!strcmp(cmd, "cancel")) { q.what = QC_CANCEL; strcpy(q.room, room); }
     else if (!strcmp(cmd, "fs") && g_debugPipe) {           // [MMFind] DebugPipe=1 (stands only): a menu command as its button sends it

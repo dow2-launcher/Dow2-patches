@@ -4,6 +4,19 @@ Every version gets an entry here before it reaches `main`. CI then tags `vX.Y.Z`
 version (`X.Y.0`) it also publishes a GitHub Release with the DLLs and the entries since the previous `X.Y.0`.
 The version of the set lives only in `VERSION`; each DLL still writes its own version to its log.
 
+## 0.2.14 — 2026-11-06
+MMFind 0.48 (store automatch mmfind-0.48 = mmfind-0.47-relay25 with this MMFind; Relay 25, OwnLobby 2, mmbridge as there).
+Live 06.11 (room d59lrf): a player's room said Space Marines, his game searched with the army it had on Find a Game (Eldar / Farseer).
+Stand: Find a Game already open with a committed army - MMFind 0.47 set the room's race into the closed hero panel, never committed
+it (and on the stand the game crashed: FATAL EXIT propertybaggroup.h). 0.48:
+- the walk of a launcher room always opens Find a Game itself: one that was open before gets Back first, then in again (its hero panel
+  comes up fresh); the race / hero are set there and committed with the hero panel's Ready (always);
+- before Start Searching the army is checked where the game keeps it: its own "Your Party" row (Receive_PopulateList: the hero's xs
+  image, the same in every language) against the room's race and hero (the image names of the racebps hero_list, Elite 3.2 and
+  vanilla); another army -> out and in again (twice at most), then failed "army"; no row in 6 s -> searched (the ladder checks the race);
+- `ttl` in the room command: the walk gives up ("expired") once the room's start is over - a game started late never walks into it.
+The ladder now calls a start off when a game searches with another race than its room (never a match with the wrong army).
+
 ## 0.2.13 — 2026-11-06
 Relay 25 (store automatch mmfind-0.47-relay25, relay_fwd relayfwd-25). Owner 06.11.2026: "не видно совсем - больше и в центр",
 "кнопка «Не ждать»; если все оставшиеся нажали - игра продолжается без ушедшего; голоса согласованы у всех".
