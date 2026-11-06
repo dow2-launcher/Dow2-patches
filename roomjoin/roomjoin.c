@@ -57,7 +57,7 @@
 #include <wchar.h>
 #include <wctype.h>
 
-#define RJ_VERSION  "12"
+#define RJ_VERSION  "13"
 #define HOOK_ADDR   0x0045DB6C                    // Invoke (engine -> Flash), this = SFMovie: +4 the movie, +0x18 its fscommand handler
 #define HOOK_RESUME 0x0045DB71
 static const unsigned char INV_PRO[5] = {0xB8, 0x59, 0x70, 0xEF, 0x00};
@@ -115,7 +115,9 @@ static void screen_reset(const char *why) {
     g_screen = SC_UNKNOWN; g_panel[0] = 0; g_engSearch = -1; g_mmClicked = 0;
 }
 // a world starts (a match or a replay loads): the menu movie goes with it - never used again (review 04.11 p.5)
+static void box_close(const char *why);               // RoomJoin 13: the game's Connecting box (below)
 static void menu_forget(const char *why) {
+    box_close(why);
     if (g_fsMovie || g_fsSelf) logmsg("the menu movie forgotten (%s)", why);
     g_fsMovie = NULL; g_fsSelf = NULL; g_ntFs = g_ntInv = 0; g_coverOn = 0; g_uiHidden = 0;
     screen_reset(why);
@@ -315,6 +317,63 @@ static void dj_to_lobby(void) {                                // the menu to th
     unsigned *data = (unsigned *)((NewFn)FN_OP_NEW)(8); if (!data) return;
     data[0] = 0x010935FC; data[1] = 3;
     ((void (__stdcall *)(unsigned, void *, void *))FN_TO_SETUP)(0, str, data);
+}
+
+// ---------------- RoomJoin 13: the game's own "Connecting" box while we join ----------------
+// The browser's Join (GameListForm, 0x0046BF34) makes the same engine call as dj_join and then opens a message box of the
+// game's MessageBoxManager: title 550001 "Connecting", text 550002 "Connecting to the game...", no buttons (0x0046C1FC-0x0046C253);
+// its id is GameListForm+0x68 m_joiningMBID, and the form closes it when the join ends (CancelConnection 0x0046B520). From the
+// main menu there is no games list form, so RoomJoin opens that box itself and closes it on every end of the join.
+//   manager: 0x0045A3CD() -> EAX;  open: ESI = manager, push 0, 0, &text, &title (LocStrings), call 0x00AD5FE0 -> EAX = box id;
+//   close:   EAX = manager, EDX = box id, call 0x00AD6200 (MessageBoxManager::DeactivateMessageBox).
+#define FN_MB_MGR   0x0045A3CD
+#define FN_MB_OPEN  0x00AD5FE0
+#define FN_MB_CLOSE 0x00AD6200
+static int g_boxCfg = 1, g_boxId = -1, g_boxOwn;                // g_boxOwn: our own box is being made (not a "no" of the game)
+static void *mb_mgr(void) {
+    void *m;
+    __asm__ volatile("call *%1" : "=a"(m) : "r"((void *)FN_MB_MGR) : "ecx", "edx", "memory");
+    return m;
+}
+static void box_open(void) {
+    if (!g_boxCfg || g_coverCfg || g_boxId != -1 || !g_fsMovie || g_inWorld || g_loading) return;
+    HMODULE l = GetModuleHandleA("Localizer.dll"); if (!l) return;
+    typedef char (__stdcall *GetStrFn)(int, void *);
+    typedef void (__fastcall *CtorFn)(void *, void *);
+    GetStrFn get = (GetStrFn)GetProcAddress(l, "?GetString@Localizer@@SG_NHAAVLocString@@@Z");
+    CtorFn ctor = (CtorFn)GetProcAddress(l, "??0LocString@@QAE@XZ"), dtor = (CtorFn)GetProcAddress(l, "??1LocString@@UAE@XZ");
+    if (!get || !ctor || !dtor) { logmsg("Connecting box: no Localizer - not shown"); return; }
+    static __attribute__((aligned(16))) unsigned char title[64], text[64];
+    memset(title, 0, sizeof title); memset(text, 0, sizeof text);
+    ctor(title, NULL); ctor(text, NULL);
+    if (get(550001, title) && get(550002, text)) {
+        void *m = mb_mgr();
+        if (m) {
+            int id; void *ti = title, *tx = text, *fn = (void *)FN_MB_OPEN;
+            g_boxOwn = 1;
+            __asm__ volatile(                                 // EBX keeps the stack (no operand in it), whoever cleans it
+                "push %%ebx\n\tmov %%esp, %%ebx\n\t"
+                "push $0\n\tpush $0\n\tpush %%ecx\n\tpush %%edi\n\t"
+                "call *%%edx\n\t"
+                "mov %%ebx, %%esp\n\tpop %%ebx"
+                : "=a"(id), "+S"(m), "+c"(tx), "+d"(fn), "+D"(ti) : : "memory");
+            g_boxOwn = 0;
+            g_boxId = id;
+            logmsg("the game's Connecting box shown (id %d)", id);
+        } else logmsg("Connecting box: no message box manager - not shown");
+    } else logmsg("Connecting box: texts 550001/550002 not found - not shown");
+    dtor(title, NULL); dtor(text, NULL);
+}
+static void box_close(const char *why) {
+    if (g_boxId == -1) return;
+    int id = g_boxId; g_boxId = -1;
+    void *fn = (void *)FN_MB_CLOSE; void *m = mb_mgr(); if (!m) { logmsg("Connecting box %d: no manager to close it (%s)", id, why); return; }
+    __asm__ volatile(
+        "push %%ebx\n\tmov %%esp, %%ebx\n\t"
+        "call *%%ecx\n\t"
+        "mov %%ebx, %%esp\n\tpop %%ebx"
+        : "+a"(m), "+d"(id), "+c"(fn) : : "memory");
+    logmsg("the game's Connecting box closed (%s)", why);
 }
 
 // ---------------- the game's own texts for a "no" (its language: Localizer::GetString of the DOW2.ucs ids) ----------------
@@ -612,6 +671,7 @@ static void notice(const wchar_t *title, const wchar_t *why, int toList) {   // 
     g_coverWant = 1; g_noticeUntil = GetTickCount() + (g_coverCfg ? 3000 : 0); g_noticeList = toList;   // no cover: the list at once
 }
 static void rj_ok(int late) {
+    box_close("in the lobby");
     logmsg("in the lobby of room %llu%s", g_rjRoom, late ? " (a late answer)" : "");
     emitf("{\"ev\":\"in_lobby\",\"room\":%llu%s}", g_rjRoom, late ? ",\"late\":true" : "");
     g_okRoom = g_rjRoom; g_okAt = GetTickCount(); g_rj = RJ_NONE; g_coverWant = 0; g_noticeUntil = 0; g_watchRoom = 0;
@@ -619,6 +679,7 @@ static void rj_ok(int late) {
 // the join failed: the event, and on the cover the reason (show = 1: 3 s, then the public games list if toList)
 static void rj_fail(const char *reason, const wchar_t *shown, int toList) {
     char t[400]; js_esc(t, sizeof t, g_mbText);                         // what the game itself said, if anything
+    box_close(reason);
     logmsg("failed (room %llu): %s", g_rjRoom, reason);
     emitf("{\"ev\":\"failed\",\"room\":%llu,\"reason\":\"%s\",\"text\":\"%s\"}", g_rjRoom, reason, t);
     int called = g_rj == RJ_JOIN && g_rjCalled;
@@ -765,13 +826,14 @@ static void rj_step(DWORD now) {
             stage(L"Joining the Game", L"Opening the lobby: %ls");
             g_mbText[0] = 0; g_mbCount = 0;
             g_coverWant = 1; g_rj = RJ_JOIN; g_rjAt = now; g_rjCalled = 0;
+            box_open();                                       // RoomJoin 13: where the cover came - the game's own Connecting box
             break;
         }
         break; }
     case RJ_JOIN: {
         unsigned long long in = dj_room();
         if (in && in == g_rjRoom) {
-            logmsg("in the room after %lu ms", g_rjCalled ? now - g_rjCalled : 0); stage(L"Joining the Game", L"In %ls. Opening the lobby screen");
+            box_close("in the room"); logmsg("in the room after %lu ms", g_rjCalled ? now - g_rjCalled : 0); stage(L"Joining the Game", L"In %ls. Opening the lobby screen");
             if (g_screen != SC_SETUP) dj_to_lobby();
             g_rj = RJ_LOBBY; g_rjAt = now; break; }
         if (in) { rj_fail("other_lobby", L"You are in another lobby", 0); break; }
@@ -996,7 +1058,7 @@ static char __fastcall inv_hook(void *self, void *edx, const char *method, int f
         int on = args[0].type == GFX_BOOL ? args[0].v.b != 0 : args[0].v.num != 0;
         if (on != g_engSearch && g_screen == SC_MM) { g_engSearch = on; logmsg("the game's search %s", on ? "on" : "off"); }
     }
-    if (g_rj && method && !IsBadReadPtr(method, 24) && !strcmp(method, "Receive_CreateMessageBox") && args && count && count < 32 && !IsBadReadPtr(args, count * sizeof(GFxValue))) {
+    if (g_rj && !g_boxOwn && method && !IsBadReadPtr(method, 24) && !strcmp(method, "Receive_CreateMessageBox") && args && count && count < 32 && !IsBadReadPtr(args, count * sizeof(GFxValue))) {
         wchar_t t[200] = L""; int n = 0; char dbg[400]; int dl = 0; dbg[0] = 0;
         for (unsigned i = 0; i < count; i++) {               // the box's strings: title, text, buttons - the longest one is the text
             int room = (int)sizeof dbg - dl; if (room < 2) break;
@@ -1144,7 +1206,9 @@ BOOL WINAPI DllMain(HINSTANCE h, DWORD r, LPVOID _) {
     { wchar_t ini[MAX_PATH]; _snwprintf(ini, MAX_PATH, L"%lsRoomJoin.ini", g_dir); ini[MAX_PATH - 1] = 0;
       if (!GetPrivateProfileIntW(L"RoomJoin", L"Enabled", 1, ini)) { logmsg("disabled in RoomJoin.ini - no hooks"); return TRUE; }
       g_coverCfg = GetPrivateProfileIntW(L"RoomJoin", L"Cover", 0, ini) != 0;
-      logmsg("cover over the game while joining: %s", g_coverCfg ? "on (RoomJoin.ini Cover=1)" : "off - the game's own screens"); }
+      g_boxCfg = GetPrivateProfileIntW(L"RoomJoin", L"ConnectingBox", 1, ini) != 0;
+      logmsg("cover over the game while joining: %s", g_coverCfg ? "on (RoomJoin.ini Cover=1)" : "off - the game's own screens");
+      logmsg("the game's Connecting box while joining: %s", g_boxCfg && !g_coverCfg ? "on" : "off"); }
     g_fsHooked = hook_fscmd();                    // the vtable slot: the same whether MMFind is in the game already or comes later
     if (!g_fsHooked) return TRUE;                 // without it no join can be done: nothing else either
     hook_invoke();
