@@ -501,7 +501,7 @@
     "order": 20
   },
   "livereplay": {
-    "version": "1",
+    "version": "2",
     "dll": "LiveReplay.dll",
     "files": {
       "lrbridge.exe": "build/lrbridge.exe"
