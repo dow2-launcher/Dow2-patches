@@ -17,7 +17,8 @@ category experiment, off by default; option Others = ai | idle, Elite_DLLs/Repla
   (GameUI vtbl+0x68/+0x64), the minimap texture re-announced (*(0x013351A0)+0xAEC off 3 frames).
 - Tested on stand 1 (Elite 3.2): 1v1 and 3v3 replays (take at 0:05 .. 6:25), both sides, -init and the normal menu path
   (Game History -> Load Replay), two replays in one game, with MatchTimer/APM/Cooldowns/ObsFix/JumpRetry/ReinforceFix/SteamKeep;
-  orders, production, the computer players, end of game (Defeat dialog, post-game screen, main menu) work. Vanilla not tested.
+  orders, production, the computer players, end of game (Defeat dialog, post-game screen, main menu) work. Vanilla too
+  (dow2-patches loader, a vanilla 3v3 replay, take at 3:33). Store: games elite + vanilla. Released 06.11.2026 ~02:30 UTC.
 
 ## 0.2.10 — 2026-11-05
 Automatch with our UDP transport inside (store automatch mmfind-0.46, relay_fwd relayfwd-23; relay_r2 removed from the store).
