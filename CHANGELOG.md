@@ -4,6 +4,22 @@ Every version gets an entry here before it reaches `main`. CI then tags `vX.Y.Z`
 version (`X.Y.0`) it also publishes a GitHub Release with the DLLs and the entries since the previous `X.Y.0`.
 The version of the set lives only in `VERSION`; each DLL still writes its own version to its log.
 
+## 0.2.11 — 2026-11-06
+Launcher rooms (store automatch mmfind-0.47; launcher 1.4.15, ladder lroom.py). Owner 05.11.2026: "a lobby in the launcher like the
+game's own - map, places, race and hero, everybody Ready, a 10 s countdown, then the game starts for everyone and they are in one match".
+- MMFind 0.47: the pipe `\\.\pipe\EliteMMFind-<pid>` (RoomJoin 9's code: only this user, no remote clients, JSON lines; the pipe
+  thread never touches the engine). `{"cmd":"room","room":id,"mode","race","hero"[, "win","vptk","sloc","rsst"]}`: MMFind walks to
+  Find a Game straight from the main menu (`.OnClickMatchMaking`; Multiplayer first asks a fresh account "Play against CPU?" and the
+  menu then ignores every command), sets the mode / race / hero (the saved-choice code), presses the hero panel's Ready and Start
+  Searching with the room's id in mm/native; events back: accepted, walking, army, searching, matched, in_room, loading, failed
+  (+reason). The menu movie and its own fscommand handler are taken from the engine's calls when MMFind came in after the menu.
+- MMFind 0.47: the room's match options for its host - the match's set-options entry (vtable +0x48 = 0x5F74A0) swapped once,
+  a string with MATY rewritten only while searching for a launcher room (victory condition, VPTK, SLOC, RSST; values measured on
+  the stand: 0 Annihilate / 3 VPC / 4 / 6 Hero Assault, 250 / 500 / 1000 = 0 / 1 / 2, Random / Fixed = 0 / 1, Standard / High = 0 / 1).
+- mmbridge.exe / mmpipe.exe: rjbridge / rjpipe built for this pipe (`-DPIPE_PREFIX`); mmbridge.exe ships in the automatch package
+  (the Linux launcher talks to the game through it). rjbridge.c: builds with older mingw headers too.
+- Stands 06.11 (test lobby / ladder, then the live ones): full 1v1 Elite and vanilla from a room; 1000 VP and High Resources in the match.
+
 ## 0.2.10 — 2026-11-05
 Automatch with our UDP transport inside (store automatch mmfind-0.46, relay_fwd relayfwd-23; relay_r2 removed from the store).
 Owner 05.11.2026: "the tick 'Games through our servers' is named stupidly, remove it. Two variants only: Automatch - always

@@ -1,0 +1,1 @@
+- Automatch v2.0 (MMFind 0.47): a match from a launcher room - launcher 1.4.15 takes the game to Find a Game, sets the room's race, hero and mode and starts the search; the host sets the room's match options (victory condition, points, starting locations, resources).
