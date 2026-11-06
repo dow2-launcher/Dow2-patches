@@ -1,0 +1,24 @@
+-- bugs_0511 (stand only): me (@RACE@, hero @HERO@) vs an easy AI, DOW2.exe -modname Elite -dev -nomovies -init bugs.lua
+MAP    = "2p_calderisrefinery"
+RACES  = { "@RACE@", "@ENEMY@" }
+HEROES = { @HERO@, @EHERO@ }
+DIFF   = { 0, 0 }
+local function log(s) print("BUGS " .. tostring(s)) end
+local function try(name, fn, ...) local ok, r = pcall(fn, ...); log(name .. " -> " .. tostring(ok) .. " " .. tostring(r)); return ok end
+function SCRIPT_Before()
+	try("SetGameSkirmish", SetGameSkirmish, MAP)
+	if "@WIN@" ~= "" then try("AddWinCondition", AddWinCondition, "@WIN@") end
+	return 1
+end
+function SCRIPT_Connect()
+	for i = 0, GetPlayerCount() - 1 do
+		if i > 0 then try("SetPlayerToAI " .. i, SetPlayerToAI, i) end
+		try("SetPlayerRace " .. i, SetPlayerRace, i, RACES[i + 1])
+		try("SetPlayerHeroChoice " .. i, SetPlayerHeroChoice, i, HEROES[i + 1])
+		try("SetPlayerAIDifficulty " .. i, SetPlayerAIDifficulty, i, DIFF[i + 1])
+		try("SetPlayerTeam " .. i, SetPlayerTeam, i, i % 2)
+		try("SetPlayerReady " .. i, SetPlayerReady, i)
+	end
+	return 1
+end
+function SCRIPT_GameStart() log("GameStart") return 1 end

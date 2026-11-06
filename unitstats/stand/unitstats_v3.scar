@@ -1,0 +1,75 @@
+-- ===== STAND ONLY (unitstats v3 session): squads with real effects on them, one selected at a time =====
+local UL = eliteai_log or (string and string.eliteai_log) or print
+US = { t = -1, k = 0 }
+local function abil(name) local ok, id = pcall(World_GetPropertyBagGroupID, name); if ok and id then return id end; UL("NO ABILITY", name) end
+local function uspawn(p, bp, pos, toward, tag, inv)
+	local ok, id = pcall(World_GetPropertyBagGroupID, bp); if not ok or not id then UL("NO BLUEPRINT", bp); return end
+	local ok2, s = pcall(Squad_CreateAndSpawnToward, id, p, 0, pos, toward)
+	if not ok2 or not s then UL("SPAWN FAILED", bp, tostring(s)); return end
+	US.n = (US.n or 0) + 1; local g = SGroup_CreateIfNotFound("us3_g" .. US.n); SGroup_Add(g, s)
+	if inv then pcall(SGroup_SetInvulnerable, g, true) end
+	UL("spawned", tag, bp); return s, g
+end
+local function off(b, x, z) return World_Pos(b.x + x, b.y, b.z + z) end
+local function cast(caster, name, target, what)
+	local id = abil(name); if not id or not caster then UL("CAST skipped", what); return end
+	local ok, err = pcall(Cmd_Ability, caster, id, target, true)
+	UL("CAST", what, tostring(ok), tostring(err))
+end
+local function sel(s, what)
+	-- e1-e3: Misc_SelectSquad(dead squad, false) froze the game (also with UnitStats off) - only deselect a live one
+	if US.prev then if pcall(Squad_GetPosition, US.prev) then pcall(Misc_SelectSquad, US.prev, false) else UL("prev dead - not deselected") end end
+	local ok, p = pcall(Squad_GetPosition, s); if not ok then UL("gone", what); US.prev = nil; return end
+	pcall(Camera_FocusOnPosition, p, false, 0, false)
+	local ok2 = pcall(Misc_SelectSquad, s, true)
+	UL("SELECT", what, tostring(ok2)); US.prev = s
+end
+function US_Setup()
+	US.P = World_GetPlayerAt(1); US.E = World_GetPlayerAt(2)
+	local b = Player_GetStartingPosition(US.P); local eb = Player_GetStartingPosition(US.E); US.base = b
+	US.own = {}; SGroup_ForEach(Player_GetSquads(US.P), function(g, i, s) US.own[i] = s end)
+	US.enemy = {}; SGroup_ForEach(Player_GetSquads(US.E), function(g, i, s) US.enemy[i] = s end)
+	US.farseer = US.own[1]; US.commissar = US.enemy[1]
+	US.A = uspawn(US.P, "sbps/pvp/race_eldar/troops/eld_guardian", off(b, 14, 14), b, "own A (fortune, guide)", true)
+	US.B = uspawn(US.P, "sbps/pvp/race_eldar/troops/eld_banshee", off(b, 24, 14), b, "own B (exarch aura)", true)
+	US.C = uspawn(US.P, "sbps/pvp/race_eldar/troops/eld_warp_spider", off(b, 34, 14), b, "own C (nothing)", true)
+	US.D = uspawn(US.P, "sbps/pvp/race_eldar/troops/eld_guardian", off(b, 14, 44), b, "own D (suppressed)", true)
+	US.H, US.Hg = uspawn(US.E, "sbps/pvp/race_imperial_guard/troops/ig_heavy_weapon_squad", off(b, 14, 74), b, "enemy H (heavy weapon on D)", true)
+	US.G = uspawn(US.E, "sbps/pvp/race_imperial_guard/troops/ig_guardsmen_squad", off(eb, 8, 8), eb, "enemy G (execution)", false)
+	US.N = uspawn(US.E, "sbps/pvp/race_ork/troops/ork_nob_squad", off(eb, -12, 8), eb, "enemy N (frenzy)", true)
+	US.T = uspawn(US.E, "sbps/pvp/race_marine/troops/sm_tactical_marine", off(eb, 0, -14), eb, "enemy T (nothing)", true)
+	pcall(FOW_RevealAll); UL("AI_Enable off", tostring(pcall(AI_Enable, US.E, false)))
+	if US.D and US.H then local dg = SGroup_CreateIfNotFound("us3_dg"); SGroup_Add(dg, US.D); UL("H attacks D", tostring(pcall(Cmd_AttackSGroup, US.Hg, dg))) end
+	UL("US3 SETUP done")
+	Rule_AddInterval(US_Tick, 1)
+end
+Rule_AddOneShot(US_Setup, 3)
+local PLAN = {
+	{ 88, function() US.K = uspawn(US.P, "sbps/pvp/race_eldar/troops/eld_guardian", off(US.base, 24, 30), US.base, "own K (killed while selected)", false) end },
+	{ 89, function() if US.K then sel(US.K, "K before death") end end },
+	{ 92, function() if US.K then UL("KILL K", tostring(pcall(Squad_Kill, US.K))) end end },
+	{ 102, function() sel(US.C, "C warp spiders, no effects") end },
+	{ 4, function() sel(US.C, "C warp spiders, no effects") end },
+	{ 14, function() cast(US.farseer, "ability/pvp/race_eldar/farseer/eld_buff_target_fortune", US.A, "fortune -> A") end },
+	{ 16, function() sel(US.A, "A fortune") end },
+	{ 22, function() cast(US.farseer, "ability/pvp/race_eldar/farseer/eld_buff_target_guide", US.A, "guide -> A") end },
+	{ 24, function() sel(US.A, "A fortune + guide") end },
+	{ 30, function() cast(US.B, "ability/pvp/race_eldar/scorpion/eld_buff_aoe_auraexarch", nil, "exarch aura B") end },
+	{ 32, function() sel(US.B, "B exarch aura") end },
+	{ 38, function() sel(US.D, "D under heavy weapon fire") end },
+	{ 44, function() cast(US.N, "ability/pvp/race_ork/nobs/ork_buff_self_frenzy", nil, "frenzy N") end },
+	{ 46, function() sel(US.N, "N frenzy") end },
+	{ 52, function() cast(US.commissar, "ability/pvp/race_imperial_guard/commissar_lord/ig_commissar_kill_target_execute", US.G, "execute -> G") end },
+	{ 56, function() sel(US.G, "G after execution") end },
+	{ 62, function() sel(US.commissar, "commissar lord") end },
+	{ 68, function() sel(US.farseer, "farseer") end },
+	{ 80, function() sel(US.T, "T tactical marines, no effects") end },
+	{ 86, function() sel(US.H, "H heavy weapon team") end },
+}
+local LOOP = 1000
+function US_Tick()
+	US.t = US.t + 1; local t = US.t % LOOP
+	if US.t % 5 == 0 then UL("tick", US.t) end
+	for _, e in ipairs(PLAN) do if e[1] == t then local ok, err = pcall(e[2]); if not ok then UL("PLAN ERR", t, tostring(err)) end end end
+end
+UL("unitstats v3 scar loaded")

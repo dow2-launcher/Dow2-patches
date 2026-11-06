@@ -40,8 +40,31 @@
 //     damage, cooldown and reload through the game's own modifier function 0x8A6790 (weapon, value, entity, type:
 //     7 damage, 3 cooldown, 2 reload, 0x17 max range) - so upgrades, wargear and buffs on the weapon count - times the
 //     level multiplier. Range = the weapon's own GetMaxRange (vtable slot 7, modifiers included).
-// Every engine read runs under a fault guard (vectored handler, this thread only): a fault ends the numbers for the
-// rest of the game, the log says where.
+// Every engine read runs under a fault guard (vectored handler, this thread only): a fault skips that update (v3; v2 ended
+// the numbers for the rest of the game at the first one), 20 of them end it, the log says where.
+//
+// v3 (05.11.2026, grantovich: "further left, active buffs, resists, auras and so on - like in DoW1"): a third block left
+// of the two stat rows - the effects on the selected squad, each a game icon + the net change it makes:
+//   * the numbers are the engine's own, as the game applies them: entity modifiers through 0x8A6AC0 (player x entity x
+//     squad modifier extensions), weapon modifiers through 0x8A6790 per weapon (hardpoint-targeted ones included), squad
+//     modifiers from the squad modifier extension; f(1) - f(0) = the multiplier, f(0) / multiplier = the addition, so
+//     "+50%" is what the damage/speed/... code really gets (multipliers of one level add up in DoW2: x1.5 and x1.5 = x2.0);
+//   * no seconds left: the engine keeps an applied modifier's timer (a record of 0x34 bytes: +0 the modifier, +4 its
+//     handle, +8 the timer, vtable 0x010DDED8, +0x50 ticks left) in the "ModifierActionState" (vtable 0x010DBC28, list at
+//     +0x3C) of the action that applied it, and that state lives in the action tree of the CASTER (its ability's
+//     ActionUpdater, nested Timed/Delay/Repeat action states) - not on the squad it buffs, not in the world's ActionUpdater
+//     (world +0x1E0: only IsAliveAction states) nor in the world's modifier applier manager (+0x1DC: empty in a skirmish),
+//     checked on stand 1. What the squad itself holds (ModifierExt QI 2: per type {handle, modifier} pairs + the sums) has
+//     no time. Finding it would mean walking every squad's ability updaters - left for later (docs/UNIT_STATS_HOWTO.md);
+//   * which modifiers: the game's own tables of modifier names (0x8A7590 entity, 0x8A7400 weapon, 0x8A7910 squad), a
+//     modifier object (0x40): +0x10 value, +0x14 type, +0x18 application, +0x1C class (0 entity, 2 squad, 3 weapon),
+//     +0x20 usage (0 add, 1 multiply, 2 enable), +0x3D shown as a decorator over the unit;
+//   * icons: the game's trait icons (ui/textures/space_marines/icon_traits_xp2: damage, damage_resistance, melee_def,
+//     ranged_def, rate_of_fire, sprint, suppression_def ...) and the decorators it draws over a buffed unit (mod_melee,
+//     mod_ranged); green = good for the squad, red = bad; [EffectIcons] in the ini can change any of them.
+// v3 also: the selection is read with the selection mutex's TryEnter (never waits on it - one of four v2 runs froze the
+// game; the panel update must not block on a lock the simulation holds), pointers are checked with VirtualQuery (an
+// IsBadReadPtr fault inside the guard was caught by our own handler).
 #include <windows.h>
 #include <stdio.h>
 #include <stdarg.h>
@@ -55,6 +78,8 @@ static void logmsg(const char *fmt, ...) {
     SYSTEMTIME t; GetLocalTime(&t); fprintf(f, "%02d:%02d:%02d.%03d ", t.wHour, t.wMinute, t.wSecond, t.wMilliseconds);
     va_list a; va_start(a, fmt); vfprintf(f, fmt, a); va_end(a); fputc('\n', f); fclose(f);
 }
+static volatile const char *g_where = "idle"; static volatile DWORD g_whereT, g_frames;
+#define AT(s) (g_where = (s), g_whereT = GetTickCount())
 
 // ---------- the items and their icons (the game's own textures) ----------
 enum { I_RANGED, I_MELEE, I_SKILL, I_ARMOUR, I_RANGE, I_SPEED, I_SIGHT, NITEMS };
@@ -82,7 +107,46 @@ static const wchar_t *ARM_DEF[NARM] = {                              // the weap
 typedef struct { char path[200]; int scale; } Icon;
 static Icon g_icon[NITEMS], g_armIcon[NARM];
 
-// ---------- settings: UnitStats.ini [UnitStats], [Icons] (re-read while the game runs) ----------
+// ---------- v3: the effect icons (game textures; [EffectIcons] in the ini) ----------
+enum { EI_DAMAGE, EI_MELEE, EI_RANGED, EI_RESIST, EI_MELEEDEF, EI_RANGEDDEF, EI_EVADE, EI_ACCURACY, EI_RATE, EI_RANGE, EI_SPEED,
+       EI_HEALTH, EI_REGEN, EI_SIGHT, EI_SKILL, EI_PEN, EI_SUPPDMG, EI_SUPPDEF, EI_KNOCKDEF, EI_ENERGY, EI_COOLDOWN, EI_SETUP,
+       EI_INVIS, EI_NORETREAT, EI_NOFIRE, NEICON };
+#define TRAIT "img://data:UI/textures/space_marines/icon_traits_xp2/"
+static const wchar_t *EICON_KEY[NEICON] = { L"Damage", L"MeleeDamage", L"RangedDamage", L"DamageTaken", L"MeleeDamageTaken",
+    L"RangedDamageTaken", L"Evasion", L"Accuracy", L"RateOfFire", L"Range", L"Speed", L"Health", L"Regeneration", L"Sight",
+    L"MeleeSkill", L"Penetration", L"SuppressionDamage", L"SuppressionTaken", L"Knockback", L"Energy", L"Recharge", L"Setup",
+    L"Hidden", L"NoRetreat", L"NoFire" };
+static const wchar_t *EICON_DEF[NEICON] = {
+    L"" TRAIT "damage.dds",                                         // crossed swords: damage dealt
+    L"img://data:UI/textures/generic/decorators/mod_melee.dds|90",    // the decorator over a unit with a melee damage buff
+    L"img://data:UI/textures/generic/decorators/mod_ranged.dds|90",   // ... a ranged damage buff
+    L"" TRAIT "damage_resistance.dds",                              // a shield: damage taken
+    L"" TRAIT "melee_def.dds",                                      // shield + fist: melee damage taken
+    L"" TRAIT "ranged_def.dds",                                     // shield + bullet: ranged damage taken
+    L"" TRAIT "force_shield.dds",                                   // accuracy of shots at it (evasion)
+    L"img://data:UI/textures/generic/tooltips/ico_accuracy.dds|130",  // the weapon tooltip's accuracy icon
+    L"" TRAIT "rate_of_fire.dds",
+    L"img://data:UI/textures/generic/tooltips/ico_range.dds|130",
+    L"" TRAIT "sprint.dds",
+    L"" TRAIT "health_generic.dds",
+    L"" TRAIT "health_regeneration.dds",
+    L"img://data:UI/textures/generic/fe/loading/tips/up_detector.dds|150",
+    L"" TRAIT "melee_paralyzes.dds",                                // a fist: melee skill
+    L"" TRAIT "critical_hit.dds",                                   // armour penetration
+    L"" TRAIT "suppression.dds",                                    // suppression it deals
+    L"" TRAIT "suppression_def.dds",                                // suppression it takes
+    L"" TRAIT "knockback_def.dds",                                  // knockback it takes
+    L"" TRAIT "energy.dds",
+    L"" TRAIT "cool_down.dds",                                      // ability recharge
+    L"" TRAIT "setup.dds",
+    L"img://data:UI/textures/imperial_guard/icon_traits_xp2/invisibility.dds",
+    L"img://data:UI/textures/imperial_guard/icon_traits_xp2/fanaticism.dds",   // cannot retreat (the commissar's execution)
+    L"" TRAIT "stun.dds",                                           // cannot fire
+};
+static Icon g_eicon[NEICON];
+static int g_effOn = 1, g_effMax = 6, g_esize = 18, g_eisize = 0, g_effX = -470, g_effGap = 14;
+
+// ---------- settings: UnitStats.ini [UnitStats], [Icons], [Effects], [EffectIcons] (re-read while the game runs) ----------
 static int g_useSkill = 1, g_useEmod = 1, g_useLvl = 1;   // [UnitStats] GameSkill / EntityMods / LevelMul: the engine calls, each can be switched off
 static int g_enabled = 1, g_size = 22, g_isize = 0, g_offX = 0, g_offY = 0, g_perModel = 1, g_verbose = 1;
 static FILETIME g_iniTime;
@@ -109,6 +173,20 @@ static void load_ini(void) {
     g_useSkill = ini_int(L"GameSkill", 1, 0, 1); g_useEmod = ini_int(L"EntityMods", 1, 0, 1); g_useLvl = ini_int(L"LevelMul", 1, 0, 1);
     for (int k = 0; k < NITEMS; k++) if (k != I_ARMOUR) ini_icon(ITEM_KEY[k], ITEM_DEF[k], &g_icon[k]);
     for (int k = 0; k < NARM; k++) ini_icon(ARM_KEY[k], ARM_DEF[k], &g_armIcon[k]);
+    g_effOn = GetPrivateProfileIntW(L"Effects", L"Enabled", 1, g_ini) != 0;
+    g_effMax = GetPrivateProfileIntW(L"Effects", L"Max", 6, g_ini); if (g_effMax < 0) g_effMax = 0; if (g_effMax > 10) g_effMax = 10;
+    g_esize = GetPrivateProfileIntW(L"Effects", L"FontSize", 18, g_ini); if (g_esize < 8 || g_esize > 40) g_esize = 18;
+    g_eisize = GetPrivateProfileIntW(L"Effects", L"IconSize", 0, g_ini); if (g_eisize < 0 || g_eisize > 60) g_eisize = 0;
+    g_effX = GetPrivateProfileIntW(L"Effects", L"Left", -470, g_ini);
+    g_effGap = GetPrivateProfileIntW(L"Effects", L"Gap", 14, g_ini);
+    for (int k = 0; k < NEICON; k++) {
+        wchar_t w[256]; GetPrivateProfileStringW(L"EffectIcons", EICON_KEY[k], EICON_DEF[k], w, 256, g_ini);
+        char u[256]; WideCharToMultiByte(CP_UTF8, 0, w, -1, u, sizeof u, NULL, NULL);
+        memset(&g_eicon[k], 0, sizeof g_eicon[k]); g_eicon[k].scale = 100;
+        char *bar = strchr(u, '|'); if (bar) { *bar = 0; sscanf(bar + 1, "%d", &g_eicon[k].scale); }
+        if (g_eicon[k].scale < 20 || g_eicon[k].scale > 400) g_eicon[k].scale = 100;
+        snprintf(g_eicon[k].path, sizeof g_eicon[k].path, "%s", u);
+    }
 }
 
 // ---------- the engine (DOW2.exe 3.19, SimEngine.dll, Platform.dll) ----------
@@ -152,7 +230,9 @@ typedef const wchar_t *(__thiscall *W0_t)(const void *obj);
 typedef void (__thiscall *M0_t)(void *mutex);
 typedef void *(__thiscall *Lookup_t)(void *obj, DWORD id);
 typedef float (__thiscall *Range_t)(void *weapon);
-static QI_t p_qi; static P0_t p_allEnts, p_begin, p_end, p_entBp; static S0_t p_sqName, p_entName, p_pbgFile; static M0_t p_enter, p_leave;
+typedef char (__thiscall *TE_t)(void *mutex);
+static QI_t p_qi, p_sqi; static P0_t p_allEnts, p_begin, p_end, p_entBp; static S0_t p_sqName, p_entName, p_pbgFile;
+static M0_t p_enter, p_leave; static TE_t p_tryEnter;
 static int g_haveSkill, g_haveLvl, g_haveTun, g_haveEmod, g_haveComb; static float g_rangeAllow;
 
 // the game's weapon modifier function: thiscall (weapon, float value, Entity *, int type), the result in xmm0
@@ -207,7 +287,7 @@ __asm__(".text\n"
     "1:\n\t popl %edi\n\t popl %esi\n\t popl %ebx\n\t ret\n");
 
 // ---------- the fault guard (as cooldowns.c): fn(arg) on this thread, 0 = it faulted ----------
-static volatile DWORD g_gThread; static DWORD g_gFault; static void *g_gAt; static int g_dead;
+static volatile DWORD g_gThread; static DWORD g_gFault; static void *g_gAt; static int g_dead, g_faults;
 DWORD g_gEsp __asm__("us_g_esp"); DWORD g_gSeh __asm__("us_g_seh"); unsigned short g_gCw __asm__("us_g_cw");
 int us_guarded(void (*fn)(void *), void *arg) __asm__("us_guarded");
 void us_fail(void) __asm__("us_fail");
@@ -238,11 +318,28 @@ static int run_guarded(void (*fn)(void *), void *arg, const char *what) {
     g_gThread = GetCurrentThreadId();
     int ok = us_guarded(fn, arg);
     g_gThread = 0;
-    if (!ok) { g_dead = 1; logmsg("FAULT %08lX at %p in %s - no numbers for the rest of this game", g_gFault, g_gAt, what); }
+    if (!ok) {            // v3: one fault skips this update (the reads are of a running simulation); 20 end it for this game
+        if (++g_faults >= 20) g_dead = 1;
+        logmsg("FAULT %08lX at %p in %s (%d)%s", g_gFault, g_gAt, what, g_faults, g_dead ? " - no numbers for the rest of this game" : "");
+    }
     return ok;
 }
 
-static int rd(const void *p, unsigned n) { return p && !IsBadReadPtr(p, n); }
+// readable? VirtualQuery, not IsBadReadPtr: inside the guard our own vectored handler would take IsBadReadPtr's fault (v3)
+static int rd(const void *p, unsigned n) {
+    static const char *lo, *hi;                                  // the last readable region seen
+    const char *a = p;
+    if ((DWORD)a < 0x10000 || (DWORD)a + n < (DWORD)a) return 0;
+    for (int k = 0; k < 4; k++) {
+        if (a >= lo && a + n <= hi) return 1;
+        if (a >= lo && a < hi) { n -= hi - a; a = hi; continue; }   // spans into the next region
+        MEMORY_BASIC_INFORMATION mb;
+        if (!VirtualQuery(a, &mb, sizeof mb) || mb.State != MEM_COMMIT || (mb.Protect & (PAGE_NOACCESS | PAGE_GUARD))
+            || !(mb.Protect & (PAGE_READONLY | PAGE_READWRITE | PAGE_WRITECOPY | PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY))) return 0;
+        lo = mb.BaseAddress; hi = lo + mb.RegionSize;
+    }
+    return a >= lo && a + n <= hi;
+}
 static int vt_is(const void *obj, DWORD vt) { return rd(obj, 4) && *(const DWORD *)obj == vt; }
 // a bag of a blueprint by its key (PropertyBagGroup +0x0C {key, bag}[], +0x10 count; as 0x436CDE does for weapon_bag)
 static void *pbg_bag(const char *pbg, DWORD key) {
@@ -405,19 +502,172 @@ static void squad_stats(void *arg) {
     armour_name(st->armour, st->armourName, sizeof st->armourName);
 }
 
+// ---------- v3: the effects on the squad (the engine's modifiers, as the game applies them) ----------
+#define EXT_MODIFIER   2                 // EntityController::QI: ModifierExt (vtable 0x011013B0)
+#define SQEXT_MODIFIER 1                 // SquadController::QI: SquadModifierExt (vtable 0x01101470)
+#define FN_MNAME_E     0x008A7590u       // modifier type -> name: EAX = type, the name in EAX (entity / weapon / squad)
+#define FN_MNAME_W     0x008A7400u
+#define FN_MNAME_S     0x008A7910u
+enum { MC_ENTITY = 0, MC_SQUAD = 2, MC_WEAPON = 3 };
+static const unsigned char MNAME_PRO[3] = {0xFF, 0x24, 0x85};          // jmp [eax*4 + table]
+const char *us_mname(DWORD fn, int type) __asm__("us_mname");
+__asm__(".text\n"
+    "us_mname:\n\t"
+    "movl 8(%esp), %eax\n\t movl 4(%esp), %ecx\n\t call *%ecx\n\t ret\n");
+static int g_haveMName;
+static const char *mod_name(int cls, int type) {                // "damage_weapon_modifier"
+    DWORD fn = cls == MC_ENTITY ? FN_MNAME_E : cls == MC_WEAPON ? FN_MNAME_W : cls == MC_SQUAD ? FN_MNAME_S : 0;
+    int n = cls == MC_ENTITY ? 0x39 : cls == MC_WEAPON ? 0x1F : 0x18;
+    if (!g_haveMName || !fn || type < 0 || type >= n) return "?";
+    const char *s = us_mname(fn, type); if (!rd(s, 4)) return "?";
+    const char *b = strrchr(s, '\\'); return b ? b + 1 : s;
+}
+
+// what is shown for a modifier type: its icon, which way is good for the squad, how the number reads, a short tag
+enum { EM_PCT, EM_RATE, EM_ADD, EM_ADDP, EM_ON, EM_OFF };   // PCT "+50%"; RATE: a time multiplier as a rate ("cooldown x0.5" = "+100%");
+                                                           // ADD "+50"; ADDP "-100%" (an addition to a chance); ON / OFF: enabled / disabled
+typedef struct { unsigned char cls, type; signed char good; unsigned char mode, icon; const char *tag; } EffDef;
+static const EffDef EFFDEF[] = {
+    { MC_ENTITY, 0x00, +1, EM_PCT,  EI_HEALTH,    "" },          // health_maximum
+    { MC_ENTITY, 0x01, +1, EM_PCT,  EI_REGEN,     "" },          // health_regeneration
+    { MC_ENTITY, 0x06, +1, EM_PCT,  EI_SPEED,     "" },          // speed_maximum
+    { MC_ENTITY, 0x0A, +1, EM_PCT,  EI_SIGHT,     "" },          // sight_radius
+    { MC_ENTITY, 0x0D, +1, EM_ON,   EI_INVIS,     "hidden" },    // camouflage_enable
+    { MC_ENTITY, 0x0F, +1, EM_OFF,  EI_NOFIRE,    "no fire" },   // shoot_enable
+    { MC_ENTITY, 0x11, -1, EM_PCT,  EI_EVADE,     "" },          // received_accuracy
+    { MC_ENTITY, 0x12, -1, EM_PCT,  EI_RESIST,    "" },          // received_damage
+    { MC_ENTITY, 0x13, -1, EM_PCT,  EI_MELEEDEF,  "" },          // received_damage_melee
+    { MC_ENTITY, 0x16, -1, EM_PCT,  EI_MELEEDEF,  "light" },
+    { MC_ENTITY, 0x17, -1, EM_PCT,  EI_MELEEDEF,  "heavy" },
+    { MC_ENTITY, 0x18, -1, EM_PCT,  EI_MELEEDEF,  "power" },
+    { MC_ENTITY, 0x14, -1, EM_PCT,  EI_RANGEDDEF, "" },          // received_damage_ranged
+    { MC_ENTITY, 0x15, -1, EM_PCT,  EI_RANGEDDEF, "pierce" },
+    { MC_ENTITY, 0x19, -1, EM_PCT,  EI_RANGEDDEF, "flame" },
+    { MC_ENTITY, 0x1A, -1, EM_PCT,  EI_RANGEDDEF, "expl" },
+    { MC_ENTITY, 0x1B, -1, EM_PCT,  EI_RANGEDDEF, "plasma" },
+    { MC_ENTITY, 0x1C, -1, EM_PCT,  EI_RANGEDDEF, "det" },
+    { MC_ENTITY, 0x1E, -1, EM_PCT,  EI_COOLDOWN,  "" },          // ability_recharge_time_entity
+    { MC_ENTITY, 0x2F, +1, EM_ADD,  EI_SKILL,     "" },          // skill_melee
+    { MC_ENTITY, 0x31, -1, EM_ADDP, EI_KNOCKDEF,  "" },          // knockback_chance_* (five kinds, one icon)
+    { MC_ENTITY, 0x32, -1, EM_ADDP, EI_KNOCKDEF,  "" },
+    { MC_ENTITY, 0x33, -1, EM_ADDP, EI_KNOCKDEF,  "" },
+    { MC_ENTITY, 0x34, -1, EM_ADDP, EI_KNOCKDEF,  "" },
+    { MC_ENTITY, 0x35, -1, EM_ADDP, EI_KNOCKDEF,  "" },
+    { MC_WEAPON, 0x07, +1, EM_PCT,  EI_DAMAGE,    "" },          // damage_weapon
+    { MC_WEAPON, 0x0E, +1, EM_PCT,  EI_MELEE,     "" },          // damage_melee_weapon
+    { MC_WEAPON, 0x0F, +1, EM_PCT,  EI_RANGED,    "" },          // damage_ranged_weapon
+    { MC_WEAPON, 0x10, +1, EM_PCT,  EI_RANGED,    "" },          // damage_projectile_weapon
+    { MC_WEAPON, 0x11, +1, EM_PCT,  EI_DAMAGE,    "vs bld" },    // damage_armor_*
+    { MC_WEAPON, 0x12, +1, EM_PCT,  EI_DAMAGE,    "vs bld" },
+    { MC_WEAPON, 0x13, +1, EM_PCT,  EI_DAMAGE,    "vs hero" },
+    { MC_WEAPON, 0x14, +1, EM_PCT,  EI_DAMAGE,    "vs heavy" },
+    { MC_WEAPON, 0x15, +1, EM_PCT,  EI_DAMAGE,    "vs inf" },
+    { MC_WEAPON, 0x16, +1, EM_PCT,  EI_DAMAGE,    "vs veh" },
+    { MC_WEAPON, 0x08, +1, EM_PCT,  EI_PEN,       "" },          // armour_penetration
+    { MC_WEAPON, 0x05, +1, EM_PCT,  EI_ACCURACY,  "" },          // accuracy
+    { MC_WEAPON, 0x19, +1, EM_PCT,  EI_ACCURACY,  "" },          // accuracy_ranged
+    { MC_WEAPON, 0x18, +1, EM_PCT,  EI_ACCURACY,  "melee" },
+    { MC_WEAPON, 0x03, +1, EM_RATE, EI_RATE,      "" },          // cooldown
+    { MC_WEAPON, 0x02, +1, EM_RATE, EI_RATE,      "reload" },
+    { MC_WEAPON, 0x04, +1, EM_PCT,  EI_RATE,      "burst" },
+    { MC_WEAPON, 0x17, +1, EM_PCT,  EI_RANGE,     "" },          // range_maximum
+    { MC_WEAPON, 0x0B, +1, EM_PCT,  EI_SUPPDMG,   "" },          // courage_damage
+    { MC_WEAPON, 0x1D, -1, EM_PCT,  EI_SETUP,     "" },          // setup
+    { MC_SQUAD,  0x01, -1, EM_PCT,  EI_SUPPDEF,   "" },          // received_courage_damage
+    { MC_SQUAD,  0x08, +1, EM_OFF,  EI_NORETREAT, "no retreat" },// retreat_enable
+    { MC_SQUAD,  0x02, -1, EM_PCT,  EI_COOLDOWN,  "" },          // ability_recharge_time_squad
+    { MC_SQUAD,  0x0C, +1, EM_PCT,  EI_ENERGY,    "" },          // energy_regen_rate
+    { MC_SQUAD,  0x0E, +1, EM_PCT,  EI_ENERGY,    "max" },       // energy_maximum
+};
+#define NEFFDEF ((int)(sizeof EFFDEF / sizeof EFFDEF[0]))
+#define MAXEFF 10
+typedef struct { int def, nEnt; float mul, add, sum, score; } Eff;   // the engine's multiplier, addition, enable sum; models with it
+typedef struct { Eff e[NEFFDEF]; char *squad; } Effs;
+static int def_of(int cls, int type) { for (int i = 0; i < NEFFDEF; i++) if (EFFDEF[i].cls == cls && EFFDEF[i].type == type) return i; return -1; }
+// the per-type entry of a modifier extension's vector (0x20 bytes: +0 {handle, modifier} pairs, +0xC mul, +0x10 add, +0x1C enable sum)
+static char *mod_entry(char *ext, int vec, int type, int n) {
+    if (!rd(ext + vec, 8)) return NULL;
+    char *b = *(char **)(ext + vec), *e = *(char **)(ext + vec + 4);
+    if (!b || e < b || (e - b) / 0x20 != n || type >= n || !rd(b + type * 0x20, 0x20)) return NULL;
+    return b + type * 0x20;
+}
+static void *g_effEnts[64]; static int g_effNEnts;
+typedef struct { char *squad; Effs *fx; } EJob;
+// the engine's multiplier and addition of a modifier type for one entity / weapon: f(v) = (v + add) * mul
+static void fit(float f1, float f0, float *mul, float *add) { *mul = f1 - f0; *add = *mul > 1e-6f || *mul < -1e-6f ? f0 / *mul : f0; }
+static void eff_values(void *arg) {
+    EJob *j = arg; Effs *fx = j->fx; char *squad = j->squad;
+    char *grp = p_allEnts(squad); if (!grp) return;
+    char **b = p_begin(grp), **e = p_end(grp);
+    char *sqx = NULL;
+    if (p_sqi && rd(squad + 0x4C, 4) && *(void **)(squad + 0x48)) sqx = p_sqi(*(void **)(squad + 0x48), SQEXT_MODIFIER);
+    for (int i = 0; i < NEFFDEF; i++) { Eff *x = &fx->e[i]; x->def = i; x->mul = 1; x->add = 0; x->sum = 0; x->score = 0; }
+    g_effNEnts = 0;
+    for (char **it = b; it && it < e && g_effNEnts < 64; it++) {
+        char *ent = *it; if (!rd(ent, 0x60)) continue;
+        void *ctrl = *(void **)(ent + 0x3C); if (!ctrl) continue;
+        g_effEnts[g_effNEnts++] = ent;
+        char *mx = p_qi(ctrl, EXT_MODIFIER);
+        // the entity's weapons (as squad_stats)
+        char *ws[16], *wents[16]; int nw = 0;
+        char *ce = p_qi(ctrl, EXT_COMBAT);
+        if (vt_is(ce, VT_COMBATEXT)) {
+            char **hp = *(char ***)(ce + 0x50); int n = *(int *)(ce + 0x54);
+            for (int k = 0; k < n && k < 16 && rd(hp, (k + 1) * 4); k++) {
+                char *h = hp[k]; if (!rd(h, 0x54)) continue;
+                char *w = *(char **)(h + 0x50); if (!rd(w, 0xB0) || !vt_is(*(char **)(w + 0x54), VT_WEAPONBAG)) continue;
+                ws[nw] = w; wents[nw] = rd(*(char **)(w + 0xAC), 0x18) ? *(char **)(*(char **)(w + 0xAC) + 0x14) : ent; nw++;
+            }
+        }
+        for (int i = 0; i < NEFFDEF; i++) {
+            const EffDef *d = &EFFDEF[i]; Eff *x = &fx->e[i];
+            float mul = 1, add = 0, sum = 0;
+            if (d->cls == MC_ENTITY) {
+                if (d->mode == EM_ON || d->mode == EM_OFF) {        // enable: the sums of the entity's and the squad's entries
+                    char *en = mx ? mod_entry(mx, 0x14, d->type, 0x39) : NULL, *es = sqx ? mod_entry(sqx, 0x20, d->type, 0x39) : NULL;
+                    sum = (en ? *(float *)(en + 0x1C) : 0) + (es ? *(float *)(es + 0x1C) : 0);
+                } else if (g_haveEmod && g_useEmod) fit(us_emod(1.0f, ent, d->type), us_emod(0.0f, ent, d->type), &mul, &add);
+            } else if (d->cls == MC_WEAPON) {                       // the weapon with the biggest change
+                float bs = 0;
+                for (int k = 0; k < nw; k++) {
+                    float m, a; fit(us_mod(ws[k], 1.0f, wents[k], d->type), us_mod(ws[k], 0.0f, wents[k], d->type), &m, &a);
+                    float sc = (m > 1 ? m - 1 : 1 - m) + (a > 0 ? a : -a) * 0.01f;
+                    if (sc > bs) { bs = sc; mul = m; add = a; }
+                }
+            } else continue;
+            float sc = (mul > 1 ? mul - 1 : 1 - mul) + (add > 0 ? add : -add) * 0.01f + (sum > 0 ? sum : -sum);
+            if (sc > 0.004f) x->nEnt++;
+            if (sc > x->score) { x->score = sc; x->mul = mul; x->add = add; x->sum = sum; }
+        }
+    }
+    for (int i = 0; i < NEFFDEF; i++) {                          // squad modifiers: the squad's own extension
+        const EffDef *d = &EFFDEF[i]; Eff *x = &fx->e[i];
+        if (d->cls != MC_SQUAD || !sqx) continue;
+        char *en = mod_entry(sqx, 0x14, d->type, 0x18); if (!en) continue;
+        x->mul = *(float *)(en + 0x0C); x->add = *(float *)(en + 0x10); x->sum = *(float *)(en + 0x1C);
+        if (d->mode == EM_ON || d->mode == EM_OFF) x->score = x->sum > 0 ? x->sum : -x->sum;
+        else x->score = (x->mul > 1 ? x->mul - 1 : 1 - x->mul) + (x->add > 0 ? x->add : -x->add) * 0.01f;
+        if (x->score > 0.004f) x->nEnt = g_effNEnts;
+    }
+}
+
 // ---------- the selection ----------
 #define MAXSEL 64
-typedef struct { char *squad; int n, own; } Sel;
+typedef struct { char *squad; int n, own; } Sel;           // n: 0 none, 1 one squad, 2 several, -1 busy (keep the last)
 static void get_selection(void *arg) {
     Sel *s = arg; s->squad = NULL; s->n = 0;
     char *r = *(char **)SEL_ROOT; if (!rd(r + 8, 4)) return;
     char *a = *(char **)(r + 8); if (!rd(a + 0x20, 4)) return;
     char *sel = *(char **)(a + 0x20); if (!rd(sel + 0x35C, 0x44)) return;
     DWORD ids[MAXSEL]; int n = 0;
-    p_enter(sel + 0x39D);
+    // v3: TryEnter, never Enter - this runs inside the panel's per-frame update on the UI thread; waiting there for a lock
+    // the simulation holds (it selects/deselects under it) is how a v2 run may have frozen the game. Busy: keep the last.
+    if (p_tryEnter) { if (!p_tryEnter(sel + 0x39D)) { s->n = -1; return; } }
+    else p_enter(sel + 0x39D);
     DWORD *b = *(DWORD **)(sel + 0x35C), *e = *(DWORD **)(sel + 0x360);
     if (b && e >= b && e - b < 4096 && rd(b, (e - b) * 4)) for (DWORD *it = b; it < e && n < MAXSEL; it++) ids[n++] = *it;
     p_leave(sel + 0x39D);
+    AT("selection: ids -> entities");
     char *w = *(char **)G_WORLD; if (!rd(w + 0xF8, 4)) return;
     void *em = *(void **)(w + 0xF8); if (!rd(em, 4)) return;
     Lookup_t look = (Lookup_t)(*(void ***)em)[4];
@@ -438,6 +688,7 @@ static Upd_t o_spUpd;
 static void *g_mv; static int g_shown = -1; static DWORD g_check, g_lastCalc;
 static char g_txt[NITEMS][200]; static int g_iconDone[NITEMS]; static char g_iconPath[NITEMS][200]; static int g_layoutDirty;
 static double g_lineH, g_iconS; static int g_iconSc[NITEMS];
+static double g_rowLeft[2] = { 0, 0 }; static int g_effDirty;      // v3: where each stat row starts (the effects end left of it)
 static void setnum(void *mv, const char *fmt, int k, const char *prop, double v) {
     char p[96]; snprintf(p, sizeof p, fmt, k); strcat(p, prop); gfx_setvar(mv, p, gv_num(v));
 }
@@ -549,6 +800,7 @@ static void layout(void *mv) {
             setnum(mv, BOX ".i%d", k, "._x", x - ov); setnum(mv, BOX ".i%d", k, "._y", y + (g_lineH - g_iconS) / 2 + 1 - ov);
             x -= gapItem;
         }
+        if (g_rowLeft[row] != x + gapItem) { g_rowLeft[row] = x + gapItem; g_effDirty = 1; }
     }
     g_layoutDirty = 0;
 }
@@ -574,6 +826,158 @@ static void set_stats(void *mv, const Stats *s) {
         set_icon(mv, k, k == I_ARMOUR ? &g_armIcon[armour_class(armour_internal(s->armour))] : &g_icon[k]);
     if (g_layoutDirty) layout(mv);
 }
+// ---------- v3: the effects block, left of the stat rows: per effect an icon clip e<k> and a text f<k> (shadow g<k>) ----------
+typedef struct { int def; float mul, add, sum, score; char html[240], plain[64]; } Cell;
+static Cell g_cell[MAXEFF]; static int g_nCell = -1;
+static char g_cellIcon[MAXEFF][200]; static int g_cellDone[MAXEFF], g_cellGen[MAXEFF], g_cellSc[MAXEFF];
+static double g_eIconS, g_eLineH;
+static void make_eff_fields(void *mv) {
+    g_eIconS = g_eisize ? g_eisize : 1.3 * g_esize; g_eLineH = 1.3 * g_esize + 4;
+    for (int k = 0; k < MAXEFF; k++) {
+        char nm[16], p[96];
+        for (int s = 0; s < 2; s++) {
+            snprintf(nm, sizeof nm, s ? "f%d" : "g%d", k);
+            GfxVal b[6] = { gv_str(nm), gv_num(200 + 2 * k + s), gv_num(0), gv_num(0), gv_num(10), gv_num(g_eLineH) };
+            invoke_n(mv, BOX ".createTextField", b, 6);
+            snprintf(p, sizeof p, BOX ".%s.html", nm); gfx_setvar(mv, p, gv_bool(1));
+            snprintf(p, sizeof p, BOX ".%s.selectable", nm); gfx_setvar(mv, p, gv_bool(0));
+            snprintf(p, sizeof p, BOX ".%s.autoSize", nm); gfx_setvar(mv, p, gv_str("left"));
+            if (!s) { snprintf(p, sizeof p, BOX ".%s._alpha", nm); gfx_setvar(mv, p, gv_num(75)); }
+        }
+        snprintf(nm, sizeof nm, "e%d", k);
+        GfxVal c[2] = { gv_str(nm), gv_num(300 + k) }; invoke_n(mv, BOX ".createEmptyMovieClip", c, 2);
+        snprintf(p, sizeof p, BOX ".e%d.createEmptyMovieClip", k);
+        GfxVal d[2] = { gv_str("h"), gv_num(1) }; invoke_n(mv, p, d, 2);
+        g_cellIcon[k][0] = 0; g_cellDone[k] = 0; g_cellSc[k] = 100;
+        g_cell[k].html[0] = 0; g_cell[k].plain[0] = 0;
+        snprintf(p, sizeof p, BOX ".e%d._visible", k); gfx_setvar(mv, p, gv_bool(0));
+    }
+    g_nCell = -1; g_effDirty = 1;
+}
+// an effect icon: each new texture into a fresh child m<gen> (so the size read back is the new one's), scaled once loaded
+static void eff_icon(void *mv, int k, const Icon *ic) {
+    char p[128];
+    if (strcmp(g_cellIcon[k], ic->path)) {
+        if (g_cellGen[k]) { snprintf(p, sizeof p, BOX ".e%d.h.m%d.removeMovieClip", k, g_cellGen[k]); invoke_n(mv, p, NULL, 0); }
+        g_cellGen[k]++;
+        snprintf(p, sizeof p, BOX ".e%d.h.createEmptyMovieClip", k);
+        char nm[16]; snprintf(nm, sizeof nm, "m%d", g_cellGen[k]);
+        GfxVal a[2] = { gv_str(nm), gv_num(g_cellGen[k] % 1000 + 1) }; invoke_n(mv, p, a, 2);
+        snprintf(p, sizeof p, BOX ".e%d.h.m%d", k, g_cellGen[k]);
+        GfxVal l[2] = { gv_str(p), gv_str(ic->path) }; invoke_n(mv, "Receive_LoadMovie", l, 2);
+        snprintf(g_cellIcon[k], sizeof g_cellIcon[k], "%s", ic->path); g_cellDone[k] = 0; g_cellSc[k] = ic->scale;
+        snprintf(p, sizeof p, BOX ".e%d._visible", k); gfx_setvar(mv, p, gv_bool(0));
+        return;
+    }
+    if (g_cellDone[k] > 0) return;
+    snprintf(p, sizeof p, BOX ".e%d.h.m%d", k, g_cellGen[k]);
+    double w = clip_w(mv, p), h = clip_h(mv, p);
+    if (w <= 0 || h <= 0) {
+        if (--g_cellDone[k] == -12 && g_verbose) logmsg("effect icon %d not there after 12 checks: %s", k, ic->path);
+        return;
+    }
+    double sc = ic->scale * g_eIconS / (w > h ? w : h);
+    snprintf(p, sizeof p, BOX ".e%d._xscale", k); gfx_setvar(mv, p, gv_num(sc));
+    snprintf(p, sizeof p, BOX ".e%d._yscale", k); gfx_setvar(mv, p, gv_num(sc));
+    g_cellDone[k] = 1; g_effDirty = 1;
+}
+static const char *C_GOOD = "#8FE36A", *C_BAD = "#FF6B5A", *C_NEUTRAL = "#FFFFFF", *C_SMALL = "#B8AE90";
+static void pct(char *o, size_t n, float d) {                   // +50% / -30% / +2.5%
+    float a = d < 0 ? -d : d;
+    if (a < 0.095f && a >= 0.005f) snprintf(o, n, "%+.1f%%", d * 100); else snprintf(o, n, "%+.0f%%", d * 100);
+}
+static void num(char *o, size_t n, float v) { if (v - (int)v > 0.05f || (int)v - v > 0.05f) snprintf(o, n, "%+.1f", v); else snprintf(o, n, "%+.0f", v); }
+// the cell's text: the value (coloured by what it means for the squad), the tag and the seconds left in small type
+static void cell_text(Cell *c) {
+    const EffDef *d = &EFFDEF[c->def]; char v[32] = ""; float delta = 0;
+    float m = c->mul, a = c->add; int addOnly = (m - 1 < 0.005f && 1 - m < 0.005f);
+    switch (d->mode) {
+    case EM_RATE:
+        if (m > 0.01f && !addOnly) { delta = 1 / m - 1; pct(v, sizeof v, delta); } else { delta = -a; num(v, sizeof v, a); } break;
+    case EM_ADD:  if (!addOnly && (a < 0.005f && a > -0.005f)) { delta = m - 1; pct(v, sizeof v, delta); } else { delta = a; num(v, sizeof v, a); } break;
+    case EM_ADDP: if (!addOnly && (a < 0.005f && a > -0.005f)) { delta = m - 1; pct(v, sizeof v, delta); } else { delta = a; snprintf(v, sizeof v, "%+.0f%%", a); } break;
+    case EM_ON:   delta = 1; snprintf(v, sizeof v, "%s", d->tag); break;
+    case EM_OFF:  delta = -1; snprintf(v, sizeof v, "%s", d->tag); break;
+    default:      if (addOnly) { delta = a; num(v, sizeof v, a); } else { delta = m - 1; pct(v, sizeof v, delta); } break;
+    }
+    const char *col = delta * d->good > 0 ? C_GOOD : delta * d->good < 0 ? C_BAD : C_NEUTRAL;
+    const char *tag = d->mode == EM_ON || d->mode == EM_OFF ? "" : d->tag;
+    char sm[48]; snprintf(sm, sizeof sm, "%s", tag);
+    if (*sm) snprintf(c->html, sizeof c->html, "<font face=\"$NormalFont\" size=\"%d\" color=\"%s\">%s<font size=\"%d\" color=\"%s\"> %s</font></font>",
+                      g_esize, col, v, g_esize * 3 / 4, C_SMALL, sm);
+    else snprintf(c->html, sizeof c->html, "<font face=\"$NormalFont\" size=\"%d\" color=\"%s\">%s</font>", g_esize, col, v);
+    snprintf(c->plain, sizeof c->plain, "%s %s%s%s", mod_name(d->cls, d->type), v, *sm ? " " : "", sm);
+}
+static int cell_cmp(const void *x, const void *y) {           // the biggest change first
+    const Cell *a = x, *b = y;
+    return a->score < b->score ? 1 : a->score > b->score ? -1 : a->def - b->def;
+}
+// from the engine's numbers to the cells shown (merged by icon + tag: the five knockback chances are one "knockback")
+static int compose(const Effs *fx, Cell *out) {
+    Cell all[NEFFDEF]; int n = 0;
+    for (int i = 0; i < NEFFDEF; i++) {
+        const EffDef *d = &EFFDEF[i]; const Eff *x = &fx->e[i];
+        if (d->mode == EM_ON ? x->sum <= 0 : d->mode == EM_OFF ? x->sum >= 0 : x->score <= 0.004f) continue;
+        int f = -1;
+        for (int q = 0; q < n; q++) if (EFFDEF[all[q].def].icon == d->icon && !strcmp(EFFDEF[all[q].def].tag, d->tag)) f = q;
+        Cell c = { i, x->mul, x->add, x->sum, x->score, "", "" };
+        if (f < 0) all[n++] = c;
+        else if (c.score > all[f].score) all[f] = c;
+    }
+    qsort(all, n, sizeof all[0], cell_cmp);
+    if (n > g_effMax) n = g_effMax;
+    for (int k = 0; k < n; k++) { out[k] = all[k]; cell_text(&out[k]); }
+    return n;
+}
+static int g_effShown;                                         // cells laid out (the rest did not fit)
+static void layout_eff(void *mv) {
+    double gapI = 0.2 * g_esize, gapItem = 0.6 * g_esize, x = g_effX + g_offX;
+    int row = 0; g_effShown = 0;
+    for (int k = 0; k < MAXEFF; k++) {
+        char p[96]; int vis = 0;
+        if (k < g_nCell) {
+            snprintf(p, sizeof p, BOX ".f%d", k);
+            double w = clip_w(mv, p); if (w < 0) w = 0.55 * g_esize * 5;
+            double cw = g_eIconS + gapI + w;
+            for (; row < 2; row++, x = g_effX + g_offX) if (x + cw <= g_rowLeft[row] - g_effGap || (x == g_effX + g_offX && g_rowLeft[row] == 0)) break;
+            if (row < 2) {
+                double yr = 134.7 + 2 + g_offY + row * g_lineH, yt = yr + (g_lineH - g_eLineH) / 2;
+                double ov = g_eIconS * (g_cellSc[k] - 100) / 200.0;
+                setnum(mv, BOX ".e%d", k, "._x", x - ov); setnum(mv, BOX ".e%d", k, "._y", yr + (g_lineH - g_eIconS) / 2 + 1 - ov);
+                setnum(mv, BOX ".f%d", k, "._x", x + g_eIconS + gapI); setnum(mv, BOX ".f%d", k, "._y", yt);
+                setnum(mv, BOX ".g%d", k, "._x", x + g_eIconS + gapI + 1.1); setnum(mv, BOX ".g%d", k, "._y", yt + 1.3);
+                x += cw + gapItem; vis = 1; g_effShown++;
+            }
+        }
+        snprintf(p, sizeof p, BOX ".e%d._visible", k); gfx_setvar(mv, p, gv_bool(vis && g_cellDone[k] > 0));
+        snprintf(p, sizeof p, BOX ".f%d._visible", k); gfx_setvar(mv, p, gv_bool(vis));
+        snprintf(p, sizeof p, BOX ".g%d._visible", k); gfx_setvar(mv, p, gv_bool(vis));
+    }
+    g_effDirty = 0;
+}
+static void set_effects(void *mv, const Cell *c, int n) {
+    for (int k = 0; k < n; k++) {
+        if (strcmp(c[k].html, g_cell[k].html)) {
+            char p[96], sh[260];
+            snprintf(p, sizeof p, BOX ".f%d.htmlText", k); gfx_setvar(mv, p, gv_str(c[k].html));
+            char *o = sh; const char *q = c[k].html;                 // the shadow: the same, black
+            while (*q && o < sh + sizeof sh - 8) {
+                if (*q == '#' && strlen(q) >= 7 && (!strncmp(q, C_GOOD, 7) || !strncmp(q, C_BAD, 7) || !strncmp(q, C_NEUTRAL, 7) || !strncmp(q, C_SMALL, 7))) { memcpy(o, "#000000", 7); o += 7; q += 7; }
+                else *o++ = *q++;
+            }
+            *o = 0;
+            snprintf(p, sizeof p, BOX ".g%d.htmlText", k); gfx_setvar(mv, p, gv_str(sh));
+            g_effDirty = 1;
+        }
+        eff_icon(mv, k, &g_eicon[EFFDEF[c[k].def].icon]);
+        g_cell[k] = c[k];
+    }
+    if (n != g_nCell) g_effDirty = 1;
+    for (int k = n; k < MAXEFF; k++) g_cell[k].html[0] = 0;
+    g_nCell = n;
+    if (g_effDirty) layout_eff(mv);
+}
+
 static void show(void *mv, int vis) {
     if (vis == g_shown) return;
     g_shown = vis;
@@ -587,6 +991,18 @@ static void reload_ini(DWORD now) {
     logmsg("UnitStats.ini re-read: Enabled=%d FontSize=%d IconSize=%d OffsetX=%d OffsetY=%d PerModel=%d", g_enabled, g_size, g_isize, g_offX, g_offY, g_perModel);
 }
 static char *g_loggedSq[32]; static int g_nLogged; static char *g_lastSq;
+// v3: a watchdog (its own thread, reads two globals, writes the log only): where the panel update is if it does not return
+static DWORD WINAPI watchdog(LPVOID _) {
+    DWORD lastFrames = 0, quiet = 0; int told = 0;
+    for (;;) {
+        Sleep(1000);
+        DWORD f = g_frames, now = GetTickCount();
+        if (f != lastFrames) { lastFrames = f; quiet = 0; told = 0; continue; }
+        if (++quiet == 5 && f) { logmsg("watchdog: the selection panel's update has not run for 5 s (frames %lu), last in \"%s\" %lu ms ago", f, (const char *)g_where, now - g_whereT); told = 1; }
+        if (told && quiet % 60 == 0) logmsg("watchdog: still no panel update (%lu s), last in \"%s\"", quiet, (const char *)g_where);
+    }
+    return 0;
+}
 static void frame(char *form) {
     void *mv = gfx_movie_of_form(form);
     if (!mv) return;
@@ -595,15 +1011,17 @@ static void frame(char *form) {
     if (mv != g_mv || (now - g_check > 1000 && (g_check = now, !gfx_exists(mv, "core_actions.us_box.t0")))) {
         if (!gfx_exists(mv, "core_actions")) return;
         g_mv = mv; g_check = now; g_shown = -1;
-        make_fields(mv);
+        make_fields(mv); make_eff_fields(mv);
     }
     if (now - g_lastCalc < 250) return;                  // four times a second is plenty
     g_lastCalc = now;
     Sel s; memset(&s, 0, sizeof s);
-    if (!g_enabled || g_dead || !run_guarded(get_selection, &s, "the selection") || s.n != 1) { show(mv, 0); g_lastSq = NULL; return; }
-    Stats st; Job j = { s.squad, &st };
+    AT("selection");
+    if (g_enabled && !g_dead && run_guarded(get_selection, &s, "the selection") && s.n == -1) return;   // the selection is busy: as it was
+    if (!g_enabled || g_dead || s.n != 1) { show(mv, 0); g_lastSq = NULL; return; }
+    AT("stats"); Stats st; Job j = { s.squad, &st };
     if (!run_guarded(squad_stats, &j, "the squad's numbers") || !st.models) { show(mv, 0); return; }
-    set_stats(mv, &st);
+    AT("stats panel"); set_stats(mv, &st);
     show(mv, 1);
     if (g_verbose && s.squad != g_lastSq) {
         logmsg("sel %s: ranged %.2f, melee %.2f, skill %d (v1 %d), %s, range %.1f, speed %.2f, sight %.1f",
@@ -619,8 +1037,28 @@ static void frame(char *form) {
                st.sameM ? "" : " differ", st.skill, st.skillOld, st.armour, armour_internal(st.armour), st.armourName, st.range, st.range0,
                st.speed, st.speed0, st.sight, g_detail);
     }
+    // v3: the effects
+    if (g_effOn && g_effMax > 0 && !g_dead) {
+        static Effs fx; memset(&fx, 0, sizeof fx); fx.squad = s.squad;
+        EJob ej = { s.squad, &fx };
+        g_detailN = 0; g_detail[0] = 0;
+        AT("effect values");
+        if (run_guarded(eff_values, &ej, "the squad's effects")) {
+            AT("effects panel"); Cell cells[MAXEFF]; int n = compose(&fx, cells);
+            set_effects(mv, cells, n);
+            static char last[1024]; static char *lastSq; char now[1024]; int o = 0; now[0] = 0;
+            for (int k = 0; k < n && o < (int)sizeof now - 80; k++) o += snprintf(now + o, sizeof now - o, "%s%s", k ? "; " : "", cells[k].plain);
+            if (g_verbose && (strcmp(now, last) || s.squad != lastSq)) {
+                char per[400]; int q = 0; per[0] = 0;                 // the engine's numbers, and how many of the models have each
+                for (int k = 0; k < n && q < (int)sizeof per - 60; k++) q += snprintf(per + q, sizeof per - q, " %s x%.3f %+.2f sum %g on %d/%d;", mod_name(EFFDEF[cells[k].def].cls, EFFDEF[cells[k].def].type),
+                                                                   cells[k].mul, cells[k].add, cells[k].sum, fx.e[cells[k].def].nEnt, g_effNEnts);
+                logmsg("effects %s: %s%s (%d shown) |%s", p_sqName ? p_sqName(s.squad) : "?", n ? now : "none", n > g_effShown ? " - not all fit" : "", g_effShown, per);
+                strcpy(last, now); lastSq = s.squad;
+            }
+        }
+    } else if (g_nCell) set_effects(mv, NULL, 0);
 }
-static void __thiscall hk_sp_upd(char *form, float dt) { o_spUpd(form, dt); frame(form); }
+static void __thiscall hk_sp_upd(char *form, float dt) { g_frames++; AT("the game's panel update"); o_spUpd(form, dt); AT("ours"); frame(form); AT("idle"); }
 
 static void *sim(const char *name) { HMODULE m = GetModuleHandleA("SimEngine.dll"); return m ? (void *)GetProcAddress(m, name) : NULL; }
 static void *plat(const char *name) { HMODULE m = GetModuleHandleA("Platform.dll"); return m ? (void *)GetProcAddress(m, name) : NULL; }
@@ -636,13 +1074,18 @@ static int resolve(void) {
     p_pbgFile = (S0_t)sim("?GetFilename@PropertyBagGroup@@QBEPBDXZ");
     p_enter   = (M0_t)plat("?Enter@RecursiveMutex@Plat@@QAEXXZ");
     p_leave   = (M0_t)plat("?Leave@RecursiveMutex@Plat@@QAEXXZ");
+    p_tryEnter = (TE_t)plat("?TryEnter@RecursiveMutex@Plat@@QAE_NXZ");
+    p_sqi     = (QI_t)sim("?QI@SquadController@@QAEPAVSquadExtension@@I@Z");
+    g_haveMName = code_is(FN_MNAME_E, MNAME_PRO, 3) && code_is(FN_MNAME_W, MNAME_PRO, 3) && code_is(FN_MNAME_S, MNAME_PRO, 3);
     g_haveSkill = code_is(FN_SKILL, SKILL_PRO, 4);
     g_haveLvl = code_is(FN_LVLMUL, LVL_PRO, 4);
     g_haveTun = code_is(FN_TUNING, TUN_PRO, 4);
     g_haveEmod = code_is(FN_EMOD, EMOD_PRO, 4);
     g_haveComb = g_haveTun && code_is(0x007E2F50, COMB_PRO, 4) && rd((void *)0x00F88130, 8);
-    logmsg("engine: melee skill %s, level multiplier %s, world tuning %s, entity modifiers %s, combat tuning %s", g_haveSkill ? "ok" : "NOT FOUND",
-           g_haveLvl ? "ok" : "NOT FOUND", g_haveTun ? "ok" : "NOT FOUND", g_haveEmod ? "ok" : "NOT FOUND", g_haveComb ? "ok" : "NOT FOUND");
+    logmsg("engine: melee skill %s, level multiplier %s, world tuning %s, entity modifiers %s, combat tuning %s; v3: squad modifiers %s, "
+           "modifier names %s, selection TryEnter %s", g_haveSkill ? "ok" : "NOT FOUND",
+           g_haveLvl ? "ok" : "NOT FOUND", g_haveTun ? "ok" : "NOT FOUND", g_haveEmod ? "ok" : "NOT FOUND", g_haveComb ? "ok" : "NOT FOUND",
+           p_sqi ? "ok" : "NOT FOUND", g_haveMName ? "ok" : "NOT FOUND", p_tryEnter ? "ok" : "NOT FOUND");
     return p_qi && p_allEnts && p_begin && p_end && p_enter && p_leave && code_is(FN_MOD, MOD_PRO, 4);
 }
 
@@ -650,6 +1093,7 @@ static DWORD WINAPI worker(LPVOID _) {
     for (int i = 0; i < 120 && !(GetModuleHandleA("SimEngine.dll") && GetModuleHandleA("Platform.dll")); i++) Sleep(500);
     if (!resolve()) { logmsg("SimEngine.dll / Platform.dll functions or DOW2.exe 3.19 code not found - no numbers"); return 0; }
     AddVectoredExceptionHandler(1, us_veh);
+    CloseHandle(CreateThread(NULL, 0, watchdog, NULL, 0, NULL));
     if (gfx_hook_slot(SP_VT_UPD, SP_UPD_FN, (void *)hk_sp_upd, (void **)&o_spUpd))
         logmsg("hooked the selection panel's per-frame update%s", (DWORD)o_spUpd != SP_UPD_FN ? " (after another add-on)" : "");
     else logmsg("selection panel form not as in DOW2.exe 3.19 - no numbers");
@@ -664,7 +1108,7 @@ BOOL WINAPI DllMain(HINSTANCE h, DWORD reason, LPVOID _) {
     GetModuleFileNameW(h, dir, MAX_PATH); wchar_t *sl = wcsrchr(dir, L'\\'); if (sl) sl[1] = 0; else dir[0] = 0;
     _snwprintf(g_ini, MAX_PATH, L"%lsUnitStats.ini", dir); _snwprintf(g_log, MAX_PATH, L"%lsUnitStats.log", dir);
     load_ini();
-    logmsg("UnitStats 0.2 EXPERIMENT (selected squad's DPS / melee skill / armour / range / speed / sight with the game's icons left of Retreat, in the game's own selection panel movie)");
+    logmsg("UnitStats 0.3 EXPERIMENT (selected squad's DPS / melee skill / armour / range / speed / sight and its active effects with the game's icons left of Retreat, in the game's own selection panel movie)");
     if (!g_enabled) { logmsg("disabled in UnitStats.ini"); return TRUE; }
     CloseHandle(CreateThread(NULL, 0, worker, NULL, 0, NULL));
     return TRUE;

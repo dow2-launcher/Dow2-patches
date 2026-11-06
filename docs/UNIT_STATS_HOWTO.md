@@ -9,6 +9,9 @@ melee skill now the one melee combat uses, icons of the game instead of words, t
 per-model number, range as written in the data, speed with its modifiers. Checked under Elite (the mod the reviewers
 play; v1 was checked only on vanilla data). Section "v2" at the end.
 
+v3 / 0.3 (05-06.11.2026, grantovich: "further left, active buffs, resists, auras and so on - like in DoW1"): the active
+effects on the squad as a third block left of the stat rows. Section "v3" at the end.
+
 Status: **experiment, archive branch `archive/unitstats-experiment` only.** Not in `addons.json`, not in the store, not
 for players. `make build/UnitStats.dll` (not part of `make all`). Code: `unitstats/unitstats.c`.
 The result of the stand test (screenshots, numbers, what did not work) is at the end of this file.
@@ -270,3 +273,111 @@ squads are not in the selection); numbers from the earlier run's log. One run (e
 in the game loop, sim stopped) 2.5 min in, right after a dead start squad was deselected by the SCAR; three runs
 (e1, e3, e4, 5-8 min each, the same DLL code) did not - not reproduced, not explained; the engine calls can be
 switched off one by one in the ini (GameSkill / EntityMods / LevelMul) if it shows again.
+
+## v3 - the active effects (0.3, 05-06.11.2026)
+
+Request (grantovich, DM 05.11.2026 22:07): "further left show the active buffs, resists, auras and so on, like in DoW1".
+
+### What is shown
+
+Left of the two stat rows, in the same strip of `core_actions` (clips `e<k>` icon, `f<k>` text, `g<k>` its black shadow,
+depths 300+k / 200+2k), up to `[Effects] Max` = 6 cells, filled from `Left` (-470, the left edge of the strip) towards the
+stats, row 1 then row 2, never closer than `Gap` (14) to the leftmost stat item of that row (`layout()` records it in
+`g_rowLeft[]`); what does not fit is dropped (the log says "not all fit"). A cell = a game icon + the net change in green
+(good for the squad) or red (bad) + a small tag ("heavy", "vs veh", "no retreat"). Biggest change first.
+
+| Modifier type(s) (the engine's names) | Icon (game texture) | Reads as |
+|---|---|---|
+| received_damage | icon_traits_xp2/damage_resistance (gold shield) | "-30%" damage taken |
+| received_damage_melee (+light/heavy/power) | icon_traits_xp2/melee_def | "-70%" melee damage taken |
+| received_damage_ranged / piercing / flame / explosive / plasma / detonation | icon_traits_xp2/ranged_def | "-50%" ranged damage taken |
+| received_accuracy | icon_traits_xp2/force_shield | accuracy of shots at it |
+| damage_weapon, damage_armor_* | icon_traits_xp2/damage (tag "vs inf"...) | "+30%" damage |
+| damage_melee_weapon / damage_ranged(+projectile) | decorators/mod_melee / mod_ranged (what the game draws over a buffed unit) | melee / ranged damage |
+| accuracy (+ranged / melee) | tooltips/ico_accuracy | its accuracy |
+| cooldown, reload (as a rate: 1/x - 1), burst | icon_traits_xp2/rate_of_fire | "-95%" = fires 20x slower |
+| range_maximum | tooltips/ico_range | range |
+| speed_maximum | icon_traits_xp2/sprint | "-65%" or "+0.5" (an addition) |
+| health_maximum / health_regeneration | health_generic / health_regeneration | |
+| sight_radius | loading tip up_detector (eye) | |
+| skill_melee | icon_traits_xp2/melee_paralyzes | "+50" |
+| armour_penetration, courage_damage, setup | critical_hit, suppression, setup | |
+| knockback_chance_* (5 kinds, one cell) | knockback_def | "-100%" |
+| ability_recharge_time (entity, squad) | cool_down | |
+| received_courage_damage (squad) | suppression_def | "-100%" = no suppression |
+| energy_regen_rate / energy_maximum (squad) | energy | |
+| camouflage_enable > 0 / shoot_enable < 0 / retreat_enable < 0 | invisibility / stun / fanaticism (IG) | "hidden" / "no fire" / "no retreat" |
+
+All icons are game textures (`img://data:UI/textures/...dds`, vanilla 000_data.sga), `[EffectIcons]` in the ini overrides any.
+
+### Where the numbers come from (DOW2.exe 3.19)
+
+Modifiers in DoW2 are not kept per buff on a unit - every modifier extension keeps, per modifier TYPE, a 0x20-byte entry:
+`+0` vector of `{handle, Modifier*}` pairs (each modifier applied, for exclusivity), `+0xC` multiplier, `+0x10` addition,
+`+0x14/+0x18` the same of only the decorator-shown ones, `+0x1C` the enable sum - recomputed by `0x88B2B0` (usage 0 adds,
+usage 1 multiplies **additively**: `1 + sum(v - 1)` - two x1.5 = x2.0, usage 2 sums the enable values; exclusive ones
+counted once). Vectors: entity `ModifierExt` (QI 2, vtable 0x011013B0) `+0x14` entity types (0x39), `+0x20` weapon types
+(0x1F); `SquadModifierExt` (`SquadController::QI(1)`, squad +0x48; vtable 0x01101470) `+0x14` squad types (0x18), `+0x20`
+entity types, `+0x2C` weapon types, `+0x38` upgrade ones (dump: `0x9E8370` "SquadModifierExt: Entity Modifiers:...").
+Type names: the game's own tables `0x8A7590` (entity), `0x8A7400` (weapon), `0x8A7910` (squad) - `jmp [eax*4+table]`,
+`mov eax, "modifiers\entity_modifiers\received_damage_modifier"`. A Modifier (0x40, made by `0x8AD4D0`): `+0x10` value,
+`+0x14` type, `+0x18` application (apply_to_entity / squad / weapon / player...), `+0x1C` class (0 entity, 2 squad,
+3 weapon), `+0x20` usage, `+0x24` exclusive, `+0x28` exclusive type, `+0x3D` show_modifier_decorator.
+
+The shown value is what the game's code gets, through the game's own functions, so player-level (research), entity,
+squad and per-weapon (hardpoint-targeted, e.g. Guide's `hardpoint_01`) modifiers all count:
+* entity types: `0x8A6AC0(value, entity, type, 0)` = `(value + add) * mul` over player (`0x7E6440`, per blueprint),
+  entity and squad extensions; called with 1 and 0: `mul = f(1) - f(0)`, `add = f(0) / mul`;
+* weapon types: `0x8A6790(weapon, value, entity, type)` the same way, per weapon of the entity; the weapon with the
+  biggest change is shown (class-specific types - melee / ranged damage, accuracy - only touch weapons of that class);
+* squad types: the squad extension's entry directly; enable types: the sums of the entries.
+The model with the biggest change wins; the log says on how many models it is ("on 5/5").
+
+### What is not shown: the time left
+
+The timer of an applied modifier is a record (0x34: `+0` Modifier, `+4` handle, `+8` timer - vtable 0x010DDED8, `+0x50`
+ticks left counted down by `0x91DC20`, `+0x4C` "while a condition holds" -, `+0xC` the Target, `+0x2C` the entity),
+created by `0x91D7D0` and kept in the `ModifierActionState` (0x44, vtable 0x010DBC28, list at `+0x3C`, made by
+`0x8547B0` from `ApplyModifiersAction::Execute 0x8545E0`). That state lives in the action tree of the CASTER: the
+ActionUpdater of the ability that ran it, nested in Timed / Delay / Repeat / Requirement action states (each has its own
+ActionUpdater: `0x9E19C0` +0x44, `0x94C4D0` +0x48, `0x94ADD0` +0xB8, `0x853FC0` +0x40; player abilities: ModPlayer
++0x3B8 -> per ability +0x14). Not on the buffed squad, not in the world's ActionUpdater (world +0x1E0 - only
+`IsAliveAction` states, one per entity group, stand 1) and not in the world's modifier applier manager (+0x1DC - empty in a
+skirmish). The squad's own ModifierExt has the pairs, not the time. Doing it: walk every squad's / player's ability
+updaters (recursively through those action states) for 0x010DBC28 states whose records target the selected squad's
+entities - read-only, but many more engine structures to trust; left for a later version.
+
+### Stand test (stand 1, Elite, 05-06.11.2026)
+
+`unitstats/stand/session_v3.sh` + `unitstats_v3.scar` + `init_v3.lua.in`: we are Eldar, the enemy IG with the Lord
+Commissar (AI off); the script casts with `Cmd_Ability(..., skipCostPrereq = true)` and selects one squad at a time; log
+`unitstats/stand/UnitStats_stand1_0511_v3_elite.log`, screenshots `/var/www/media/dow2_shots/unitstats/v3/` (`zoom_*`).
+
+| Case | Shown | Data |
+|---|---|---|
+| Warp Spiders, nothing on them | nothing | - |
+| Guardians + Fortune | damage taken -30% (and the lasting -50% melee / -50% ranged) | eld_buff_target_fortune: received_damage x0.7, 15 s (gone after 15 s) |
+| + Guide | +30% damage, +30% range (5th cell did not fit) | eld_buff_target_guide: damage_weapon x1.3 hardpoint_01, range_maximum x1.3 |
+| Banshees + exarch aura | speed +0.5 (stat row speed 5.5 -> 6.0) | eld_buff_aoe_auraexarch: speed_maximum, addition 0.5 |
+| Guardians under heavy weapon fire | fire rate -95%, speed -65% (DPS 43.75 -> 6.7, speed 1.9) | suppression: cooldown x20, speed x0.35 |
+| Nobz + Frenzy | suppression taken -100%, damage taken -75% | ork_buff_self_frenzy: received_courage x0, received_damage x0.25, 10 s |
+| Guardsmen after the commissar's execution | damage +100% (ranged DPS 25.9 -> 43 for 5 models) | ig_commissar_execute_effects: damage_weapon x2 |
+| Lord Commissar | melee damage taken -40% | lasting |
+| fresh Guardians in the open | nothing | - |
+
+The lasting "-50% melee / -50% ranged damage taken" (banshees, tactical marines -70% melee) shows on squads standing near
+the bases and not on the same squads in the open - most likely cover; the engine's numbers, source not identified.
+Stats (rows 1-2) as in v2 for every squad (same numbers as the v2 table). No faults.
+
+### The freeze of v2 (one run in four): not UnitStats
+
+Reproduced every time on the stand by the stand script itself: a squad is selected, `Squad_Kill` kills it, then SCAR
+`Misc_SelectSquad` selects another squad -> simulation and UI both stop (the watchdog of 0.3: the panel's update stops
+while our code is idle). The same with UnitStats switched off (`Enabled=0`, run e3off: the SCAR heartbeat stops right
+after that select) and when the dead squad is not deselected first; killing the selected squad alone is fine (the game ran
+on 10 s). v2's frozen run e2 was the same pattern ("gone start squad 2" = a dead squad, then a select). So it is a
+game/Wine reaction to a script selection right after the selected squad died, not the DLL; the v3 stand script avoids it.
+0.3 still hardens the DLL: the selection mutex is taken with `TryEnter` (never waits; busy = keep the last frame),
+pointers are checked with VirtualQuery instead of IsBadReadPtr (inside the guard our own vectored handler would take
+IsBadReadPtr's fault), a fault skips one update instead of ending the numbers (20 end them), and a watchdog thread logs if
+the panel update stops ("watchdog: ..." in UnitStats.log, says where).
