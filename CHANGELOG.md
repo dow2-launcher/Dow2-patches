@@ -4,6 +4,15 @@ Every version gets an entry here before it reaches `main`. CI then tags `vX.Y.Z`
 version (`X.Y.0`) it also publishes a GitHub Release with the DLLs and the entries since the previous `X.Y.0`.
 The version of the set lives only in `VERSION`; each DLL still writes its own version to its log.
 
+## 0.2.16 — 2026-11-06
+LiveReplay 2 (store livereplay-2) after the players' test of 06.11 (siritos, l'Alerion): "the server did not give the game", a long
+wait in the menu, then the game crashed on the map's loading screen.
+- The crash was the servers' header: both players of m3 had a Random army; the lobby has race / hero 255 for it, the replay got that
+  (dow2-ladder #9 takes what the game rolled - the slot carries it - and gives no header rather than a wrong one). The DLL is the same.
+- "The server did not give the game": the ladder's TCP to the Moscow nodes stalled (now over our UDP tunnel, dow2-ladder #9). The DLL
+  now waits 90 s for its first answer (it said "server" after 3 failed tries); the launcher shows "fetching" meanwhile.
+- Stand 1: a Random-army stand match (c7) served as a running one - loads, plays in sync.
+
 ## 0.2.15 — 2026-11-06
 Watch a running match (owner 06.11.2026: "зритель открывает матч в лаунчере и смотрит его как реплей, который не заканчивается и
 подтягивается вживую, с задержкой, заданной сервером"): LiveReplay.dll 1 (store livereplay-1, experiment, Elite and vanilla) +
