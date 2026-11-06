@@ -13,6 +13,10 @@
 #include <stdlib.h>
 #include <string.h>
 
+// MMFind 0.46: built as mmpipe.exe with -DPIPE_PREFIX="EliteMMFind" - the test client of MMFind's pipe (launcher rooms)
+#ifndef PIPE_PREFIX
+#define PIPE_PREFIX "EliteRoomJoin"
+#endif
 static DWORD find_game(void) {
     HANDLE s = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0); PROCESSENTRY32 e; e.dwSize = sizeof e; DWORD pid = 0;
     if (s == INVALID_HANDLE_VALUE) return 0;
@@ -38,7 +42,7 @@ int main(int argc, char **argv) {
     t0 = GetTickCount();
     DWORD pid = strcmp(argv[1], "auto") ? strtoul(argv[1], NULL, 10) : find_game();
     if (!pid) { printf("no DOW2.exe\n"); return 1; }
-    char name[64]; snprintf(name, sizeof name, "\\\\.\\pipe\\EliteRoomJoin-%lu", pid);
+    char name[64]; snprintf(name, sizeof name, "\\\\.\\pipe\\" PIPE_PREFIX "-%lu", pid);
     HANDLE h = INVALID_HANDLE_VALUE;
     for (int i = 0; i < 50 && h == INVALID_HANDLE_VALUE; i++) {
         h = CreateFileA(name, GENERIC_READ | GENERIC_WRITE, 0, NULL, OPEN_EXISTING, 0, NULL);

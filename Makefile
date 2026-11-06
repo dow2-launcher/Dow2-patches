@@ -119,6 +119,12 @@ $(OUT)/RoomJoin.dll: roomjoin/roomjoin.c | $(OUT)
 # RoomJoin's pipe for a launcher outside Wine (Linux): shipped with the add-on as Elite_DLLs/rjbridge.exe
 $(OUT)/rjbridge.exe: roomjoin/rjbridge.c | $(OUT)
 	$(CC) $(CFLAGS) -o $@ $< -static-libgcc
+# MMFind 0.46: the same bridge for MMFind's pipe (launcher rooms), shipped with the automatch package as Elite_DLLs/mmbridge.exe
+$(OUT)/mmbridge.exe: roomjoin/rjbridge.c | $(OUT)
+	$(CC) $(CFLAGS) -DPIPE_PREFIX='L"EliteMMFind"' -o $@ $< -static-libgcc
+# the test client of MMFind's pipe (not shipped): make build/mmpipe.exe
+$(OUT)/mmpipe.exe: roomjoin/rjpipe.c | $(OUT)
+	$(CC) $(CFLAGS) -DPIPE_PREFIX='"EliteMMFind"' -o $@ $< -static-libgcc
 # the test client of RoomJoin's pipe (RoomJoin 9; not shipped): make build/rjpipe.exe
 $(OUT)/rjpipe.exe: roomjoin/rjpipe.c | $(OUT)
 	$(CC) $(CFLAGS) -o $@ $< -static-libgcc

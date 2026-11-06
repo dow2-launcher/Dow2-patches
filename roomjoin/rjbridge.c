@@ -7,12 +7,19 @@
 // Ends when the pipe closes (the game ended) or stdin ends (the launcher let go). No pipe: one line
 // {"ev":"bridge","error":"no_pipe"} (or "no_game") on stdout and exit code 2.
 // Shipped with the RoomJoin add-on (Elite_DLLs/rjbridge.exe); built from this file alone.
+#ifndef _WIN32_WINNT
+#define _WIN32_WINNT 0x0600                 // GetNamedPipeServerProcessId (Vista+) with older mingw headers
+#endif
 #include <windows.h>
 #include <tlhelp32.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
+// MMFind 0.46: the same bridge for MMFind's pipe (launcher rooms) - built as mmbridge.exe with -DPIPE_PREFIX=L"EliteMMFind"
+#ifndef PIPE_PREFIX
+#define PIPE_PREFIX L"EliteRoomJoin"
+#endif
 static HANDLE g_pipe, g_out;
 static void out(const char *s, DWORD n) { DWORD w; while (n) { if (!WriteFile(g_out, s, n, &w, NULL) || !w) ExitProcess(0); s += w; n -= w; } }
 static DWORD WINAPI from_launcher(LPVOID _) {                         // stdin -> the pipe (its own OVERLAPPED: the main thread reads it)
@@ -26,7 +33,7 @@ static DWORD WINAPI from_launcher(LPVOID _) {                         // stdin -
     return 0;
 }
 static HANDLE open_pipe(DWORD pid) {
-    wchar_t name[64]; _snwprintf(name, 64, L"\\\\.\\pipe\\EliteRoomJoin-%lu", pid); name[63] = 0;
+    wchar_t name[64]; _snwprintf(name, 64, L"\\\\.\\pipe\\" PIPE_PREFIX L"-%lu", pid); name[63] = 0;
     for (int i = 0; i < 20; i++) {
         HANDLE h = CreateFileW(name, GENERIC_READ | GENERIC_WRITE, 0, NULL, OPEN_EXISTING, FILE_FLAG_OVERLAPPED | SECURITY_SQOS_PRESENT | SECURITY_IDENTIFICATION, NULL);
         if (h != INVALID_HANDLE_VALUE) {
