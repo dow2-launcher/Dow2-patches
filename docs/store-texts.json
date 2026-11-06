@@ -327,5 +327,23 @@
       "fr": "À activer si le jeu se ferme tout seul une seconde après le début de la partie. Répare une partie d'Elite qui parfois ne démarre pas ; si tout va bien, rien ne change.",
       "de": "Einschalten, wenn sich das Spiel eine Sekunde nach Spielbeginn von selbst schließt. Repariert einen Teil von Elite, der manchmal nicht startet; sonst ändert sich nichts."
     }
+  },
+  "livereplay": {
+    "category": "experiment",
+    "order": 15,
+    "name": {
+      "en": "Watch running matches",
+      "ru": "Смотреть идущие матчи",
+      "es": "Ver partidas en curso",
+      "fr": "Regarder les parties en cours",
+      "de": "Laufende Spiele ansehen"
+    },
+    "description": {
+      "en": "A Watch button on a running match of our servers (Online on the home tab): the game opens it as a replay that keeps going, a couple of minutes behind the players.",
+      "ru": "Кнопка «Смотреть» у идущего матча на наших серверах (блок «Онлайн» на главной): игра откроет его как реплей, который идёт дальше, с отставанием от игроков на пару минут.",
+      "es": "Un botón Ver en una partida en curso de nuestros servidores (En línea, en la pestaña principal): el juego la abre como una repetición que sigue avanzando, un par de minutos por detrás de los jugadores.",
+      "fr": "Un bouton Regarder sur une partie en cours de nos serveurs (En ligne, onglet d'accueil) : le jeu l'ouvre comme un replay qui continue, avec quelques minutes de retard sur les joueurs.",
+      "de": "Ein Zuschauen-Knopf an einem laufenden Spiel unserer Server (Online auf der Startseite): das Spiel öffnet es als Replay, das weiterläuft, ein paar Minuten hinter den Spielern."
+    }
   }
 }

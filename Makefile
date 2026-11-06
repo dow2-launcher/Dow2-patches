@@ -12,6 +12,7 @@ all: $(OUT)/EliteAI.dll $(OUT)/Reverse.dll $(OUT)/MMFind.dll $(OUT)/RoomJoin.dll
 all: $(OUT)/RelayForward.dll $(OUT)/OwnLobby.dll $(OUT)/CrashLog.dll $(OUT)/NetProbe.dll
 all: $(OUT)/rjbridge.exe
 all: $(OUT)/ShellFix.dll
+all: $(OUT)/LiveReplay.dll $(OUT)/lrbridge.exe
 
 $(OUT):
 	mkdir -p $(OUT)
@@ -128,3 +129,10 @@ $(OUT)/mmpipe.exe: roomjoin/rjpipe.c | $(OUT)
 # the test client of RoomJoin's pipe (RoomJoin 9; not shipped): make build/rjpipe.exe
 $(OUT)/rjpipe.exe: roomjoin/rjpipe.c | $(OUT)
 	$(CC) $(CFLAGS) -o $@ $< -static-libgcc
+
+# 06.11.2026: watch a running match of our servers as a growing replay (the spectator's side; the servers build the replay)
+$(OUT)/LiveReplay.dll: livereplay/livereplay.c | $(OUT)
+	$(CC) $(CFLAGS) -shared -o $@ $< -lwinhttp -lshell32 -static-libgcc
+# its pipe for a launcher outside Wine (Linux), shipped with the add-on as Elite_DLLs/lrbridge.exe
+$(OUT)/lrbridge.exe: roomjoin/rjbridge.c | $(OUT)
+	$(CC) $(CFLAGS) -DPIPE_PREFIX='L"EliteLiveReplay"' -o $@ $< -static-libgcc
