@@ -4,6 +4,22 @@ Every version gets an entry here before it reaches `main`. CI then tags `vX.Y.Z`
 version (`X.Y.0`) it also publishes a GitHub Release with the DLLs and the entries since the previous `X.Y.0`.
 The version of the set lives only in `VERSION`; each DLL still writes its own version to its log.
 
+## 0.2.19 — 2026-11-07
+UnitStats 0.5 - a new add-on (store unitstats-0.5, category experiment, off by default; Elite and vanilla): the selected
+squad's ranged / melee DPS, melee skill, armour, range, speed, sight and active effects left of Retreat, in the game's own
+selection panel (0.1-0.4 were an experiment of the archive branch, shared by hand with grantovich).
+- The DPS is now the attribute editor's (grantovich checks balance with it): shots x damage / (shots x (wind_up + firing +
+  wind_down + cooldown) + reload), shots = reload frequency (min + max) / 2. His shotgun (20 dmg, cd 1.5, wd 0.5, 9 shots,
+  reload 3 s): 8.57; 0.4 said 8.3 (the engine's real cycle: +1 tick per burst, randomised cooldown in ticks, F = min..max-1),
+  0.3 said 10.3 (the game's tooltip: no wind_down, +0.1 s for a burst_info weapon). The engine's number stays in the log;
+  ShowEngineCycle=1 shows it instead.
+- The weapon times as written (0.49, 0.75, 0.83 - the engine keeps only 0.1 s ticks): UnitStats notes the seconds the
+  WeaponBag loader reads, through the SecondsToTicks import of DOW2.exe (the game's result unchanged; the seven call sites
+  checked first, else ticks).
+- DPS with two decimals (8.57, 14.58), the log starts over past 2 MB, no ini needed (defaults in the code).
+- Stand 1 (Elite 3.2.1): nine weapons (single, wind_up, wind_down 0.49, cooldown 0.75, real bursts, a one-shot burst_info,
+  3 projectiles, melee) equal to the hand count from the attribute files - docs/UNIT_STATS_HOWTO.md "v5".
+
 ## 0.2.18 — 2026-11-06
 MMFind 0.49 (store automatch mmfind-0.49 = mmfind-0.48 with this MMFind; OwnLobby 2, Relay 25, early winmm, mmbridge as there).
 Players 06.11 (noofancy, siritos): "the map ban does not work, and when you ban, it resets after a game".

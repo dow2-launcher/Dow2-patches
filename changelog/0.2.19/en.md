@@ -1,0 +1,1 @@
+- New add-on (experiment) "Squad stats in the panel (DPS, armour, speed…)": left of the Retreat button, the selected squad's ranged and melee DPS - counted as in the attribute editor - melee skill, armour, range, speed, sight and active effects. Off by default.

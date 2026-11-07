@@ -1,0 +1,60 @@
+-- ===== STAND ONLY (unitstats v5 session): squads of the DPS check spawned for player 1, one selected at a time
+-- (UnitStats logs its numbers per weapon, the session takes a screenshot of the panel) =====
+local UL = eliteai_log or (string and string.eliteai_log) or print
+US = { t = -1, n = 0 }
+local function bpid(name) local ok, id = pcall(World_GetPropertyBagGroupID, name); if ok and id then return id end; UL("NO BLUEPRINT", name) end
+local function uspawn(p, bp, pos, toward, tag)
+	local id = bpid(bp); if not id then return end
+	local ok2, s = pcall(Squad_CreateAndSpawnToward, id, p, 0, pos, toward)
+	if not ok2 or not s then UL("SPAWN FAILED", bp, tostring(s)); return end
+	US.n = US.n + 1; local g = SGroup_CreateIfNotFound("us5_g" .. US.n); SGroup_Add(g, s)
+	pcall(SGroup_SetInvulnerable, g, true)
+	UL("spawned", tag, bp); return s, g
+end
+local function off(b, x, z) return World_Pos(b.x + x, b.y, b.z + z) end
+local function sel(s, what)
+	if US.prev then if pcall(Squad_GetPosition, US.prev) then pcall(Misc_SelectSquad, US.prev, false) end end
+	local ok, p = pcall(Squad_GetPosition, s); if not ok then UL("gone", what); US.prev = nil; return end
+	pcall(Camera_FocusOnPosition, p, false, 0, false)
+	UL("SELECT", what, tostring(pcall(Misc_SelectSquad, s, true))); US.prev = s
+end
+-- squad, its wargear, its upgrade, what it checks
+local SQ = {
+	{ "sbps/pvp/race_tau/troops/tau_pathfinders", nil, nil, "pathfinders: ion rifle like the shotgun (cooldown 1.5, wind_down 0.5, reload 3, 6-8 shots)" },
+	{ "sbps/pvp/race_marine/troops/sm_scout_marine", nil, "upgrade/pvp/race_marine/troops/sm_shotgun", "scout shotgun (wind_down 0.6, reload 4, 8-10 shots)" },
+	{ "sbps/pvp/race_eldar/troops/eld_ranger", "wargear/wargear/pvp/race_eldar/eld_wp1_long_rifle", nil, "rangers long rifle (wind_up 0.2, cooldown 0.75)" },
+	{ "sbps/pvp/race_imperial_guard/troops/ig_kasrkin_squad", nil, "upgrade/pvp/race_imperial_guard/troops/ig_kasrkin_plasma_guns", "kasrkin plasma (burst + wind_down)" },
+	{ "sbps/pvp/race_marine/troops/sm_tactical_marine", nil, nil, "tactical bolter (burst)" },
+	{ "sbps/pvp/race_ork/troops/ork_tankbustas", nil, nil, "tankbustas rokkit (3 projectiles)" },
+	{ "sbps/pvp/race_marine/troops/sm_assault_marine", nil, nil, "assault marines (melee)" },
+	{ "sbps/pvp/race_marine/troops/sm_devastator", nil, nil, "devastator heavy bolter (burst)" },
+	{ "sbps/pvp/race_imperial_guard/troops/ig_guardsmen_squad", nil, nil, "guardsmen lasgun" },
+}
+function US_Setup()
+	US.P = World_GetPlayerAt(1); US.E = World_GetPlayerAt(2)
+	local b = Player_GetStartingPosition(US.P); US.base = b
+	pcall(FOW_RevealAll); UL("AI_Enable off", tostring(pcall(AI_Enable, US.E, false)))
+	US.sq = {}
+	for i, p in ipairs(SQ) do
+		local x = -40 + (i - 1) * 10
+		local s, g = uspawn(US.P, p[1], off(b, x, 20), off(b, x, 60), p[4])
+		if g then
+			if p[2] then UL("wargear", p[4], tostring(pcall(SGroup_EquipWargear, g, p[2]))) end
+			if p[3] then UL("upgrade", p[4], tostring(pcall(Cmd_InstantSquadUpgrade, g, bpid(p[3])))) end
+		end
+		US.sq[i] = { s = s, g = g, what = p[4] }
+	end
+	UL("US5 SETUP done")
+	Rule_AddInterval(US_Tick, 1)
+end
+Rule_AddOneShot(US_Setup, 3)
+local STEP = @STEP@
+function US_Tick()
+	US.t = US.t + 1; local t = US.t
+	if t % 10 == 0 then UL("tick", t) end
+	if t >= STEP and t % STEP == 0 then
+		local i = (math.floor(t / STEP) - 1) % #US.sq + 1
+		if US.sq[i].s then sel(US.sq[i].s, US.sq[i].what) end
+	end
+end
+UL("unitstats v5 scar loaded")

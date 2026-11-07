@@ -1,0 +1,32 @@
+squad                        weapon                             shots measured     v0.4  tooltip   ticks reloads  cycle
+ig_commander                 ig_commander_guardsmen_lasgun        394     4.99     4.98     4.94    4742     30    9.0   (2 weapons: 4.96 5.01)
+                                                                   predicted cycle: burst, 19.50 ticks per burst, 2.00 shots, F 6.50, reload 30.0, cooldown 9.50
+ig_commander                 ig_commander_shotgun                 111    11.29    11.32    11.74    2359     13   17.0   (1 weapons: 11.29)
+                                                                   predicted cycle: single, 16.50 ticks per burst, 1.00 shots, F 8.50, reload 40.0, cooldown 9.50
+ig_devils                    ig_guardsmen_shotgun                1786     8.57     8.57     8.82   31247      0   17.2   (12 weapons: 8.61 8.56 8.59 8.52 8.50 8.56 8.55 8.59 8.60 8.59 8.56 8.65)
+                                                                   predicted cycle: single, 17.50 ticks per burst, 1.00 shots, F 1.00, reload 0.0, cooldown 9.50
+ig_guardsmen_squad           ig_guardsmen_fist                   1163     1.45     2.00     2.00   16056      0   10.0   (8 weapons: 1.06 1.87 0.84 1.78 1.21 1.83 1.73 1.28)
+                                                                   predicted cycle: melee, 10.00 ticks per burst, 1.00 shots, F 0.00, reload 0.0, cooldown 0.00
+ig_guardsmen_squad           ig_guardsmen_lasgun                 2366     4.35     4.35     4.32   28578    181    9.0   (12 weapons: 4.32 4.38 4.34 4.36 4.35 4.34 4.37 4.32 4.39 4.35 4.31 4.33)
+                                                                   predicted cycle: burst, 19.50 ticks per burst, 2.00 shots, F 6.50, reload 30.0, cooldown 9.50
+ig_inquisitor                ig_inquisitor_plasma_pistol          120    10.02        -        -    2396     18   16.0   (1 weapons: 10.02)
+ork_slugga                   ork_choppa                          1389    22.56    25.00    25.00   15395      0   10.0   (6 weapons: 22.51 22.90 22.56 23.18 21.07 23.13)
+                                                                   predicted cycle: melee, 10.00 ticks per burst, 1.00 shots, F 0.00, reload 0.0, cooldown 0.00
+ork_slugga                   ork_slugga                            30     0.09     0.60     0.68    9011     18  385.8   (6 weapons: 0.03 0.43 0.03 0.03 0.03 0.02)
+                                                                   predicted cycle: burst, 10.50 ticks per burst, 1.00 shots, F 6.50, reload 40.0, cooldown 7.50
+sm_assault_marine            sm_bolt_pistol_asm                    15     0.46     7.32     7.66    4629      6  200.0   (2 weapons: 0.38 0.55)
+                                                                   predicted cycle: single, 14.50 ticks per burst, 1.00 shots, F 6.50, reload 30.0, cooldown 9.50
+sm_assault_marine            sm_chain_sword_assault               460    21.03    26.92    26.92    7653      0   13.0   (3 weapons: 21.40 20.78 20.92)
+                                                                   predicted cycle: melee, 13.00 ticks per burst, 1.00 shots, F 0.00, reload 0.0, cooldown 0.00
+sm_devastator                sm_bolter_devastator                 516     7.04     7.03     7.00    4400     20    5.0   (2 weapons: 7.04 7.03)
+                                                                   predicted cycle: burst, 29.50 ticks per burst, 4.00 shots, F 6.50, reload 30.0, cooldown 9.50
+sm_devastator                sm_heavy_bolter                     2400   219.51   219.32   216.39    2050      7   25.0   (1 weapons: 219.51)
+                                                                   predicted cycle: burst, 24.50 ticks per burst, 32.00 shots, F 10.50, reload 30.0, cooldown 4.50
+sm_predator                  sm_autocannon_predator                67    31.58    31.58    32.43    2546     67   38.0   (1 weapons: 31.58)
+                                                                   predicted cycle: projectile, 8.00 ticks per burst, 1.00 shots, F 1.00, reload 30.0, cooldown 0.00
+sm_predator                  sm_heavy_bolter_predator_l            16    22.67    23.45    22.67      15      0   15.0   (1 weapons: 22.67)
+                                                                   predicted cycle: burst, 14.50 ticks per burst, 16.00 shots, F 1.00, reload 0.0, cooldown 4.50
+sm_scout_marine              sm_shotgun                           325    14.12    14.15    14.67    6906     39   17.0   (3 weapons: 14.06 14.10 14.19)
+                                                                   predicted cycle: single, 16.50 ticks per burst, 1.00 shots, F 8.50, reload 40.0, cooldown 9.50
+sm_tactical_marine           sm_bolter                            736    13.71    14.66    14.58    6733     37    5.0   (3 weapons: 14.63 14.78 11.72)
+                                                                   predicted cycle: burst, 29.50 ticks per burst, 4.00 shots, F 6.50, reload 30.0, cooldown 9.50
