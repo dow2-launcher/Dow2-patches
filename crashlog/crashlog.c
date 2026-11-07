@@ -9,6 +9,12 @@
 //    (module+offset and the stack), so "the game just closed" names the code that closed it;
 //  - the process going away (DLL detach at exit).
 // Its own add-on and tick (docs/ADDON_RULES.md); nothing is sent anywhere - the launcher's "Send logs" carries the log.
+// CrashLog 2 (07.11.2026): CrashLog 1 itself crashed when the game closed (players' Windows records "APPCRASH DOW2.exe!
+// CrashLog.dll c0000005 at +0x21C7 / +0x34E1", "40000015 at +0x90FF" = abort): its exception watch asked a __thread variable
+// (MinGW's emulated TLS, heap memory) first for EVERY exception, and at the process exit that memory is already freed by the
+// DLL's own runtime - the next exception of anything (OutputDebugString, a C++ throw in another DLL's exit code) went into
+// freed memory. Now: the cheap code check first, the "in our own report" flag in the system's TLS slot (no memory of ours),
+// and the watch is off from the moment the game exits (ExitProcess / the DLL detach).
 #include <windows.h>
 #include <psapi.h>
 #include <dbghelp.h>
@@ -18,7 +24,10 @@
 static wchar_t g_dir[MAX_PATH]; static CRITICAL_SECTION g_lk; static volatile LONG g_seen, g_dumped;
 static LPTOP_LEVEL_EXCEPTION_FILTER g_prevFilter;
 static CONTEXT g_lastCtx; static EXCEPTION_RECORD g_lastRec; static volatile DWORD g_lastTid;   // the last serious exception, for the dump at the exit
-static __thread int t_in;                                         // our own reporting never reports itself
+static DWORD g_tls = TLS_OUT_OF_INDEXES;                          // our own reporting never reports itself (system TLS: safe at the exit)
+static volatile LONG g_exiting; static PVOID g_veh;                // the game exits: no more reports from the exception watch
+static int in_report(void) { return g_tls != TLS_OUT_OF_INDEXES && TlsGetValue(g_tls) != NULL; }
+static void set_in(int on) { if (g_tls != TLS_OUT_OF_INDEXES) TlsSetValue(g_tls, on ? (LPVOID)1 : NULL); }
 typedef VOID (WINAPI *ExitProcessFn)(UINT); typedef BOOL (WINAPI *TerminateProcessFn)(HANDLE, UINT);
 static ExitProcessFn g_exitOrig; static TerminateProcessFn g_termOrig;
 
@@ -98,24 +107,26 @@ static void write_dump(EXCEPTION_POINTERS *e) {
     CloseHandle(h); logmsg("minidump %s", ok ? "written" : "failed");
 }
 static LONG WINAPI veh(EXCEPTION_POINTERS *e) {
-    if (t_in || !serious(e->ExceptionRecord->ExceptionCode) || InterlockedIncrement(&g_seen) > 30) return EXCEPTION_CONTINUE_SEARCH;
-    t_in = 1; report(e, "exception (first chance)");
-    g_lastRec = *e->ExceptionRecord; g_lastCtx = *e->ContextRecord; g_lastTid = GetCurrentThreadId(); t_in = 0;
+    if (!serious(e->ExceptionRecord->ExceptionCode) || g_exiting || in_report() || InterlockedIncrement(&g_seen) > 30) return EXCEPTION_CONTINUE_SEARCH;
+    set_in(1); report(e, "exception (first chance)");
+    g_lastRec = *e->ExceptionRecord; g_lastCtx = *e->ContextRecord; g_lastTid = GetCurrentThreadId(); set_in(0);
     return EXCEPTION_CONTINUE_SEARCH;
 }
 static LONG WINAPI uef(EXCEPTION_POINTERS *e) {
-    t_in = 1; report(e, "UNHANDLED exception - the game crashes"); write_dump(e); t_in = 0;
+    if (!g_exiting && !in_report()) { set_in(1); report(e, "UNHANDLED exception - the game crashes"); write_dump(e); set_in(0); }
     return g_prevFilter ? g_prevFilter(e) : EXCEPTION_CONTINUE_SEARCH;
 }
 static VOID WINAPI exit_hook(UINT code) {
-    logmsg("ExitProcess(%u)", code); caller_stack("the game exits itself"); g_exitOrig(code);
+    if (!InterlockedExchange(&g_exiting, 1)) { set_in(1); logmsg("ExitProcess(%u)", code); caller_stack("the game exits itself"); set_in(0); }
+    g_exitOrig(code);
 }
 static BOOL WINAPI term_hook(HANDLE h, UINT code) {
-    if (h == GetCurrentProcess() || GetProcessId(h) == GetCurrentProcessId()) {
-        logmsg("TerminateProcess(self, 0x%X)%s", code, code == 0xFFFFFFFD ? " - the game's own crash reporter (BugSplat) closes it after a crash: no Windows crash record" : "");
+    if ((h == GetCurrentProcess() || GetProcessId(h) == GetCurrentProcessId()) && !InterlockedExchange(&g_exiting, 1)) {
+        set_in(1); logmsg("TerminateProcess(self, 0x%X)%s", code, code == 0xFFFFFFFD ? " - the game's own crash reporter (BugSplat) closes it after a crash: no Windows crash record" : "");
         caller_stack("the game is terminated from inside");
         if (g_lastTid == GetCurrentThreadId()) { EXCEPTION_POINTERS ep = { &g_lastRec, &g_lastCtx }; write_dump(&ep); }   // the crash of this thread, its stack still here
         else write_dump(NULL);
+        set_in(0);
     }
     return g_termOrig(h, code);
 }
@@ -156,7 +167,12 @@ static DWORD WINAPI crash_test(LPVOID _) {                        // test only (
 }
 
 BOOL WINAPI DllMain(HINSTANCE h, DWORD reason, LPVOID reserved) {
-    if (reason == DLL_PROCESS_DETACH) { if (g_dir[0]) logmsg("process ends (%s)", reserved ? "the process is exiting" : "the DLL is unloaded"); return TRUE; }
+    if (reason == DLL_PROCESS_DETACH) {
+        InterlockedExchange(&g_exiting, 1); if (g_veh) RemoveVectoredExceptionHandler(g_veh);
+        // the log's lock may belong to a thread the exit already ended: only when it is free
+        if (g_dir[0] && TryEnterCriticalSection(&g_lk)) { LeaveCriticalSection(&g_lk); logmsg("process ends (%s)", reserved ? "the process is exiting" : "the DLL is unloaded"); }
+        return TRUE;
+    }
     if (reason != DLL_PROCESS_ATTACH) return TRUE;
     DisableThreadLibraryCalls(h);
     char mx[64]; wsprintfA(mx, "Local\\dow2patch_CrashLog_%lu", GetCurrentProcessId());
@@ -165,14 +181,15 @@ BOOL WINAPI DllMain(HINSTANCE h, DWORD reason, LPVOID reserved) {
     GetModuleFileNameW(h, g_dir, MAX_PATH); wchar_t *s = wcsrchr(g_dir, L'\\'); if (s) s[1] = 0;
     { wchar_t p[MAX_PATH], o[MAX_PATH]; _snwprintf(p, MAX_PATH, L"%lsCrashLog.log", g_dir); _snwprintf(o, MAX_PATH, L"%lsCrashLog.log.old", g_dir);
       WIN32_FILE_ATTRIBUTE_DATA a; if (GetFileAttributesExW(p, GetFileExInfoStandard, &a) && (a.nFileSizeHigh || a.nFileSizeLow > (1u << 20))) MoveFileExW(p, o, MOVEFILE_REPLACE_EXISTING); }
-    AddVectoredExceptionHandler(1, veh);
+    g_tls = TlsAlloc();
+    g_veh = AddVectoredExceptionHandler(1, veh);
     g_prevFilter = SetUnhandledExceptionFilter(uef);
     HMODULE k = GetModuleHandleA("kernel32.dll");
     g_exitOrig = (ExitProcessFn)GetProcAddress(k, "ExitProcess"); g_termOrig = (TerminateProcessFn)GetProcAddress(k, "TerminateProcess");
     int ne = g_exitOrig ? patch_imports((void *)g_exitOrig, (void *)exit_hook) : 0;
     int nt = g_termOrig ? patch_imports((void *)g_termOrig, (void *)term_hook) : 0;
     MEMORYSTATUSEX ms = { sizeof ms }; GlobalMemoryStatusEx(&ms);
-    logmsg("CrashLog 1 start: exception watch on, crash filter on, ExitProcess hooked in %d import(s), TerminateProcess in %d; "
+    logmsg("CrashLog 2 start: exception watch on, crash filter on, ExitProcess hooked in %d import(s), TerminateProcess in %d; "
            "memory: %llu MB free of %llu, address space free %llu MB", ne, nt, ms.ullAvailPhys >> 20, ms.ullTotalPhys >> 20, ms.ullAvailVirtual >> 20);
     CloseHandle(CreateThread(NULL, 0, keep_filter, NULL, 0, NULL));
     { char t[4] = ""; if (GetEnvironmentVariableA("CRASHLOG_TEST", t, sizeof t) && t[0] == '1') CloseHandle(CreateThread(NULL, 0, crash_test, NULL, 0, NULL)); }

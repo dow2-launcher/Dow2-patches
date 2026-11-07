@@ -26,6 +26,18 @@
 // No overlay (only the game's own replay screen), no files read during the replay, the pipe instead of files for the launcher.
 // LiveReplay.ini [LiveReplay] Enabled=0: off; CatchUp=0: no faster start; CatchUpSpeed=40 (ticks/s, 10 = normal);
 // SyncOffset=0 (the record whose crc a step is compared with); Server= the ladder when the launcher sends none.
+// LiveReplay 3 (07.11.2026, players' test 06.11: "Watch" of a match that had run for a few minutes never started - "the ladder:
+// no answer we read (HTTP 200, 24000 / 121936 / 268336 bytes)" until "failed: server"): the ladder brings a node's answer over
+// our UDP tunnel, whose end closes the connection while the last packets of a big answer are still on their way - the spectator
+// got the answer cut off (a clean beginning, its end missing; 24000 bytes = the tunnel's first burst of 20 packets). Small
+// answers (a match watched from its start, the records every 2 s) came whole, so only a late "Watch" failed. Now a cut answer
+// is used as far as it goes: the header, then the whole records in it (the next request asks from there); the replay file's
+// length in its header is set to the steps really in it.
+// Also LiveReplay 3: the replay file's second word is the game data's checksum (DOW2.exe 0x42B2B8 compares it with 0x7A0A30(),
+// the "dataChecksum" of Relic's lobby): the servers write Elite 3.2's (0xD6805B7D), and Elite 3.2.1 (07.11.2026, new attrib
+// archives, same modVersion) refused every such file ("replay start: REFUSED by the game"). The file gets this game's own value
+// before the start - the match is of the version the spectator plays (the launcher offers matches of his game); the sync check
+// says it if the data differ.
 #ifndef _WIN32_WINNT
 #define _WIN32_WINNT 0x0600                 // CancelIoEx (Vista+) with older mingw headers
 #endif
@@ -39,7 +51,7 @@
 #include <stdarg.h>
 #include <wchar.h>
 
-#define LR_VERSION "2"
+#define LR_VERSION "3"
 // ---- DOW2.exe 3.19
 #define G_SETTINGS     0x01335A78         // +0x118 game type (0x800 playback)
 #define G_GAMEOBJ_PTR  0x01335A74         // what the replay start takes in EDX ([+4] = the settings)
@@ -54,6 +66,7 @@
 #define FN_PB_END      0x0042761A
 #define FN_READREC     0x0042B451         // a record from a ByteStream (ECX), the game's own allocation; 0 = none
 #define FN_START_PB    0x0040F526         // the replay of a file (ECX "playback:<name>.rec", EDX 0x01335A74) -> AL
+#define FN_DATACRC     0x007A0A30         // cdecl () -> the game data's checksum (a replay header's 2nd word must equal it)
 #define IAT_SHARK_UPDATE 0x00F88068
 #define IAT_SIM_PRE    0x00F88154
 #define IAT_SIM_POST   0x00F88100
@@ -332,13 +345,22 @@ static void __fastcall post_hook(void *self, void *edx) {
 }
 
 // ---------------- the network (its own thread per watch) ----------------
-typedef struct { unsigned flags, avail, nticks; const unsigned char *head; unsigned headLen; const unsigned char *body; unsigned bodyLen; } Env;
+typedef struct { unsigned flags, avail, nticks; const unsigned char *head; unsigned headLen; const unsigned char *body; unsigned bodyLen, cut; } Env;
+// the envelope; an answer cut off by the way (LiveReplay 3) is fine as long as its header is whole: body = what came of it
+// (cut = the bytes missing), the caller takes only its whole records
 static int env_parse(const unsigned char *b, size_t n, Env *e) {
     if (n < 28 || memcmp(b, "DWLR", 4)) return 0;
     e->flags = *(unsigned *)(b + 8); e->avail = *(unsigned *)(b + 12); e->nticks = *(unsigned *)(b + 16);
-    size_t o = 20; e->headLen = *(unsigned *)(b + o); o += 4; if (o + e->headLen + 4 > n) return 0;
-    e->head = b + o; o += e->headLen; e->bodyLen = *(unsigned *)(b + o); o += 4; if (o + e->bodyLen > n) return 0;
+    size_t o = 20; e->headLen = *(unsigned *)(b + o); o += 4; if (e->headLen > (4u << 20) || o + e->headLen + 4 > n) return 0;
+    e->head = b + o; o += e->headLen; e->bodyLen = *(unsigned *)(b + o); o += 4; e->cut = 0;
+    if (e->bodyLen > (64u << 20)) return 0;
+    if (o + e->bodyLen > n) { e->cut = (unsigned)(o + e->bodyLen - n); e->bodyLen = (unsigned)(n - o); }
     e->body = b + o; return 1;
+}
+// the playback length in the replay header (FOLDPOST > DATADATA: "DATADATA" ver len 0 -1 0, then u32 ticks) -> n
+static void head_set_ticks(unsigned char *h, unsigned len, unsigned n) {
+    for (unsigned i = 0; i + 32 <= len; i++)
+        if (!memcmp(h + i, "DATADATA", 8) && *(unsigned *)(h + i + 12) == 4) { *(unsigned *)(h + i + 28) = n; return; }
 }
 // GET <base><path> -> the body (malloc'd) and the HTTP status; NULL on a network error
 static unsigned char *http_get(const char *base, const char *path, size_t *len, DWORD *status) {
@@ -368,6 +390,17 @@ static unsigned char *http_get(const char *base, const char *path, size_t *len, 
     if (r) WinHttpCloseHandle(r); if (c) WinHttpCloseHandle(c); WinHttpCloseHandle(s);
     return out;
 }
+// the replay header's game data word (+4, after 10320) -> this game's own (game thread, before the start)
+static void file_fix_datacrc(void) {
+    unsigned mine = ((unsigned (__cdecl *)(void))FN_DATACRC)(), h[3];
+    HANDLE f = CreateFileW(g_file, GENERIC_READ | GENERIC_WRITE, 0, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL); DWORD n = 0;
+    if (f == INVALID_HANDLE_VALUE) return;
+    if (ReadFile(f, h, sizeof h, &n, NULL) && n == sizeof h && h[0] == 10320 && h[1] != mine) {
+        logmsg("the replay is for game data %08X, this game has %08X (another Elite build, e.g. 3.2 / 3.2.1) - set to this game's", h[1], mine);
+        DWORD w = 0; SetFilePointer(f, 4, NULL, FILE_BEGIN); WriteFile(f, &mine, 4, &w, NULL);
+    }
+    CloseHandle(f);
+}
 static int write_file(const wchar_t *p, const unsigned char *a, size_t an, const unsigned char *b, size_t bn) {
     HANDLE f = CreateFileW(p, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
     if (f == INVALID_HANDLE_VALUE) return 0;
@@ -377,7 +410,7 @@ static int write_file(const wchar_t *p, const unsigned char *a, size_t an, const
 static DWORD WINAPI net_thread(LPVOID arg) {
     LONG me = (LONG)(INT_PTR)arg; char path[200], base[200], match[32];
     EnterCriticalSection(&g_qlk); snprintf(base, sizeof base, "%s", g_base); snprintf(match, sizeof match, "%s", g_match); LeaveCriticalSection(&g_qlk);
-    int fails = 0; DWORD lastOk = GetTickCount();
+    int fails = 0, cuts = 0; DWORD lastOk = GetTickCount();
     while (g_session == me) {
         if (g_state != ST_FETCH && g_state != ST_START && g_state != ST_PLAY) break;   // left the replay, failed, stopped
         LONG from = g_avail;
@@ -393,18 +426,26 @@ static DWORD WINAPI net_thread(LPVOID arg) {
             if (GetTickCount() - lastOk > 120000) { set_state(ST_FAILED, "server"); break; }
             Sleep(3000); continue;
         }
-        fails = 0; lastOk = GetTickCount();
         if (e.flags & 4) { free(b); set_state(ST_FAILED, "no_match"); break; }
-        if (e.flags & 2) { free(b); Sleep(3000); continue; }          // the match is not started on the server yet
+        if (e.flags & 2) { free(b); fails = 0; lastOk = GetTickCount(); Sleep(3000); continue; }   // the match is not started on the server yet
         LONG recs = 0, ticks = 0; size_t w = whole(e.body, e.bodyLen, &recs, &ticks);
+        if (e.cut) {                                                   // cut off by the way: its whole records, the rest asked again
+            cuts++;
+            if (cuts <= 3 || cuts % 50 == 0) logmsg("the ladder: the answer came cut off (%u of %u bytes of records, %ld whole records in it)%s",
+                                                    e.bodyLen, e.bodyLen + e.cut, recs, cuts == 3 ? " - not logged any more (each 50th)" : "");
+            if (!recs) { free(b); fails++; if (GetTickCount() - lastOk > 120000) { set_state(ST_FAILED, "server"); break; } Sleep(1000); continue; }
+        }
+        fails = 0; lastOk = GetTickCount();
         if (from == 0) {                                               // the start: header + the records so far = the replay file
             if (!e.headLen) { free(b); Sleep(2000); continue; }
+            if (e.cut) head_set_ticks((unsigned char *)e.head, e.headLen, (unsigned)ticks);   // the file's length = its steps
             if (!write_file(g_file, e.head, e.headLen, e.body, w)) { free(b); set_state(ST_FAILED, "file"); break; }
             EnterCriticalSection(&g_qlk);
             for (size_t o = 0; o + 8 <= w; o += 8 + *(const unsigned *)(e.body + o + 4)) crc_note(e.body + o, 8 + *(const unsigned *)(e.body + o + 4));
             g_avail = from + recs; g_availTicks = ticks; g_fileTicks = ticks; g_over = (e.flags & 1) && g_avail >= (LONG)e.avail;
             LeaveCriticalSection(&g_qlk);
-            logmsg("the replay so far: %ld records (%ld steps), %u bytes of header -> live_watch.rec%s", recs, ticks, e.headLen, g_over ? " (the match is over)" : "");
+            logmsg("the replay so far: %ld records (%ld steps), %u bytes of header -> live_watch.rec%s%s", recs, ticks, e.headLen, g_over ? " (the match is over)" : "",
+                   e.cut ? " (the rest follows)" : "");
             g_fileReady = 1;
         } else if (recs) {
             EnterCriticalSection(&g_qlk); buf_add(e.body, w); g_avail = from + recs; g_availTicks += ticks; LeaveCriticalSection(&g_qlk);
@@ -444,6 +485,7 @@ static void game_step(void) {
         // the menu after 3 s of frames without a world
         if (g_screen == SC_UNKNOWN && now - g_startAt < 3000) return;
         g_live = 1;
+        file_fix_datacrc();
         char pb[] = "playback:live_watch.rec";
         char r = ((StartPb_t)FN_START_PB)(pb, (void *)G_GAMEOBJ_PTR);
         logmsg("replay start: %s", r ? "ok - the game loads it" : "REFUSED by the game");
@@ -660,7 +702,8 @@ BOOL WINAPI DllMain(HINSTANCE h, DWORD r, LPVOID _) {
     int good = !IsBadReadPtr((void *)VT_READER, 8) && ((DWORD *)VT_READER)[1] == FN_NEXTREC
         && !IsBadReadPtr((void *)VT_PLAYBACK, 0x20) && ((DWORD *)VT_PLAYBACK)[0] == 0x0066AD20
         && !IsBadReadPtr(e, 5) && e[0] == 0xE8 && (DWORD)(e + 5) + *(int *)(e + 1) == FN_PB_END
-        && !IsBadReadPtr((void *)FN_READREC, 3) && *(unsigned char *)FN_READREC == 0xB8 && *(unsigned char *)FN_START_PB == 0xB8;
+        && !IsBadReadPtr((void *)FN_READREC, 3) && *(unsigned char *)FN_READREC == 0xB8 && *(unsigned char *)FN_START_PB == 0xB8
+        && !IsBadReadPtr((void *)FN_DATACRC, 7) && !memcmp((void *)FN_DATACRC, "\x6A\xFF\x68\x69\xF9\xEB\x00", 7);
     if (!good) { logmsg("not DOW2.exe 3.19 (or patched there by something else) - nothing changed"); return TRUE; }
     for (int i = 0; i < 16; i++) g_bsVt[i] = (void *)bs_zero;
     g_bsVt[2] = (void *)bs_read;

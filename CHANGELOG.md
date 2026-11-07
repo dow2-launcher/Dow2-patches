@@ -4,6 +4,30 @@ Every version gets an entry here before it reaches `main`. CI then tags `vX.Y.Z`
 version (`X.Y.0`) it also publishes a GitHub Release with the DLLs and the entries since the previous `X.Y.0`.
 The version of the set lives only in `VERSION`; each DLL still writes its own version to its log.
 
+## 0.2.20 — 2026-11-07
+LiveReplay 3 (store livereplay-3, lrbridge.exe as in livereplay-2) and CrashLog 2 (store crashlog-2). Players 06.11 (noofancy,
+l'Alerion): "joining as an observer does not work / crashes".
+- LiveReplay: a "Watch" of a match running for a few minutes never started - "the ladder: no answer we read (HTTP 200, 24000 /
+  121936 / 268336 bytes)" until "failed: server". The node's udp_gateway sent FIN right after battle_relay's answer with its last
+  packets still unsent; FIN has no number, the ladder's end of our UDP tunnel closed at once - the answer arrived cut off (24000 =
+  the first burst of 20 x 1200 bytes). LiveReplay 3 uses a cut answer as far as it goes: the header, the whole records in it (the
+  next request asks from there), the file's length in the header = its steps. (Server side: dow2-ladder fix/live-replay-cut-answers -
+  the gateway waits for the acks before FIN, the ladder repairs cut answers of nodes not updated yet.)
+- LiveReplay: Elite 3.2.1 refused every live replay ("replay start: REFUSED by the game") - the file's 2nd word is the game data
+  checksum (DOW2.exe 0x42B2B8 compares it with 0x7A0A30(), Relic's "dataChecksum"); the nodes write Elite 3.2's (0xD6805B7D), 3.2.1
+  has 0x819567F8. LiveReplay 3 sets the game's own value before the start (logged).
+- CrashLog: "APPCRASH DOW2.exe!CrashLog.dll c0000005 at +0x21C7 / +0x34E1" and "40000015 at +0x90FF" when the game closed (3 players,
+  each on exit, never in a match): the exception watch read a __thread flag (MinGW emulated TLS: __emutls_get_address +0x61 and
+  veh+0x17; +0x90FF its abort) for every exception, and at the exit the DLL's runtime had freed that memory. Now the code check
+  first, the flag in a system TLS slot, the watch off from ExitProcess / the DLL detach on.
+- The observer crash at map loading (DOW2.exe+0x12511 after "Loading Animators", l'Alerion 06.11 15:30 CET) was the Random army header,
+  fixed on the nodes 06.11 15:24-15:47 CET (live replay 2); nothing new of it after that.
+- Stand 1 (Elite 3.2.1; fake ladder giving a stand match 200 s in, its answers cut off as the tunnel did): LiveReplay 2 - "no
+  answer we read" x30, "failed: server"; LiveReplay 3 - the cut answers taken (1353 records first, then ~450 per answer), the data
+  word set to this game's, started, caught up, the match to its end, 2400 / 2400 steps in sync; whole answers - the same, 1800 / 1800;
+  LiveReplay 2 with the ladder's repair of cut answers (and a header of this game's data) - started, 2400 / 2400. CrashLog 2 loaded
+  in the game, its minute lines as before.
+
 ## 0.2.19 — 2026-11-07
 UnitStats 0.5 - a new add-on (store unitstats-0.5, category experiment, off by default; Elite and vanilla): the selected
 squad's ranged / melee DPS, melee skill, armour, range, speed, sight and active effects left of Retreat, in the game's own

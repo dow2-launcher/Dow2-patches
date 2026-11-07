@@ -302,7 +302,7 @@
     "order": 60
   },
   "crashlog": {
-    "version": "1",
+    "version": "2",
     "dll": "CrashLog.dll",
     "default": false,
     "name": {
@@ -501,7 +501,7 @@
     "order": 20
   },
   "livereplay": {
-    "version": "2",
+    "version": "3",
     "dll": "LiveReplay.dll",
     "files": {
       "lrbridge.exe": "build/lrbridge.exe"
