@@ -363,5 +363,23 @@
       "fr": "À gauche du bouton de retraite : DPS à distance et au corps à corps de l'escouade choisie (calculés comme dans l'éditeur d'attributs), mêlée, armure, portée, vitesse, vision et effets actifs. Vous seul le voyez.",
       "de": "Links vom Rückzugsknopf: Fern- und Nahkampf-DPS des gewählten Trupps (gerechnet wie im Attribut-Editor), Nahkampfwert, Rüstung, Reichweite, Tempo, Sicht und aktive Effekte. Nur du siehst es."
     }
+  },
+  "replaytakeover": {
+    "category": "experiment",
+    "name": {
+      "en": "EXPERIMENT: continue a game from a replay",
+      "ru": "ЭКСПЕРИМЕНТ: продолжить игру из реплея",
+      "es": "EXPERIMENTO: continuar una partida desde una repetición",
+      "fr": "EXPÉRIENCE : reprendre une partie depuis un replay",
+      "de": "EXPERIMENT: ein Spiel aus einem Replay fortsetzen"
+    },
+    "description": {
+      "en": "While watching a replay, click any unit of a player, open Menu and press \"Continue as ...\": from that moment it is your game, the others are played by the computer.",
+      "ru": "В реплее кликните любой юнит игрока, откройте Menu и нажмите «Продолжить за …»: с этого момента это ваша игра, за остальных играет компьютер.",
+      "es": "En una repetición, haz clic en una unidad de un jugador, abre el Menú y pulsa \"Continue as ...\": desde ahí la partida es tuya, el resto lo juega el ordenador.",
+      "fr": "Dans un replay, cliquez sur une unité d'un joueur, ouvrez le Menu et appuyez sur « Continue as ... » : la partie est à vous, l'ordinateur joue les autres.",
+      "de": "Im Replay eine Einheit eines Spielers anklicken, Menü öffnen, \"Continue as ...\" drücken: ab da ist es dein Spiel, die anderen spielt der Computer."
+    },
+    "order": 20
   }
 }

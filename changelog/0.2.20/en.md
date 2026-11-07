@@ -1,2 +1,3 @@
 - Watch running matches (LiveReplay 3): "Watch" on a match that had been running for a few minutes now starts (before, it waited and gave up); a match also opens on Elite 3.2.1 (before, the game refused it).
 - Record game crashes (CrashLog 2): closing the game no longer ends with a Windows "DOW2 stopped working" caused by the crash recorder itself.
+- Continue from a replay (ReplayTakeover 2): the computers that take over the other players now play at Expert, the game's hardest level (an option in the launcher: Expert / Hard / Normal / Easy).

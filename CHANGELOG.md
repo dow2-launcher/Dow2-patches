@@ -5,6 +5,17 @@ version (`X.Y.0`) it also publishes a GitHub Release with the DLLs and the entri
 The version of the set lives only in `VERSION`; each DLL still writes its own version to its log.
 
 ## 0.2.20 — 2026-11-07
+ReplayTakeover 2 (store replaytakeover-2; the add-on's code, released from feature/replay-takeover as replaytakeover-1 on
+06.11, is in main from here on - its entry of that day is in the branch's history). Players (WarGood, 06.11): the computer put
+in for the others is weak, "walks single squads from point to point"; owner: the maximum difficulty.
+- The AI of a former human took his Player's difficulty (Player+0xBC; the AIPlayer constructor 0x80E6A0 copies it to
+  AIPlayer+0x900 = AIPlayer_GetDifficultyLevel; -1 = Hard). Now Player+0xBC and the GameInfo slot +0x2C (what the lobby's
+  SetPlayerAIDifficulty 0x44EEEB sets) get Expert (AD_Hardest = 3, the game's highest, "Add Expert Computer") before his AI is
+  made. Option Difficulty = expert (default) | hard | normal | easy | keep. Computers of the match keep their own AI.
+- Stand 2 (Elite 3.2, rt_test 3v3, slot 5 taken at tick 1500 by the stand-only TestTakeAt, 4 minutes, a telemetry-only AI
+  script): keep - s_diffLevel 2 for the five computers (this replay's humans had -1 = Hard); expert - 3 for all five; with
+  Expert pop 256 vs 217, 26 vs 23 squads, squads in combat 170 vs 117 samples, models lost 26 vs 12.
+
 LiveReplay 3 (store livereplay-3, lrbridge.exe as in livereplay-2) and CrashLog 2 (store crashlog-2). Players 06.11 (noofancy,
 l'Alerion): "joining as an observer does not work / crashes".
 - LiveReplay: a "Watch" of a match running for a few minutes never started - "the ladder: no answer we read (HTTP 200, 24000 /

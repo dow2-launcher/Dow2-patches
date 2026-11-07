@@ -14,6 +14,7 @@ all: $(OUT)/rjbridge.exe
 all: $(OUT)/ShellFix.dll
 all: $(OUT)/LiveReplay.dll $(OUT)/lrbridge.exe
 all: $(OUT)/UnitStats.dll
+all: $(OUT)/ReplayTakeover.dll
 
 $(OUT):
 	mkdir -p $(OUT)
@@ -142,3 +143,7 @@ $(OUT)/LiveReplay.dll: livereplay/livereplay.c | $(OUT)
 # its pipe for a launcher outside Wine (Linux), shipped with the add-on as Elite_DLLs/lrbridge.exe
 $(OUT)/lrbridge.exe: roomjoin/rjbridge.c | $(OUT)
 	$(CC) $(CFLAGS) -DPIPE_PREFIX='L"EliteLiveReplay"' -o $@ $< -static-libgcc
+# 06.11.2026 (experiment): continue a replay as a skirmish from any tick, as any of its players (the pause menu's
+# "Concede match" button in a replay becomes "Continue as <name>")
+$(OUT)/ReplayTakeover.dll: replaytakeover/replaytakeover.c common/gfxui.h | $(OUT)
+	$(CC) $(CFLAGS) -shared -o $@ $< -static-libgcc
