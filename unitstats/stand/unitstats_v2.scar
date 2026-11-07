@@ -1,0 +1,36 @@
+
+-- ===== STAND ONLY (unitstats v2 session): spawn squads of several races near the base, select one at a time =====
+local UL = eliteai_log or (string and string.eliteai_log) or print
+US = { list = {}, k = 0, step = @STEP@ }
+local OWN = { @OWN@ }
+local ENEMY = { @ENEMY@ }
+local function uspawn(p, bp, pos, tag)
+	local ok, id = pcall(World_GetPropertyBagGroupID, bp); if not ok or not id then UL("NO BLUEPRINT", bp); return end
+	local ok2, s = pcall(Squad_CreateAndSpawnToward, id, p, 0, pos, US.base)
+	if not ok2 or not s then UL("SPAWN FAILED", bp, tostring(s)); return end
+	local g = SGroup_CreateIfNotFound("us_g" .. (#US.list + 1)); SGroup_Add(g, s); pcall(SGroup_SetInvulnerable, g, true)
+	table.insert(US.list, { s = s, name = bp, tag = tag }); UL("spawned", tag, bp)
+end
+function US_Setup()
+	US.P = World_GetPlayerAt(1); US.E = World_GetPlayerAt(2)
+	US.base = Player_GetStartingPosition(US.P)
+	SGroup_ForEach(Player_GetSquads(US.P), function(g, i, s) table.insert(US.list, { s = s, name = "start squad " .. i, tag = "own" }) end)
+	for i, bp in ipairs(OWN) do uspawn(US.P, bp, World_Pos(US.base.x + 14 + 9 * ((i - 1) % 3), US.base.y, US.base.z + 14 + 10 * math.floor((i - 1) / 3)), "own") end
+	for i, bp in ipairs(ENEMY) do uspawn(US.E, bp, World_Pos(US.base.x + 6 + 11 * ((i - 1) % 5), US.base.y, US.base.z + 85 + 12 * math.floor((i - 1) / 5)), "enemy") end
+	pcall(FOW_RevealAll); UL("AI_Enable off", tostring(pcall(AI_Enable, US.E, false)))
+	UL("US SETUP done", #US.list)
+end
+Rule_AddOneShot(US_Setup, 3)
+function US_Next()
+	if #US.list == 0 then return end
+	if US.prev then pcall(Misc_SelectSquad, US.prev, false) end
+	US.k = US.k + 1; if US.k > #US.list then US.k = 1 end
+	local e = US.list[US.k]
+	local ok, p = pcall(Squad_GetPosition, e.s); if not ok then UL("gone", e.name); return end
+	pcall(Camera_FocusOnPosition, p, false, 0, false)
+	local ok2 = pcall(Misc_SelectSquad, e.s, true)
+	UL("SELECT", US.k, e.tag, e.name, tostring(ok2))
+	US.prev = e.s
+end
+Rule_AddInterval(US_Next, US.step)
+UL("unitstats v2 scar loaded")

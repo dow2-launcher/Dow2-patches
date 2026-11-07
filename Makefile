@@ -13,6 +13,7 @@ all: $(OUT)/RelayForward.dll $(OUT)/OwnLobby.dll $(OUT)/CrashLog.dll $(OUT)/NetP
 all: $(OUT)/rjbridge.exe
 all: $(OUT)/ShellFix.dll
 all: $(OUT)/LiveReplay.dll $(OUT)/lrbridge.exe
+all: $(OUT)/UnitStats.dll
 
 $(OUT):
 	mkdir -p $(OUT)
@@ -129,6 +130,11 @@ $(OUT)/mmpipe.exe: roomjoin/rjpipe.c | $(OUT)
 # the test client of RoomJoin's pipe (RoomJoin 9; not shipped): make build/rjpipe.exe
 $(OUT)/rjpipe.exe: roomjoin/rjpipe.c | $(OUT)
 	$(CC) $(CFLAGS) -o $@ $< -static-libgcc
+
+# 04-07.11.2026 (grantovich): the selected squad's DPS (as the attribute editor counts it) / melee skill / armour / range / speed /
+# sight and its active effects left of the Retreat button, in the selection panel movie - docs/UNIT_STATS_HOWTO.md
+$(OUT)/UnitStats.dll: unitstats/unitstats.c common/gfxui.h | $(OUT)
+	$(CC) $(CFLAGS) -shared -o $@ unitstats/unitstats.c -static-libgcc -Wl,--exclude-all-symbols
 
 # 06.11.2026: watch a running match of our servers as a growing replay (the spectator's side; the servers build the replay)
 $(OUT)/LiveReplay.dll: livereplay/livereplay.c | $(OUT)

@@ -345,5 +345,23 @@
       "fr": "Un bouton Regarder sur une partie en cours de nos serveurs (En ligne, onglet d'accueil) : le jeu l'ouvre comme un replay qui continue, avec quelques minutes de retard sur les joueurs.",
       "de": "Ein Zuschauen-Knopf an einem laufenden Spiel unserer Server (Online auf der Startseite): das Spiel öffnet es als Replay, das weiterläuft, ein paar Minuten hinter den Spielern."
     }
+  },
+  "unitstats": {
+    "category": "experiment",
+    "order": 30,
+    "name": {
+      "en": "Squad stats in the panel (DPS, armour, speed…)",
+      "ru": "Характеристики отряда в панели (DPS, броня, скорость…)",
+      "es": "Datos de la escuadra en el panel (DPS, blindaje, velocidad…)",
+      "fr": "Stats de l'escouade dans le panneau (DPS, armure, vitesse…)",
+      "de": "Truppwerte im Auswahlfeld (DPS, Rüstung, Tempo…)"
+    },
+    "description": {
+      "en": "Left of the Retreat button: the selected squad's ranged and melee DPS (counted as in the attribute editor), melee skill, armour, range, speed, sight and active effects. Only you see it.",
+      "ru": "Слева от кнопки отступления: DPS выбранного отряда в дальнем и ближнем бою (считается как в редакторе атрибутов), навык ближнего боя, броня, дальность, скорость, обзор и действующие эффекты. Видите только вы.",
+      "es": "A la izquierda del botón de retirada: DPS a distancia y cuerpo a cuerpo de la escuadra seleccionada (como en el editor de atributos), habilidad cuerpo a cuerpo, blindaje, alcance, velocidad, visión y efectos activos. Solo lo ves tú.",
+      "fr": "À gauche du bouton de retraite : DPS à distance et au corps à corps de l'escouade choisie (calculés comme dans l'éditeur d'attributs), mêlée, armure, portée, vitesse, vision et effets actifs. Vous seul le voyez.",
+      "de": "Links vom Rückzugsknopf: Fern- und Nahkampf-DPS des gewählten Trupps (gerechnet wie im Attribut-Editor), Nahkampfwert, Rüstung, Reichweite, Tempo, Sicht und aktive Effekte. Nur du siehst es."
+    }
   }
 }

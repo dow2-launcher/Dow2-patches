@@ -1,0 +1,90 @@
+-- ===== STAND ONLY (unitstats v4 session): attackers firing at targets that cannot die nor shoot back, for ShotProbe.dll;
+-- one squad selected at a time (UnitStats logs its DPS per weapon); a squad with six effects for the layout =====
+local UL = eliteai_log or (string and string.eliteai_log) or print
+US = { t = -1, n = 0 }
+local function bpid(name) local ok, id = pcall(World_GetPropertyBagGroupID, name); if ok and id then return id end; UL("NO BLUEPRINT", name) end
+local function uspawn(p, bp, pos, toward, tag)
+	local id = bpid(bp); if not id then return end
+	local ok2, s = pcall(Squad_CreateAndSpawnToward, id, p, 0, pos, toward)
+	if not ok2 or not s then UL("SPAWN FAILED", bp, tostring(s)); return end
+	US.n = US.n + 1; local g = SGroup_CreateIfNotFound("us4_g" .. US.n); SGroup_Add(g, s)
+	pcall(SGroup_SetInvulnerable, g, true)
+	UL("spawned", tag, bp); return s, g
+end
+local function off(b, x, z) return World_Pos(b.x + x, b.y, b.z + z) end
+local function noshoot(g)                    -- the targets: shoot_enable off (MUT_Enable -1), as Modify_DisableCapture does
+	local ok, m = pcall(Modifier_Create, MAT_Entity, "modifiers\\entity_modifiers\\shoot_enable_modifier", MUT_Enable, false, -1.0, "")
+	if not ok then UL("noshoot create failed", tostring(m)); return end
+	SGroup_ForEach(g, function(gg, i, s) UL("noshoot", tostring(pcall(Modifier_ApplyToSquad, m, s))) end)
+end
+local function sel(s, what)
+	if US.prev then if pcall(Squad_GetPosition, US.prev) then pcall(Misc_SelectSquad, US.prev, false) end end
+	local ok, p = pcall(Squad_GetPosition, s); if not ok then UL("gone", what); US.prev = nil; return end
+	pcall(Camera_FocusOnPosition, p, false, 0, false)
+	UL("SELECT", what, tostring(pcall(Misc_SelectSquad, s, true))); US.prev = s
+end
+-- attacker, its wargear / upgrade, the target
+local PAIRS = {
+	{ "sbps/pvp/race_imperial_guard/heroes/ig_commander", "wargear/wargear/pvp/race_imperial_guard/ig_weapon_commander_shotgun", nil, "commander shotgun" },
+	{ "sbps/pvp/race_imperial_guard/troops/ig_devils", "wargear/wargear/pvp/race_imperial_guard/ig_weapon_devils_shotgun", nil, "devils shotgun" },
+	{ "sbps/pvp/race_imperial_guard/troops/ig_guardsmen_squad", nil, nil, "guardsmen lasgun" },
+	{ "sbps/pvp/race_marine/troops/sm_tactical_marine", nil, nil, "tactical bolter" },
+	{ "sbps/pvp/race_marine/troops/sm_devastator", nil, nil, "devastator heavy bolter (setup)" },
+	{ "sbps/pvp/race_marine/troops/sm_scout_marine", nil, "upgrade/pvp/race_marine/troops/sm_shotgun", "scout shotgun" },
+	{ "sbps/pvp/race_marine/troops/sm_assault_marine", nil, nil, "assault marines melee" },
+	{ "sbps/pvp/race_ork/troops/ork_slugga", nil, nil, "slugga boyz melee" },
+	{ "sbps/pvp/race_marine/vehicles/sm_predator", nil, nil, "predator" },
+}
+function US_Setup()
+	US.P = World_GetPlayerAt(1); US.E = World_GetPlayerAt(2)
+	local b = Player_GetStartingPosition(US.P); US.base = b
+	pcall(FOW_RevealAll); UL("AI_Enable off", tostring(pcall(AI_Enable, US.E, false)))
+	US.att = {}
+	for i, p in ipairs(PAIRS) do
+		local x = -40 + (i - 1) * 10
+		local s, g = uspawn(US.P, p[1], off(b, x, 20), off(b, x, 60), "attacker " .. p[4])
+		local ts, tg = uspawn(US.E, (p[4]:find("melee") and "sbps/pvp/race_imperial_guard/troops/ig_guardsmen_squad") or "sbps/pvp/race_imperial_guard/vehicles/ig_chimera",
+			off(b, x, 34), off(b, x, 0), "target of " .. p[4])
+		if g then
+			if p[2] then UL("wargear", p[4], tostring(pcall(SGroup_EquipWargear, g, p[2]))) end
+			if p[3] then UL("upgrade", p[4], tostring(pcall(Cmd_InstantSquadUpgrade, g, bpid(p[3])))) end
+			UL("no suppression", tostring(pcall(Modify_ReceivedSuppression, g, 0)))
+		end
+		if tg then noshoot(tg) end
+		US.att[i] = { s = s, g = g, tg = tg, what = p[4] }
+	end
+	-- the layout case: grantovich's screenshot (CQC infantry, fire resist armour, a shotgun) with six effects on it
+	US.F, US.Fg = uspawn(US.P, "sbps/pvp/race_imperial_guard/troops/ig_devils", off(b, 0, 52), off(b, 0, 80), "effects squad")
+	if US.Fg then
+		pcall(SGroup_EquipWargear, US.Fg, "wargear/wargear/pvp/race_imperial_guard/ig_weapon_devils_shotgun")
+		UL("eff dmg", tostring(pcall(Modify_WeaponDamage, US.Fg, 1.3)))
+		UL("eff recv", tostring(pcall(Modify_ReceivedDamage, US.Fg, 0.7)))
+		UL("eff speed", tostring(pcall(Modify_UnitSpeed, US.Fg, 1.25)))
+		UL("eff range", tostring(pcall(Modify_WeaponRange, US.Fg, 1.2)))
+		UL("eff acc", tostring(pcall(Modify_WeaponAccuracy, US.Fg, 1.5)))
+		UL("eff sight", tostring(pcall(Modify_SightRadius, US.Fg, 1.2)))
+		UL("eff supp", tostring(pcall(Modify_ReceivedSuppression, US.Fg, 0.5)))
+	end
+	UL("US4 SETUP done")
+	Rule_AddInterval(US_Tick, 1)
+end
+Rule_AddOneShot(US_Setup, 3)
+function US_Attack()
+	for i, a in ipairs(US.att) do
+		if a.g and a.tg then UL("ATTACK", a.what, tostring(pcall(Cmd_AttackSGroup, a.g, a.tg))) end
+	end
+end
+local STEP = @STEP@
+function US_Tick()
+	US.t = US.t + 1; local t = US.t
+	if t % 10 == 0 then UL("tick", t) end
+	if t == 3 or t == 6 then pcall(US_Attack) end                  -- twice (the wargear swap right before may eat the first)
+	local k = math.floor(t / STEP)
+	if t % STEP == 0 then
+		local n = #US.att + 1
+		local i = k % n + 1
+		if i <= #US.att then if US.att[i].s then sel(US.att[i].s, US.att[i].what) end
+		elseif US.F then sel(US.F, "effects squad") end
+	end
+end
+UL("unitstats v4 scar loaded")
