@@ -501,7 +501,7 @@
     "order": 20
   },
   "replaytakeover": {
-    "version": "1",
+    "version": "2",
     "dll": "ReplayTakeover.dll",
     "default": false,
     "name": {
@@ -558,6 +558,63 @@
           }
         ],
         "default_value": "ai"
+      },
+      {
+        "id": "difficulty",
+        "name": {
+          "en": "Computer difficulty",
+          "ru": "Сложность компьютера",
+          "es": "Dificultad del ordenador",
+          "fr": "Difficulté de l'ordinateur",
+          "de": "Schwierigkeit des Computers"
+        },
+        "ini": "Elite_DLLs/ReplayTakeover.ini",
+        "section": "ReplayTakeover",
+        "key": "Difficulty",
+        "default": true,
+        "choices": [
+          {
+            "value": "expert",
+            "name": {
+              "en": "Expert (the hardest)",
+              "ru": "Эксперт (самый сильный)",
+              "es": "Experto (el más difícil)",
+              "fr": "Expert (le plus fort)",
+              "de": "Experte (am stärksten)"
+            }
+          },
+          {
+            "value": "hard",
+            "name": {
+              "en": "Hard",
+              "ru": "Сложный",
+              "es": "Difícil",
+              "fr": "Difficile",
+              "de": "Schwer"
+            }
+          },
+          {
+            "value": "normal",
+            "name": {
+              "en": "Normal",
+              "ru": "Обычный",
+              "es": "Normal",
+              "fr": "Normal",
+              "de": "Normal"
+            }
+          },
+          {
+            "value": "easy",
+            "name": {
+              "en": "Easy",
+              "ru": "Лёгкий",
+              "es": "Fácil",
+              "fr": "Facile",
+              "de": "Leicht"
+            }
+          }
+        ],
+        "default_value": "expert"
       }
     ],
     "category": "experiment",
