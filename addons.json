@@ -397,18 +397,18 @@
     "dll": "ReinforceFix.dll",
     "default": false,
     "name": {
-      "en": "Auto-reinforce after the Webway Gate",
-      "ru": "Автоподкрепление после врат Паутины",
-      "es": "Refuerzo automático tras el Portal de la Telaraña",
-      "fr": "Renfort auto après la Porte de la Toile",
-      "de": "Auto-Verstärkung nach dem Netzportal"
+      "en": "Auto-reinforce after webway gates and Ravener tunnels",
+      "ru": "Автоподкрепление после врат Паутины и туннелей равенеров",
+      "es": "Refuerzo automático tras portales de la Telaraña y túneles de raveners",
+      "fr": "Renfort auto après les portails de la Toile et les tunnels de Raveners",
+      "de": "Auto-Verstärkung nach Netzportalen und Ravener-Tunneln"
     },
     "description": {
-      "en": "A squad that goes through an Eldar Webway Gate no longer loses its auto-reinforce.",
-      "ru": "Отряд, прошедший через врата Паутины эльдар, больше не теряет включённое автоподкрепление.",
-      "es": "Una escuadra que pasa por un Portal de la Telaraña eldar ya no pierde el refuerzo automático.",
-      "fr": "Une escouade qui passe par une Porte de la Toile eldar ne perd plus son renfort automatique.",
-      "de": "Ein Trupp, der durch ein Eldar-Netzportal geht, verliert seine Auto-Verstärkung nicht mehr."
+      "en": "A squad that goes into an Eldar webway gate or a Tyranid Ravener tunnel (or anything else that takes it off the map for a while) no longer comes out with auto-reinforce switched off.",
+      "ru": "Отряд, ушедший во врата Паутины эльдар или в туннель равенеров тиранид (и вообще куда угодно, где он на время пропадает с карты), больше не выходит оттуда с выключенным автоподкреплением.",
+      "es": "Una escuadra que entra en un portal de la Telaraña eldar o en un túnel de raveners tiránido (o en cualquier cosa que la saque del mapa un rato) ya no sale con el refuerzo automático apagado.",
+      "fr": "Une escouade qui entre dans un portail de la Toile eldar ou un tunnel de Raveners tyranide (ou tout ce qui la retire de la carte un moment) ne ressort plus avec le renfort auto désactivé.",
+      "de": "Ein Trupp, der in ein Eldar-Netzportal oder einen Tyraniden-Ravener-Tunnel geht (oder sonst kurz von der Karte verschwindet), kommt nicht mehr mit abgeschalteter Auto-Verstärkung heraus."
     },
     "category": "gameplay",
     "order": 30
