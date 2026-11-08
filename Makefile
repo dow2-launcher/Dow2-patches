@@ -18,6 +18,7 @@ all: $(OUT)/ReplayTakeover.dll
 all: $(OUT)/SoundFix.dll
 all: $(OUT)/SoundBugTest.dll
 all: $(OUT)/ReplaySpeed.dll
+all: $(OUT)/FastBuffers.dll $(OUT)/FastLocStrings.dll
 
 $(OUT):
 	mkdir -p $(OUT)
@@ -117,6 +118,13 @@ $(OUT)/HeroLabelFix.dll: herolabelfix/herolabelfix.c | $(OUT)
 
 # 08.11.2026: replay speeds 8x and Max - two buttons next to the replay panel's speed button
 $(OUT)/ReplaySpeed.dll: replayspeed/replayspeed.c common/gfxui.h | $(OUT)
+	$(CC) $(CFLAGS) -shared -o $@ $< -static-libgcc
+
+# 08.11.2026 performance, rendering/UI only (no simulation code touched): dynamic buffer locks without the page probe;
+# formatted UI strings released by searching from the end
+$(OUT)/FastBuffers.dll: fastbuffers/fastbuffers.c | $(OUT)
+	$(CC) $(CFLAGS) -shared -o $@ $< -static-libgcc
+$(OUT)/FastLocStrings.dll: fastlocstrings/fastlocstrings.c | $(OUT)
 	$(CC) $(CFLAGS) -shared -o $@ $< -static-libgcc
 
 # 03.11.2026: the game's own Continue after a custom game (host -> everyone back in the same room)

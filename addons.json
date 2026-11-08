@@ -833,5 +833,47 @@
       "fr": "Deux boutons de plus à côté de celui de la vitesse du replay : 8x et Max, aussi vite que votre PC le permet (l'image se met à jour quelques fois par seconde). Rappuyez pour la vitesse normale.",
       "de": "Zwei Knöpfe mehr neben dem Replay-Tempo-Knopf: 8x und Max - so schnell wie dein PC kann (das Bild wird dann ein paar Mal pro Sekunde erneuert). Erneut drücken für normales Tempo."
     }
+  },
+  "fastbuffers": {
+    "version": "1",
+    "dll": "FastBuffers.dll",
+    "default": false,
+    "category": "fixes",
+    "order": 60,
+    "name": {
+      "en": "Faster drawing: no needless buffer check",
+      "ru": "Ускорение отрисовки: без лишней проверки буферов",
+      "es": "Dibujo más rápido: sin comprobación inútil de búferes",
+      "fr": "Rendu plus rapide : sans vérification inutile des tampons",
+      "de": "Schnelleres Zeichnen: ohne unnötige Pufferprüfung"
+    },
+    "description": {
+      "en": "Removes a needless memory check the game makes every time it draws effects and the interface: more FPS in big battles.",
+      "ru": "Убирает лишнюю проверку памяти, которую игра делает при каждой отрисовке эффектов и интерфейса: больше FPS в больших боях.",
+      "es": "Quita una comprobación de memoria inútil al dibujar efectos e interfaz: más FPS en batallas grandes.",
+      "fr": "Supprime une vérification mémoire inutile lors du rendu des effets et de l'interface : plus de FPS dans les grandes batailles.",
+      "de": "Entfernt eine unnötige Speicherprüfung beim Zeichnen von Effekten und Oberfläche: mehr FPS in großen Schlachten."
+    }
+  },
+  "fastlocstrings": {
+    "version": "1",
+    "dll": "FastLocStrings.dll",
+    "default": false,
+    "category": "fixes",
+    "order": 70,
+    "name": {
+      "en": "Faster interface: quick texts",
+      "ru": "Ускорение интерфейса: быстрые строки",
+      "es": "Interfaz más rápida: textos rápidos",
+      "fr": "Interface plus rapide : textes rapides",
+      "de": "Schnellere Oberfläche: schnelle Texte"
+    },
+    "description": {
+      "en": "The game stops searching through thousands of old texts every time the interface updates a number or a tooltip: more FPS.",
+      "ru": "Игра больше не перебирает тысячи старых строк при каждом обновлении цифры или подсказки в интерфейсе: больше FPS.",
+      "es": "El juego deja de recorrer miles de textos viejos cada vez que la interfaz actualiza un número: más FPS.",
+      "fr": "Le jeu ne parcourt plus des milliers d'anciens textes à chaque mise à jour de l'interface : plus de FPS.",
+      "de": "Das Spiel durchsucht nicht mehr Tausende alter Texte bei jeder Aktualisierung der Oberfläche: mehr FPS."
+    }
   }
 }

@@ -1,0 +1,2 @@
+- New: Faster drawing: no needless buffer check - the game skips a slow memory check every time it draws effects and the interface. Off by default.
+- New: Faster interface: quick texts - the interface stops searching through thousands of old texts on every tooltip or counter update. Together about +10 % FPS in big battles. Off by default.
