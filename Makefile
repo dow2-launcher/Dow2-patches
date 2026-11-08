@@ -19,6 +19,7 @@ all: $(OUT)/SoundFix.dll
 all: $(OUT)/SoundBugTest.dll
 all: $(OUT)/ReplaySpeed.dll
 all: $(OUT)/FastBuffers.dll $(OUT)/FastLocStrings.dll
+all: $(OUT)/PerfLog.dll
 
 $(OUT):
 	mkdir -p $(OUT)
@@ -125,6 +126,10 @@ $(OUT)/ReplaySpeed.dll: replayspeed/replayspeed.c common/gfxui.h | $(OUT)
 $(OUT)/FastBuffers.dll: fastbuffers/fastbuffers.c | $(OUT)
 	$(CC) $(CFLAGS) -shared -o $@ $< -static-libgcc
 $(OUT)/FastLocStrings.dll: fastlocstrings/fastlocstrings.c | $(OUT)
+	$(CC) $(CFLAGS) -shared -o $@ $< -static-libgcc
+
+# 08.11.2026: performance log for players - FPS and what limits it (main loop parts, Present wait, main thread CPU), no game change
+$(OUT)/PerfLog.dll: perflog/perflog.c | $(OUT)
 	$(CC) $(CFLAGS) -shared -o $@ $< -static-libgcc
 
 # 03.11.2026: the game's own Continue after a custom game (host -> everyone back in the same room)
