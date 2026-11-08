@@ -4,6 +4,22 @@ Every version gets an entry here before it reaches `main`. CI then tags `vX.Y.Z`
 version (`X.Y.0`) it also publishes a GitHub Release with the DLLs and the entries since the previous `X.Y.0`.
 The version of the set lives only in `VERSION`; each DLL still writes its own version to its log.
 
+## 0.2.26 — 2026-11-08
+SoundFix 2 (store soundfix-2, experiment, off by default, Elite + vanilla). Crash fix.
+- SoundFix 1 crashed vanilla on a real Windows PC (native Direct3D 9, no DXVK, NVIDIA, 2560x1440 fullscreen) every launch,
+  ~0.2-1 s after "ScaleformFrontEnd - Loading Front End" = the first frames of the menu; with SoundFix off the same set works.
+  WER: APPCRASH DOW2.exe in BugSplat.dll c0000005 at +0xeca7 = BugSplat's stack probe (_chkstk): its crash handler ran on a
+  thread that had already used up its stack - an endless call chain. The only per-frame code of SoundFix 1 that exists only on a
+  native Direct3D 9 is its Present hook (vtable hooks of IDirect3DDevice9::Present / IDirect3DSwapChain9::Present, installed from
+  a hooked IDirect3D9::CreateDevice via Spooge's Direct3DCreate9 import); a Present hook of another program on that PC chaining
+  with it is the likely loop. Not reproduced under Wine (stands: DXVK and wined3d, the player's exact add-on set, normal front
+  end with Steam, menus - no crash with SoundFix 1 either).
+- SoundFix 2: no Direct3D hooks at all (FpsCap stays a DXVK_CONFIG setting; without DXVK it does nothing - vsync); no COM on
+  the thread that starts FMOD (the output mix format is read once on SoundFix's own thread); the Windows audio device change
+  callbacks only with AudioLog=1 in SoundFix.ini (diagnostics, default off). Queue merging and the FMOD 4.32.20 swap unchanged.
+- Tested on stand 1 (vanilla, vloader-1, the player's set of 13 add-ons + SoundFix 2, DOW2.exe -nomovies through the front end
+  with Steam): menu, 9/9 hooks, ~19 k merges/min in the menu, no crash.
+
 ## 0.2.25 — 2026-11-08
 FastBuffers 1 and FastLocStrings 1 (new, store fastbuffers-1 / fastlocstrings-1, fixes, off by default, Elite + vanilla).
 Performance, drawing / interface only. Profile of a 3v3 replay (Wine+DXVK+NVIDIA, ~47 fps): the sim tick is ~1.5 % of the game
