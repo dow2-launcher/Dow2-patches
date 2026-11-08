@@ -4,6 +4,19 @@ Every version gets an entry here before it reaches `main`. CI then tags `vX.Y.Z`
 version (`X.Y.0`) it also publishes a GitHub Release with the DLLs and the entries since the previous `X.Y.0`.
 The version of the set lives only in `VERSION`; each DLL still writes its own version to its log.
 
+## 0.2.22 — 2026-11-08
+HeroLabelFix 1 (new, store herolabelfix-1, fixes, off by default, Elite + vanilla; HeroLabelFix.dll). The bar over a hero
+(squad_leader_decorator, vtable 0x011129E4: icon, health, energy) sometimes never came back after the hero was downed and
+revived - mostly in replays, where every player counts as hostile:
+- while the hero is down the decorator's update (slot 0x30, 0x00B24370) clears "valid" (+0x9C) and the next draw (slot 0x10,
+  0x00B25070) hides the movie (+0x1C = 0); the movie manager's per-frame walk (0x00680C00) asks only SHOWN elements whether
+  they are on screen (slot 4, 0x00B92520), and only that test calls the draw - so after the revive nobody shows it again until
+  the decorator happens to be re-created ("sometimes" = the hero was on screen when he went down).
+- HeroLabelFix wraps the update (vtable slot, bytes checked, otherwise off): a valid-but-hidden decorator that the manager has
+  set up (+0x28/+0x2C) gets the game's own draw once, under the manager's lock (Plat::RecursiveMutex::TryEnter). UI only.
+- Stand 2, 6p replay calderis 2026-02-21 (probe): 9 revives, 0 bars stuck hidden > 20 s (17-22 without the fix), 9 restores;
+  CrcTrace to tick 2425 identical with/without (vanilla) and against the Elite 3.2.1 baseline; Elite 3.2.1 loads and hooks.
+
 ## 0.2.21 — 2026-11-08
 SoundFix 1 (new, store soundfix-1, fixes, off by default, Elite + vanilla; SoundFix.dll + SoundFix_fmodex.bin). The "sound bug"
 (late big fights at high FPS: sound stutters, one sound loops, unit responses vanish, then a crash) is NOT reproduced on the
