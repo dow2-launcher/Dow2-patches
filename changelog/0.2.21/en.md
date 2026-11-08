@@ -1,0 +1,1 @@
+- New: Sound fix and no FPS cap: sound no longer stutters, loops or goes silent in big late fights (the game's sound queue stays small at any frame rate; vanilla also gets the newer sound library of the community fix). No 60 FPS cap except in Elite's DXVK mode; vertical sync stays as set in the game. Off by default.

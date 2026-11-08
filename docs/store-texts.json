@@ -381,5 +381,23 @@
       "de": "Im Replay eine Einheit eines Spielers anklicken, Menü öffnen, \"Continue as ...\" drücken: ab da ist es dein Spiel, die anderen spielt der Computer."
     },
     "order": 20
+  },
+  "soundfix": {
+    "category": "fixes",
+    "order": 40,
+    "name": {
+      "en": "Sound fix and no FPS cap",
+      "ru": "Исправление звука и без ограничения FPS",
+      "es": "Arreglo del sonido y FPS sin límite",
+      "fr": "Correctif du son et FPS sans limite",
+      "de": "Sound-Fix und FPS ohne Limit"
+    },
+    "description": {
+      "en": "Sound no longer stutters, loops or goes silent in big late fights; the newer sound library of the community fix. No 60 FPS cap (except Elite's DXVK mode); vertical sync stays as set in the game.",
+      "ru": "Звук не заикается, не зацикливается и не пропадает в больших поздних боях; более новая звуковая библиотека из фикса сообщества. Без ограничения 60 FPS (кроме режима DXVK в Elite); вертикальная синхронизация — как в игре.",
+      "es": "El sonido ya no se entrecorta, no se repite ni desaparece en grandes batallas; la biblioteca de sonido más nueva del arreglo de la comunidad. Sin límite de 60 FPS (salvo el modo DXVK de Elite); la sincronización vertical, como en el juego.",
+      "fr": "Le son ne saccade plus, ne boucle plus et ne disparaît plus dans les grandes batailles ; bibliothèque son plus récente du correctif communautaire. Sans limite de 60 FPS (sauf mode DXVK d'Elite) ; synchro verticale comme dans le jeu.",
+      "de": "Der Ton stockt, wiederholt sich und verschwindet nicht mehr in großen späten Gefechten; neuere Soundbibliothek des Community-Fixes. Kein 60-FPS-Limit (außer Elites DXVK-Modus); VSync wie im Spiel eingestellt."
+    }
   }
 }

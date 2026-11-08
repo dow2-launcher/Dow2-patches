@@ -4,6 +4,37 @@ Every version gets an entry here before it reaches `main`. CI then tags `vX.Y.Z`
 version (`X.Y.0`) it also publishes a GitHub Release with the DLLs and the entries since the previous `X.Y.0`.
 The version of the set lives only in `VERSION`; each DLL still writes its own version to its log.
 
+## 0.2.21 — 2026-11-08
+SoundFix 1 (new, store soundfix-1, fixes, off by default, Elite + vanilla; SoundFix.dll + SoundFix_fmodex.bin). The "sound bug"
+(late big fights at high FPS: sound stutters, one sound loops, unit responses vanish, then a crash) is NOT reproduced on the
+stands (Wine, null audio), its cause is not proven; this is hardening plus the community's SMOL fix for vanilla:
+- Shark's sound queues: DOW2 0x760E00 pushes setPosition/Orientation/Velocity/Volume and ControlSource::setData for every
+  emitter every FRAME into Shark's queues (Shark+0x6ABFC / +0x6A1B8), the Shark thread applies them 20 times a second - work
+  linear in FPS. SoundFix (DOW2 import slots of Shark) replaces the payload of the still-waiting message of the same emitter and
+  field instead of queueing another (under Shark's queue mutex); play/stop/free are barriers. Stand 2, 6p replay, ~77 fps:
+  ~390k of ~545k state messages a minute merged.
+- FMOD Ex 4.32.20 for vanilla: DOW2.exe imports Shark.dll, Shark imports fmodex.dll (89 names, all in 4.32.20), so 4.32.3 is
+  mapped first; while Shark's Driver::m_instance (Shark+0x6BDA8) is 0 SoundFix loads SoundFix_fmodex.bin (= Elite_bin/
+  Elite_fmodex.bin, md5 10b85787) and points Shark's fmodex import table at it, then Shark+0x3907A 85 -> 8C (jne -> jl of the
+  FMOD version check, the SMOL byte) in memory; no game file changes. Elite already runs 4.32.20 + the patched Shark: untouched.
+  Accepts both Shark builds (only that byte differs). Unknown Shark/Platform build -> off.
+- No frame cap: the game has none of its own (app_fixedframerate = dev-only frame-time setting App+0xFAC, default 0; the main
+  loop sleeps 50 ms only while the window is inactive); DXVK's maxFrameRate (dxvk.conf, Elite.exe writes 60 with IsDXVK=true)
+  is overridden through DXVK_CONFIG (d3d9/dxgi.maxFrameRate) before Spooge's Direct3DCreate9 (import hooked). Vsync untouched.
+  SoundFix.ini FpsCap=N (launcher option: none/60/120/144/240): DXVK cap + a wait in IDirect3DDevice9/SwapChain9::Present.
+  Elite loads Elite_DLLs ~1 s AFTER Direct3D is created: there the DXVK cap of IsDXVK=true stays (logged).
+- Diagnostics in SoundFix.log: the game's FMOD rate (configuration.lua soundfrequency, 44100) vs the default output's mix format
+  (IAudioClient::GetMixFormat), DSP buffer (2048 x 4), FMOD output type and real rate, Windows audio device changes
+  (IMMNotificationClient), Direct3D device lost/back.
+- Tests (stand 2, real GPU via DXVK, stand dxvk.conf maxFrameRate = 60): vanilla Steam fmodex/Shark - without 60.0 fps,
+  with ~77 fps, 4.32.20 mapped from dow2-patches\SoundFix_fmodex.bin, FMOD initialised; 12 min to tick 7010 without a problem;
+  FpsCap=40 -> 40.0 fps. Elite 3.2.1 (rt_test321) - add-on loaded, 9/9 hooks, 12 min fine, fps 60 (DXVK cap stays, see above).
+  -sync_high + CrcTrace: CRC of every tick 0..2425 identical with and without, vanilla and Elite.
+- Code reading of MP-only audio: voice chat plays through Shark::Util::playVoiceStream (FMOD user stream, PCM16 mono 11025 Hz),
+  created only when voice from a player arrives, silence on underrun, unbounded buffer; on player-left only Channel::stop (the
+  FMOD Sound is never released). Nobody talks -> no stream. "SOUND: streaming buffer overflow" = Shark's sample loader has no
+  free stream slot (speech dropped).
+
 ## 0.2.20 — 2026-11-07
 ReplayTakeover 2 (store replaytakeover-2; the add-on's code, released from feature/replay-takeover as replaytakeover-1 on
 06.11, is in main from here on - its entry of that day is in the branch's history). Players (WarGood, 06.11): the computer put
