@@ -1,4 +1,4 @@
-// SoundFix.dll 1 - hardening against the Dawn of War II "sound bug" (late big fights at high FPS: sound stutters, one sound
+// SoundFix.dll 2 - hardening against the Dawn of War II "sound bug" (late big fights at high FPS: sound stutters, one sound
 // loops, unit responses vanish, then the game dies) and no frame cap while the add-on is on. Three parts, one tick:
 //
 // 1. Shark's sound queues do not grow with the frame rate.
@@ -18,26 +18,33 @@
 // 3. No frame cap: DXVK reads DXVK_CONFIG when the game creates Direct3D; SoundFix sets d3d9/dxgi.maxFrameRate there (it
 //  overrides dxvk.conf, e.g. the "maxFrameRate = 60" Elite.exe writes with IsDXVK=true). The game itself has no limiter
 //  (app_fixedframerate is a dev-only frame-time setting, default off). Vertical sync stays the player's choice in the options.
-//  SoundFix.ini [SoundFix] FpsCap=0 (default, no cap) or N: then DXVK caps at N and, without DXVK, SoundFix waits in Present.
+//  SoundFix.ini [SoundFix] FpsCap=0 (default, no cap) or N: DXVK caps at N. Without DXVK FpsCap does nothing (use vsync).
+//  SoundFix 2 (08.11.2026): NO Direct3D hooks any more. SoundFix 1 hooked Spooge's Direct3DCreate9 import, IDirect3D9::CreateDevice
+//  and IDirect3DDevice9/IDirect3DSwapChain9::Present through their vtables (for a Present wait and device lost/back lines). On a
+//  real Windows PC with the native Direct3D 9 (no DXVK) vanilla died ~0.2 s after the menu started, on the first frames, every
+//  launch: WER "BugSplat.dll c0000005 at +eca7" = BugSplat's handler faulting in its own stack probe (_chkstk), i.e. the thread
+//  had already run out of stack - an endless call chain through the hooked Present (a Present hook of another program on that PC
+//  chaining with ours is the likely loop; the Wine/DXVK stands have no such program and never crashed). Not needed for the
+//  fix itself, so removed; FpsCap stays a DXVK setting.
 //
 // 4. Diagnostics only (no change): the game's FMOD format (Shark passes the "soundfrequency" setting of configuration.lua, 44100 by
 //  default, to System::setSoftwareFormat; DSP buffer 2048 x 4), the default output's shared-mode mix format (IAudioClient::GetMixFormat
 //  = Control Panel -> device -> Advanced), the output type and rate FMOD really runs at, every Windows audio device change
-//  (added/removed/state/default) and Direct3D device lost/back - so player logs show them.
+//  (added/removed/state/default, only with AudioLog=1 in SoundFix.ini since 2: Windows then calls into this DLL from its own
+//  threads) - so player logs show them. No COM on the game's threads (2: the mix format is read once on SoundFix's own thread).
 //
 // Loads as an Elite_DLLs add-on (Profiler) or from dow2-patches (vanilla). Log: SoundFix.log next to the DLL.
 #define COBJMACROS
 #include <windows.h>
-#include <d3d9.h>
 #include <mmdeviceapi.h>
 #include <audioclient.h>
 #include <stdio.h>
 #include <stdarg.h>
 #include <string.h>
 
-#define SOUNDFIX_VERSION "1"
+#define SOUNDFIX_VERSION "2"
 static char g_dir[MAX_PATH], g_log[MAX_PATH];   // g_dir: folder of the DLL with the trailing backslash
-static int opt_fps, opt_fmod = 1, opt_merge = 1;
+static int opt_fps, opt_fmod = 1, opt_merge = 1, opt_audiolog;
 static void logmsg(const char *fmt, ...) {
     FILE *f = fopen(g_log, "a"); if (!f) return;
     SYSTEMTIME t; GetLocalTime(&t); fprintf(f, "%02d.%02d %02d:%02d:%02d ", t.wDay, t.wMonth, t.wHour, t.wMinute, t.wSecond);
@@ -260,56 +267,11 @@ static void fmod_upgrade(void) {
            vs2, vs, n, nm, smol ? "" : "; Shark's FMOD version check jne -> jl in memory");
 }
 
-// ---- part 3: frame cap (DXVK_CONFIG before Direct3D is created; FpsCap > 0 also waits in Present without DXVK)
+// ---- part 3: frame cap (DXVK_CONFIG before Direct3D is created; nothing without DXVK)
 static void dxvk_env(void) {
     char old[2048], v[2400]; DWORD n = GetEnvironmentVariableA("DXVK_CONFIG", old, sizeof old); if (n >= sizeof old) n = 0; old[n] = 0;
     snprintf(v, sizeof v, "%s%sd3d9.maxFrameRate = %d; dxgi.maxFrameRate = %d", old, n ? "; " : "", opt_fps, opt_fps);
     SetEnvironmentVariableA("DXVK_CONFIG", v);
-}
-static LONGLONG g_qf, g_next; static void *g_present_user;   // which Present the game uses (the device's or the swap chain's)
-static void frame_wait(void *who) {
-    if (opt_fps <= 0) return;
-    if (!g_present_user) g_present_user = who; else if (g_present_user != who) return;
-    LARGE_INTEGER t; QueryPerformanceCounter(&t); LONGLONG per = g_qf / opt_fps;
-    if (g_next && t.QuadPart < g_next) {
-        LONGLONG ms = (g_next - t.QuadPart) * 1000 / g_qf; if (ms > 1) Sleep((DWORD)ms - 1);
-        do { Sleep(0); QueryPerformanceCounter(&t); } while (t.QuadPart < g_next);
-        g_next += per;
-    } else g_next = t.QuadPart + per;   // first frame or late: start a new interval from now
-}
-typedef HRESULT (WINAPI *dpresent_t)(void *, const RECT *, const RECT *, HWND, const void *);
-typedef HRESULT (WINAPI *spresent_t)(void *, const RECT *, const RECT *, HWND, const void *, DWORD);
-typedef HRESULT (WINAPI *getsc_t)(void *, UINT, void **);
-typedef ULONG (WINAPI *release_t)(void *);
-typedef HRESULT (WINAPI *createdev_t)(void *, UINT, DWORD, HWND, DWORD, D3DPRESENT_PARAMETERS *, void **);
-typedef void *(WINAPI *d3dcreate_t)(UINT);
-static dpresent_t o_dpresent; static spresent_t o_spresent; static createdev_t o_createdev; static d3dcreate_t o_d3dcreate;
-static volatile LONG g_lost;
-static void present_result(HRESULT r) {   // device lost / back (Alt-Tab, mode change, driver reset) into the log, once per change
-    if (r == D3DERR_DEVICELOST || r == D3DERR_DEVICEREMOVED) { if (!InterlockedExchange(&g_lost, 1)) logmsg("Direct3D: device %s (Present %08lx)", r == D3DERR_DEVICELOST ? "lost" : "REMOVED", (DWORD)r); }
-    else if (r >= 0 && g_lost && InterlockedExchange(&g_lost, 0)) logmsg("Direct3D: presenting again");
-}
-static HRESULT WINAPI hk_dpresent(void *d, const RECT *a, const RECT *b, HWND w, const void *r) { frame_wait((void *)1); HRESULT h = o_dpresent(d, a, b, w, r); present_result(h); return h; }
-static HRESULT WINAPI hk_spresent(void *s, const RECT *a, const RECT *b, HWND w, const void *r, DWORD f) { frame_wait((void *)2); HRESULT h = o_spresent(s, a, b, w, r, f); present_result(h); return h; }
-static void vt_hook(void *obj, int idx, void *fn, void **orig) {   // once per implementation (vtable)
-    void **vt = *(void ***)obj; DWORD o;
-    if (vt[idx] == fn || !VirtualProtect(&vt[idx], 4, PAGE_READWRITE, &o)) return;
-    if (!*orig) *orig = vt[idx];
-    vt[idx] = fn; VirtualProtect(&vt[idx], 4, o, &o);
-}
-static HRESULT WINAPI hk_createdev(void *d3d, UINT ad, DWORD type, HWND w, DWORD fl, D3DPRESENT_PARAMETERS *pp, void **out) {
-    HRESULT r = o_createdev(d3d, ad, type, w, fl, pp, out);
-    if (r >= 0 && out && *out) {
-        void *dev = *out, *sc = NULL;
-        vt_hook(dev, 17, hk_dpresent, (void **)&o_dpresent);                                    // IDirect3DDevice9::Present
-        if (((getsc_t)(*(void ***)dev)[14])(dev, 0, &sc) >= 0 && sc) {                         // GetSwapChain(0)
-            vt_hook(sc, 3, hk_spresent, (void **)&o_spresent);                                  // IDirect3DSwapChain9::Present
-            ((release_t)(*(void ***)sc)[2])(sc);
-        }
-        if (pp) logmsg("Direct3D device %ux%u %s%s", pp->BackBufferWidth, pp->BackBufferHeight, pp->Windowed ? "windowed" : "fullscreen", opt_fps ? "" : "");
-        if (opt_fps) logmsg("frame cap %d fps (Present)", opt_fps);
-    } else logmsg("CreateDevice failed %08lx", (DWORD)r);
-    return r;
 }
 static int is_dxvk(HMODULE m) {   // DXVK's d3d9.dll has no export of its own; it carries the name of its config variable
     if (!m) return 0;
@@ -322,18 +284,6 @@ static int is_dxvk(HMODULE m) {   // DXVK's d3d9.dll has no export of its own; i
     }
     return 0;
 }
-static volatile LONG g_d3d_seen;
-static void *WINAPI hk_d3dcreate(UINT sdk) {
-    void *d = o_d3dcreate(sdk);
-    if (!InterlockedExchange(&g_d3d_seen, 1)) {
-        HMODULE dx = GetModuleHandleA("d3d9.dll"); int dxvk = is_dxvk(dx);
-        if (opt_fps) logmsg("Direct3D created after SoundFix: frame cap %d%s", opt_fps, dxvk ? " (DXVK, via DXVK_CONFIG)" : "");
-        else logmsg("Direct3D created after SoundFix: no frame cap%s", dxvk ? " (DXVK: maxFrameRate = 0 via DXVK_CONFIG, overrides dxvk.conf)" : " (no DXVK: the game has no cap of its own; vsync as set in the options)");
-    }
-    if (d) vt_hook(d, 16, hk_createdev, (void **)&o_createdev);                                  // IDirect3D9::CreateDevice
-    return d;
-}
-
 // ---- Windows audio device changes into the log (IMMNotificationClient): what FMOD 4.32 may not survive
 static const CLSID my_CLSID_MMDeviceEnumerator = {0xBCDE0395, 0xE52F, 0x467C, {0x8E, 0x3D, 0xC4, 0x57, 0x92, 0x91, 0x69, 0x2E}};
 static const IID my_IID_IMMDeviceEnumerator = {0xA95664D2, 0x9614, 0x4F35, {0xA7, 0x46, 0xDE, 0x8D, 0xB6, 0x36, 0x17, 0xE6}};
@@ -369,7 +319,7 @@ static IMMNotificationClientVtbl nc_vt = {nc_qi, nc_ref, nc_ref, nc_state, nc_ad
 static IMMNotificationClient nc = {&nc_vt};
 // ---- part 4 (diagnostics): the game's FMOD format vs the output device's mix format, what FMOD really runs at
 static const IID my_IID_IAudioClient = {0x1CB9AD4C, 0xDBFA, 0x4C32, {0xB1, 0x78, 0xC2, 0xF5, 0x68, 0xA7, 0x03, 0xB2}};
-static char g_mix_desc[160] = "unknown";
+static char g_mix_desc[160] = "unknown"; static volatile LONG g_mix_rate;
 static int query_mix(void) {   // shared-mode mix format of the default output = the "Default Format" of Control Panel -> device -> Advanced
     HRESULT ci = CoInitializeEx(NULL, COINIT_MULTITHREADED);
     IMMDeviceEnumerator *en = NULL; IMMDevice *d = NULL; IAudioClient *ac = NULL; WAVEFORMATEX *wf = NULL; int rate = 0;
@@ -388,6 +338,7 @@ static int query_mix(void) {   // shared-mode mix format of the default output =
         IMMDeviceEnumerator_Release(en);
     }
     if (ci == S_OK || ci == S_FALSE) CoUninitialize();
+    if (rate) InterlockedExchange(&g_mix_rate, rate);
     return rate;
 }
 // FMOD Ex C++ API: public __stdcall members, "this" (FMOD::System *) first
@@ -399,7 +350,7 @@ typedef int (__stdcall *getout_t)(void *, int *);
 typedef int (__stdcall *getdsp_t)(void *, unsigned *, int *);
 static setsw_t o_setsw; static setdsp_t o_setdsp; static finit_t o_finit; static getsw_t p_getsw; static getout_t p_getout; static getdsp_t p_getdsp;
 static int __stdcall hk_setsw(void *sys, int rate, int fmt, int outch, int maxin, int rs) {   // logged, passed on unchanged
-    int mix = query_mix();
+    int mix = (int)g_mix_rate;   // read by audio_watch on SoundFix's own thread (2: no COM on the thread that starts FMOD)
     logmsg("FMOD: the game's rate %d Hz (format %d, max input channels %d, resampler %d); output device mix format %s%s", rate, fmt, maxin, rs, g_mix_desc,
            !mix ? "" : mix == rate ? " (same)" : " (differs: resampled)");
     return o_setsw(sys, rate, fmt, outch, maxin, rs);
@@ -442,9 +393,13 @@ static DWORD WINAPI audio_watch(LPVOID _) {
     if (IMMDeviceEnumerator_GetDefaultAudioEndpoint(g_en, eRender, eConsole, &d) >= 0 && d) {
         LPWSTR id = NULL; if (IMMDevice_GetId(d, &id) >= 0) { dev_name(id, nm, sizeof nm); CoTaskMemFree(id); } IMMDevice_Release(d);
     }
-    HRESULT r = IMMDeviceEnumerator_RegisterEndpointNotificationCallback(g_en, &nc);
     query_mix();
-    logmsg("audio output: %s (mix format %s); watching audio device changes%s", nm, g_mix_desc, r < 0 ? " - FAILED" : "");
+    if (!opt_audiolog) {   // diagnostics only: no callbacks from Windows into this DLL
+        logmsg("audio output: %s (mix format %s)", nm, g_mix_desc);
+        IMMDeviceEnumerator *en = g_en; g_en = NULL; IMMDeviceEnumerator_Release(en); CoUninitialize(); return 0;
+    }
+    HRESULT r = IMMDeviceEnumerator_RegisterEndpointNotificationCallback(g_en, &nc);
+    logmsg("audio output: %s (mix format %s); watching audio device changes (AudioLog=1)%s", nm, g_mix_desc, r < 0 ? " - FAILED" : "");
     for (;;) Sleep(INFINITE);   // the callbacks come on the system's threads; this one keeps COM alive
     return 0;
 }
@@ -472,8 +427,8 @@ static DWORD WINAPI install(LPVOID _) {
     logmsg("SoundFix %s: %d/9 hooks, Shark %p (%s version check)", SOUNDFIX_VERSION, n, SB, *SR(0x3907a) == 0x8c ? "jl" : "jne");
     for (int t = 1;; t++) {
         Sleep(60000);
-        if (t == 1 && !g_d3d_seen) logmsg("Direct3D was created before SoundFix loaded (Elite loads its add-ons late): no frame cap change this session%s",
-                                          is_dxvk(GetModuleHandleA("d3d9.dll")) ? " - DXVK keeps dxvk.conf's maxFrameRate" : " (no DXVK: the game has no cap of its own)");
+        if (t == 1) logmsg("Direct3D: %s", is_dxvk(GetModuleHandleA("d3d9.dll")) ? (opt_fps ? "DXVK (FpsCap via DXVK_CONFIG if SoundFix loaded before Direct3D)" : "DXVK (maxFrameRate = 0 via DXVK_CONFIG if SoundFix loaded before Direct3D)")
+                                       : (opt_fps ? "no DXVK - FpsCap does nothing there (use vsync)" : "no DXVK (the game has no cap of its own; vsync as set in the options)"));
         LONG m = n_merged, q = n_queued, b = n_barrier;
         logmsg("last minute: %ld state messages merged into waiting ones, %ld queued, %ld play/stop/free", m, q, b);
         n_merged = n_queued = n_barrier = 0;
@@ -491,16 +446,13 @@ BOOL WINAPI DllMain(HINSTANCE h, DWORD r, LPVOID _) {
     opt_fps = GetPrivateProfileIntA("SoundFix", "FpsCap", 0, g_log); if (opt_fps < 0 || opt_fps > 1000) opt_fps = 0;
     opt_fmod = GetPrivateProfileIntA("SoundFix", "Fmodex", 1, g_log);
     opt_merge = GetPrivateProfileIntA("SoundFix", "Merge", 1, g_log);
+    opt_audiolog = GetPrivateProfileIntA("SoundFix", "AudioLog", 0, g_log);
     if (e) strcpy(e, ".log");
     e = strrchr(g_dir, '\\'); if (e) e[1] = 0;
-    LARGE_INTEGER qf; QueryPerformanceFrequency(&qf); g_qf = qf.QuadPart;
     // everything that must happen before the game starts sound and Direct3D is done right here, while the DLL loads
     char fv[32]; verstr(modver(GetModuleHandleA("fmodex.dll")), fv);
-    logmsg("SoundFix %s loaded from %s (FpsCap=%d Fmodex=%d Merge=%d; fmodex.dll %s)", SOUNDFIX_VERSION, g_dir, opt_fps, opt_fmod, opt_merge, fv);
+    logmsg("SoundFix %s loaded from %s (FpsCap=%d Fmodex=%d Merge=%d AudioLog=%d; fmodex.dll %s; no Direct3D hooks)", SOUNDFIX_VERSION, g_dir, opt_fps, opt_fmod, opt_merge, opt_audiolog, fv);
     dxvk_env();
-    HMODULE sp = GetModuleHandleA("Spooge.dll"); void **s = sp ? import_slot((BYTE *)sp, "d3d9.dll", "Direct3DCreate9") : NULL; DWORD o;
-    if (s && VirtualProtect(s, 4, PAGE_READWRITE, &o)) { o_d3dcreate = (d3dcreate_t)*s; *s = (void *)hk_d3dcreate; VirtualProtect(s, 4, o, &o); }
-    else logmsg("Spooge's Direct3DCreate9 import not found - frame cap only through DXVK_CONFIG");
     SB = (BYTE *)GetModuleHandleA("Shark.dll");
     fmod_upgrade();
     fmod_hooks();

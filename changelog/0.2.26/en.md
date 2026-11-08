@@ -1,0 +1,1 @@
+- Fixed: Sound fix and no FPS cap - vanilla no longer crashes a moment after the main menu appears on Windows without DXVK. The frame limit option now works only with DXVK (otherwise use vertical sync).

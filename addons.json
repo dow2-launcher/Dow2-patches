@@ -693,7 +693,7 @@
     "order": 20
   },
   "soundfix": {
-    "version": "1",
+    "version": "2",
     "dll": "SoundFix.dll",
     "files": {
       "SoundFix_fmodex.bin": "soundfix/SoundFix_fmodex.bin"
