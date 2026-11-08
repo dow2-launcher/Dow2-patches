@@ -26,6 +26,7 @@ are client-side, and the other players in the match don't need them.
 | **APM** | Your clicks and key presses per minute, next to the match timer or in the minimap corner. Only you see it. | `apm` → `apm-3` | `apm/` | no |
 | **Auto-reinforce through the webway gate** | A squad that goes through an Eldar webway gate keeps auto-reinforce on. | `reinforcefix` → `reinforcefix-1` | `reinforcefix/` | no (the game's own orders) |
 | **Hero bar comes back after a revive** (new, staging) | The bar over a hero (icon, health, energy) comes back after he is downed and revived; before, it sometimes stayed gone for the rest of the match (mostly in replays). | `herolabelfix` → `herolabelfix-1` (staging) | `herolabelfix/` | no (interface only) |
+| **Sound without fixes (sound bug test)** (new, staging) | Turns the sound fixes off on purpose (the game's old FMOD 4.32.3, no FPS cap) and writes a detailed sound log, for players who try to provoke the sound bug. Conflicts with the sound fix. | `soundbugtest` → `soundbugtest-1` (staging) | `soundbugtest/` | no (sound only) |
 | **Jumps don't break on obstacles** | An Autarch (or another jumper) whose jump order broke on an obstacle on the way gets it repeated after landing. | `jumpretry` → `jumpretry-2` | `jumpretry/` | no (the game's own orders) |
 | **Reverse (test)** | Ctrl + right-click behind your vehicles: they back off driving backwards, front armour to the enemy. | `reverse_r2` → `reverse-4` | `reverse/` | no (the game's own orders) |
 | **Don't drop out of the match when Steam goes away** | A match is played to the end when Steam loses its connection, however long it is away. | `steamkeep` → `steamkeep-2` | `steamkeep/` | no |
@@ -118,6 +119,13 @@ jumpretry/ - **JumpRetry.dll** (JumpRetry 2)
 reverse/ - **Reverse.dll** (Reverse 4)
     Ctrl + right-click: the selected squads back off to the point, vehicles driving backwards (25 m legs, so the game's own turn
     plans reverse). Only the point of your own right-click is moved. Reverse.ini: Key, StepMeters, LeadMeters.
+
+soundbugtest/ - **SoundBugTest.dll** (SoundBugTest 1, TEST)
+    The sound bug's worst case: Shark's fmodex imports -> Relic's FMOD Ex 4.32.3 (SoundBugTest_fmodex.bin) before Shark starts
+    FMOD, Shark+0x3907A back to jne in memory (Elite's SMOL byte), no queue merging (SoundFix kept idle through its mutex), no frame
+    cap (DXVK_CONFIG). Logs per second (frames, Shark tick time and queue sizes, FMOD channels/virtual/memory, buffer pools,
+    match/players/game time) and events (FMOD format vs Windows mix rate, device changes, FMOD callbacks, Shark's trace lines)
+    to SoundBugTest.log / SoundBugTest_events.log, written straight through, rotated by size.
 
 steamkeep/ - **SteamKeep.dll** (SteamKeep 2)
     A Steam drop during a match is not turned into an end reason, and Steam's close request (a bare WM_CLOSE) is ignored for the

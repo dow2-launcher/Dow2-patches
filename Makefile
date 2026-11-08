@@ -16,6 +16,7 @@ all: $(OUT)/LiveReplay.dll $(OUT)/lrbridge.exe
 all: $(OUT)/UnitStats.dll
 all: $(OUT)/ReplayTakeover.dll
 all: $(OUT)/SoundFix.dll
+all: $(OUT)/SoundBugTest.dll
 
 $(OUT):
 	mkdir -p $(OUT)
@@ -158,3 +159,9 @@ $(OUT)/ReplayTakeover.dll: replaytakeover/replaytakeover.c common/gfxui.h | $(OU
 # vanilla's Shark, no frame cap (DXVK_CONFIG) while it is on, FMOD at the output device's mix rate, audio device changes in the log
 $(OUT)/SoundFix.dll: soundfix/soundfix.c | $(OUT)
 	$(CC) $(CFLAGS) -shared -o $@ $< -lole32 -static-libgcc -Wl,--exclude-all-symbols
+
+# 08.11.2026 (TEST): the sound bug's worst case for players who try to provoke it - Relic's own FMOD Ex 4.32.3
+# (soundbugtest/SoundBugTest_fmodex.bin, from the Steam depot) and Shark's stock version check also in Elite, no queue merging,
+# no frame cap - plus a detailed sound log (SoundBugTest.log / SoundBugTest_events.log). Conflicts with SoundFix.
+$(OUT)/SoundBugTest.dll: soundbugtest/soundbugtest.c | $(OUT)
+	$(CC) $(CFLAGS) -shared -o $@ $< -lole32 -lpsapi -static-libgcc -Wl,--exclude-all-symbols
