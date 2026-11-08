@@ -417,5 +417,23 @@
       "fr": "Le son ne saccade plus, ne boucle plus et ne disparaît plus dans les grandes batailles ; bibliothèque son plus récente du correctif communautaire. Sans limite de 60 FPS (sauf mode DXVK d'Elite) ; synchro verticale comme dans le jeu.",
       "de": "Der Ton stockt, wiederholt sich und verschwindet nicht mehr in großen späten Gefechten; neuere Soundbibliothek des Community-Fixes. Kein 60-FPS-Limit (außer Elites DXVK-Modus); VSync wie im Spiel eingestellt."
     }
+  },
+  "soundbugtest": {
+    "category": "experiment",
+    "order": 40,
+    "name": {
+      "en": "Sound without fixes (sound bug test)",
+      "ru": "Звук без исправлений (проверка саундбага)",
+      "es": "Sonido sin arreglos (prueba del fallo de sonido)",
+      "fr": "Son sans correctifs (test du bug de son)",
+      "de": "Ton ohne Fixes (Sound-Bug-Test)"
+    },
+    "description": {
+      "en": "Turns the sound fixes off on purpose and writes a detailed sound log. To trigger the bug: a different sample rate in Windows sound settings, 3v3 online, several matches without restarting the game. Then Send logs.",
+      "ru": "Нарочно выключает исправления звука и пишет подробный лог звука. Чтобы вызвать баг: другая частота в настройках звука Windows, 3х3 по сети, несколько матчей подряд без перезапуска игры. Потом «Отправить логи».",
+      "es": "Desactiva a propósito los arreglos del sonido y escribe un registro detallado. Para provocar el fallo: otra frecuencia en el sonido de Windows, 3c3 en línea, varias partidas sin reiniciar el juego. Luego, Enviar registros.",
+      "fr": "Désactive exprès les correctifs du son et écrit un journal détaillé. Pour provoquer le bug : autre fréquence dans le son de Windows, 3c3 en ligne, plusieurs parties sans relancer le jeu. Puis Envoyer les journaux.",
+      "de": "Schaltet die Sound-Fixes absichtlich ab und schreibt ein ausführliches Sound-Log. Bug auslösen: andere Abtastrate in den Windows-Soundeinstellungen, 3v3 online, mehrere Spiele ohne Neustart. Danach Logs senden."
+    }
   }
 }

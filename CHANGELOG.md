@@ -4,6 +4,35 @@ Every version gets an entry here before it reaches `main`. CI then tags `vX.Y.Z`
 version (`X.Y.0`) it also publishes a GitHub Release with the DLLs and the entries since the previous `X.Y.0`.
 The version of the set lives only in `VERSION`; each DLL still writes its own version to its log.
 
+## 0.2.23 — 2026-11-08
+SoundBugTest 1 (new, TEST, store soundbugtest-1, experiment, off by default, Elite + vanilla; SoundBugTest.dll +
+SoundBugTest_fmodex.bin; conflicts with SoundFix). The sound bug's WORST case for players who try to provoke it, plus a log:
+- Stock FMOD Ex 4.32.3 (SoundBugTest_fmodex.bin = Relic's fmodex.dll from the Steam depot, md5 9bea3b58) and Shark's stock FMOD
+  version check, in Elite too: Elite copies Elite_fmodex.bin (4.32.20) / Elite_Shark.bin (Shark+0x3907A 8C, SMOL) over the root
+  files, so after a game of Elite vanilla runs them as well. While Shark's Driver::m_instance (Shark+0x6BDA8) is 0 SoundBugTest
+  points Shark's 89 fmodex imports at its 4.32.3 and puts Shark+0x3907A back to 85 (jne) in memory - only once 4.32.3 is in use
+  (a jne Shark refuses 4.32.20 = silent game). Elite loads Elite_DLLs before FMOD starts (stand), so this works there too; FMOD
+  already started -> logged "NOT the worst case". No game file changes.
+- No merging of Shark's queues: holds SoundFix's mutex (SoundFix-<pid>) so a later SoundFix stays idle; refuses to work (logged)
+  when SoundFix came first. Store: conflicts Elite_DLLs/SoundFix.dll (SoundFix wins). No frame cap: DXVK_CONFIG maxFrameRate = 0
+  before Spooge's Direct3DCreate9 (vanilla; Elite creates Direct3D before its add-ons - cap of dxvk.conf stays, logged).
+- Log next to the DLL, written through (FILE_FLAG_WRITE_THROUGH, shared so the launcher can read/truncate it), rotated at 3 MB
+  (SoundBugTest.1.log): one line a second - match number of the game session / players / game time, frames (DOW2 calls of
+  shark::update), Shark thread ticks + busy avg/max (inline hook of the tick Shark+0x45B30, 8-byte atomic), messages per second in
+  its 7 queues (ContainerLogic/ControlSource) + biggest batch + still pending, FMOD update time, channels playing / real / virtual
+  (System::getChannel + isVirtual on the Shark thread), FMOD CPU, FMOD_Memory_GetStats (3 args), streaming/static buffers in use
+  of the sample loader (this of Shark+0x33410 via its vtable slot Shark+0x4F6EC, free stacks +0x14/+0x8), buffer overflows,
+  process memory, largest free address block. Events at once: FMOD format vs the Windows mix format, FMOD init (output, rate, DSP
+  buffer), FMOD system callbacks (Shark's wrapped: device list changed / device lost / ...), System::update errors, Shark's own
+  trace lines (dbInternal::TimeStampedTracef, max 6/s) and Fatalf, Windows audio device changes incl. a changed sample rate
+  (IMMNotificationClient, PKEY_AudioEngine_DeviceFormat), match start/decided/end (SimEngine imports), Shark thread not ticking
+  (+ its stack). SoundBugTest_events.log (1 MB): the events + one line a minute, so a long evening fits the launcher's 256 KB.
+- Tests (stand 2, 6p replays, 5 min each; root files = Elite's fmodex 4.32.20 + SMOL Shark as after a game of Elite): vanilla -
+  SoundBugTest_fmodex.bin mapped, 89 imports redirected, jl -> jne, FMOD 4.32.3 init 0 on WASAPI 44100 Hz (Windows mix 48000),
+  70-89 fps (DXVK cap of dxvk.conf lifted), up to 81 channels, match/6 players/game time logged; Elite 3.2.1 - add-ons load
+  before FMOD starts: the same redirect + jne, FMOD 4.32.3 init 0, sound plays (up to 106 channels), 60 fps (stand dxvk.conf cap
+  stays: Direct3D before Elite_DLLs). ~255 bytes a second in SoundBugTest.log. No simulation change (sound only), no CrcTrace.
+
 ## 0.2.22 — 2026-11-08
 HeroLabelFix 1 (new, store herolabelfix-1, fixes, off by default, Elite + vanilla; HeroLabelFix.dll). The bar over a hero
 (squad_leader_decorator, vtable 0x011129E4: icon, health, energy) sometimes never came back after the hero was downed and

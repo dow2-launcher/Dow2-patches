@@ -1,0 +1,1 @@
+- Test: Sound without fixes (sound bug test): turns the sound fixes off on purpose (the game's old sound library, no FPS cap) and writes a detailed sound log, for players who want to help catch the sound bug: set a different sample rate in Windows sound settings, play 3v3 online, several matches without restarting, then Send logs. Off by default.
