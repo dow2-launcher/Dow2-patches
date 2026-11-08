@@ -15,6 +15,7 @@ all: $(OUT)/ShellFix.dll
 all: $(OUT)/LiveReplay.dll $(OUT)/lrbridge.exe
 all: $(OUT)/UnitStats.dll
 all: $(OUT)/ReplayTakeover.dll
+all: $(OUT)/SoundFix.dll
 
 $(OUT):
 	mkdir -p $(OUT)
@@ -147,3 +148,9 @@ $(OUT)/lrbridge.exe: roomjoin/rjbridge.c | $(OUT)
 # "Concede match" button in a replay becomes "Continue as <name>")
 $(OUT)/ReplayTakeover.dll: replaytakeover/replaytakeover.c common/gfxui.h | $(OUT)
 	$(CC) $(CFLAGS) -shared -o $@ $< -static-libgcc
+
+# 08.11.2026: the sound bug (sound stutters/loops/vanishes in late big fights at high FPS): Shark's sound queues no longer grow
+# with the frame rate, FMOD Ex 4.32.20 (soundfix/SoundFix_fmodex.bin, the file Elite ships as Elite_bin/Elite_fmodex.bin) for
+# vanilla's Shark, no frame cap (DXVK_CONFIG) while it is on, FMOD at the output device's mix rate, audio device changes in the log
+$(OUT)/SoundFix.dll: soundfix/soundfix.c | $(OUT)
+	$(CC) $(CFLAGS) -shared -o $@ $< -lole32 -static-libgcc -Wl,--exclude-all-symbols
