@@ -4,6 +4,29 @@ Every version gets an entry here before it reaches `main`. CI then tags `vX.Y.Z`
 version (`X.Y.0`) it also publishes a GitHub Release with the DLLs and the entries since the previous `X.Y.0`.
 The version of the set lives only in `VERSION`; each DLL still writes its own version to its log.
 
+## 0.2.24 — 2026-11-08
+ReplaySpeed 1 (new, store replayspeed-1, fixes, off by default, Elite + vanilla; ReplaySpeed.dll). Two more replay speeds, 8x and
+Max, as two buttons right of the replay panel's own speed button:
+- the game's speed: the panel's one button (/playback_panel_mc/fast_forward_btn, click 0xB1FCC0) steps through {5, 10, 20, 40}
+  (table 0x012C07DC) = sim ticks per second (10 = 1x) and calls the sim rate interface *(*(0x01335720)+8)+0x68 (vtable
+  0x0108DFAC, +0x28 = Game_SetSimRate 0x43ECE9 -> 0x425106: SimulationController+0x2C rate, +0x28 1/rate, no clamp; only the
+  icon lookup 0xACC2E0 clamps to 5..40).
+- SimulationController::Update (0x438613) runs at most one tick per pass of the main loop and keeps at most one interval of
+  backlog, so ticks/s = min(rate, passes/s); a drawn pass is ~20 ms on a 6p replay, so 8x would stay at ~4.7x.
+- 8x = rate 80 (raised up to 160 by a once-a-second controller until the replay really runs 80 ticks/s: each drawn frame drops
+  the rest of an interval); Max = 1000. While one of them runs in a replay (settings+0x118 & 0x800), the visual update
+  (call 0x40E58D -> 0x439CE8) and draw+Present (call 0x40E6DC -> 0x405935) are skipped on the passes between shown frames
+  (30 fps at 8x, 15 at Max; ReplaySpeed.ini Fps8x/FpsMax); paused / replay end / live replay waiting = every pass drawn.
+  Scaleform still advances every pass: buttons answer at once. No Direct3D code.
+- buttons: two Receive_DuplicateMovieClip copies of fast_forward_btn (its up/over/down/toggled_on frames), "8x" a $NormalFont
+  text, "Max" the game's unused icon hud/playback_panel/large_btn_ff_8x; toggled_on follows the rate we set (the game's own
+  button or a takeover changing it turns ours off). Clicks: GetAsyncKeyState + the copy's _xmouse/_ymouse. Pressing the game's
+  speed button during 8x/Max sets 0.5x first, so its click lands on 1x. The elapsed time and the progress bar move right by
+  the two buttons (the bar keeps its right end).
+- Stand 2 (vanilla, 6p calderis 2026-05-15, DXVK): 8x 8.0 game s per real s (80 ticks/s, 27 frames/s), Max 20.7x (207 ticks/s,
+  14 frames/s; simulation-bound), back to 1x and the game's button from 8x -> 1x work. Elite 3.2.1 (stand 1, rt_test321): 8x
+  7.95x, Max 17.4x, 1x again, no crash.
+
 ## 0.2.23 — 2026-11-08
 SoundBugTest 1 (new, TEST, store soundbugtest-1, experiment, off by default, Elite + vanilla; SoundBugTest.dll +
 SoundBugTest_fmodex.bin; conflicts with SoundFix). The sound bug's WORST case for players who try to provoke it, plus a log:

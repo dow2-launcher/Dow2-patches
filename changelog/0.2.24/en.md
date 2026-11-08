@@ -1,0 +1,1 @@
+- New: Replay fast-forward 8x and max: two more buttons next to the replay speed button - 8x, and Max, as fast as your PC can play the replay (the picture then updates a few times a second). Press the lit button again for normal speed. Off by default.

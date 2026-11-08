@@ -17,6 +17,7 @@ all: $(OUT)/UnitStats.dll
 all: $(OUT)/ReplayTakeover.dll
 all: $(OUT)/SoundFix.dll
 all: $(OUT)/SoundBugTest.dll
+all: $(OUT)/ReplaySpeed.dll
 
 $(OUT):
 	mkdir -p $(OUT)
@@ -112,6 +113,10 @@ $(OUT)/ReinforceFix.dll: reinforcefix/reinforcefix.c | $(OUT)
 
 # 08.11.2026: the bar over a hero comes back after he is revived (a hidden squad_leader_decorator was never drawn again)
 $(OUT)/HeroLabelFix.dll: herolabelfix/herolabelfix.c | $(OUT)
+	$(CC) $(CFLAGS) -shared -o $@ $< -static-libgcc
+
+# 08.11.2026: replay speeds 8x and Max - two buttons next to the replay panel's speed button
+$(OUT)/ReplaySpeed.dll: replayspeed/replayspeed.c common/gfxui.h | $(OUT)
 	$(CC) $(CFLAGS) -shared -o $@ $< -static-libgcc
 
 # 03.11.2026: the game's own Continue after a custom game (host -> everyone back in the same room)

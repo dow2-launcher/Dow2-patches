@@ -27,6 +27,7 @@ are client-side, and the other players in the match don't need them.
 | **Auto-reinforce through the webway gate** | A squad that goes through an Eldar webway gate keeps auto-reinforce on. | `reinforcefix` → `reinforcefix-1` | `reinforcefix/` | no (the game's own orders) |
 | **Hero bar comes back after a revive** (new, staging) | The bar over a hero (icon, health, energy) comes back after he is downed and revived; before, it sometimes stayed gone for the rest of the match (mostly in replays). | `herolabelfix` → `herolabelfix-1` (staging) | `herolabelfix/` | no (interface only) |
 | **Sound without fixes (sound bug test)** (new, staging) | Turns the sound fixes off on purpose (the game's old FMOD 4.32.3, no FPS cap) and writes a detailed sound log, for players who try to provoke the sound bug. Conflicts with the sound fix. | `soundbugtest` → `soundbugtest-1` (staging) | `soundbugtest/` | no (sound only) |
+| **Replay fast-forward 8x and max** (new, staging) | Two more buttons next to the replay speed button: 8x, and Max (as fast as the PC simulates, the picture a few times a second). | `replayspeed` → `replayspeed-1` (staging) | `replayspeed/` | no (replays only) |
 | **Jumps don't break on obstacles** | An Autarch (or another jumper) whose jump order broke on an obstacle on the way gets it repeated after landing. | `jumpretry` → `jumpretry-2` | `jumpretry/` | no (the game's own orders) |
 | **Reverse (test)** | Ctrl + right-click behind your vehicles: they back off driving backwards, front armour to the enemy. | `reverse_r2` → `reverse-4` | `reverse/` | no (the game's own orders) |
 | **Don't drop out of the match when Steam goes away** | A match is played to the end when Steam loses its connection, however long it is away. | `steamkeep` → `steamkeep-2` | `steamkeep/` | no |
@@ -103,6 +104,14 @@ apm/ - **APM.dll** (APM 3)
 reinforcefix/ - **ReinforceFix.dll** (ReinforceFix v1)
     The HUD's auto-reinforce list drops squads with no models on the map - also a squad sitting inside an Eldar webway gate.
     ReinforceFix keeps such squads; the reinforce orders stay the game's own.
+
+replayspeed/ - **ReplaySpeed.dll** (ReplaySpeed 1)
+    Replay speed = sim ticks per second (10 = 1x) set through the sim rate interface *(*(0x01335720)+8)+0x68 (vtable 0x0108DFAC,
+    +0x28 = Game_SetSimRate, no clamp); the panel's one speed button (0xB1FCC0) cycles 5/10/20/40. SimulationController::Update
+    (0x438613) runs at most one tick per loop pass, so 8x/Max are limited by the draw: while 8x (80, raised up to 160 until 80 real
+    ticks/s) or Max (1000) runs in a replay, the call sites of the visual update (0x40E58D) and draw+Present (0x40E6DC) skip the
+    passes between shown frames (30 / 15 fps). Buttons: two copies of fast_forward_btn in playback_panel_v2 (Scaleform), clicks by
+    GetAsyncKeyState + the copy's _xmouse/_ymouse; the elapsed time and the progress bar move right to make room.
 
 herolabelfix/ - **HeroLabelFix.dll** (HeroLabelFix 1)
     A downed hero's squad_leader_decorator (vtable 0x011129E4) is hidden by its draw (slot 0x10, 0x00B25070: +0x1C = 0) when its

@@ -812,5 +812,26 @@
     ],
     "category": "experiment",
     "order": 40
+  },
+  "replayspeed": {
+    "version": "1",
+    "dll": "ReplaySpeed.dll",
+    "default": false,
+    "category": "fixes",
+    "order": 50,
+    "name": {
+      "en": "Replay fast-forward 8x and max",
+      "ru": "Перемотка реплея 8x и максимум",
+      "es": "Avance rápido de repeticiones 8x y máximo",
+      "fr": "Avance rapide des replays 8x et max",
+      "de": "Replay-Vorlauf 8x und Maximum"
+    },
+    "description": {
+      "en": "Two more buttons next to the replay speed button: 8x, and Max - as fast as your PC can play it (the picture then updates a few times a second). Press again for normal speed.",
+      "ru": "Две кнопки рядом с кнопкой скорости реплея: 8x и Max — так быстро, как тянет ваш ПК (картинка тогда обновляется несколько раз в секунду). Повторное нажатие — обычная скорость.",
+      "es": "Dos botones más junto al de velocidad de la repetición: 8x y Max, tan rápido como permita tu PC (la imagen se actualiza unas veces por segundo). Pulsa otra vez para la velocidad normal.",
+      "fr": "Deux boutons de plus à côté de celui de la vitesse du replay : 8x et Max, aussi vite que votre PC le permet (l'image se met à jour quelques fois par seconde). Rappuyez pour la vitesse normale.",
+      "de": "Zwei Knöpfe mehr neben dem Replay-Tempo-Knopf: 8x und Max - so schnell wie dein PC kann (das Bild wird dann ein paar Mal pro Sekunde erneuert). Erneut drücken für normales Tempo."
+    }
   }
 }
