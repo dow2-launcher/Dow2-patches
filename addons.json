@@ -875,5 +875,26 @@
       "fr": "Le jeu ne parcourt plus des milliers d'anciens textes à chaque mise à jour de l'interface : plus de FPS.",
       "de": "Das Spiel durchsucht nicht mehr Tausende alter Texte bei jeder Aktualisierung der Oberfläche: mehr FPS."
     }
+  },
+  "perflog": {
+    "version": "1",
+    "dll": "PerfLog.dll",
+    "default": false,
+    "category": "experiment",
+    "order": 970,
+    "name": {
+      "en": "PerfLog",
+      "ru": "PerfLog",
+      "es": "PerfLog",
+      "fr": "PerfLog",
+      "de": "PerfLog"
+    },
+    "description": {
+      "en": "Writes the FPS and what limits it (graphics card, main game thread, which part of the frame) to a log every 5 s. Play a match or watch a replay, then press \"Send logs\". Changes nothing in the game.",
+      "ru": "Замер производительности: каждые 5 с пишет в лог FPS и что его ограничивает (видеокарта, главный поток игры, какая часть кадра). Сыграйте матч или посмотрите реплей, затем нажмите «Отправить логи». В игре ничего не меняет.",
+      "es": "Cada 5 s escribe en un registro los FPS y qué los limita (tarjeta gráfica, hilo principal del juego, qué parte del fotograma). Juega una partida o mira una repetición y pulsa \"Enviar registros\". No cambia nada del juego.",
+      "fr": "Toutes les 5 s, écrit dans un journal les FPS et ce qui les limite (carte graphique, thread principal du jeu, quelle partie de l'image). Jouez une partie ou regardez un replay, puis cliquez sur « Envoyer les journaux ». Ne change rien au jeu.",
+      "de": "Schreibt alle 5 s die FPS und was sie begrenzt (Grafikkarte, Haupt-Thread des Spiels, welcher Teil des Bildes) in ein Protokoll. Spiel ein Match oder schau ein Replay, dann \"Logs senden\" drücken. Ändert nichts am Spiel."
+    }
   }
 }

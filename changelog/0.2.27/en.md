@@ -1,0 +1,1 @@
+- New (experiment, off by default): PerfLog - every 5 s writes the FPS and what limits it (graphics card, main game thread, which part of the frame) to a log, with a verdict every minute. Play or watch a replay, then "Send logs". Changes nothing in the game.

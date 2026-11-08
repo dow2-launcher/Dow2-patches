@@ -4,6 +4,28 @@ Every version gets an entry here before it reaches `main`. CI then tags `vX.Y.Z`
 version (`X.Y.0`) it also publishes a GitHub Release with the DLLs and the entries since the previous `X.Y.0`.
 The version of the set lives only in `VERSION`; each DLL still writes its own version to its log.
 
+## 0.2.27 — 2026-11-08
+PerfLog 1 (new, store perflog-1, experiment, order 970, off by default, Elite + vanilla; PerfLog.dll). A performance log for
+players: what limits the FPS on their PC. Measures only - no simulation, drawing or Direct3D object is changed.
+- PerfLog.log, a line every 5 s: mode (menu / match / replay xN, "loading"), game time, fps avg / min / 1% low frame ms, and ms
+  per shown frame: frame, main thread CPU (GetThreadTimes of "XThread 0"), Present + EndScene wait, 3D world 0xB7DAA0 (with the
+  unit bars), HUD panels 0x681110, other drawing, game frame 0x4240F5 (sim + HUD model), visual update 0x439CE8, UI update
+  0x680C00, rest of the loop; sim ticks and loop passes, visuals (Viz proxies), players, memory. Once: CPU, RAM, Windows / Wine,
+  d3d9.dll path, DXVK cap, GPU name / vendor / driver, resolution / fullscreen / vsync, the other add-ons of the folder.
+  PerfLog_summary.log: a line per minute with a verdict (vsync / FPS cap; GPU/driver-bound = Present >= 30 % of the frame;
+  CPU-bound (main thread) = its CPU >= 80 % of the frame; else mixed; the biggest part named). Logs trimmed above 1 MB.
+- How: shark::update import slot (pass / frame), entry jumps on the main-loop functions that time the outermost call on the main
+  thread with two QueryPerformanceCounter, Spooge's own sp::Device Present / EndScene vtable slots (0xC0 / 0xB8). The
+  IDirect3DDevice9 vtable is not hooked (overlays hook it; see SoundFix 2). All writes under the shared patch mutex; the main
+  loop's call sites stay free for ReplaySpeed / ReplayTakeover (tested together with ReplaySpeed 8x: frames shown match).
+- Tested: stand 2 (Wine + DXVK + NVIDIA) Elite 3.2.1 started normally (inj.exe Profiler.dll DOW2.exe -modname Elite, no -dev /
+  -init), Game History -> 6p replay, with ReplaySpeed + FastBuffers + FastLocStrings: lines from the menu on, replay x1 / x8,
+  values match the earlier profile (frame 13 ms, main thread 7-9 ms, world 3.2, visuals 1.6-2.5). Vanilla normal launch
+  (vloader-1): stand 1 Custom Games -> Private -> 1v1 skirmish vs AI (match, 2 players, "capped by the FPS limit (60)").
+- Overhead (stand 2, vanilla 3v3 replay ticks 1200-2400, uncapped, PerfMeter): without 77.1 / 77.5 / 77.8 fps, main thread
+  6.19 / 6.10 / 6.06 ms per frame; with 77.7 / 77.8 / 77.9 fps, 6.08 / 6.04 / 6.06 ms - within noise. ~8 timed calls per frame
+  x 0.3 us = ~2.4 us per frame (0.02 %).
+
 ## 0.2.26 — 2026-11-08
 SoundFix 2 (store soundfix-2, experiment, off by default, Elite + vanilla). Crash fix.
 - SoundFix 1 crashed vanilla on a real Windows PC (native Direct3D 9, no DXVK, NVIDIA, 2560x1440 fullscreen) every launch,
