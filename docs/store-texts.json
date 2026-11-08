@@ -260,11 +260,11 @@
     "category": "fixes",
     "order": 20,
     "name": {
-      "en": "Smooth spectating",
-      "ru": "Smooth spectating",
-      "es": "Smooth spectating",
-      "fr": "Smooth spectating",
-      "de": "Smooth spectating"
+      "en": "Obs lag fix",
+      "ru": "Obs lag fix",
+      "es": "Obs lag fix",
+      "fr": "Obs lag fix",
+      "de": "Obs lag fix"
     },
     "description": {
       "en": "Removes the stutter when you watch someone else's live game as an observer.",
