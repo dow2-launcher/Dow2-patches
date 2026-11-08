@@ -28,6 +28,8 @@ are client-side, and the other players in the match don't need them.
 | **Hero bar comes back after a revive** (new, staging) | The bar over a hero (icon, health, energy) comes back after he is downed and revived; before, it sometimes stayed gone for the rest of the match (mostly in replays). | `herolabelfix` → `herolabelfix-1` (staging) | `herolabelfix/` | no (interface only) |
 | **Sound without fixes (sound bug test)** (new, staging) | Turns the sound fixes off on purpose (the game's old FMOD 4.32.3, no FPS cap) and writes a detailed sound log, for players who try to provoke the sound bug. Conflicts with the sound fix. | `soundbugtest` → `soundbugtest-1` (staging) | `soundbugtest/` | no (sound only) |
 | **Replay fast-forward 8x and max** (new, staging) | Two more buttons next to the replay speed button: 8x, and Max (as fast as the PC simulates, the picture a few times a second). | `replayspeed` → `replayspeed-1` (staging) | `replayspeed/` | no (replays only) |
+| **Faster drawing: no needless buffer check** (new, staging) | The game no longer re-checks every piece of memory it writes effects and interface quads to: more FPS (with the next one +10 % on a 3v3 replay). | `fastbuffers` → `fastbuffers-1` (staging) | `fastbuffers/` | no (drawing only) |
+| **Faster interface: quick texts** (new, staging) | A dropped interface text (tooltip, counter) is found from the end of the list of live texts instead of its start. | `fastlocstrings` → `fastlocstrings-1` (staging) | `fastlocstrings/` | no (interface texts only) |
 | **Jumps don't break on obstacles** | An Autarch (or another jumper) whose jump order broke on an obstacle on the way gets it repeated after landing. | `jumpretry` → `jumpretry-2` | `jumpretry/` | no (the game's own orders) |
 | **Reverse (test)** | Ctrl + right-click behind your vehicles: they back off driving backwards, front armour to the enemy. | `reverse_r2` → `reverse-4` | `reverse/` | no (the game's own orders) |
 | **Don't drop out of the match when Steam goes away** | A match is played to the end when Steam loses its connection, however long it is away. | `steamkeep` → `steamkeep-2` | `steamkeep/` | no |
@@ -104,6 +106,17 @@ apm/ - **APM.dll** (APM 3)
 reinforcefix/ - **ReinforceFix.dll** (ReinforceFix v1)
     The HUD's auto-reinforce list drops squads with no models on the map - also a squad sitting inside an Eldar webway gate.
     ReinforceFix keeps such squads; the reinforce orders stay the game's own.
+
+fastbuffers/ - **FastBuffers.dll** (FastBuffers 1)
+    Spooge.dll locks its dynamic vertex / index ring buffers and then calls IsBadWritePtr on the returned pointer (0x1004D414,
+    0x1004D4FA): a page walk under SEH, 8.7 % of the game thread on a 3v3 replay under Wine/DXVK. A successful Lock always gives a
+    writable pointer, so Spooge's import slot of IsBadWritePtr (used only there) points to a stub that rejects only NULL. One pointer
+    write, no game code changed. FastBuffers.ini [FastBuffers] Enabled=0 turns it off, Stats=1 logs the skipped probes.
+
+fastlocstrings/ - **FastLocStrings.dll** (FastLocStrings 1)
+    Localizer.dll keeps all formatted LocStrings in one vector; releasing one (0x10004A80) searched it from the start, past the
+    long-lived strings (~16 k on a 3v3 replay), 4.5-5.8 % of the game thread. The same function searching from the end (same
+    swap-with-last, same mutex, same frees) is jumped to by one atomic 8-byte write over the entry. FastLocStrings.ini as above.
 
 replayspeed/ - **ReplaySpeed.dll** (ReplaySpeed 1)
     Replay speed = sim ticks per second (10 = 1x) set through the sim rate interface *(*(0x01335720)+8)+0x68 (vtable 0x0108DFAC,

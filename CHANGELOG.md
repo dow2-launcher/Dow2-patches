@@ -4,6 +4,21 @@ Every version gets an entry here before it reaches `main`. CI then tags `vX.Y.Z`
 version (`X.Y.0`) it also publishes a GitHub Release with the DLLs and the entries since the previous `X.Y.0`.
 The version of the set lives only in `VERSION`; each DLL still writes its own version to its log.
 
+## 0.2.25 — 2026-11-08
+FastBuffers 1 and FastLocStrings 1 (new, store fastbuffers-1 / fastlocstrings-1, fixes, off by default, Elite + vanilla).
+Performance, drawing / interface only. Profile of a 3v3 replay (Wine+DXVK+NVIDIA, ~47 fps): the sim tick is ~1.5 % of the game
+thread; the frame goes to drawing (~11 ms), the HUD model, the visual update of all units and the UI.
+- FastBuffers.dll: Spooge's IsBadWritePtr after every dynamic VB/IB Lock (0x1004D414, 0x1004D4FA; 8.7 % of the game thread) ->
+  IAT stub that rejects only NULL.
+- FastLocStrings.dll: Localizer 0x10004A80 (release of a formatted LocString, linear search from the start of the vector of ~16 k
+  live strings; 4.5-5.8 %) -> the same function searching from the end; entry patched by one atomic 8-byte jmp.
+- Tested (stands, the binaries of this commit's sources; -sync_high + CrcTrace, CRC of every tick vs a run without them):
+  vanilla 3v3 calderis 2026-02-21 ticks 0..2424 identical; Elite 3.2.1 rt_test321 (6p Graesark) ticks 0..2430 identical on
+  stand 1 and stand 2. Both load and work in Elite and vanilla (FastBuffers ~1.9 M probes skipped / 2 min; FastLocStrings
+  ~29-52 entries looked at per release in a list of ~16-19 k), no crash.
+- FPS (stand 2, DXVK uncapped): vanilla 3v3 calderis 2026-05-15 ticks 4200-4800 47.5 -> 52.5 fps (+10.4 %, main thread
+  14.25 -> 12.40 ms/frame); Elite rt_test321 ticks 1200-2400 74.1 -> 74.1 fps (that replay is not bound by these two).
+
 ## 0.2.24 — 2026-11-08
 ReplaySpeed 1 (new, store replayspeed-1, fixes, off by default, Elite + vanilla; ReplaySpeed.dll). Two more replay speeds, 8x and
 Max, as two buttons right of the replay panel's own speed button:
