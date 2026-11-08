@@ -220,6 +220,24 @@
       "de": "Ein Trupp, der in ein Eldar-Netzportal oder einen Tyraniden-Ravener-Tunnel geht (oder sonst kurz von der Karte verschwindet), kommt nicht mehr mit abgeschalteter Auto-Verstärkung heraus."
     }
   },
+  "herolabelfix": {
+    "category": "fixes",
+    "order": 15,
+    "name": {
+      "en": "Hero bar comes back after a revive",
+      "ru": "Полоска над героем возвращается после воскрешения",
+      "es": "La barra del héroe vuelve tras revivir",
+      "fr": "La barre du héros revient après sa réanimation",
+      "de": "Heldenleiste kommt nach dem Wiederbeleben zurück"
+    },
+    "description": {
+      "en": "Sometimes, after a hero is downed and gets back up, the bar over him (icon, health, energy) never came back for the rest of the match - mostly in replays. Now it always comes back. Changes only what is shown.",
+      "ru": "Иногда после того, как героя убивали и он вставал, полоска над ним (значок, здоровье, энергия) пропадала до конца матча — чаще всего в реплеях. Теперь она всегда возвращается. Меняет только то, что видно на экране.",
+      "es": "A veces, después de que un héroe caía y se levantaba, la barra sobre él (icono, salud, energía) no volvía en toda la partida, sobre todo en las repeticiones. Ahora siempre vuelve. Solo cambia lo que se ve.",
+      "fr": "Parfois, après qu'un héros était mis à terre puis relevé, la barre au-dessus de lui (icône, santé, énergie) ne revenait plus de la partie, surtout dans les replays. Maintenant elle revient toujours. Ne change que l'affichage.",
+      "de": "Manchmal kam die Leiste über einem Helden (Symbol, Leben, Energie) nach dem Niederschlagen und Aufstehen bis zum Spielende nicht zurück, vor allem in Wiederholungen. Jetzt kommt sie immer zurück. Ändert nur die Anzeige."
+    }
+  },
   "elitefix_wmic": {
     "category": "fixes",
     "order": 10,

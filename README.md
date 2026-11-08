@@ -25,6 +25,7 @@ are client-side, and the other players in the match don't need them.
 | **Cooldown seconds on ability buttons** | Seconds left on recharging abilities and global abilities, in the middle of the button. | `cooldowns_r2` → `cooldowns-9` | `cooldowns/` | no |
 | **APM** | Your clicks and key presses per minute, next to the match timer or in the minimap corner. Only you see it. | `apm` → `apm-3` | `apm/` | no |
 | **Auto-reinforce through the webway gate** | A squad that goes through an Eldar webway gate keeps auto-reinforce on. | `reinforcefix` → `reinforcefix-1` | `reinforcefix/` | no (the game's own orders) |
+| **Hero bar comes back after a revive** (new, staging) | The bar over a hero (icon, health, energy) comes back after he is downed and revived; before, it sometimes stayed gone for the rest of the match (mostly in replays). | `herolabelfix` → `herolabelfix-1` (staging) | `herolabelfix/` | no (interface only) |
 | **Jumps don't break on obstacles** | An Autarch (or another jumper) whose jump order broke on an obstacle on the way gets it repeated after landing. | `jumpretry` → `jumpretry-2` | `jumpretry/` | no (the game's own orders) |
 | **Reverse (test)** | Ctrl + right-click behind your vehicles: they back off driving backwards, front armour to the enemy. | `reverse_r2` → `reverse-4` | `reverse/` | no (the game's own orders) |
 | **Don't drop out of the match when Steam goes away** | A match is played to the end when Steam loses its connection, however long it is away. | `steamkeep` → `steamkeep-2` | `steamkeep/` | no |
@@ -101,6 +102,13 @@ apm/ - **APM.dll** (APM 3)
 reinforcefix/ - **ReinforceFix.dll** (ReinforceFix v1)
     The HUD's auto-reinforce list drops squads with no models on the map - also a squad sitting inside an Eldar webway gate.
     ReinforceFix keeps such squads; the reinforce orders stay the game's own.
+
+herolabelfix/ - **HeroLabelFix.dll** (HeroLabelFix 1)
+    A downed hero's squad_leader_decorator (vtable 0x011129E4) is hidden by its draw (slot 0x10, 0x00B25070: +0x1C = 0) when its
+    update (slot 0x30, 0x00B24370) says not to show him (+0x9C = 0). The movie manager's per-frame walk (0x00680C00) asks only
+    shown elements whether they are on screen (slot 4) - and only that test calls the draw - so after the revive (+0x9C = 1)
+    nobody shows it again until the decorator happens to be re-created. HeroLabelFix wraps the update: a valid-but-hidden
+    decorator that the manager has set up gets the game's own draw once, under the manager's lock (TryEnter).
 
 jumpretry/ - **JumpRetry.dll** (JumpRetry 2)
     An Autarch ordered to jump out of range walks toward the point inside the ability order; a hop over a low wall on the way ends

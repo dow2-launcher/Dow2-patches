@@ -1,0 +1,1 @@
+- New: Hero bar comes back after a revive: sometimes, after a hero was downed and got back up, the bar over him (icon, health, energy) never came back for the rest of the match - mostly in replays. Now it always comes back. Changes only what is shown. Off by default.
