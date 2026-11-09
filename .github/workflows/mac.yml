@@ -38,7 +38,7 @@ jobs:
           { echo "### crossplay_fix ${{ steps.ver.outputs.ver }}"; echo '```'; cat mac/${{ steps.ver.outputs.ver }}/out/SHA256SUMS.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
       # check a download with: gh attestation verify <file> -R dow2-launcher/Dow2-patches
       - name: Build provenance
-        if: github.event_name != pull_request
+        if: github.event_name != 'pull_request'
         uses: actions/attest-build-provenance@v2
         with:
           subject-path: |
