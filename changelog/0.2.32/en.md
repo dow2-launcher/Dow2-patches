@@ -1,0 +1,1 @@
+- New (Performance, off by default): UI state filter - the interface stops sending the graphics driver the same settings again and again; a gain is expected with the usual Direct3D 9, none with DXVK.

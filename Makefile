@@ -23,6 +23,7 @@ all: $(OUT)/FastBuffers.dll $(OUT)/FastLocStrings.dll
 all: $(OUT)/PerfLog.dll
 all: $(OUT)/CursorScale.dll
 all: $(OUT)/DXVK.dll $(OUT)/FpsUnlock.dll
+all: $(OUT)/UIFilter.dll
 
 $(OUT):
 	mkdir -p $(OUT)
@@ -185,6 +186,11 @@ $(OUT)/DXVK.dll: dxvk/dxvk.c | $(OUT)
 
 # 09.11.2026 (performance): no DXVK frame cap (d3d9/dxgi.maxFrameRate = 0 appended to DXVK_CONFIG before Direct3D); vsync untouched
 $(OUT)/FpsUnlock.dll: fpsunlock/fpsunlock.c | $(OUT)
+	$(CC) $(CFLAGS) -shared -o $@ $< -static-libgcc -Wl,--exclude-all-symbols
+
+# 09.11.2026 (performance): the interface (Scaleform) renderer's repeated Direct3D state calls dropped inside one display - a proxy
+# device only for that renderer (BeginDisplay/EndDisplay patched in Spooge.dll), the real device untouched; UIFilter.ini Enabled/Verify
+$(OUT)/UIFilter.dll: uifilter/uifilter.c | $(OUT)
 	$(CC) $(CFLAGS) -shared -o $@ $< -static-libgcc -Wl,--exclude-all-symbols
 
 # 06.11.2026 (experiment): continue a replay as a skirmish from any tick, as any of its players (the pause menu's

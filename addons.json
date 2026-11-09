@@ -897,6 +897,31 @@
       "de": "Schreibt alle 5 s die FPS und was sie begrenzt (Grafikkarte, Haupt-Thread des Spiels, welcher Teil des Bildes) in ein Protokoll. Spiel ein Match oder schau ein Replay, dann \"Logs senden\" drücken. Ändert nichts am Spiel."
     }
   },
+  "uifilter": {
+    "version": "1",
+    "dll": "UIFilter.dll",
+    "default": false,
+    "games": [
+      "elite",
+      "vanilla"
+    ],
+    "category": "performance",
+    "order": 60,
+    "name": {
+      "en": "UI state filter",
+      "ru": "UI state filter",
+      "es": "UI state filter",
+      "fr": "UI state filter",
+      "de": "UI state filter"
+    },
+    "description": {
+      "en": "The interface stops sending the graphics driver the same settings again and again while it draws: fewer needless driver calls from menus and the HUD. A gain is expected with the usual Direct3D 9 (most players). With DXVK (our tick or Elite DXVK mode) there is no gain: DXVK drops the repeats itself.",
+      "ru": "Интерфейс перестаёт по многу раз передавать видеодрайверу одни и те же настройки, пока рисуется: меньше лишних вызовов драйвера от меню и HUD. Выигрыш ожидается с обычным Direct3D 9 (у большинства игроков). С DXVK (наша галочка или режим DXVK в Elite) выигрыша нет: DXVK сам отбрасывает повторы.",
+      "es": "La interfaz deja de enviar al controlador gráfico los mismos ajustes una y otra vez mientras se dibuja: menos llamadas inútiles al controlador desde los menús y el HUD. Se espera una mejora con el Direct3D 9 habitual (la mayoría de jugadores). Con DXVK (nuestra casilla o el modo DXVK de Elite) no hay mejora: DXVK ya descarta las repeticiones.",
+      "fr": "L'interface cesse d'envoyer encore et encore les mêmes réglages au pilote graphique pendant son affichage : moins d'appels inutiles au pilote depuis les menus et le HUD. Un gain est attendu avec le Direct3D 9 habituel (la plupart des joueurs). Avec DXVK (notre case ou le mode DXVK d'Elite), aucun gain : DXVK écarte déjà les répétitions lui-même.",
+      "de": "Die Oberfläche schickt dem Grafiktreiber beim Zeichnen nicht mehr immer wieder dieselben Einstellungen: weniger unnötige Treiberaufrufe von Menüs und HUD. Ein Gewinn wird mit dem üblichen Direct3D 9 erwartet (die meisten Spieler). Mit DXVK (unser Haken oder Elites DXVK-Modus) gibt es keinen Gewinn: DXVK verwirft die Wiederholungen selbst."
+    }
+  },
   "chathide": {
     "version": "2",
     "dll": "ChatHide.dll",
