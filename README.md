@@ -1,5 +1,10 @@
 # Dow2-patches
 
+[![build](https://github.com/dow2-launcher/Dow2-patches/actions/workflows/build.yml/badge.svg)](https://github.com/dow2-launcher/Dow2-patches/actions/workflows/build.yml)
+[![CodeQL](https://github.com/dow2-launcher/Dow2-patches/actions/workflows/codeql.yml/badge.svg)](https://github.com/dow2-launcher/Dow2-patches/actions/workflows/codeql.yml)
+[![secret scan](https://github.com/dow2-launcher/Dow2-patches/actions/workflows/secrets.yml/badge.svg)](https://github.com/dow2-launcher/Dow2-patches/actions/workflows/secrets.yml)
+[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/dow2-launcher/Dow2-patches/badge)](https://scorecard.dev/viewer/?uri=github.com/dow2-launcher/Dow2-patches)
+
 Add-ons for Dawn of War II: Retribution (DOW2.exe 3.19.1.10320, the current Steam build) and the Elite mod, shipped to
 players as ticks in the Elite launcher. Plain C, built with MinGW. Every patch checks the bytes it is about to change and
 does nothing if the exe is a different build.
