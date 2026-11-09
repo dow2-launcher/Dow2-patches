@@ -21,7 +21,7 @@ jobs:
     outputs:
       ver: ${{ steps.ver.outputs.ver }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - id: ver
         run: echo "ver=$(ls -d mac/v[0-9]* | sed 's#mac/##' | sort -V | tail -1)" >> "$GITHUB_OUTPUT"
       - name: clang 19 (same as the osxcross build)
@@ -39,12 +39,12 @@ jobs:
       # check a download with: gh attestation verify <file> -R dow2-launcher/Dow2-patches
       - name: Build provenance
         if: github.event_name != 'pull_request'
-        uses: actions/attest-build-provenance@v2
+        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2
         with:
           subject-path: |
             mac/${{ steps.ver.outputs.ver }}/out/*.zip
             mac/${{ steps.ver.outputs.ver }}/out/crossplay_fix.dylib
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: dow2mac_crossplay_${{ steps.ver.outputs.ver }}
           path: |
@@ -63,8 +63,8 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       VER: ${{ needs.build.outputs.ver }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: dow2mac_crossplay_${{ needs.build.outputs.ver }}
           path: dist

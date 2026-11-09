@@ -20,7 +20,7 @@ jobs:
       tag: ${{ steps.version.outputs.tag }}
       release: ${{ steps.version.outputs.release }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - id: version
         run: |
           version="$(tr -d '[:space:]' < VERSION)"
@@ -37,8 +37,8 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/cache@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: ~/apt-archives
           key: apt-mingw-i686-win32-${{ runner.os }}-noble
@@ -52,7 +52,7 @@ jobs:
           i686-w64-mingw32-gcc --version | head -1
       - run: make
       - run: cd build && sha256sum ./*.dll | tee SHA256SUMS.txt
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: dow2-fixes-dlls
           path: build/*
@@ -73,15 +73,15 @@ jobs:
             echo "DIST=$RUNNER_TEMP/dist"
             echo "STORE=$RUNNER_TEMP/store"
           } >> "$GITHUB_ENV"
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           repository: pivolan/Dow2-elite-launcher
           path: launcher
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         with:
           workspaces: launcher
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: dow2-fixes-dlls
           path: ${{ runner.temp }}/dist
@@ -129,7 +129,7 @@ jobs:
       VERSION: ${{ needs.version.outputs.number }}
       GH_TOKEN: ${{ github.token }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
       - name: Tag
@@ -145,7 +145,7 @@ jobs:
           git tag -a "$TAG" -m "$TAG"
           git push origin "$TAG"
           echo "new=true" >> "$GITHUB_OUTPUT"
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         if: steps.tag.outputs.new == 'true' && needs.version.outputs.release == 'true'
         with:
           name: dow2-fixes-dlls
