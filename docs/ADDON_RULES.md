@@ -35,6 +35,10 @@ rusifikator...) is never copied there. Its ini is read next to the DLL, so optio
 vanilla game's loader is `build/launcher/winmm.dll` (store `vloader-<n>`, launcher.json `"vanilla": {"loader": ...}`). A new
 add-on: test it in vanilla 3.19 on the stand before its entry gets "vanilla".
 
+Launcher 1.5.2: an entry may also have `"requires": [<store id>, ...]` (the tick works only with those ticked; fpsunlock
+requires dxvk) and `"excludes": [<store id>, ...]` (never together). `games`, `requires` and `excludes` written in addons.json
+go to the store with a deploy; an add-on without them there keeps what the store has.
+
 ## What happened (history)
 
 - Up to 0.9.x LobbyStats.dll carried the lobby ratings, the loading screen ratings, the match clock, the cooldown

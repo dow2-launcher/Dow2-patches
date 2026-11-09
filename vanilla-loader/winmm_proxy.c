@@ -274,7 +274,8 @@ static DWORD WINAPI load_stats(LPVOID _) {
 #endif
     // early launcher add-ons in Elite_DLLs: they must be in before the game starts its network (Elite's injector loads
     // Elite_DLLs ~9 s after the start - too late for them). The launcher keeps such a DLL there only while its tick is on.
-    static const wchar_t *EARLY[] = {L"OwnLobby.dll"};          // 02.11.2026: our lobby server (experiment)
+    // 02.11.2026: our lobby server (experiment); 09.11.2026: DXVK and FPS unlock (before the game creates Direct3D)
+    static const wchar_t *EARLY[] = {L"OwnLobby.dll", L"DXVK.dll", L"FpsUnlock.dll"};
     for (int i = 0; i < (int)(sizeof EARLY / sizeof *EARLY); i++) {
         wchar_t e[MAX_PATH]; _snwprintf(e, MAX_PATH, L"%lsElite_DLLs\\%ls", dir, EARLY[i]);
         if (GetFileAttributesW(e) != INVALID_FILE_ATTRIBUTES) LoadLibraryW(e);

@@ -1,0 +1,2 @@
+- New (Performance, off by default): DXVK - runs the game's Direct3D 9 through DXVK 2.7.1 (Vulkan), often smoother late fights; needs a graphics card with Vulkan 1.3. If the game does not start, untick it. In Elite it works with Automatch ticked.
+- New (Performance, off by default): FPS unlock - removes the DXVK frame cap (Elite's DXVK mode caps at 60 FPS); needs DXVK. Better together with Sound bug fix.

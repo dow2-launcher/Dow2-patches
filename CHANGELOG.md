@@ -4,6 +4,24 @@ Every version gets an entry here before it reaches `main`. CI then tags `vX.Y.Z`
 version (`X.Y.0`) it also publishes a GitHub Release with the DLLs and the entries since the previous `X.Y.0`.
 The version of the set lives only in `VERSION`; each DLL still writes its own version to its log.
 
+## 0.2.31 — 2026-11-09
+DXVK 1 and FpsUnlock 1 (new, store dxvk-1 / fpsunlock-1, new category performance, order 10 / 20, off by default, Elite + vanilla;
+DXVK.dll, FpsUnlock.dll). Both are in the EARLY list of the winmm loader (OwnLobby, DXVK, FpsUnlock), so they load ~0.05 s after
+the start, before the game creates Direct3D: in vanilla through the launcher's loader (vloader), in Elite through Automatch's early
+winmm (Elite's own injector is ~1 s after Direct3D, too late).
+- dxvk/: DXVK.dll points only Spooge.dll's import of d3d9.dll!Direct3DCreate9 at DXVK 2.7.1 x32 (DXVK_d3d9.bin, byte for byte
+  the d3d9.dll Elite ships; zlib licence DXVK_LICENSE.txt); DXVK_CONFIG_FILE / DXVK_LOG_PATH = the add-on folder (DXVK.conf has
+  comments only). Nothing when the game's d3d9.dll is DXVK already (Elite IsDXVK) or when loaded > 5 s after the start (Elite's
+  injector without Automatch). No Vulkan check and no fallback to the system d3d9 (owner 09.11): an unsupported PC fails to start
+  the game and the player unticks it.
+- fpsunlock/: FpsUnlock.dll appends d3d9/dxgi.maxFrameRate = 0 to DXVK_CONFIG (lifts Elite's dxvk.conf 60 and any DXVK cap);
+  a maxFrameRate already there (SoundFix FpsCap) is kept. Vertical sync is the game's option, untouched. Store: requires dxvk.
+- Store category performance (09.11): DXVK, FPS unlock, FastBuffers, FastLocStrings, PerfLog (order 10-50).
+- addons.json: games / requires / excludes of an add-on go to the store with a deploy (launcher 1.5.2 reads requires/excludes).
+- Stand 2: vanilla and Elite (early winmm) both render through DXVK on the RTX 4000 (replays ~80 fps); Elite IsDXVK: DXVK.dll
+  does nothing, FpsUnlock lifts the 60 cap (control without it: 60.0 fps). Both winmm builds (Automatch's early one, vloader) are
+  released by hand.
+
 ## 0.2.30 — 2026-11-09
 ChatHide 2 (store chathide-2). Crash fix: v1 kept the chat handler (arg 1 of 0xB214F0) captured from the first chat line of a
 match and called it for its "Chat hidden / shown" line; in the next match that handler was already freed with the old HUD,

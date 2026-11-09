@@ -27,6 +27,7 @@ README and the commits.
 | `interface` | what the game shows: timers, ratings, sounds, the translation |
 | `gameplay` | how units act on orders |
 | `fixes` | fixes of the game or Elite, crash records |
+| `performance` | performance (experiment): frame rate, renderer; new group 09.11.2026 - older launchers show it under Experiments |
 | `experiment` | being tested, may change or go away; anything that fits no other group |
 
 `order` is the place inside the group: a whole number, smaller = higher (10, 20, 30 ... leaves room for a new one between).
