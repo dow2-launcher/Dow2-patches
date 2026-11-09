@@ -38,6 +38,7 @@ are client-side, and the other players in the match don't need them.
 | **PerfLog** (new, staging, experiment) | Every 5 s writes the FPS and what limits it (graphics card / driver wait, main game thread, which part of the frame) to PerfLog.log, a line with a verdict per minute to PerfLog_summary.log; for "Send logs". Changes nothing in the game. | `perflog` → `perflog-1` (staging) | `perflog/` | no (measures only) |
 | **DXVK** (new, staging, performance) | The game's Direct3D 9 through DXVK 2.7.1 (Vulkan): often smoother late fights. Needs Vulkan 1.3; if the game does not start, untick it. In Elite it needs Automatch ticked. | `dxvk` → `dxvk-1` (staging) | `dxvk/` | no (drawing only) |
 | **FPS unlock** (new, staging, performance) | Removes the DXVK frame cap (Elite's DXVK mode: 60 FPS); needs DXVK, vertical sync stays the game's option. | `fpsunlock` → `fpsunlock-1` (staging) | `fpsunlock/` | no (drawing only) |
+| **UI state filter** (new, staging, performance) | The interface no longer sends the graphics driver the same settings again and again while it draws (repeats of render/sampler state, texture, shaders, buffers dropped inside one display); gain expected with the usual D3D9, none with DXVK (it drops repeats itself). UIFilter.ini: Enabled=0 off, Verify=1 checks every dropped value against the device. | `uifilter` → `uifilter-1` (staging) | `uifilter/` | no (drawing only) |
 | **Chat Hide** (new, staging, experiment) | Hides incoming chat from other players during a match; a bubble button by the minimap or Ctrl+Shift+C toggles it. Your own messages and system lines still show. | `chathide` → `chathide-1` (staging) | `chathide/` | no (client-side display only) |
 | **Jumps don't break on obstacles** | An Autarch (or another jumper) whose jump order broke on an obstacle on the way gets it repeated after landing. | `jumpretry` → `jumpretry-2` | `jumpretry/` | no (the game's own orders) |
 | **Reverse (test)** | Ctrl + right-click behind your vehicles: they back off driving backwards, front armour to the enemy. | `reverse_r2` → `reverse-4` | `reverse/` | no (the game's own orders) |
@@ -229,6 +230,14 @@ dxvk/ - **DXVK.dll** (DXVK 1) + DXVK_d3d9.bin (DXVK 2.7.1 x32 d3d9.dll), DXVK.co
 fpsunlock/ - **FpsUnlock.dll** (FpsUnlock 1)
     Early add-on. Appends "d3d9.maxFrameRate = 0; dxgi.maxFrameRate = 0" to DXVK_CONFIG (read after dxvk.conf, so it lifts
     Elite's 60) unless a maxFrameRate is there already (SoundFix FpsCap wins). No hooks; logs which Direct3D the game got.
+
+uifilter/ - **UIFilter.dll** (UIFilter 1)
+    Patches Spooge.dll's GFx D3D9 renderer at BeginDisplay (0x100513B8) / EndDisplay (0x10051F10, 8-byte cmpxchg8b writes): its
+    device at renderer+0xD4 and the buffer helper's copy at +0x18C become a proxy IDirect3DDevice9 (own vtable, everything
+    forwarded; the real device and its vtable untouched). Inside one display it drops repeated SetRenderState / SetSamplerState /
+    SetTexture / SetVertexShader / SetPixelShader / SetStreamSource / SetIndices / SetVertexDeclaration / SetFVF; the cache is
+    emptied on Begin/EndScene, Present, Reset, SetRenderTarget, SetDepthStencilSurface, another thread. UIFilter.ini [UIFilter]
+    Enabled=0 / Verify=1 (Get* check of each dropped value, mismatches logged); UIFilter.log: per-minute counts per type.
 
 vanilla-loader/ - **winmm.dll**
     Forwards everything to the real winmm.dll. Full build: loads every *.dll from <game>\dow2-patches\ (vanilla and Elite) and the

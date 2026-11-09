@@ -4,6 +4,15 @@ Every version gets an entry here before it reaches `main`. CI then tags `vX.Y.Z`
 version (`X.Y.0`) it also publishes a GitHub Release with the DLLs and the entries since the previous `X.Y.0`.
 The version of the set lives only in `VERSION`; each DLL still writes its own version to its log.
 
+## 0.2.32 — 2026-11-09
+UIFilter 1 (new, store uifilter-1, category performance, order 60, off by default, Elite + vanilla; UIFilter.dll).
+- uifilter/: the Scaleform GFx D3D9 renderer in Spooge.dll draws through a proxy device (BeginDisplay 0x100513B8 /
+  EndDisplay 0x10051F10, renderer+0xD4 and the buffer helper +0x18C); repeats of render/sampler state, texture, shaders,
+  stream source, indices, declaration/FVF inside one display are dropped. Works with any d3d9 (owner 09.11).
+- Stand 2 (late 3v3, DXVK): D3D9 calls per frame 16604 -> 13341 (-20 %), main-thread CPU unchanged (DXVK drops repeats
+  cheaply itself); Verify mismatches 0 in menus, Army Painter, HUD, minimap, replay. The store text says the gain is expected
+  with the usual Direct3D 9 and not with DXVK.
+
 ## 0.2.31 — 2026-11-09
 DXVK 1 and FpsUnlock 1 (new, store dxvk-1 / fpsunlock-1, new category performance, order 10 / 20, off by default, Elite + vanilla;
 DXVK.dll, FpsUnlock.dll). Both are in the EARLY list of the winmm loader (OwnLobby, DXVK, FpsUnlock), so they load ~0.05 s after
