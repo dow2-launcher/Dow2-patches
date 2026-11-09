@@ -31,6 +31,7 @@ are client-side, and the other players in the match don't need them.
 | **Faster drawing: no needless buffer check** (new, staging) | The game no longer re-checks every piece of memory it writes effects and interface quads to: more FPS (with the next one +10 % on a 3v3 replay). | `fastbuffers` → `fastbuffers-1` (staging) | `fastbuffers/` | no (drawing only) |
 | **Faster interface: quick texts** (new, staging) | A dropped interface text (tooltip, counter) is found from the end of the list of live texts instead of its start. | `fastlocstrings` → `fastlocstrings-1` (staging) | `fastlocstrings/` | no (interface texts only) |
 | **PerfLog** (new, staging, experiment) | Every 5 s writes the FPS and what limits it (graphics card / driver wait, main game thread, which part of the frame) to PerfLog.log, a line with a verdict per minute to PerfLog_summary.log; for "Send logs". Changes nothing in the game. | `perflog` → `perflog-1` (staging) | `perflog/` | no (measures only) |
+| **Chat Hide** (new, staging, experiment) | Hides incoming chat from other players during a match; a bubble button by the minimap or Ctrl+Shift+C toggles it. Your own messages and system lines still show. | `chathide` → `chathide-1` (staging) | `chathide/` | no (client-side display only) |
 | **Jumps don't break on obstacles** | An Autarch (or another jumper) whose jump order broke on an obstacle on the way gets it repeated after landing. | `jumpretry` → `jumpretry-2` | `jumpretry/` | no (the game's own orders) |
 | **Reverse (test)** | Ctrl + right-click behind your vehicles: they back off driving backwards, front armour to the enemy. | `reverse_r2` → `reverse-4` | `reverse/` | no (the game's own orders) |
 | **Don't drop out of the match when Steam goes away** | A match is played to the end when Steam loses its connection, however long it is away. | `steamkeep` → `steamkeep-2` | `steamkeep/` | no |
@@ -131,6 +132,12 @@ perflog/ - **PerfLog.dll** (PerfLog 1)
     in PerfLog.ini); PerfLog_summary.log: a line per minute with a verdict (vsync / FPS cap, GPU-bound = Present >= 30 % of the
     frame, CPU-bound = main thread CPU >= 80 %, else mixed; the biggest part named). Both trimmed to the newest 256 KB above 1 MB.
     Call sites of the main loop stay free for ReplaySpeed / ReplayTakeover (they call through these entries).
+
+chathide/ - **ChatHide.dll** (ChatHide 1)
+    Chat lines go through one display call (0xB207EB -> 0xB214F0, type 0 all / 3 team / 4 system / 5 observer / 6 referee);
+    while hidden, 0/3/5/6 return at once. The player's own send (call 0x401D97 -> 0x429672) echoes synchronously and is marked,
+    so his lines stay. Toggle: a button clip in the minimap movie (slot +0x10 of form vtable 0x011160D8) and Ctrl+Shift+C;
+    a system line per toggle; state in ChatHide.ini. Client-side only.
 
 replayspeed/ - **ReplaySpeed.dll** (ReplaySpeed 1)
     Replay speed = sim ticks per second (10 = 1x) set through the sim rate interface *(*(0x01335720)+8)+0x68 (vtable 0x0108DFAC,

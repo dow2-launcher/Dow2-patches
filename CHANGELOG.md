@@ -4,6 +4,20 @@ Every version gets an entry here before it reaches `main`. CI then tags `vX.Y.Z`
 version (`X.Y.0`) it also publishes a GitHub Release with the DLLs and the entries since the previous `X.Y.0`.
 The version of the set lives only in `VERSION`; each DLL still writes its own version to its log.
 
+## 0.2.28 — 2026-11-09
+ChatHide 1 (new, store chathide-1, experiment, order 980, off by default, Elite + vanilla; ChatHide.dll). Hides incoming player chat
+(all, team, observer, referee) during a match; client-side only, nothing sent, no effect on sync:
+- display: the one call site 0xB207EB (call 0xB214F0, the chat line display) - while hidden, types 0/3/5/6 return at once.
+  System lines (type 4) and the player's own lines stay: the own send 0x401D97 -> 0x429672 echoes synchronously, marked there.
+- toggle: a speech-bubble button inside the minimap frame (minimap_panel movie, per-frame slot +0x10 of form vtable 0x011160D8;
+  the game's bubble_up / bubble_over textures, crossed and dimmed when hidden; default mouse callbacks, so a click doesn't reach
+  the world) and Ctrl+Shift+C (GetAsyncKeyState, game window in front). Each toggle shows a system line; the state is kept in
+  ChatHide.ini ([ChatHide] Enabled, Hidden, Hotkey, Button, OffsetX/OffsetY).
+- Stand 2: button in both states, click and hotkey toggle, injected all/team lines hidden and shown again, ini persists (Elite
+  replay, vanilla skirmish); Elite 3.2.1 skirmish: Stronghold selected + Ctrl+Shift+C toggles chat and queues no Scouts (plain C
+  does), clicking the button keeps the squad selected; main-menu start Elite and vanilla, no crash. The own-message echo online
+  is untested (stand Steam offline).
+
 ## 0.2.27 — 2026-11-08
 PerfLog 1 (new, store perflog-1, experiment, order 970, off by default, Elite + vanilla; PerfLog.dll). A performance log for
 players: what limits the FPS on their PC. Measures only - no simulation, drawing or Direct3D object is changed.

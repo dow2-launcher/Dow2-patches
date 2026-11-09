@@ -1,0 +1,1 @@
+- New (experiment, off by default): Chat Hide - hides incoming chat from other players during a match. Toggle it with the bubble button by the minimap or Ctrl+Shift+C; your own messages and system lines still show. Only on your PC, no effect on sync.
