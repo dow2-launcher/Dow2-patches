@@ -1,0 +1,69 @@
+name: mac-crossplay
+# Builds the Mac crossplay dylib (mac/<latest v*>/build_ci.sh) on a macOS runner.
+# Every push / PR: artifact. Push to main: GitHub Release "mac-crossplay-<ver>" with the player zip (asset replaced on rebuild).
+on:
+  push:
+    paths: ["mac/**", ".github/workflows/mac.yml"]
+  pull_request:
+    paths: ["mac/**", ".github/workflows/mac.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-14
+    outputs:
+      ver: ${{ steps.ver.outputs.ver }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: ver
+        run: echo "ver=$(ls -d mac/v[0-9]* | sed 's#mac/##' | sort -V | tail -1)" >> "$GITHUB_OUTPUT"
+      - name: clang 19 (same as the osxcross build)
+        run: brew install llvm@19
+      - name: Build
+        env:
+          CC: /opt/homebrew/opt/llvm@19/bin/clang
+        run: mac/${{ steps.ver.outputs.ver }}/build_ci.sh
+      - name: Check
+        run: |
+          d=mac/${{ steps.ver.outputs.ver }}/out/crossplay_fix.dylib
+          file "$d"; otool -l "$d" | grep -A3 LC_BUILD_VERSION -m1 || otool -l "$d" | grep -A3 LC_VERSION_MIN -m1
+          nm -gU "$d" | head -5
+          { echo "### crossplay_fix ${{ steps.ver.outputs.ver }}"; echo '```'; cat mac/${{ steps.ver.outputs.ver }}/out/SHA256SUMS.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dow2mac_crossplay_${{ steps.ver.outputs.ver }}
+          path: |
+            mac/${{ steps.ver.outputs.ver }}/out/*.zip
+            mac/${{ steps.ver.outputs.ver }}/out/crossplay_fix.dylib
+            mac/${{ steps.ver.outputs.ver }}/out/SHA256SUMS.txt
+          retention-days: 30
+
+  release:
+    needs: build
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      VER: ${{ needs.build.outputs.ver }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: dow2mac_crossplay_${{ needs.build.outputs.ver }}
+          path: dist
+      - name: GitHub Release
+        run: |
+          TAG="mac-crossplay-$VER"
+          ls -la dist
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" dist/*.zip dist/SHA256SUMS.txt --clobber
+          else
+            gh release create "$TAG" dist/*.zip dist/SHA256SUMS.txt --target "$GITHUB_SHA" --prerelease \
+              --title "Mac crossplay $VER (test build)" \
+              --notes "DoW2 Retribution: native Mac (Feral) <-> Windows crossplay patch, $VER. Test build, not for general players yet. Sources: mac/$VER, install: README_RU.txt in the zip."
+          fi
