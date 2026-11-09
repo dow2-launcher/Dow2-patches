@@ -4,6 +4,14 @@ Every version gets an entry here before it reaches `main`. CI then tags `vX.Y.Z`
 version (`X.Y.0`) it also publishes a GitHub Release with the DLLs and the entries since the previous `X.Y.0`.
 The version of the set lives only in `VERSION`; each DLL still writes its own version to its log.
 
+## 0.2.30 — 2026-11-09
+ChatHide 2 (store chathide-2). Crash fix: v1 kept the chat handler (arg 1 of 0xB214F0) captured from the first chat line of a
+match and called it for its "Chat hidden / shown" line; in the next match that handler was already freed with the old HUD,
+so toggling crashed (Grantovich 09.11 19:18: DOW2.exe+0x282451, ebx = the handler from the 19:01 match). Now the handler is
+dropped at every new match (new minimap movie or no minimap update for 3 s) and the status line is shown only through a handler
+seen in the current match; before the first chat line of a match the toggle shows no line (the button shows the state). The
+untested Receive_AddMessage fallback is removed. Hiding itself is unchanged.
+
 ## 0.2.29 — 2026-11-09
 CursorScale 1 (new, store cursorscale-1, experiment, order 990, off by default, Elite + vanilla; CursorScale.dll). A bigger mouse
 cursor for high-resolution screens; only the cursor changes, the interface stays as it is:
