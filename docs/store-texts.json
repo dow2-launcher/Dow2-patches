@@ -525,5 +525,23 @@
       "fr": "Masque le chat entrant des autres joueurs. Bouton bulle près de la minicarte ou Ctrl+Maj+C. Uniquement chez vous, aucun effet sur la synchro.",
       "de": "Blendet eingehenden Chat anderer Spieler aus. Sprechblasen-Knopf an der Minikarte oder Strg+Umschalt+C. Nur lokal, ohne Einfluss auf Sync."
     }
+  },
+  "cursorscale": {
+    "category": "experiment",
+    "order": 990,
+    "name": {
+      "en": "Cursor Scale",
+      "ru": "Cursor Scale",
+      "es": "Cursor Scale",
+      "fr": "Cursor Scale",
+      "de": "Cursor Scale"
+    },
+    "description": {
+      "en": "A bigger mouse cursor. Auto sizes it by the game's resolution (1440p x1.33, 4K x2), or pick a size. Only the cursor changes, not the interface.",
+      "ru": "Крупнее курсор мыши. «Авто» подбирает размер по разрешению игры (1440p ×1.33, 4K ×2), или выберите размер сами. Меняется только курсор, не интерфейс.",
+      "es": "Un cursor del ratón más grande. Auto lo ajusta a la resolución del juego (1440p x1.33, 4K x2), o elige un tamaño. Solo cambia el cursor, no la interfaz.",
+      "fr": "Un curseur de souris plus grand. Auto l'adapte à la résolution du jeu (1440p x1.33, 4K x2), ou choisissez une taille. Seul le curseur change, pas l'interface.",
+      "de": "Ein größerer Mauszeiger. Auto passt ihn an die Spielauflösung an (1440p x1,33, 4K x2), oder wähle eine Größe. Nur der Zeiger ändert sich, nicht die Oberfläche."
+    }
   }
 }

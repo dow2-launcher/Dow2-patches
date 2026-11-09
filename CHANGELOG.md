@@ -4,6 +4,19 @@ Every version gets an entry here before it reaches `main`. CI then tags `vX.Y.Z`
 version (`X.Y.0`) it also publishes a GitHub Release with the DLLs and the entries since the previous `X.Y.0`.
 The version of the set lives only in `VERSION`; each DLL still writes its own version to its log.
 
+## 0.2.29 — 2026-11-09
+CursorScale 1 (new, store cursorscale-1, experiment, order 990, off by default, Elite + vanilla; CursorScale.dll). A bigger mouse
+cursor for high-resolution screens; only the cursor changes, the interface stays as it is:
+- the game makes its 45 cursors from 48x48 TGAs (DOW2.exe 0x0068CCC0 -> Plat::Input::CreateCursor -> CreateIconIndirect in
+  Platform.dll). CursorScale hooks that import, scales the image (premultiplied-alpha bicubic, or nearest with Filter=nearest)
+  and the hotspot with it (centre of the source hotspot pixel), and rebuilds in place the cursors made before it was loaded
+  (Elite: Profiler loads add-ons at the main menu).
+- size: one launcher dropdown \"Size\" = Auto / 1.25x / 1.5x / 2x / 2.5x / 3x (CursorScale.ini [CursorScale] Scale). Auto follows
+  the game window height (GetClientRect, not the desktop): 1440 -> 64 px (x1.33), 2160 -> 96 px (x2), up to 1080 unchanged.
+- Stand: Elite main-menu start 1.25 / 1.5 / 2 / 2.5 / 3 -> 60 / 72 / 96 / 120 / 144 px; Auto 1440p and 4K fullscreen and a
+  2560x1440 window on a 4K desktop; vanilla main-menu start x2 = 96 px, no crash; Elite skirmish x2 and x3: clicking a Scout
+  under the cursor centre selects the squad. Not testable under Wine: Windows DPI virtualization (Auto may pick the logical size).
+
 ## 0.2.28 — 2026-11-09
 ChatHide 1 (new, store chathide-1, experiment, order 980, off by default, Elite + vanilla; ChatHide.dll). Hides incoming player chat
 (all, team, observer, referee) during a match; client-side only, nothing sent, no effect on sync:

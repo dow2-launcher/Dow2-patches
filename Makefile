@@ -21,6 +21,7 @@ all: $(OUT)/ReplaySpeed.dll
 all: $(OUT)/ChatHide.dll
 all: $(OUT)/FastBuffers.dll $(OUT)/FastLocStrings.dll
 all: $(OUT)/PerfLog.dll
+all: $(OUT)/CursorScale.dll
 
 $(OUT):
 	mkdir -p $(OUT)
@@ -56,6 +57,10 @@ $(OUT)/SteamKeep.dll: steamkeep/steamkeep.c | $(OUT)
 # match start (SetVisible(NULL)); ShellFix puts the wrapper in when it is missing, changes nothing otherwise
 $(OUT)/ShellFix.dll: shellfix/shellfix.c | $(OUT)
 	$(CC) $(CFLAGS) -shared -o $@ $< -static-libgcc
+
+# 07.11.2026: a bigger mouse cursor at high resolutions (the game's own Windows cursor, scaled when it is made; the UI scale stays)
+$(OUT)/CursorScale.dll: cursorscale/cursorscale.c | $(OUT)
+	$(CC) $(CFLAGS) -shared -o $@ $< -lgdi32 -static-libgcc
 
 clean:
 	rm -rf $(OUT)

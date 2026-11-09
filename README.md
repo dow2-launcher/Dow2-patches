@@ -35,6 +35,7 @@ are client-side, and the other players in the match don't need them.
 | **Jumps don't break on obstacles** | An Autarch (or another jumper) whose jump order broke on an obstacle on the way gets it repeated after landing. | `jumpretry` → `jumpretry-2` | `jumpretry/` | no (the game's own orders) |
 | **Reverse (test)** | Ctrl + right-click behind your vehicles: they back off driving backwards, front armour to the enemy. | `reverse_r2` → `reverse-4` | `reverse/` | no (the game's own orders) |
 | **Don't drop out of the match when Steam goes away** | A match is played to the end when Steam loses its connection, however long it is away. | `steamkeep` → `steamkeep-2` | `steamkeep/` | no |
+| **Cursor Scale** (new, staging, experiment) | A bigger mouse cursor: Auto by the game's own resolution (height / 1080, so 1440p ×1.33, 4K ×2) or a chosen ×1.25 / ×1.5 / ×2 / ×2.5 / ×3 (launcher dropdown); the UI scale stays. Every cursor state, fullscreen and windowed, Elite and vanilla. | `cursorscale` → `cursorscale-1` (staging) | `cursorscale/` | no |
 | **Observer lag fix (experimental)** | Spectating a live game no longer stutters. | `obsfix_r2` → `obsfix-1` | `obsfix/` | no |
 | **Join a lobby from the launcher (test)** | Experiment by siritos: a Join button on the launcher's Lobbies tab (and elite:// links of the ladder site); the game starts and walks into the room by itself. | `roomjoin` → `roomjoin-4` (staging; live: `roomjoin-3`) | `roomjoin/` | no |
 | **Fix: the game closes when a match starts** (new, not released yet) | Repairs Elite's ShellPatch.dll (the race meter) when it could not hook in at the game's start - then every match crashed a second in. Otherwise does nothing. | `shellfix` → `shellfix-1` (staging) | `shellfix/` | no |
@@ -173,6 +174,14 @@ soundbugtest/ - **SoundBugTest.dll** (SoundBugTest 1, TEST)
 steamkeep/ - **SteamKeep.dll** (SteamKeep 2)
     A Steam drop during a match is not turned into an end reason, and Steam's close request (a bare WM_CLOSE) is ignored for the
     rest of the match. Alt+F4, menu Quit, the close button and Windows shutdown still work. Not in menus or replays.
+
+cursorscale/ - **CursorScale.dll** (CursorScale 1)
+    The game's cursor is an ordinary Windows cursor: 45 48x48 TGAs of UI/cursor/cursorlist.lua -> Plat::Input::CreateCursor ->
+    Platform.dll CreateIconIndirect (DIB section + mask), SetCursor on WM_SETCURSOR. CursorScale points Platform.dll's import of
+    CreateIconIndirect at its own function, which scales the picture (premultiplied-alpha bicubic or nearest) and the hotspot
+    before the real call; cursors made before it was loaded (Elite's Profiler loads add-ons at the front end) are rebuilt in the
+    input object's vector. No drawing of our own, no Direct3D. CursorScale.ini: Scale=auto|1.0-4.0 (auto = the game window's client
+    height / 1080, i.e. the game's own resolution, not the desktop's), Filter=smooth|sharp.
 
 obsfix/ - **ObsFix.dll** (ObsFix v1)
     When you spectate a live game the client asks "which slot am I in" dozens of times per frame and rebuilds the whole match
