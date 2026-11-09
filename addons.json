@@ -898,7 +898,7 @@
     }
   },
   "chathide": {
-    "version": "1",
+    "version": "2",
     "dll": "ChatHide.dll",
     "default": false,
     "category": "experiment",

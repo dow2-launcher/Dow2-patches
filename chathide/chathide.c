@@ -27,7 +27,7 @@
 #include <string.h>
 #include "../common/gfxui.h"
 
-#define VERSION "1"
+#define VERSION "2"
 
 #define AT_SHOW     0x00B207EBu   // call 0xB214F0 in OnChatMessage: the one place a chat line is shown
 #define FN_SHOW     0x00B214F0u
@@ -59,6 +59,7 @@ static LONGLONG qpc(void) { LARGE_INTEGER t; QueryPerformanceCounter(&t); return
 static volatile int g_hidden;          // chat hidden
 volatile int g_sending; volatile LONG g_sendCalls;                // inside the player's own send (0x429672): every line shown then is his own
 static char *g_handler;                // chat handler (arg 1 of 0xB214F0), captured from the first displayed line
+static void *g_mvSeen;                // minimap movie of the current match (a new one = a new match)
 static int g_hotkey = 1, g_button = 1; static double g_offX, g_offY;
 static LONG g_shown, g_dropped, g_own;
 
@@ -123,11 +124,10 @@ static void *chat_movie(void) {
 static void sys_line(const wchar_t *text) {
     static wchar_t buf[160]; static char dummy[0x40]; static struct { wchar_t *b, *e, *c; } s;
     wcsncpy(buf, text, 159); buf[159] = 0; s.b = buf; s.e = buf + wcslen(buf); s.c = s.e;
+    // only through a chat handler seen in THIS match (reset at every new match / new minimap movie): the handler of an
+    // earlier match is freed with that match's HUD - v1 crashed calling it (Grantovich 09.11 19:18, ebx = the 19:01 handler)
     if (g_handler && okp(g_handler, 0x5C)) { memset(dummy, 0, sizeof dummy); ((Show_t)FN_SHOW)(dummy, g_handler, &s, 4); return; }
-    void *mv = chat_movie();
-    if (!mv) { logmsg("no chat movie - system line not shown"); return; }
-    GfxVal a[3] = { gv_wstr(L""), gv_wstr(buf), gv_num(4) };
-    logmsg("system line through Receive_AddMessage (chat handler not seen yet): %s", gfx_invoke(mv, "Receive_AddMessage", NULL, a, 3) ? "ok" : "FAILED");
+    logmsg("no chat line seen in this match yet - system line not shown (the button shows the state)");
 }
 static void toggle(const char *how) {
     g_hidden = !g_hidden; save_state();
@@ -244,7 +244,10 @@ static void __thiscall hk_mm(char *form, float dt) {
     g_sending = 0;                                         // never inside a send here (an exception out of it would leave it set)
     void *mv = gfx_movie_of_form(form); if (!mv) return;
     LONGLONG now = qpc();
-    if (now - g_mmAt > g_qf * 3) { g_remind = 1; g_matchAt = now; }   // a new match (no minimap update for 3 s)
+    if (now - g_mmAt > g_qf * 3 || mv != g_mvSeen) {      // a new match (no minimap update for 3 s, or a new minimap movie)
+        if (g_handler) logmsg("new match: chat handler %p of the last match dropped", g_handler);
+        g_handler = NULL; g_remind = 1; g_matchAt = now; g_mvSeen = mv;
+    }
     g_mmAt = now;
     DWORD fpid = 0; GetWindowThreadProcessId(GetForegroundWindow(), &fpid);
     int front = fpid == GetCurrentProcessId();

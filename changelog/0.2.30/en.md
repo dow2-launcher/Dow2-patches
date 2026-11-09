@@ -1,0 +1,1 @@
+- Chat Hide 2: fixed a crash when toggling the chat in the second match of a session (the add-on reused the chat of the previous match).
