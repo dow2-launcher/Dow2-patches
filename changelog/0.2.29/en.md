@@ -1,0 +1,1 @@
+- New (experiment, off by default): Cursor Scale - a bigger mouse cursor. Auto sizes it by the game's resolution (1440p x1.33, 4K x2), or pick 1.25x, 1.5x, 2x, 2.5x or 3x in the launcher. Only the cursor changes, the interface stays as it is. Elite and vanilla.
