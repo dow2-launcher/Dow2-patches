@@ -14,6 +14,10 @@ permissions:
 jobs:
   build:
     runs-on: macos-latest
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
     outputs:
       ver: ${{ steps.ver.outputs.ver }}
     steps:
@@ -32,6 +36,13 @@ jobs:
           file "$d"; otool -l "$d" | grep -A3 LC_BUILD_VERSION -m1 || otool -l "$d" | grep -A3 LC_VERSION_MIN -m1
           nm -gU "$d" | head -5
           { echo "### crossplay_fix ${{ steps.ver.outputs.ver }}"; echo '```'; cat mac/${{ steps.ver.outputs.ver }}/out/SHA256SUMS.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+      - name: Build provenance (check: gh attestation verify <file> -R dow2-launcher/Dow2-patches)
+        if: github.event_name != pull_request
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: |
+            mac/${{ steps.ver.outputs.ver }}/out/*.zip
+            mac/${{ steps.ver.outputs.ver }}/out/crossplay_fix.dylib
       - uses: actions/upload-artifact@v4
         with:
           name: dow2mac_crossplay_${{ steps.ver.outputs.ver }}
