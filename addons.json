@@ -896,5 +896,26 @@
       "fr": "Toutes les 5 s, écrit dans un journal les FPS et ce qui les limite (carte graphique, thread principal du jeu, quelle partie de l'image). Jouez une partie ou regardez un replay, puis cliquez sur « Envoyer les journaux ». Ne change rien au jeu.",
       "de": "Schreibt alle 5 s die FPS und was sie begrenzt (Grafikkarte, Haupt-Thread des Spiels, welcher Teil des Bildes) in ein Protokoll. Spiel ein Match oder schau ein Replay, dann \"Logs senden\" drücken. Ändert nichts am Spiel."
     }
+  },
+  "chathide": {
+    "version": "1",
+    "dll": "ChatHide.dll",
+    "default": false,
+    "category": "experiment",
+    "order": 980,
+    "name": {
+      "en": "Chat Hide",
+      "ru": "Chat Hide",
+      "es": "Chat Hide",
+      "fr": "Chat Hide",
+      "de": "Chat Hide"
+    },
+    "description": {
+      "en": "Hides incoming chat from other players. Toggle with the bubble button by the minimap or Ctrl+Shift+C. Client-side only, no effect on sync.",
+      "ru": "Скрывает входящий чат других игроков. Включение — кнопка-облачко у миникарты или Ctrl+Shift+C. Только у вас, на синхронизацию не влияет.",
+      "es": "Oculta el chat entrante de otros jugadores. Botón de bocadillo junto al minimapa o Ctrl+Shift+C. Solo en tu PC, sin efecto en la sincronía.",
+      "fr": "Masque le chat entrant des autres joueurs. Bouton bulle près de la minicarte ou Ctrl+Maj+C. Uniquement chez vous, aucun effet sur la synchro.",
+      "de": "Blendet eingehenden Chat anderer Spieler aus. Sprechblasen-Knopf an der Minikarte oder Strg+Umschalt+C. Nur lokal, ohne Einfluss auf Sync."
+    }
   }
 }
