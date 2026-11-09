@@ -36,6 +36,8 @@ are client-side, and the other players in the match don't need them.
 | **Faster drawing: no needless buffer check** (new, staging) | The game no longer re-checks every piece of memory it writes effects and interface quads to: more FPS (with the next one +10 % on a 3v3 replay). | `fastbuffers` → `fastbuffers-1` (staging) | `fastbuffers/` | no (drawing only) |
 | **Faster interface: quick texts** (new, staging) | A dropped interface text (tooltip, counter) is found from the end of the list of live texts instead of its start. | `fastlocstrings` → `fastlocstrings-1` (staging) | `fastlocstrings/` | no (interface texts only) |
 | **PerfLog** (new, staging, experiment) | Every 5 s writes the FPS and what limits it (graphics card / driver wait, main game thread, which part of the frame) to PerfLog.log, a line with a verdict per minute to PerfLog_summary.log; for "Send logs". Changes nothing in the game. | `perflog` → `perflog-1` (staging) | `perflog/` | no (measures only) |
+| **DXVK** (new, staging, performance) | The game's Direct3D 9 through DXVK 2.7.1 (Vulkan): often smoother late fights. Needs Vulkan 1.3; if the game does not start, untick it. In Elite it needs Automatch ticked. | `dxvk` → `dxvk-1` (staging) | `dxvk/` | no (drawing only) |
+| **FPS unlock** (new, staging, performance) | Removes the DXVK frame cap (Elite's DXVK mode: 60 FPS); needs DXVK, vertical sync stays the game's option. | `fpsunlock` → `fpsunlock-1` (staging) | `fpsunlock/` | no (drawing only) |
 | **Chat Hide** (new, staging, experiment) | Hides incoming chat from other players during a match; a bubble button by the minimap or Ctrl+Shift+C toggles it. Your own messages and system lines still show. | `chathide` → `chathide-1` (staging) | `chathide/` | no (client-side display only) |
 | **Jumps don't break on obstacles** | An Autarch (or another jumper) whose jump order broke on an obstacle on the way gets it repeated after landing. | `jumpretry` → `jumpretry-2` | `jumpretry/` | no (the game's own orders) |
 | **Reverse (test)** | Ctrl + right-click behind your vehicles: they back off driving backwards, front armour to the enemy. | `reverse_r2` → `reverse-4` | `reverse/` | no (the game's own orders) |
@@ -219,9 +221,18 @@ netprobe/ - **NetProbe.dll** (NetProbe 2), experiment - removed from the store 0
     No hooks. 15 s after the game starts: TCP and UDP to our servers' probe service (dow2-ladder gameserver/probe_server.py) on
     several ports, ~5 MB, 1-2 minutes; writes NetProbe.log and sends it to us.
 
+dxvk/ - **DXVK.dll** (DXVK 1) + DXVK_d3d9.bin (DXVK 2.7.1 x32 d3d9.dll), DXVK.conf, DXVK_LICENSE.txt (zlib)
+    Early add-on. Points only Spooge.dll's import of d3d9.dll!Direct3DCreate9 at DXVK_d3d9.bin (loaded in the hook, not under the
+    loader lock; .bin so the loader does not load it as an add-on); DXVK_CONFIG_FILE / DXVK_LOG_PATH = the add-on folder. Does
+    nothing when the game's d3d9.dll is DXVK already (Elite IsDXVK) or when it is loaded > 5 s after the start. No Vulkan check.
+
+fpsunlock/ - **FpsUnlock.dll** (FpsUnlock 1)
+    Early add-on. Appends "d3d9.maxFrameRate = 0; dxgi.maxFrameRate = 0" to DXVK_CONFIG (read after dxvk.conf, so it lifts
+    Elite's 60) unless a maxFrameRate is there already (SoundFix FpsCap wins). No hooks; logs which Direct3D the game got.
+
 vanilla-loader/ - **winmm.dll**
     Forwards everything to the real winmm.dll. Full build: loads every *.dll from <game>\dow2-patches\ (vanilla and Elite) and the
-    early add-ons in Elite_DLLs. -DEARLY_ONLY (build/early/winmm.dll, in Automatch v2.0): only the early add-ons (OwnLobby.dll) -
+    early add-ons in Elite_DLLs. -DEARLY_ONLY (build/early/winmm.dll, in Automatch v2.0): only the early add-ons (OwnLobby.dll, DXVK.dll, FpsUnlock.dll) -
     Elite's injector loads Elite_DLLs ~9 s after the start, too late for them.
     -DLAUNCHER_LOADER (build/launcher/winmm.dll, the launcher's "Vanilla Retribution", launcher 1.4.11; store vanilla.loader
     vloader-<n>): decides by the game's command line - a mod start (Elite.exe starts DOW2.exe -modname Elite) loads only the early

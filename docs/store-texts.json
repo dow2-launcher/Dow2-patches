@@ -2,7 +2,7 @@
   "_readme": [
     "Player texts of every add-on in the launcher store (store3/launcher.json), by store id: category, name, description; option names only where they changed.",
     "How to write them: docs/ADDON_TEXTS.md. Applied to a launcher.json by scripts/store_texts.py (then sign it as usual); the add-ons of addons.json get the same texts there, so a deploy keeps them.",
-    "category = the group on the launcher's Add-ons tab: network, interface, gameplay, fixes, experiment; order = the place inside it (smaller = higher)."
+    "category = the group on the launcher's Add-ons tab: network, interface, gameplay, fixes, performance, experiment; order = the place inside it (smaller = higher)."
   ],
   "relay_fwd": {
     "category": "network",
@@ -455,8 +455,8 @@
     }
   },
   "fastbuffers": {
-    "category": "fixes",
-    "order": 60,
+    "category": "performance",
+    "order": 30,
     "name": {
       "en": "Fast buffers",
       "ru": "Fast buffers",
@@ -473,8 +473,8 @@
     }
   },
   "fastlocstrings": {
-    "category": "fixes",
-    "order": 70,
+    "category": "performance",
+    "order": 40,
     "name": {
       "en": "Fast UI strings",
       "ru": "Fast UI strings",
@@ -491,8 +491,8 @@
     }
   },
   "perflog": {
-    "category": "experiment",
-    "order": 970,
+    "category": "performance",
+    "order": 50,
     "name": {
       "en": "PerfLog",
       "ru": "PerfLog",
@@ -542,6 +542,42 @@
       "es": "Un cursor del ratón más grande. Auto lo ajusta a la resolución del juego (1440p x1.33, 4K x2), o elige un tamaño. Solo cambia el cursor, no la interfaz.",
       "fr": "Un curseur de souris plus grand. Auto l'adapte à la résolution du jeu (1440p x1.33, 4K x2), ou choisissez une taille. Seul le curseur change, pas l'interface.",
       "de": "Ein größerer Mauszeiger. Auto passt ihn an die Spielauflösung an (1440p x1,33, 4K x2), oder wähle eine Größe. Nur der Zeiger ändert sich, nicht die Oberfläche."
+    }
+  },
+  "dxvk": {
+    "category": "performance",
+    "order": 10,
+    "name": {
+      "en": "DXVK",
+      "ru": "DXVK",
+      "es": "DXVK",
+      "fr": "DXVK",
+      "de": "DXVK"
+    },
+    "description": {
+      "en": "Runs the game's Direct3D 9 through DXVK 2.7.1 (Vulkan): often smoother late fights. Needs a graphics card with Vulkan 1.3 and a fresh driver; if the game does not start, untick it. The first matches may stutter briefly while shaders are built. In Elite it works with Automatch ticked; Elite's own DXVK mode is left as it is.",
+      "ru": "Direct3D 9 игры через DXVK 2.7.1 (Vulkan): поздние бои часто плавнее. Нужна видеокарта с Vulkan 1.3 и свежий драйвер; если игра не запускается — снимите галочку. В первых матчах возможны короткие подлагивания, пока собираются шейдеры. В Elite работает при включённом Автоматче; собственный режим DXVK в Elite не трогается.",
+      "es": "El Direct3D 9 del juego a través de DXVK 2.7.1 (Vulkan): las batallas tardías suelen ir más fluidas. Requiere una tarjeta gráfica con Vulkan 1.3 y un controlador reciente; si el juego no arranca, desmárcalo. En las primeras partidas puede haber tirones breves mientras se compilan los shaders. En Elite funciona con Automatch marcado; el modo DXVK propio de Elite no se toca.",
+      "fr": "Le Direct3D 9 du jeu via DXVK 2.7.1 (Vulkan) : les batailles tardives sont souvent plus fluides. Nécessite une carte graphique Vulkan 1.3 et un pilote récent ; si le jeu ne démarre pas, décochez-le. Les premières parties peuvent saccader brièvement pendant la compilation des shaders. Dans Elite, il fonctionne avec Automatch coché ; le mode DXVK d'Elite reste tel quel.",
+      "de": "Das Direct3D 9 des Spiels über DXVK 2.7.1 (Vulkan): späte Gefechte laufen oft flüssiger. Braucht eine Grafikkarte mit Vulkan 1.3 und einen aktuellen Treiber; startet das Spiel nicht, Haken entfernen. In den ersten Matches kann es kurz ruckeln, während Shader erstellt werden. In Elite funktioniert es mit aktiviertem Automatch; Elites eigener DXVK-Modus bleibt unverändert."
+    }
+  },
+  "fpsunlock": {
+    "category": "performance",
+    "order": 20,
+    "name": {
+      "en": "FPS unlock",
+      "ru": "FPS unlock",
+      "es": "FPS unlock",
+      "fr": "FPS unlock",
+      "de": "FPS unlock"
+    },
+    "description": {
+      "en": "Removes the DXVK frame cap (Elite's DXVK mode caps at 60 FPS); vertical sync stays as set in the game. Better together with Sound bug fix: a high frame rate makes the sound bug worse. In Elite it works with Automatch ticked.",
+      "ru": "Снимает ограничение кадров DXVK (режим DXVK в Elite ограничивает 60 FPS); вертикальная синхронизация — как в игре. Лучше вместе с Sound bug fix: высокий FPS усиливает саундбаг. В Elite работает при включённом Автоматче.",
+      "es": "Quita el límite de FPS de DXVK (el modo DXVK de Elite limita a 60 FPS); la sincronización vertical, como en el juego. Mejor junto con Sound bug fix: muchos FPS empeoran el fallo de sonido. En Elite funciona con Automatch marcado.",
+      "fr": "Supprime la limite d'images de DXVK (le mode DXVK d'Elite limite à 60 FPS) ; synchro verticale comme dans le jeu. Mieux avec Sound bug fix : un FPS élevé aggrave le bug de son. Dans Elite, il fonctionne avec Automatch coché.",
+      "de": "Entfernt das DXVK-Bildlimit (Elites DXVK-Modus begrenzt auf 60 FPS); VSync wie im Spiel eingestellt. Besser zusammen mit Sound bug fix: hohe FPS verschlimmern den Soundbug. In Elite funktioniert es mit aktiviertem Automatch."
     }
   }
 }

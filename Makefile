@@ -22,6 +22,7 @@ all: $(OUT)/ChatHide.dll
 all: $(OUT)/FastBuffers.dll $(OUT)/FastLocStrings.dll
 all: $(OUT)/PerfLog.dll
 all: $(OUT)/CursorScale.dll
+all: $(OUT)/DXVK.dll $(OUT)/FpsUnlock.dll
 
 $(OUT):
 	mkdir -p $(OUT)
@@ -177,6 +178,15 @@ $(OUT)/LiveReplay.dll: livereplay/livereplay.c | $(OUT)
 # its pipe for a launcher outside Wine (Linux), shipped with the add-on as Elite_DLLs/lrbridge.exe
 $(OUT)/lrbridge.exe: roomjoin/rjbridge.c | $(OUT)
 	$(CC) $(CFLAGS) -DPIPE_PREFIX='L"EliteLiveReplay"' -o $@ $< -static-libgcc
+# 09.11.2026 (performance): the game's Direct3D 9 through DXVK 2.7.1 (dxvk/DXVK_d3d9.bin = the official x32 d3d9.dll, zlib licence
+# dxvk/DXVK_LICENSE.txt): only Spooge's Direct3DCreate9 import is pointed at it; nothing when the game's d3d9.dll is DXVK already
+$(OUT)/DXVK.dll: dxvk/dxvk.c | $(OUT)
+	$(CC) $(CFLAGS) -shared -o $@ $< -static-libgcc -Wl,--exclude-all-symbols
+
+# 09.11.2026 (performance): no DXVK frame cap (d3d9/dxgi.maxFrameRate = 0 appended to DXVK_CONFIG before Direct3D); vsync untouched
+$(OUT)/FpsUnlock.dll: fpsunlock/fpsunlock.c | $(OUT)
+	$(CC) $(CFLAGS) -shared -o $@ $< -static-libgcc -Wl,--exclude-all-symbols
+
 # 06.11.2026 (experiment): continue a replay as a skirmish from any tick, as any of its players (the pause menu's
 # "Concede match" button in a replay becomes "Continue as <name>")
 $(OUT)/ReplayTakeover.dll: replaytakeover/replaytakeover.c common/gfxui.h | $(OUT)
