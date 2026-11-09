@@ -1,5 +1,5 @@
 name: mac-crossplay
-# Builds the Mac crossplay dylib (mac/<latest v*>/build_ci.sh) on a macOS runner.
+# Builds the Mac crossplay dylib (mac/<latest v*>/build_ci.sh) on a macOS runner (macos-latest; macos-14 is retired).
 # Every push / PR: artifact. Push to main: GitHub Release "mac-crossplay-<ver>" with the player zip (asset replaced on rebuild).
 on:
   push:
@@ -13,7 +13,7 @@ permissions:
 
 jobs:
   build:
-    runs-on: macos-14
+    runs-on: macos-latest
     outputs:
       ver: ${{ steps.ver.outputs.ver }}
     steps:
