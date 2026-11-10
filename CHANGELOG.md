@@ -4,6 +4,15 @@ Every version gets an entry here before it reaches `main`. CI then tags `vX.Y.Z`
 version (`X.Y.0`) it also publishes a GitHub Release with the DLLs and the entries since the previous `X.Y.0`.
 The version of the set lives only in `VERSION`; each DLL still writes its own version to its log.
 
+## 0.2.39 — 2026-11-10
+New AI 7 (store newai-7, experiment, off by default, Elite only) = newai-6 + simulation/ai/strategy_tech_purchase.ai
+(EliteAI.dll gives it to the game instead of Elite's script, like strategy_unit_purchase.ai).
+- Tech plan for the new logic: tier 2 from 7 min (earlier with a rich bank), tier 3 from 15 min; the research money is reserved
+  first, the army buys from the surplus; arbiter Conf_TechVsArmy (A/B/C), TECH lines in EliteAI.log. Elite's AIs run Elite's code.
+- Unit purchase: a forbidden unit (tyranid spore mines, IG spotters) no longer cuts off the rest of the HQ list; new-tier bonus; tier in the buy log.
+- Stand 1, one 2v2 (tyranids + IG on the new logic vs SM + eldar on Elite, 24 min game): T2 at 6-7.5 min, T3 at 10-14.5 min,
+  no hangs, PCALLERR 0.
+
 ## 0.2.38 — 2026-11-10
 New AI 6 (store newai-6, experiment, off by default, Elite only) = newai-5 + simulation/ai/strategy_unit_purchase.ai
 (EliteAI.dll gives it to the game instead of Elite's script: Elite_DLLs\EliteAI\simulation\ai\...).

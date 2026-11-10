@@ -5,7 +5,7 @@
 -- 2) super units (Baneblade, Land Raiders, Great Unclean One, Avatar, Swarmlord...): none before SuperMinTime (s) and
 --    without SuperMinArmy combat squads, one at a time; until then the money goes into the army.
 -- Tuning from EliteAI.ini [Lua]: DivK, DivShare, DivNew, CatShare, SuperMinTime, SuperMinArmy, SuperMult, SuperCost.
-EliteAI_P = { cost_logged = {}, block_log = -999 }
+EliteAI_P = { cost_logged = {}, block_log = -999, tier_seen = {} }   -- tier_seen[name] = our tech level when the unit first became producible
 local function eai_num(key, default)
 	if EliteAI and EliteAI.num then return EliteAI.num(key, default) end
 	return default
@@ -34,6 +34,12 @@ function EliteAI_PurchasePrep()
 		local name = string.lower(PBG_GetName(pbg) or "")
 		local c = UtilPBG_CountTotal( pbg )
 		local k = eai_class(name)
+		-- tech (10.11): the tier of a unit = our tech level when it first became producible (AIProduction_CanProduce, as in
+		-- AccumulateSquadDemand below); for the new logic the level stays while a research runs (strategy_tech_purchase.ai)
+		if not P.tier_seen[name] and AIProduction_CanProduce( s_selfplayer, PITEM_Spawn, pbg ) then
+			-- verify 10.11: the level fresh, not cache.tech_tier_level (refreshed later: in t7 chimera/leman_russ/carnifex got tier-1 labels)
+			P.tier_seen[name] = (CalculateCurrentTechLevel and CalculateCurrentTechLevel()) or (cache and cache.tech_tier_level) or 1
+		end
 		P.cls[k] = P.cls[k] + c
 		if k ~= "hero" then P.total = P.total + c end
 		if EliteAI_IsSuper(pbg, name) then P.supers = P.supers + c end
@@ -57,6 +63,10 @@ function EliteAI_PurchaseMult(pbg, curAmount)
 		local ok, cost = pcall(SquadStats_GetCost, s_self_modplayer, pbg)
 		if ok and cost then eai_log("cost", name, math.floor(cost.requisition or -1), math.floor(cost.power or -1), EliteAI_IsSuper(pbg, name) and "super" or "") end
 	end
+	-- tech (10.11): the tier a unit belongs to = our level when it first became producible (cache.tech_tier_level stays
+	-- during a research for the new logic, see strategy_tech_purchase.ai); units of the tier we just reached get a bonus
+	local lvl = (cache and cache.tech_tier_level) or 1
+	if not P.tier_seen[name] then P.tier_seen[name] = lvl end
 	if EliteAI_IsSuper(pbg, name) then
 		local t, army = eai_time(), (cache and cache.military_count) or 0
 		if t < eai_num("SuperMinTime", 1080) or army < eai_num("SuperMinArmy", 8) or P.supers >= 1 then
@@ -76,6 +86,7 @@ function EliteAI_PurchaseMult(pbg, curAmount)
 		if cshare > cmax then mult = mult * (cmax / cshare) ^ 2 end
 	end
 	if curAmount == 0 and total >= 3 then mult = mult * eai_num("DivNew", 1.4) end
+	if curAmount == 0 and lvl >= 2 and P.tier_seen[name] == lvl then mult = mult * eai_num("Tech_NewTierMult", 1.3) end   -- we teched for these
 	return mult
 end
 
@@ -278,7 +289,9 @@ function AccumulateSquadDemand( availableResources, reinforce_only )
 						local unitcap = s_unit_purchase_limit[ pbgid ]
 
 						if unitcap < 1 then 		-- kk k extra back up to stop forbidden unit purchase
-							return
+							if not eai_on then return end
+							demand = 0      -- EliteAI (10.11): a forbidden unit (spore mines, IG spotters) only skips itself; Elite's return
+							                -- dropped every unit after it in the HQ list (tyranids: venom cannon, genestealers, tyrant guard, carnifex...)
 						end
 
 						-- local curAmount = UtilPBG_CountTotal( pbg )
@@ -614,7 +627,8 @@ function TryPurchaseUnitChoice( best_choice, availableResources )
 			Request_Production( s_selfplayer, TGROUP_BuildUnits, TPRIORITY_BuildUnits, PITEM_Spawn, pbg )
 			print("UnitPurchase: Produce:"..PBG_GetName(pbg)  )
 			if EliteAI and EliteAI.on then
-				eai_log("buy", eai_time(), string.lower(PBG_GetName(pbg) or ""), "army", (cache and cache.military_count) or -1)
+				local bname = string.lower(PBG_GetName(pbg) or "")
+				eai_log("buy", eai_time(), bname, "army", (cache and cache.military_count) or -1, "tier", EliteAI_P.tier_seen[bname] or (cache and cache.tech_tier_level) or -1)
 			end
 		end
 		

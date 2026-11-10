@@ -1,0 +1,1 @@
+- New AI 7: gradual climb through the tiers - T2 ~7-12 min, T3 ~15-22 min (earlier when the economy allows); a forbidden unit (spore mines, spotters) no longer blocks the rest of the unit list.
