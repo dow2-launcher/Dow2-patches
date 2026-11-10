@@ -15,8 +15,10 @@ function EliteAI_ExecuteOrders()
 		-- a squad that died since the AI queued the order: Squad_FromWorldID on it is an engine assert (in -dev a modal
 		-- dialog that stops the game) - check first
 		local alive = Squad_IsValid and Squad_IsValid(wid)
-		local ok = alive and pcall(function()
+		local ok, err = false, "dead"
+		if alive then ok, err = pcall(function()
 			local sq = Squad_FromWorldID(wid)
+			if not sq or Squad_Count(sq) == 0 then return end              -- nothing to order (all models dead)
 			SGroup_Clear(sg)
 			SGroup_Add(sg, sq)
 			local pos = World_Pos(tonumber(x), tonumber(y), tonumber(z))
@@ -25,7 +27,9 @@ function EliteAI_ExecuteOrders()
 			elseif m == 2 then Cmd_AttackMovePos(sg, pos)
 			elseif m == 3 then Cmd_Retreat(sg)
 			end
-		end)
+		end) end
+		if not ok and alive then EliteAI_ErrN = (EliteAI_ErrN or 0) + 1
+			if EliteAI_ErrN <= 10 or EliteAI_ErrN - math.floor(EliteAI_ErrN / 50) * 50 == 0 then _log("PCALLERR scar_order", EliteAI_ErrN, "mode", mode, tostring(err)) end end
 		if ok then done = done + 1 elseif alive then bad = bad + 1; EliteAI_LastBadMode = mode end
 	end
 	if bad > 0 and not EliteAI_ExecWarned then EliteAI_ExecWarned = true; _log("director: some orders failed", bad, "of", done + bad, "last mode", tostring(EliteAI_LastBadMode)) end

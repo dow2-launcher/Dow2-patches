@@ -4,7 +4,7 @@
 -- (all | none | normal | <player ids, e.g. 1000>) so one match can pit the new logic against Elite's (A/B).
 -- Every tuning value can be overridden from EliteAI.ini [Lua] without rebuilding (EliteAI.num("Key", default)).
 
-EliteAI = { version = "0.5" }
+EliteAI = { version = "0.8" }
 
 -- C functions from EliteAI.dll: global, or (AI scripts run in their own environment) via the shared string table
 local G0 = getfenv and getfenv(0) or {}
@@ -15,6 +15,14 @@ local function log(...)
 	if eliteai_log then eliteai_log("p" .. tostring(s_selfplayerid), ...) end
 end
 EliteAI.log = log
+
+-- step 4 (10.11): every swallowed error is logged with its place (a pcall'd engine error leaked the Lua mutex -> hang)
+EliteAI.errn = {}
+local function perr(tag, err)
+	local c = (EliteAI.errn[tag] or 0) + 1; EliteAI.errn[tag] = c
+	if c <= 5 or c - math.floor(c / 50) * 50 == 0 then log("PCALLERR", tag, c, tostring(err)) end
+end
+EliteAI.perr = perr
 
 local function cfg(key, default)
 	local v = eliteai_cfg and eliteai_cfg(key)
@@ -80,6 +88,7 @@ Target_CalcAttackPriority = function(militaryPoint)
 		s_diffLevel = AD_Hard
 		local ok, v = pcall(Elite_CalcAttackPriority, militaryPoint)
 		s_diffLevel = real
+		if not ok then perr("calcprio", v) end
 		r = ok and v or 0
 	else
 		r = Elite_CalcAttackPriority(militaryPoint)
@@ -96,13 +105,14 @@ RankAttackTargets = function()
 	EliteAI.collect = {}
 	local ok, err = pcall(Elite_RankAttackTargets)
 	local list = EliteAI.collect; EliteAI.collect = nil
-	if not ok then log("RankAttackTargets error:", tostring(err)); return end
+	if not ok then perr("rank", err); return end
 	table.sort(list, function(a, b) return a.pr > b.pr end)
 	-- 0.7: the position now, not the point: Elite rebuilds its military points, a point kept for the director's next
 	-- tick is a dead engine object - reading it crashed the game (R6025 pure virtual call, 0:30-3:00 into a match)
 	EliteAI.best_pos = nil
-	if list[1] then
+	if list[1] and list[1].mp then
 		local ok, p = pcall(Military_GetMilitaryPointPosition, list[1].mp)
+		if not ok then perr("mppos", p) end
 		if ok and p then EliteAI.best_pos = { x = p.x, y = p.y, z = p.z }; EliteAI.best_key = string.format("%.0f %.0f", p.x, p.z) end
 	end
 	local k = num("AttackTargets", 2)
@@ -139,8 +149,9 @@ local _order = eliteai_order or (string and string.eliteai_order)
 EliteAI.retreating, EliteAI.orders, EliteAI.dir_squads = {}, 0, 0
 
 local function order(sq, pos, mode)
-	if not _order then return end
-	local ok = pcall(_order, Squad_GetGameID(sq), pos.x, pos.y, pos.z, mode)
+	if not _order or not sq or not pos then return end
+	local ok, err = pcall(function() _order(Squad_GetGameID(sq), pos.x, pos.y, pos.z, mode) end)
+	if not ok then perr("order", err) end
 	if ok then EliteAI.orders = EliteAI.orders + 1 end
 end
 local function dist(a, b) return math.sqrt((a.x - b.x) ^ 2 + (a.z - b.z) ^ 2) end
@@ -149,8 +160,10 @@ local function dist(a, b) return math.sqrt((a.x - b.x) ^ 2 + (a.z - b.z) ^ 2) en
 local Elite_MilitaryExecute = strategy_military.execute
 strategy_military.execute = function()
 	if EliteAI.director then
-		pcall(Task_KillGroup, s_selfplayer, TGROUP_Attack)
-		pcall(Task_KillGroup, s_selfplayer, TGROUP_Defend)
+		local ok1, e1 = pcall(Task_KillGroup, s_selfplayer, TGROUP_Attack)
+		if not ok1 then perr("kill_att", e1) end
+		local ok2, e2 = pcall(Task_KillGroup, s_selfplayer, TGROUP_Defend)
+		if not ok2 then perr("kill_def", e2) end
 		return
 	end
 	return Elite_MilitaryExecute()
@@ -161,14 +174,18 @@ function EliteAI_Director()
 	local now = World_GetGameTime()
 	local army, n = {}, Military_SquadTotalCount(s_selfplayer)
 	for i = 0, n - 1 do
-		pcall(function()
+		local okq, eq = pcall(function()
+			-- 0.8: an engine call that raises a Lua error inside the AI job leaks the Lua mutex (LuaBinding::GetMutex) on
+			-- the xthread worker -> the main thread waits forever (hang). Seen: AISquad_ConvertToSimSquad -> nil for a squad
+			-- that is not spawned (dead/in reinforcement) and Squad_GetHealth(nil) raised. Check everything BEFORE the call.
 			local aisq = Military_GetAISquadAtIndex(s_selfplayer, i)
-			if aisq and not AISquad_InCaptureTask(aisq) then
-				local sq = AISquad_ConvertToSimSquad(aisq)
+			local sq = aisq and not AISquad_InCaptureTask(aisq) and AISquad_ConvertToSimSquad(aisq)
+			if sq and Squad_Count(sq) > 0 then
 				local hp = Squad_GetHealth(sq) / math.max(Squad_GetHealthMax(sq), 1)
 				table.insert(army, { sq = sq, id = Squad_GetGameID(sq), pos = Squad_GetPosition(sq), hp = hp, hit = Squad_IsUnderAttack(sq, 3) })
 			end
 		end)
+		if not okq then perr("dir_sq", eq) end
 	end
 	EliteAI.dir_squads = table.getn(army)
 	-- badly hurt squads go home (once; they come back to the army after RetreatSecs)
@@ -216,6 +233,7 @@ end
 -- telemetry: what this AI has and does, every 30 s of game time (A/B comparison, reading a match without video)
 local function gametime()
 	local ok, t = pcall(World_GetGameTime)
+	if not ok then perr("gametime", t) end
 	if ok and t then return math.floor(t) end
 	return -1
 end
@@ -234,8 +252,10 @@ function EliteAI_Sample()
 			local before = EliteAI.seen[id]
 			if before and n < before then EliteAI.models_lost = EliteAI.models_lost + (before - n) end
 			if Squad_IsUnderAttack(sq, 5) then engaged = engaged + 1 end
-			local okp, pos = pcall(Squad_GetPosition, sq)
-			if okp and pos and n > 0 then n2 = n2 + 1; xs[n2] = pos.x; zs[n2] = pos.z end
+			local okp, pos = true, nil
+			if n > 0 then okp, pos = pcall(Squad_GetPosition, sq) end         -- no position for a squad without models
+			if not okp then perr("sqpos", pos) end
+			if okp and pos then n2 = n2 + 1; xs[n2] = pos.x; zs[n2] = pos.z end
 		end
 		for id, n in pairs(EliteAI.seen) do
 			if now[id] == nil then EliteAI.squads_lost = EliteAI.squads_lost + 1; EliteAI.models_lost = EliteAI.models_lost + n end
@@ -251,13 +271,15 @@ function EliteAI_Sample()
 			EliteAI.spread_sum = (EliteAI.spread_sum or 0) + d / n2; EliteAI.spread_n = (EliteAI.spread_n or 0) + 1
 		end
 	end)
-	if not ok and not EliteAI.sample_err then EliteAI.sample_err = true; log("sample error:", tostring(err)) end
+	if not ok then perr("sample", err) end
 end
 
 function EliteAI_Telemetry()
 	local c = cache or {}
 	local okA, att = pcall(Task_CountCombat, s_selfplayer, COMBAT_Attack)
 	local okD, def = pcall(Task_CountCombat, s_selfplayer, COMBAT_Defend)
+	if not okA then perr("count_att", att) end
+	if not okD then perr("count_def", def) end
 	log("T", gametime(), EliteAI.on and "new" or "elite",
 		"mil", math.floor(c.military_value or -1), "lost", EliteAI.models_lost, "squads_lost", EliteAI.squads_lost, "engaged", EliteAI.engaged,
 		"spread", math.floor((EliteAI.spread_sum or 0) / math.max(EliteAI.spread_n or 0, 1)),

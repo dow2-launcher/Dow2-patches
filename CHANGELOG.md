@@ -4,6 +4,17 @@ Every version gets an entry here before it reaches `main`. CI then tags `vX.Y.Z`
 version (`X.Y.0`) it also publishes a GitHub Release with the DLLs and the entries since the previous `X.Y.0`.
 The version of the set lives only in `VERSION`; each DLL still writes its own version to its log.
 
+## 0.2.34 — 2026-11-10
+New AI 2 (store newai-2, category experiment, order 1000, off by default, Elite only; scripts only, EliteAI.dll unchanged).
+- Fix for the freeze of AI-vs-AI matches (2-4 min into a 2v2 on stand 1): the combat director read the health of a squad
+  that was not spawned (AISquad_ConvertToSimSquad -> nil, Squad_GetHealth(nil) raised a Lua error). The error, raised
+  inside the AI job on an xthread worker, left the engine's Lua mutex (LuaBinding::GetMutex) locked; pcall caught the
+  error but the main thread then waited for the mutex forever. Squads are now checked before any engine call
+  (converted squad exists, has models; position only for squads with models; order only with a squad and a position;
+  SCAR side: no order for a squad without models).
+- Every caught error is written to EliteAI.log as `PCALLERR <place> <count> <text>` (first 5, then every 50th).
+- main.ai script version 0.8.
+
 ## 0.2.33 — 2026-11-10
 New AI 1 (new, store newai-1, category experiment, order 1000, off by default, Elite only; EliteAI.dll 0.7 + eliteai/mod/main.ai,
 append/scar/elite/elite.scar). The store id is new (`newai`); the old `eliteai_off` stays off.
