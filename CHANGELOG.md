@@ -4,6 +4,19 @@ Every version gets an entry here before it reaches `main`. CI then tags `vX.Y.Z`
 version (`X.Y.0`) it also publishes a GitHub Release with the DLLs and the entries since the previous `X.Y.0`.
 The version of the set lives only in `VERSION`; each DLL still writes its own version to its log.
 
+## 0.2.36 — 2026-11-10
+Replay takeover 3 (store replaytakeover-3, experiment, off by default) + New AI 4 (store newai-4: EliteAI.dll 0.10, scripts unchanged).
+- ReplayTakeover.ini Others = elite (old "ai") | newai_a | newai_b | newai_c | idle. The new AI picks its variant by the
+  computer's difficulty (Easy = A, Normal = B, Hard = C), so newai_* gives the former humans' computers that difficulty
+  (Player+0xBC, GameInfo slot +0x2C) instead of Difficulty. EliteAI.dll not loaded or EliteAI.ini [Lua] NewAI=none -> a line
+  in ReplayTakeover.log and Elite's AI at Difficulty. Computers of the match keep their own AI (made by the replay).
+- EliteAI.dll: the game type is already 4 (skirmish) when ReplayTakeover makes the computers, so their AI scripts get main.ai
+  as in a skirmish; but the replay loaded SCAR as playback (0x800), without the order-queue rule. With ReplayTakeover.dll in
+  the game a replay's SCAR now gets EliteAI\append too (the rule takes an empty queue in a plain replay - no commands); the
+  AI scripts of a replay stay Elite's.
+- Stand 1 (Elite 3.2.1, rt_h2h321, slot 4 taken at tick 120, Others=newai_b, 3 min): EliteAI.log `variant B retreats`,
+  kicker "New AI - variant B (imperial_guard)", director orders 2 -> 37, points taken, no crash; stand md5 back.
+
 ## 0.2.35 — 2026-11-10
 New AI 3 (store newai-3, category experiment, order 1000, off by default, Elite only; EliteAI.dll + main.ai 0.9 + elite.scar).
 - Three variants of the new AI to compare, picked in the skirmish setup by the computer slot's level: Easy = "NEW AI A",

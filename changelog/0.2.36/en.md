@@ -1,0 +1,1 @@
+- Replay takeover 3: choose who plays the other players after "Continue as ..." - Elite's AI, NEW AI A, NEW AI B, NEW AI C (needs the New AI add-on) or stand still. Wind a replay to the moment you want, take one player and test the new AI against the rest.
