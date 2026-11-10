@@ -14,6 +14,9 @@ EliteAI = { version = "0.9" }
 -- the same retreat threshold/aggression/targets; A/B/C differ ONLY in how disputed decisions are resolved - the conflict
 -- arbiters Conf_* of mod/mechanics.ai (1/2/3, table in reports/newai_1110/MECHANICS_RU.md section 3). Any key can still be
 -- Conf_TechVsArmy (10.11): the tech plan of mod/simulation/ai/strategy_tech_purchase.ai (reports/newai_1110/TECH_RU.md).
+-- Conf_ReinforceVsSave (10.11): the reinforcement budget of mod/simulation/ai/strategy_unit_purchase.ai (TECH_RU.md section 8):
+-- while power piles up and req is short for the next tier / a power unit, a cheap squad is reinforced by rule 1 = only weak
+-- and out of a fight, 2 = weak (in a fight too), 3 = in a fight or below Reinf_FullHp; share of the req income 0.2 / 0.35 / 0.5.
 -- overridden in EliteAI.ini [Lua] (ini > variant > default in the code).
 --   RetreatHP 0.35 (squad goes home below this health share), RetreatSecs 40, AggrMin 0.75 (floor of Military_SetSquadAggression),
 --   AttackTargets 2, Inertia 4, TargetTicks 450, GatherR 30, KiteChance/KiteRatio x1 - identical in A, B, C
@@ -21,15 +24,15 @@ EliteAI_VARIANTS = {
 	A = { name = "rules A", RetreatHP = 0.35, RetreatSecs = 40, AggrMin = 0.75, AttackTargets = 2, Inertia = 4, TargetTicks = 450,
 		GatherR = 30, KiteChance = 1, KiteRatio = 1,
 		Mech_Purchase = 1, Mech_FocusFire = 1, Mech_ArmyRetreat = 1, Mech_PunishTurn = 1, Mech_PreRetreat = 1, Mech_MeleeTie = 1, Mech_Repair = 1, Mech_RaceAbilities = 1, Mech_ArmyRoles = 1,
-		Conf_MeleeApproach = 1, Conf_FocusLeave = 1, Conf_Chase = 1, Conf_Split = 1, Conf_Decap = 1, Conf_HoldVP = 1, Conf_TieVsFocus = 1, Conf_RepairVsFight = 1, Conf_PreEngage = 1, Conf_RunnerFight = 1, Conf_AbilitySave = 1, Conf_TechVsArmy = 1 },
+		Conf_MeleeApproach = 1, Conf_FocusLeave = 1, Conf_Chase = 1, Conf_Split = 1, Conf_Decap = 1, Conf_HoldVP = 1, Conf_TieVsFocus = 1, Conf_RepairVsFight = 1, Conf_PreEngage = 1, Conf_RunnerFight = 1, Conf_AbilitySave = 1, Conf_TechVsArmy = 1, Conf_ReinforceVsSave = 1 },
 	B = { name = "rules B", RetreatHP = 0.35, RetreatSecs = 40, AggrMin = 0.75, AttackTargets = 2, Inertia = 4, TargetTicks = 450,
 		GatherR = 30, KiteChance = 1, KiteRatio = 1,
 		Mech_Purchase = 1, Mech_FocusFire = 1, Mech_ArmyRetreat = 1, Mech_PunishTurn = 1, Mech_PreRetreat = 1, Mech_MeleeTie = 1, Mech_Repair = 1, Mech_RaceAbilities = 1, Mech_ArmyRoles = 1,
-		Conf_MeleeApproach = 2, Conf_FocusLeave = 2, Conf_Chase = 2, Conf_Split = 2, Conf_Decap = 2, Conf_HoldVP = 2, Conf_TieVsFocus = 2, Conf_RepairVsFight = 2, Conf_PreEngage = 2, Conf_RunnerFight = 2, Conf_AbilitySave = 2, Conf_TechVsArmy = 2 },
+		Conf_MeleeApproach = 2, Conf_FocusLeave = 2, Conf_Chase = 2, Conf_Split = 2, Conf_Decap = 2, Conf_HoldVP = 2, Conf_TieVsFocus = 2, Conf_RepairVsFight = 2, Conf_PreEngage = 2, Conf_RunnerFight = 2, Conf_AbilitySave = 2, Conf_TechVsArmy = 2, Conf_ReinforceVsSave = 2 },
 	C = { name = "rules C", RetreatHP = 0.35, RetreatSecs = 40, AggrMin = 0.75, AttackTargets = 2, Inertia = 4, TargetTicks = 450,
 		GatherR = 30, KiteChance = 1, KiteRatio = 1,
 		Mech_Purchase = 1, Mech_FocusFire = 1, Mech_ArmyRetreat = 1, Mech_PunishTurn = 1, Mech_PreRetreat = 1, Mech_MeleeTie = 1, Mech_Repair = 1, Mech_RaceAbilities = 1, Mech_ArmyRoles = 1,
-		Conf_MeleeApproach = 3, Conf_FocusLeave = 3, Conf_Chase = 3, Conf_Split = 3, Conf_Decap = 3, Conf_HoldVP = 3, Conf_TieVsFocus = 3, Conf_RepairVsFight = 3, Conf_PreEngage = 3, Conf_RunnerFight = 3, Conf_AbilitySave = 3, Conf_TechVsArmy = 3 },
+		Conf_MeleeApproach = 3, Conf_FocusLeave = 3, Conf_Chase = 3, Conf_Split = 3, Conf_Decap = 3, Conf_HoldVP = 3, Conf_TieVsFocus = 3, Conf_RepairVsFight = 3, Conf_PreEngage = 3, Conf_RunnerFight = 3, Conf_AbilitySave = 3, Conf_TechVsArmy = 3, Conf_ReinforceVsSave = 3 },
 }
 
 -- C functions from EliteAI.dll: global, or (AI scripts run in their own environment) via the shared string table

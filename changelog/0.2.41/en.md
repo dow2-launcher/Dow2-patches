@@ -1,0 +1,1 @@
+- New AI 9: does not hold money for abilities and reinforcements - builds an army of higher tiers (reinforcements of cheap squads are limited while saving for the next tier; the idle-bank watchdog buys over the other budgets' holds, but not over the tier research).
