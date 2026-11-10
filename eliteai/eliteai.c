@@ -143,9 +143,16 @@ static DWORD game_type(void) {
     return *(DWORD *)(*g + 0x118);
 }
 static int single_player(void) { DWORD t = game_type(); return (t & SP_TYPES) && !(t & NOT_SP); }
+// 0.10 (10.11): ReplayTakeover 3 turns a replay into a skirmish (type 0x800 -> 4) and makes the computers then, so the AI
+// scripts come here as in a skirmish - but the SCAR scripts were loaded by the replay, without the order queue rule.
+// With ReplayTakeover.dll in the game, a replay's SCAR also gets EliteAI\append (a rule taking the queue once a second:
+// nothing in a plain replay, where no new AI runs, so it gives no command). The AI scripts of a replay stay Elite's.
+#define T_PLAYBACK  0x800
+static int replay_takeover_on(void) { return game_type() == T_PLAYBACK && GetModuleHandleA("ReplayTakeover.dll") != NULL; }
 static int __stdcall load_hook(void *L, LuaReader reader, void *data, const char *chunkname) {
     char rel[400];
-    if (!single_player()) {                            // online, replay, menus: Elite's own scripts, untouched
+    int rt = 0;
+    if (!single_player() && !(rt = replay_takeover_on())) {   // online, replay, menus: Elite's own scripts, untouched
         static DWORD said, lastType = 1;
         DWORD t = game_type();
         if (t && (t != lastType || GetTickCount() - said > 60000)) { said = GetTickCount(); lastType = t; logmsg("game type %lX (not single player): the new AI stays out", t); }
@@ -158,9 +165,10 @@ static int __stdcall load_hook(void *L, LuaReader reader, void *data, const char
         if (p && !strstr(p, "..")) {
             wchar_t f[MAX_PATH]; _snwprintf(f, MAX_PATH, L"%lsEliteAI\\append\\%hs", g_dir, p + 11);
             size_t alen = 0; char *add = read_file(f, &alen);
-            if (add) { int r = append_load(L, reader, data, chunkname, add, alen); logmsg("%s + append (%u bytes), load %d", chunkname, (unsigned)alen, r); free(add); return r; }
+            if (add) { int r = append_load(L, reader, data, chunkname, add, alen); logmsg("%s + append (%u bytes), load %d%s", chunkname, (unsigned)alen, r, rt ? " (replay: for ReplayTakeover)" : ""); free(add); return r; }
         }
     }
+    if (rt) return g_loadOrig(L, reader, data, chunkname);  // a replay: only the SCAR queue rule, the AI scripts are Elite's
     if (ai_rel(chunkname, rel, sizeof rel)) {
         wchar_t p[MAX_PATH]; _snwprintf(p, MAX_PATH, L"%lsEliteAI\\%hs", g_dir, rel);
         size_t len = 0; char *buf = read_file(p, &len);

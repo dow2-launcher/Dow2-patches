@@ -41,13 +41,19 @@
 // gets Expert (AD_Hardest = 3, the game's highest: "Add Expert Computer", the same value the MP lobby's slot +0x2C holds) in
 // the Player and in his GameInfo slot before his AI is made. ReplayTakeover.ini [ReplayTakeover] Difficulty=expert (default) |
 // hard | normal | easy | keep (as before). Players who were computers in the match keep their own AI.
+//
+// ReplayTakeover 3 (10.11.2026, owner: test the new AI from any minute of a replay): Others = elite (old "ai") | newai_a |
+// newai_b | newai_c | idle. The new AI (EliteAI.dll) picks its variant by the computer's difficulty (Easy = A, Normal = B,
+// Hard = C, Expert = Elite's AI), so newai_* gives the former humans' computers that difficulty (Player+0xBC, slot +0x2C)
+// instead of [Difficulty]. EliteAI.dll not loaded or EliteAI.ini [Lua] NewAI=none -> logged, Elite's AI (Difficulty) instead.
+// EliteAI itself takes the game for a single-player one: the type is already 4 when the computers are made.
 #include <windows.h>
 #include <stdio.h>
 #include <string.h>
 #include <wchar.h>
 #include "../common/gfxui.h"
 
-#define VERSION "2"
+#define VERSION "3"
 
 #define G_SETTINGS   0x01335A78   // +0x110 GameObj, +0x118 game type (0x800 playback), +0x118+0x810 slots, +0x814 count
 #define G_WORLD      0x013356A4   // +0xF8 entities (vtbl+0x10 = by id), +0x194 PlayerManager, +0x174 playback length, +0x178 tick
@@ -103,6 +109,7 @@ static int ok(const void *p, int n) { return p && !IsBadReadPtr(p, n); }
 
 static GetPl_t g_getpl; static Owner_t g_owner; static CStr_t g_cstr; static IsDone_t g_isdone; static Dealloc_t g_dealloc;
 static int g_others_ai = 1, g_ru;
+static int g_newai = -1;                           // 3: Others=newai_a/b/c -> 0/1/2 (the EliteAI variant's difficulty), -1 = elite
 static int g_diff = 3;                             // AD_Easy 0, AD_Standard 1, AD_Hard 2, AD_Hardest 3 ("Expert"); -1 = keep
 static const char *DIFF_NAME[] = {"easy", "normal", "hard", "expert"};
 #define PL_AIDIFF 0xBC                             // Player: the AI difficulty its AIPlayer is made with
@@ -112,6 +119,16 @@ static int g_testAt = -1, g_testSlot = -1;          // stands only (ReplayTakeov
 static char *settings(void) { return ok((void *)G_SETTINGS, 4) && ok(*(char **)G_SETTINGS, 0x1000) ? *(char **)G_SETTINGS : NULL; }
 static char *world(void) { return ok((void *)G_WORLD, 4) && ok(*(char **)G_WORLD, 0x200) ? *(char **)G_WORLD : NULL; }
 static char *gamestate(char *st) { char *go = st ? P32(st, 0x110) : NULL; return ok(go, 8) && ok(P32(go, 4), 0x200) ? P32(go, 4) : NULL; }
+static wchar_t g_dirw[MAX_PATH];
+// v3: the new AI is there - EliteAI.dll in this game and not switched off by EliteAI.ini [Lua] NewAI=none; NULL = yes
+static const char *newai_missing(void) {
+    if (!GetModuleHandleA("EliteAI.dll")) return "EliteAI.dll is not loaded (the New AI add-on is off)";
+    wchar_t ini[MAX_PATH], v[32]; _snwprintf(ini, MAX_PATH, L"%lsEliteAI.ini", g_dirw); ini[MAX_PATH - 1] = 0;
+    GetPrivateProfileStringW(L"Lua", L"NewAI", L"normal", v, 32, ini);
+    if (!_wcsicmp(v, L"none")) return "EliteAI.ini [Lua] NewAI=none";
+    if (_wcsicmp(v, L"normal") && _wcsicmp(v, L"all")) return "EliteAI.ini [Lua] NewAI is a test list of player ids";
+    return NULL;
+}
 static int is_replay(void) { char *st = settings(); return st && I32(st, 0x118) == T_PLAYBACK; }
 static void *player_by_id(DWORD id) { char *w = world(); return w && g_getpl ? g_getpl(w + 0x194, 0, id) : NULL; }
 static DWORD player_id(void *p) { return ((DWORD (__fastcall *)(void *, void *))(*(void ***)p)[2])(p, 0); }
@@ -182,6 +199,12 @@ static void take(DWORD id) {
     { char *hud = *(char **)G_HUD, *h = ok(hud, 12) ? P32(hud, 8) : NULL, *sr = ok(h, 0x70) ? P32(h, 0x68) : NULL;
       if (ok(sr, 4)) ((SetF_t)(*(void ***)sr)[0x28 / 4])(sr, 0, 10.0f); }          // normal speed (a replay may run at 4x)
     hud_down(gs);
+    int diff = g_diff;
+    if (g_others_ai && g_newai >= 0) {
+        const char *why = newai_missing();
+        if (why) logmsg("  new AI %c asked, but %s - Elite's AI instead (difficulty %s)", 'A' + g_newai, why, diff < 0 ? "kept" : DIFF_NAME[diff]);
+        else { diff = g_newai; logmsg("  new AI %c (EliteAI.dll): the computers play at %s", 'A' + g_newai, DIFF_NAME[diff]); }
+    }
     I32(st, 0x118) = T_SKIRMISH;
     unsigned char wasAi[16] = {0};
     for (int i = 0; i < n; i++) {
@@ -196,8 +219,8 @@ static void take(DWORD id) {
         char *s = arr + i * 0xA8; if (i == ts || I32(s, 0) != 1) continue;
         void *p = player_by_id(I32(s, 0x9C)); if (!p) continue;
         int was = ok((char *)p + PL_AIDIFF, 4) ? I32(p, PL_AIDIFF) : -99, now = was;
-        if (g_diff >= 0 && !(i < 16 && wasAi[i]) && was != -99) {   // a former human: the chosen difficulty for his computer
-            I32(p, PL_AIDIFF) = g_diff; I32(s, SLOT_AIDIFF) = g_diff; now = g_diff;
+        if (diff >= 0 && !(i < 16 && wasAi[i]) && was != -99) {   // a former human: the chosen difficulty for his computer
+            I32(p, PL_AIDIFF) = diff; I32(s, SLOT_AIDIFF) = diff; now = diff;
         }
         P32(gs, 0x6C) = p; char r = ((AiLocal_t)FN_AI_LOCAL)(go);
         logmsg("  computer for %s (player %d): %s, difficulty %s%s", u8(player_name(p)), I32(s, 0x9C), r ? "on" : "already / failed",
@@ -320,7 +343,8 @@ BOOL WINAPI DllMain(HINSTANCE h, DWORD reason, LPVOID _) {
     wcscpy(g_log, dir); wcscat(g_log, L"ReplayTakeover.log"); wcscpy(ini, dir); wcscat(ini, L"ReplayTakeover.ini");
     if (already_loaded("ReplayTakeover")) { logmsg("another ReplayTakeover copy is already active in this game, this one stays idle"); return TRUE; }
     wchar_t v[32]; GetPrivateProfileStringW(L"ReplayTakeover", L"Others", L"ai", v, 32, ini);
-    g_others_ai = _wcsicmp(v, L"idle") != 0;
+    g_others_ai = _wcsicmp(v, L"idle") != 0; wcscpy(g_dirw, dir);
+    g_newai = !_wcsicmp(v, L"newai_a") ? 0 : !_wcsicmp(v, L"newai_b") ? 1 : !_wcsicmp(v, L"newai_c") ? 2 : -1;   // elite / ai = Elite's
     GetPrivateProfileStringW(L"ReplayTakeover", L"Difficulty", L"expert", v, 32, ini);
     g_diff = !_wcsicmp(v, L"keep") ? -1 : !_wcsicmp(v, L"easy") ? 0 : !_wcsicmp(v, L"normal") ? 1 : !_wcsicmp(v, L"hard") ? 2 : 3;
     g_testAt = GetPrivateProfileIntW(L"ReplayTakeover", L"TestTakeAt", -1, ini); g_testSlot = GetPrivateProfileIntW(L"ReplayTakeover", L"TestSlot", -1, ini);
@@ -346,7 +370,7 @@ BOOL WINAPI DllMain(HINSTANCE h, DWORD reason, LPVOID _) {
     gfx_patch_slot((DWORD)&vt[6], FN_NOP4, (void *)my_cc_update);
     patch_imm(AT_CC_CLICK, 0xB9, FN_CC_CLICK, (void *)my_cc_click);
     logmsg("ReplayTakeover " VERSION ": in a replay - select a unit of a player, Menu -> \"Continue as ...\"; others: %s (difficulty %s), %s",
-           g_others_ai ? "computer" : "stand", g_diff < 0 ? "kept" : DIFF_NAME[g_diff], g_ru ? "ru" : "en");
+           g_others_ai ? (g_newai == 0 ? "new AI A" : g_newai == 1 ? "new AI B" : g_newai == 2 ? "new AI C" : "Elite's AI") : "stand", g_diff < 0 ? "kept" : DIFF_NAME[g_diff], g_ru ? "ru" : "en");
     if (g_testAt >= 0) logmsg("TEST: takes slot %d by itself at tick %d (ReplayTakeover.ini TestTakeAt - stands only)", g_testSlot, g_testAt);
     if (!g_cstr || !g_dealloc) logmsg("(names %s, selection buffer %s)", g_cstr ? "ok" : "missing", g_dealloc ? "freed" : "kept");
     return TRUE;

@@ -573,7 +573,7 @@
     "order": 30
   },
   "replaytakeover": {
-    "version": "2",
+    "version": "3",
     "dll": "ReplayTakeover.dll",
     "default": false,
     "name": {
@@ -584,11 +584,11 @@
       "de": "Replay takeover"
     },
     "description": {
-      "en": "While watching a replay, click any unit of a player, open Menu and press \"Continue as ...\": from that moment it is your game, the others are played by the computer.",
-      "ru": "В реплее кликните любой юнит игрока, откройте Menu и нажмите «Продолжить за …»: с этого момента это ваша игра, за остальных играет компьютер.",
-      "es": "En una repetición, haz clic en una unidad de un jugador, abre el Menú y pulsa \"Continue as ...\": desde ahí la partida es tuya, el resto lo juega el ordenador.",
-      "fr": "Dans un replay, cliquez sur une unité d'un joueur, ouvrez le Menu et appuyez sur « Continue as ... » : la partie est à vous, l'ordinateur joue les autres.",
-      "de": "Im Replay eine Einheit eines Spielers anklicken, Menü öffnen, \"Continue as ...\" drücken: ab da ist es dein Spiel, die anderen spielt der Computer."
+      "en": "While watching a replay, click any unit of a player, open Menu and press \"Continue as ...\": from that moment it is your game, the others are played by the computer. NEW AI A/B/C need the New AI add-on (otherwise Elite's AI plays).",
+      "ru": "В реплее кликните любой юнит игрока, откройте Menu и нажмите «Продолжить за …»: с этого момента это ваша игра, за остальных играет компьютер. НОВЫЙ ИИ A/B/C — нужно дополнение New AI (без него играет ИИ Elite).",
+      "es": "En una repetición, haz clic en una unidad de un jugador, abre el Menú y pulsa \"Continue as ...\": desde ahí la partida es tuya, el resto lo juega el ordenador. NUEVA IA A/B/C requiere el complemento New AI (si no, juega la IA de Elite).",
+      "fr": "Dans un replay, cliquez sur une unité d'un joueur, ouvrez le Menu et appuyez sur « Continue as ... » : la partie est à vous, l'ordinateur joue les autres. NOUVELLE IA A/B/C nécessite le module New AI (sinon l'IA d'Elite joue).",
+      "de": "Im Replay eine Einheit eines Spielers anklicken, Menü öffnen, \"Continue as ...\" drücken: ab da ist es dein Spiel, die anderen spielt der Computer. NEUE KI A/B/C braucht das Add-on New AI (sonst spielt die Elite-KI)."
     },
     "conflicts": [
       "dow2-patches/ReplayTakeover.dll"
@@ -609,13 +609,43 @@
         "default": true,
         "choices": [
           {
-            "value": "ai",
+            "value": "elite",
             "name": {
-              "en": "Played by the computer",
-              "ru": "Играет компьютер",
-              "es": "Los juega el ordenador",
-              "fr": "Joués par l'ordinateur",
-              "de": "Spielt der Computer"
+              "en": "Elite's AI",
+              "ru": "ИИ Elite",
+              "es": "IA de Elite",
+              "fr": "IA d'Elite",
+              "de": "Elite-KI"
+            }
+          },
+          {
+            "value": "newai_a",
+            "name": {
+              "en": "NEW AI A",
+              "ru": "НОВЫЙ ИИ A",
+              "es": "NUEVA IA A",
+              "fr": "NOUVELLE IA A",
+              "de": "NEUE KI A"
+            }
+          },
+          {
+            "value": "newai_b",
+            "name": {
+              "en": "NEW AI B",
+              "ru": "НОВЫЙ ИИ B",
+              "es": "NUEVA IA B",
+              "fr": "NOUVELLE IA B",
+              "de": "NEUE KI B"
+            }
+          },
+          {
+            "value": "newai_c",
+            "name": {
+              "en": "NEW AI C",
+              "ru": "НОВЫЙ ИИ C",
+              "es": "NUEVA IA C",
+              "fr": "NOUVELLE IA C",
+              "de": "NEUE KI C"
             }
           },
           {
@@ -629,7 +659,7 @@
             }
           }
         ],
-        "default_value": "ai"
+        "default_value": "elite"
       },
       {
         "id": "difficulty",
@@ -1102,7 +1132,7 @@
     }
   },
   "newai": {
-    "version": "3",
+    "version": "4",
     "dll": "EliteAI.dll",
     "files": {
       "EliteAI/main.ai": "eliteai/mod/main.ai",
