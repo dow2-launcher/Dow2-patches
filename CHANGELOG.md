@@ -4,6 +4,18 @@ Every version gets an entry here before it reaches `main`. CI then tags `vX.Y.Z`
 version (`X.Y.0`) it also publishes a GitHub Release with the DLLs and the entries since the previous `X.Y.0`.
 The version of the set lives only in `VERSION`; each DLL still writes its own version to its log.
 
+## 0.2.35 — 2026-11-10
+New AI 3 (store newai-3, category experiment, order 1000, off by default, Elite only; EliteAI.dll + main.ai 0.9 + elite.scar).
+- Three variants of the new AI to compare, picked in the skirmish setup by the computer slot's level: Easy = "NEW AI A",
+  Normal = "NEW AI B", Hard = "NEW AI C" (Localizer labels 555026-555028 / 555035-555037, single player only); Expert stays
+  Elite's AI. All three play with the standard personality and build orders (AIPlayer_GetDifficultyLevel -> Standard);
+  variants can be set against each other in one match.
+- Variant table at the top of main.ai (EliteAI_VARIANTS): A "focus + purchase", B "retreats" (earlier retreat, short fights,
+  one attack target), C "attack" (holds fights longer, three targets, higher inertia); Mech_* switches for the mechanics
+  module (not in this release - they do nothing yet). EliteAI.ini [Lua] still overrides any value; Variant / Variant<player id> for tests.
+- At the start of the match a kicker text over the player's first squad: "New AI - variant B (orks)"; EliteAI.log: `variant B`.
+  (Game_ShowSystemMessage is not used: it pauses the simulation.)
+
 ## 0.2.34 — 2026-11-10
 New AI 2 (store newai-2, category experiment, order 1000, off by default, Elite only; scripts only, EliteAI.dll unchanged).
 - Fix for the freeze of AI-vs-AI matches (2-4 min into a 2v2 on stand 1): the combat director read the health of a squad
