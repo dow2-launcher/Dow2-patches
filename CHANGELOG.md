@@ -4,6 +4,16 @@ Every version gets an entry here before it reaches `main`. CI then tags `vX.Y.Z`
 version (`X.Y.0`) it also publishes a GitHub Release with the DLLs and the entries since the previous `X.Y.0`.
 The version of the set lives only in `VERSION`; each DLL still writes its own version to its log.
 
+## 0.2.41 — 2026-11-10
+New AI 9 (store newai-9, experiment, off by default, Elite only) = newai-8 + reinforcement budget and spending gates in
+simulation/ai/strategy_unit_purchase.ai, main.ai (Conf_ReinforceVsSave), strategy_tech_purchase.ai (EliteAI_TechReserve) (eliteai f16a17d).
+- Reinforcement budget (REINF): while power piles up and req is short for the next tier or a power unit, cheap squads are reinforced
+  only by the variant's rule (A: weak and out of a fight, B: weak, C: in a fight or below full HP) and within a share of the req income
+  (0.2 / 0.35 / 0.5), squads with power included. REINF lines in EliteAI.log.
+- Forbidden blueprints (cap 0, super units before their time/army) are dropped before the demand, in the watchdog and in the purchase multiplier (GATE drop).
+- The idle-bank watchdog buys over the money other budgets hold (abilities, reinforcements), but not over the tier research the tech plan holds.
+- Not run in game after the last change (static check, luac, spend_stub). Elite's AIs run Elite's code.
+
 ## 0.2.40 — 2026-11-10
 New AI 8 (store newai-8, experiment, off by default, Elite only) = newai-7 + spending in simulation/ai/strategy_unit_purchase.ai.
 - Idle-bank watchdog (SPEND): when the bank stays above 400 req or 300 power without a spawn, the new logic buys the best affordable unit;

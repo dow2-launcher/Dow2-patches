@@ -265,6 +265,16 @@ function EliteAI_TechPromote()
 		ai_budget:add_resources( add, "BUDGET_Tech" )
 	end
 end
+-- step 15: the money the plan holds right now (the tier research promoted first - the same conditions as EliteAI_TechPromote, on
+-- the state of the last t_eval): req, pow; 0, 0 when nothing is held. The watchdog of strategy_unit_purchase.ai (over_lock) buys
+-- over the locks of the other budgets but never over this one.
+function EliteAI_TechReserve()
+	local T = EliteAI_T
+	if not t_on() or type(T) ~= "table" or not T.want or T.decision ~= "tech" or not T.k then return 0, 0 end
+	local pbg = t_tier_pbg(T.k)
+	if pbg and Task_CountActivePBG( s_selfplayer, pbg, true ) > 0 then return 0, 0 end   -- the research is running: paid already
+	return T.cost_req or 0, T.cost_pow or 0
+end
 if state_analysis and state_analysis.recalculate_budgets and not EliteAI_TechPromoteWrapped then
 	EliteAI_TechPromoteWrapped = true
 	local Elite_recalculate_budgets = state_analysis.recalculate_budgets

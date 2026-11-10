@@ -9,7 +9,15 @@
 --    without a spawn is spent on units (diversity score, no engine demand) and squad upgrades; log "SPEND idle bank ...".
 --    The class-share damping (CatShare) applies only to races with two unit classes among the buildables (tyranids: all
 --    "inf" -> every unit got x0.36 before).
-EliteAI_P = { cost_logged = {}, block_log = -999, tier_seen = {}, ncls = 2 }   -- tier_seen[name] = our tech level when the unit first became producible
+-- 4) reinf (10.11, after the spend block): the reinforcement budget - while the power bank piles up and the req bank is below
+--    the next tier / the cheapest power unit, cheap squads (spawn cost power < Spend_PowUnit) are reinforced only by the rules
+--    of the arbiter Conf_ReinforceVsSave (A/B/C) and within a share of the req income; log "REINF ...".
+-- 5) gate (10.11, step 15): one verdict EliteAI_GateDrop for every blueprint we forbid (a super unit outside its window, a limit
+--    of 0): no demand at all in AccumulateSquadDemand (so it is never the "first" choice Elite stalls on and reserves nothing),
+--    not a candidate of the watchdog; log "GATE drop <sbps> <why>". The watchdog's "locked" exit (nothing affordable within the
+--    budget's share while the bank could pay) no longer stops it: it buys over the locks of the budgets ahead of ours in the order
+--    (BUDGET_PlayerAbility, Elite's researches), never over the tech plan's reserve (EliteAI_TechReserve); log "-> buy ... over_lock".
+EliteAI_P = { cost_logged = {}, tier_seen = {}, ncls = 2 }   -- tier_seen[name] = our tech level when the unit first became producible
 local function eai_num(key, default)
 	if EliteAI and EliteAI.num then return EliteAI.num(key, default) end
 	return default
@@ -60,6 +68,37 @@ function EliteAI_IsSuper(pbg, name)
 	if ok and cost and (cost.requisition or 0) + (cost.power or 0) >= eai_num("SuperCost", 1000) then return true end
 	return false
 end
+-- gate (10.11, step 15): the one verdict for a blueprint we forbid - why (a string) or nil = allowed. "cap0" = s_unit_purchase_limit 0
+-- (spore mines, IG spotters); "super_time" / "super_army" / "super_have" = a super unit before SuperMinTime, with fewer than
+-- SuperMinArmy combat squads, or while one is alive/queued. Called before the demand (AccumulateSquadDemand: demand 0 -> no ETA, no
+-- entry in HighestSquadDemand, never the "first" choice TryPurchaseUnitChoice stalls on, nothing reserved), by the watchdog and by
+-- EliteAI_PurchaseMult (a super unit outside its window: x0). Log "GATE drop <sbps> <why> t T army N have H" at most once per
+-- Gate_LogSecs per blueprint and reason. State between ticks: numbers/strings only (EliteAI_G); no pcall, no randomness.
+EliteAI_GATE_VERSION = "0.1"
+EliteAI_G = { said = {}, n_drop = 0 }
+function EliteAI_GateDrop(pbg, name)
+	local P = EliteAI_P
+	if not P.cls then EliteAI_PurchasePrep() end
+	local why = nil
+	local cap = s_unit_purchase_limit and s_unit_purchase_limit[ PBG_GetID( pbg ) ]
+	local t, army = World_GetGameTime(), (cache and cache.military_count) or 0
+	if cap and cap < 1 then why = "cap0"
+	elseif EliteAI_IsSuper(pbg, name) then
+		if t < eai_num("SuperMinTime", 1080) then why = "super_time"
+		elseif army < eai_num("SuperMinArmy", 8) then why = "super_army"
+		elseif (P.supers or 0) >= 1 then why = "super_have" end
+	end
+	if why == nil then return nil end
+	local G = EliteAI_G
+	G.n_drop = G.n_drop + 1
+	local k = name .. "|" .. why
+	local last = G.said[k]
+	if last == nil or t - last >= eai_num("Gate_LogSecs", 30) then
+		G.said[k] = t
+		eai_log("GATE", "drop", name, why, "t", math.floor(t), "army", army, "have", P.supers or 0)
+	end
+	return why
+end
 -- multiplier for the demand of a buildable squad (new logic only)
 function EliteAI_PurchaseMult(pbg, curAmount)
 	local P = EliteAI_P
@@ -75,11 +114,7 @@ function EliteAI_PurchaseMult(pbg, curAmount)
 	local lvl = (cache and cache.tech_tier_level) or 1
 	if not P.tier_seen[name] then P.tier_seen[name] = lvl end
 	if EliteAI_IsSuper(pbg, name) then
-		local t, army = eai_time(), (cache and cache.military_count) or 0
-		if t < eai_num("SuperMinTime", 1080) or army < eai_num("SuperMinArmy", 8) or P.supers >= 1 then
-			if t - P.block_log >= 60 then P.block_log = t; eai_log("super_block", t, name, "army", army, "have", P.supers) end
-			return 0
-		end
+		if EliteAI_GateDrop(pbg, name) then return 0 end                     -- gate: outside its window ("GATE drop", was "super_block")
 		return eai_num("SuperMult", 0.6)
 	end
 	local k = eai_class(name)
@@ -101,7 +136,11 @@ function EliteAI_PurchaseMult(pbg, curAmount)
 	local bank = cache and cache.resources
 	if bank and (bank.power or 0) >= eai_num("Spend_BankPow", 300) then
 		local cost = SquadStats_GetCost( s_self_modplayer, pbg )
-		if cost and (cost.power or 0) < eai_num("Spend_PowUnit", 40) then mult = mult * eai_num("Spend_LowPowMult", 0.25) end
+		if cost and (cost.power or 0) < eai_num("Spend_PowUnit", 40) then
+			mult = mult * eai_num("Spend_LowPowMult", 0.25)
+			-- reinf (10.11): while saving req for a power unit / the next tier, the cheap spawns step back further
+			if EliteAI_R and EliteAI_R.save then mult = mult * eai_num("Reinf_SaveSpawnMult", 0.4) end
+		end
 	end
 	return mult
 end
@@ -141,7 +180,7 @@ import("rules_unit_purchase.ai")
 -- silent exit of the next match; "SPEND idle end bank R/P after T s bought N" when the bank is below the threshold again.
 -- SAFETY: numbers/strings between ticks only (EliteAI_S), PBGs are read and used within the tick, no pcall around engine
 -- calls, every engine function is one Elite's own scripts call (file:line in reports/newai_1110/TECH_RU.md).
-EliteAI_SPEND_VERSION = "0.1"
+EliteAI_SPEND_VERSION = "0.2"
 EliteAI_S = { last_buy = 0, above_t = -1, hot = false, said = {}, n_buy = 0, n_none = 0, addon_floor = 0, bought_hot = 0, cool = -1 }
 local function s_on() return EliteAI ~= nil and EliteAI.on == true end
 local function s_rp(r) return math.floor((r and r.requisition) or 0) .. "/" .. math.floor((r and r.power) or 0) end
@@ -211,6 +250,8 @@ function EliteAI_SpendIdle( availableResources, purchase_count )
 	local prod, afford, pos, bank_afford = 0, 0, 0, 0
 	local best, best_score, best_name, best_cost, best_now = nil, -1, "-", nil, false
 	local top_name, top_dem = "-", nil
+	local cands = {}                                                           -- this tick only: { pbg, name, cost, score, now_ok }
+	local function better( now_ok, score ) return (now_ok and not best_now) or (now_ok == best_now and score > best_score) end
 	for i = 0, n - 1 do
 		local pbg = AIProduction_GetBuildableSquadAt( s_selfplayer, i )
 		if AIProduction_CanProduce( s_selfplayer, PITEM_Spawn, pbg ) then
@@ -220,9 +261,10 @@ function EliteAI_SpendIdle( availableResources, purchase_count )
 			if dem > 0 then pos = pos + 1 end
 			if top_dem == nil or dem > top_dem then top_dem, top_name = dem, name end
 			local cap = s_unit_purchase_limit and s_unit_purchase_limit[ PBG_GetID( pbg ) ]
-			if eai_class(name) ~= "hero" and not (cap and cap < 1) then        -- heroes: Elite's resurrection path; cap 0 = forbidden
+			-- heroes: Elite's resurrection path; the gate: limit 0 and super units outside their window ("GATE drop")
+			if eai_class(name) ~= "hero" and not EliteAI_GateDrop( pbg, name ) then
 				local cur = UtilPBG_CountTotal( pbg )
-				local mult = EliteAI_PurchaseMult( pbg, cur )                     -- 0 = a super unit not allowed yet
+				local mult = EliteAI_PurchaseMult( pbg, cur )
 				if cap and cur >= cap then mult = mult / ((cur - cap) + 6) end   -- Elite's damping over the limit (AccumulateSquadDemand)
 				local cost = (mult > 0) and SquadStats_GetCost( s_self_modplayer, pbg ) or nil
 				-- 10.11 verify s8: hot on power alone (req bank below Spend_BankReq) -> only units that use power
@@ -230,12 +272,15 @@ function EliteAI_SpendIdle( availableResources, purchase_count )
 				-- (guardsmen/termagaunts), the req never reached 350-575 for T2/T3 units or the IG T3 research
 				if cost and (cost.power or 0) < pmin then mult = 0 end
 				if mult > 0 then
-					if ResourceAmount_Has( bank, cost ) then bank_afford = bank_afford + 1 end
+					local score = mult * 2 / (2 + cur)
+					local now_ok = AIProduction_CanProduceNow( s_selfplayer, PITEM_Spawn, pbg ) and true or false
+					if ResourceAmount_Has( bank, cost ) then
+						bank_afford = bank_afford + 1
+						table.insert(cands, { pbg = pbg, name = name, cost = cost, score = score, now_ok = now_ok })
+					end
 					if ResourceAmount_Has( availableResources, cost ) then
 						afford = afford + 1
-						local score = mult * 2 / (2 + cur)
-						local now_ok = AIProduction_CanProduceNow( s_selfplayer, PITEM_Spawn, pbg ) and true or false
-						if (now_ok and not best_now) or (now_ok == best_now and score > best_score) then
+						if better( now_ok, score ) then
 							best, best_score, best_name, best_cost, best_now = pbg, score, name, cost, now_ok
 						end
 					end
@@ -245,8 +290,27 @@ function EliteAI_SpendIdle( availableResources, purchase_count )
 	end
 	local topstr = string.format("engine_pos %d/%d top %s %.1f pmin %d", pos, prod, top_name, top_dem or 0, pmin)
 	if prod == 0 then return none("no_unit", topstr) end
+	-- step 15 (s12): nothing fits the budget's share while the bank could pay = "locked": the money is held by the budgets ahead
+	-- of ours in the order (util/budget.ai:310-361: BUDGET_PlayerAbility at weight 60 holds the cost of the chosen global ability
+	-- until it casts, Elite's researches), not by a unit of ours (a gated super unit has no demand and reserves nothing). The
+	-- watchdog then buys from what the bank really has - bank minus the tasks (budget.ai:271/318) minus the tech plan's reserve
+	-- (EliteAI_TechReserve: the tier research promoted first) - the best candidate by the same rule. Spend_OverLock=0 = old exit.
+	local over = nil
+	if best == nil and bank_afford > 0 and eai_num("Spend_OverLock", 1) >= 1 then
+		local free = ResourceAmount_Subtract( bank, Task_CountCost( s_selfplayer, false ) )
+		local rr, rp = 0, 0
+		if type(EliteAI_TechReserve) == "function" then rr, rp = EliteAI_TechReserve() end
+		free.requisition, free.power = (free.requisition or 0) - rr, (free.power or 0) - rp
+		for _, c in ipairs(cands) do
+			if ResourceAmount_Has( free, c.cost ) and better( c.now_ok, c.score ) then
+				best, best_score, best_name, best_cost, best_now = c.pbg, c.score, c.name, c.cost, c.now_ok
+			end
+		end
+		over = string.format("over_lock avail %s free %s reserve %d/%d", s_rp(availableResources), s_rp(free), rr, rp)
+		if best == nil then return none("locked", "bank_afford", bank_afford, "free", s_rp(free), "reserve", rr .. "/" .. rp, topstr) end
+	end
 	if best == nil then
-		if afford == 0 and bank_afford > 0 then return none("locked", "bank_afford", bank_afford, topstr) end   -- other budgets hold it
+		if afford == 0 and bank_afford > 0 then return none("locked", "bank_afford", bank_afford, topstr) end   -- other budgets hold it (Spend_OverLock=0)
 		if afford == 0 then return none("poor", topstr) end                                                  -- the bank itself is short
 		return none("blocked", topstr)                                                                       -- only super units left
 	end
@@ -267,10 +331,16 @@ function EliteAI_SpendIdle( availableResources, purchase_count )
 	if queued > 0 then return none("channel", queued, best_name, "killed", killed, topstr) end
 	Request_Production( s_selfplayer, TGROUP_BuildUnits, TPRIORITY_BuildUnits, PITEM_Spawn, best )
 	S.last_buy, S.cool, S.cool_name = now, now, best_name
+	EliteAI_ReinforceNoteBuy( best_name, best_cost, now )                   -- reinf: a power unit ends the save state
 	S.n_buy, S.bought_hot = S.n_buy + 1, S.bought_hot + 1
-	eai_log("buy", math.floor(now), best_name, "army", cache.military_count or -1, "tier", EliteAI_P.tier_seen[best_name] or lvl, "spend")
+	if over then
+		eai_log("buy", math.floor(now), best_name, "army", cache.military_count or -1, "tier", EliteAI_P.tier_seen[best_name] or lvl, "spend", "over_lock")
+	else
+		eai_log("buy", math.floor(now), best_name, "army", cache.military_count or -1, "tier", EliteAI_P.tier_seen[best_name] or lvl, "spend")
+	end
 	eai_log("SPEND", "idle", "bank", s_rp(bank), "for", for_s, "s", "->", "buy", best_name, s_rp(best_cost),
-		string.format("score %.2f now %s cand %d killed %d", best_score, tostring(best_now), afford, killed), topstr, s_diag( availableResources ))
+		string.format("score %.2f now %s cand %d killed %d", best_score, tostring(best_now), afford, killed),
+		over and (over .. " " .. topstr) or topstr, s_diag( availableResources ))
 	return true, best_cost
 end
 
@@ -291,6 +361,315 @@ if type(CalcSquadUpgradeDemand) == "function" and not EliteAI_SpendAddonWrapped 
 		return d
 	end
 end
+
+-------------------------------------------------------------------------------------------------
+-- EliteAI 10.11 (reinf): the reinforcement budget of the new logic (EliteAI.on only; Elite's AIs keep their code).
+-- WHY: Elite reinforces first. AccumulateReinforceDemand gives every squad that misses a model a demand x50 (sk_reinforce_mult)
+-- whenever one model is affordable within 30 s, so a reinforcement entry outranks every spawn in HighestSquadDemand. In s10
+-- (2v2, selenonfissure, 38cd631) the tyranids bought 7 squads and nothing after 13:08: the req income (175-266/min) went into
+-- gaunt reinforcements (pop 57-79 with 6-9 squads, 86 models lost and replaced), the req bank stayed below 300 while the power
+-- bank grew to 1287 - the T2/T3 units (genestealer 350/45, zoanthrope 360/40, lictor 400/65, carnifex 575/150) never got req.
+-- WHAT: a "save" state with hysteresis: on while the power bank is >= Reinf_BankPow and the req bank is below `need` = what we
+-- save for (the next tier research the tech plan wants and has not placed, or the cheapest producible unit that uses power
+-- >= Spend_PowUnit; capped by Reinf_NeedMax); off when the power is spent (< Reinf_BankPow x Reinf_ExitK), the req is there
+-- and nobody takes it (need + Reinf_ReqMargin), a power unit was bought (then a pause of Reinf_PauseSecs so the squads
+-- refill) or after Reinf_SaveMax without such a buy (pause too: something else holds the money). While saving, a cheap squad
+-- (spawn cost power < Spend_PowUnit: gaunts, guardsmen, hws...) gets its reinforcement demand only when the arbiter
+-- Conf_ReinforceVsSave says so; squads that use power are always reinforced ("pow_unit"). Readiness = 1 - missing models /
+-- the most models seen in one squad of that blueprint (missing = the engine's total reinforce cost / the cost of one model;
+-- the weakest squad of a blueprint decides, the engine's request is per blueprint); "in a fight" = a squad of the blueprint
+-- was under attack in the last scan. Rules: 1 (A) = save: only a weak squad (readiness <= Reinf_LowHp) that is NOT in a fight
+-- is refilled (a losing fight gets no money; the director sends it home at RetreatHP); 2 (B) = balanced: a weak squad is
+-- refilled, in a fight or not; 3 (C) = army first: every squad in a fight and every squad below Reinf_FullHp. On top, the
+-- cheap reinforcements of the last minute may not exceed Reinf_Share of the req income per minute (0.2 / 0.35 / 0.5 by rule;
+-- the ledger counts the requests TryPurchaseUnitChoice places). A decision per blueprint holds Reinf_ConfHold seconds,
+-- every switch is logged. While saving, the spawn demand of the cheap units is damped x Reinf_SaveSpawnMult on top of
+-- Spend_LowPowMult (EliteAI_PurchaseMult), so the saved req goes to the power units: Elite's own stall ("lack of moola")
+-- then locks the money for the chosen power unit until it is affordable, and the watchdog (pmin) buys them too.
+-- LOG (EliteAI.log, "AI: p<id> REINF ..."): "REINF init ...", "REINF save on|off req R pow P need N (<what>) why <why> rule K",
+-- "REINF skip|allow <sbps> req R pow P why <why> miss M n N hit H rule K per C spent S cap C" (while saving; counted always,
+-- printed at most once per Reinf_LogSecs per blueprint and verdict), "REINF Conf_ReinforceVsSave <sbps> allow->skip <why>
+-- rule K" (every switch of the arbiter), "REINF stats ..." every Reinf_StatsSecs. Off without a rebuild: Reinf_BankPow=99999.
+-- SAFETY: numbers and strings between ticks only (EliteAI_R); squads are read and dropped within the tick (aisq / sim squad
+-- nil checks, Squad_Count > 0 before health); no pcall around engine calls; no randomness; every engine function is one
+-- Elite's scripts or our in-game-verified files call (file:line in reports/newai_1110/TECH_RU.md section 8).
+EliteAI_REINF_VERSION = "0.1"
+EliteAI_R = {}
+local function r_reset()
+	EliteAI_R = { save = false, save_t = -1, sw_t = -1000, pause_until = -1, need = 0, need_what = "-", need_t = -1000, conf = {}, said = {},
+		ledger = {}, sq = {}, maxc = {}, scan_t = -1000, last_stats = 0, n_skip = 0, n_allow = 0, n_sw = 0, n_req = 0, skip_est = 0,
+		pow_buys = 0, last_pow_buy = -1, last_pow_name = "-", save_n = 0, save_secs = 0 }
+end
+r_reset()
+local function r_short(name)                                                -- "sbps\pvp\race_tyranid\troops\tyr_termagaunt" -> "tyr_termagaunt"
+	local s = string.lower(name or "")
+	local _, _, short = string.find(s, "([^/\\]+)$")
+	return short or s
+end
+local function r_key(name) return (string.gsub(string.lower(name or ""), "\\", "/")) end
+local function r_vidx() local v = EliteAI and EliteAI.variant; return (v == "B" and 2) or (v == "C" and 3) or 1 end
+local function r_rule()                                                     -- Conf_ReinforceVsSave = 1/2/3 (default: the variant)
+	local r = math.floor(eai_num("Conf_ReinforceVsSave", r_vidx()))
+	if r < 1 then r = 1 elseif r > 3 then r = 3 end
+	return r
+end
+local function r_share()                                                    -- the share of the req income per minute for cheap reinforcements
+	local r = r_rule()
+	return eai_num("Reinf_Share", (r == 1 and 0.2) or (r == 2 and 0.35) or 0.5)
+end
+-- the arbiter's memory: a decision per blueprint holds Reinf_ConfHold seconds (hysteresis); every switch is logged
+local function r_decide( key, v, why, now )
+	local R = EliteAI_R
+	local c = R.conf[key]
+	if not c then R.conf[key] = { v = v, t = now }; return v, false end
+	if c.v == v then return v, false end
+	if now - c.t < eai_num("Reinf_ConfHold", 10) then return c.v, true end
+	eai_log("REINF", "Conf_ReinforceVsSave", r_short(key), c.v .. "->" .. v, why, "rule", r_rule())
+	c.v, c.t = v, now
+	R.n_sw = R.n_sw + 1
+	return v, false
+end
+-- the ledger: req of the reinforcement requests placed in the last 60 s (numbers only)
+local function r_ledger( now )
+	local R, keep, sum = EliteAI_R, {}, 0
+	for _, e in ipairs(R.ledger) do
+		if now - e.t < 60 then table.insert(keep, e); sum = sum + e.req end
+	end
+	R.ledger = keep
+	return sum
+end
+-- our squads by blueprint, numbers only: EliteAI_R.sq[key] = { n, hit, low, minc }; EliteAI_R.maxc[key] = most models seen in one squad
+local function r_scan( now )
+	local R = EliteAI_R
+	if now - R.scan_t < eai_num("Reinf_ScanSecs", 6) then return end
+	R.scan_t = now
+	local lowhp = eai_num("Reinf_LowHp", 0.5)
+	local sq, maxc = {}, R.maxc
+	local n = Military_SquadTotalCount( s_selfplayer )                       -- strategy_addon_purchase.ai:120
+	for i = 0, n - 1 do
+		local aisq = Military_GetAISquadAtIndex( s_selfplayer, i )            -- strategy_addon_purchase.ai:123
+		if aisq ~= nil then
+			local s = AISquad_ConvertToSimSquad( aisq )                       -- tactics.ai:270 (nil for a squad that is not spawned)
+			local c = (s ~= nil) and Squad_Count( s ) or 0                    -- mechanics.ai:308 (in game since step 7)
+			if c > 0 then
+				local pbg = AISquad_ConvertToPBG( aisq )                       -- strategy_unit_purchase.ai:104 (Elite), strategy_addon.ai:188
+				local key = (pbg ~= nil) and r_key(PBG_GetName( pbg )) or ""
+				if key ~= "" then
+					local e = sq[key]
+					if not e then e = { n = 0, hit = 0, low = 0, minc = c }; sq[key] = e end
+					e.n = e.n + 1
+					if c < e.minc then e.minc = c end
+					if not maxc[key] or c > maxc[key] then maxc[key] = c end
+					if Squad_IsUnderAttack( s, 5 ) then e.hit = e.hit + 1 end      -- player-tactics.ai:51
+					local hmax = Squad_GetHealthMax( s )                            -- tactics.ai:277
+					if hmax > 0 and Squad_GetHealth( s ) / hmax <= lowhp then e.low = e.low + 1 end
+				end
+			end
+		end
+	end
+	R.sq = sq
+end
+-- what we save the req for: the next tier research the tech plan wants and has not placed yet, or the cheapest producible unit
+-- that uses power (>= Spend_PowUnit; heroes, forbidden and super units aside); 0 = nothing to save for; at most once per Reinf_NeedSecs
+local function r_need( now )
+	local R = EliteAI_R
+	if now - R.need_t < eai_num("Reinf_NeedSecs", 10) then return R.need end
+	R.need_t = now
+	local need, what = 0, "-"
+	local T = EliteAI_T                                                      -- strategy_tech_purchase.ai (numbers; nil in the stub)
+	if type(T) == "table" and T.want and T.k and (T.cost_req or 0) > 0 then
+		local st = T.st and T.st[T.k]
+		if not (st and st.started) then need, what = T.cost_req, "tech_" .. tostring(T.tag or "?") end
+	end
+	local pmin = eai_num("Spend_PowUnit", 40)
+	local n = AIProduction_GetBuildableSquadCount( s_selfplayer )
+	local best, best_name = nil, "-"
+	for i = 0, n - 1 do
+		local pbg = AIProduction_GetBuildableSquadAt( s_selfplayer, i )
+		if pbg ~= nil and AIProduction_CanProduce( s_selfplayer, PITEM_Spawn, pbg ) then
+			local name = string.lower(PBG_GetName( pbg ) or "")
+			local cap = s_unit_purchase_limit and s_unit_purchase_limit[ PBG_GetID( pbg ) ]
+			if eai_class(name) ~= "hero" and not (cap and cap < 1) and not EliteAI_IsSuper( pbg, name ) then
+				local cost = SquadStats_GetCost( s_self_modplayer, pbg )
+				local cr, cp = (cost and cost.requisition) or 0, (cost and cost.power) or 0
+				if cp >= pmin and cr > 0 and (best == nil or cr < best) then best, best_name = cr, name end
+			end
+		end
+	end
+	if best and best > need then need, what = best, r_short(best_name) end
+	local mx = eai_num("Reinf_NeedMax", 600)
+	if need > mx then need = mx end
+	R.need, R.need_what = need, what
+	return need
+end
+local function r_save_log( on, bank, why )
+	eai_log("REINF", "save", on and "on" or "off", "req", math.floor(bank.requisition or 0), "pow", math.floor(bank.power or 0),
+		"need", math.floor(EliteAI_R.need), "(" .. EliteAI_R.need_what .. ")", "why", why, "rule", r_rule())
+end
+-- the save state: a switch holds Reinf_ConfHold seconds; a power-unit buy switches it off at once (then the pause)
+local function r_save_state( now, bank )
+	local R = EliteAI_R
+	local req, pow = bank.requisition or 0, bank.power or 0
+	local bp = eai_num("Reinf_BankPow", eai_num("Spend_BankPow", 300))
+	local need = r_need( now )
+	local hold = eai_num("Reinf_ConfHold", 10)
+	if R.save then
+		local why
+		if R.last_pow_buy >= R.save_t then                                  -- >=: the buy can come later in the tick that switched on
+			why = "pow_buy " .. r_short(R.last_pow_name); R.pause_until = now + eai_num("Reinf_PauseSecs", 45)
+		elseif now - R.sw_t < hold then
+			return true
+		elseif pow < bp * eai_num("Reinf_ExitK", 0.5) then
+			why = "pow " .. math.floor(pow)
+		elseif need <= 0 then
+			why = "no_need"
+		elseif req >= need + eai_num("Reinf_ReqMargin", 200) then
+			why = "req " .. math.floor(req) .. ">=" .. math.floor(need + eai_num("Reinf_ReqMargin", 200))
+		elseif now - R.save_t >= eai_num("Reinf_SaveMax", 240) then
+			why = "timeout " .. math.floor(now - R.save_t); R.pause_until = now + eai_num("Reinf_PauseSecs", 45)
+		end
+		if why then
+			R.save, R.sw_t = false, now
+			R.save_secs = R.save_secs + (now - R.save_t)
+			r_save_log( false, bank, why )
+		end
+		return R.save
+	end
+	if now < R.pause_until or now - R.sw_t < hold then return false end
+	if pow >= bp and need > 0 and req < need then
+		R.save, R.save_t, R.sw_t, R.save_n = true, now, now, R.save_n + 1
+		r_save_log( true, bank, "pow " .. math.floor(pow) .. ">=" .. math.floor(bp) .. " req " .. math.floor(req) .. "<" .. math.floor(need) )
+	end
+	return R.save
+end
+-- the verdict per blueprint for this tick (called by AccumulateReinforceDemand): key -> true (reinforce) / false (skip);
+-- nil = Elite's AI (everything as before)
+function EliteAI_ReinforceGate( reinforcecount, availableResources )
+	if not s_on() or cache == nil or cache.resources == nil then return nil end
+	local R = EliteAI_R
+	local now = World_GetGameTime()
+	local bank = cache.resources
+	local gate = {}
+	if not R.save then
+		for i = 0, reinforcecount - 1 do
+			local pbg = AIProduction_GetReinforcementSquadPBGAt( s_selfplayer, i )
+			if pbg ~= nil then
+				local k = r_key(PBG_GetName( pbg ))
+				if gate[k] == nil then gate[k] = true; R.n_allow = R.n_allow + 1 end
+			end
+		end
+		return gate
+	end
+	local pmin, low, full, rule = eai_num("Spend_PowUnit", 40), eai_num("Reinf_LowHp", 0.5), eai_num("Reinf_FullHp", 0.8), r_rule()
+	local rate = (cache.resources_rate and cache.resources_rate.requisition) or 0   -- per minute (cache.ai:156)
+	local spent = r_ledger( now )
+	local cap = rate * r_share()
+	-- the entries by blueprint; the weakest squad of a blueprint decides
+	local ent, order = {}, {}
+	for i = 0, reinforcecount - 1 do
+		local pbg = AIProduction_GetReinforcementSquadPBGAt( s_selfplayer, i )
+		if pbg ~= nil then
+			local k = r_key(PBG_GetName( pbg ))
+			local per = AIPlayer_GetProductionCost( s_self_modplayer, PITEM_SquadReinforce, pbg )
+			local total = AIProduction_GetReinforcementSquadCostAt( s_selfplayer, i )
+			local pr, tr = (per and per.requisition) or 0, (total and total.requisition) or 0
+			local missing = 1
+			if pr > 0 and tr > 0 then missing = math.floor(tr / pr + 0.5); if missing < 1 then missing = 1 end end
+			local e = ent[k]
+			if not e then
+				local cost = SquadStats_GetCost( s_self_modplayer, pbg )
+				e = { pow = (cost and cost.power) or 0, per = pr, missing = missing, n = 0 }
+				ent[k] = e; table.insert(order, k)
+			end
+			e.n = e.n + 1
+			if missing > e.missing then e.missing = missing end
+		end
+	end
+	for _, k in ipairs(order) do
+		local e = ent[k]
+		local v, why, ready, hit = "allow", "pow_unit", 1, false
+		if e.pow < pmin then
+			-- the full size of the squad: the fewest models seen in a squad of this blueprint (last scan) + the most missing
+			-- (the weakest squad is the one missing most) - exact with a fresh scan; the most models ever seen as the floor
+			local s, fsz = R.sq[k], R.maxc[k] or 0                         -- fsz: models in a full squad (not `full` = Reinf_FullHp)
+			if s ~= nil and s.minc + e.missing > fsz then fsz = s.minc + e.missing end
+			if fsz > 0 then ready = (fsz - e.missing) / fsz; if ready < 0 then ready = 0 end
+			else ready = (e.missing <= 1) and 0.9 or 0.3 end                 -- no scan of this blueprint yet: one model short = nearly full
+			hit = (s ~= nil and s.hit > 0)
+			local rtxt = string.format("ready %.2f", ready)
+			if rule == 1 then
+				if ready <= low and not hit then v, why = "allow", "weak " .. rtxt
+				elseif ready <= low then v, why = "skip", "weak_in_fight " .. rtxt
+				else v, why = "skip", rtxt end
+			elseif rule == 2 then
+				if ready <= low then v, why = "allow", "weak " .. rtxt .. (hit and " in_fight" or "")
+				else v, why = "skip", rtxt end
+			else
+				if hit then v, why = "allow", "in_fight " .. rtxt
+				elseif ready <= full then v, why = "allow", "weak " .. rtxt
+				else v, why = "skip", rtxt end
+			end
+		end
+		-- step 14 (s11): the share cap holds for squads with power too - in s11 genestealer/ravener refills ("pow_unit")
+		-- took 337-437 req/min against a cap of 74-101 while saving, and the req never reached the next power unit
+		if v == "allow" and cap > 0 and spent + e.per > cap then
+			v, why = "skip", string.format("share %d+%d>%d", spent, e.per, cap) .. ((e.pow >= pmin) and " pow_unit" or "")
+		end
+		local dv, held = r_decide( k, v, why, now )
+		if dv == "allow" then R.n_allow = R.n_allow + 1 else R.n_skip = R.n_skip + 1; R.skip_est = R.skip_est + e.per end
+		local sk = k .. ":" .. dv
+		local last = R.said[sk]
+		if last == nil or now - last >= eai_num("Reinf_LogSecs", 30) then
+			R.said[sk] = now
+			eai_log("REINF", dv, r_short(k), "req", math.floor(bank.requisition or 0), "pow", math.floor(bank.power or 0),
+				"why", why .. (held and " (held)" or ""), "miss", e.missing, "n", e.n, "hit", hit and 1 or 0, "rule", rule,
+				"per", math.floor(e.per), "spent", math.floor(spent), "cap", math.floor(cap))
+		end
+		gate[k] = (dv == "allow")
+	end
+	return gate
+end
+function EliteAI_ReinforceNoteRequest( cost )                               -- TryPurchaseUnitChoice placed a reinforcement request
+	if not s_on() then return end
+	local R = EliteAI_R
+	table.insert(R.ledger, { t = World_GetGameTime(), req = (cost and cost.requisition) or 0 })
+	R.n_req = R.n_req + 1
+end
+function EliteAI_ReinforceNoteBuy( name, cost, now )                        -- a spawn request: a power unit ends the save state
+	if not s_on() then return end
+	if cost and (cost.power or 0) >= eai_num("Spend_PowUnit", 40) then
+		local R = EliteAI_R
+		R.pow_buys, R.last_pow_buy, R.last_pow_name = R.pow_buys + 1, now, name or "-"
+	end
+end
+-- every purchase tick (do_purchase, before the watchdog, first pass of the budget loop): the scan, the save state, the stats line
+function EliteAI_ReinforceTick( availableResources, purchase_count )
+	if not s_on() or cache == nil or cache.resources == nil or purchase_count ~= 0 then return end
+	local R = EliteAI_R
+	local now = World_GetGameTime()
+	r_scan( now )
+	r_save_state( now, cache.resources )
+	if now - R.last_stats < eai_num("Reinf_StatsSecs", 60) then return end
+	R.last_stats = now
+	for key, c in pairs(R.conf) do if now - c.t > 300 then R.conf[key] = nil end end   -- old decisions of blueprints gone
+	local nsq, nhit, nlow = 0, 0, 0
+	for _, e in pairs(R.sq) do nsq = nsq + e.n; nhit = nhit + e.hit; nlow = nlow + e.low end
+	local saved = R.save_secs + (R.save and (now - R.save_t) or 0)
+	eai_log("REINF", "stats", "t", math.floor(now), "save", R.save and "on" or "off", "since", R.save and math.floor(now - R.save_t) or 0,
+		"saved_secs", math.floor(saved), "episodes", R.save_n, "need", math.floor(R.need), "(" .. R.need_what .. ")", "rule", r_rule(),
+		"bank", s_rp(cache.resources), "rate", s_rp(cache.resources_rate), "skip", R.n_skip, "allow", R.n_allow, "skip_est", math.floor(R.skip_est),
+		"requests", R.n_req, "reinf_req_min", math.floor(r_ledger( now )), "share", string.format("%.2f", r_share()),
+		"pow_buys", R.pow_buys, "switches", R.n_sw, "squads", nsq, "hit", nhit, "low", nlow)
+end
+local function r_init_log()
+	r_reset()
+	eai_log("REINF", "init", "version", EliteAI_REINF_VERSION, "rule", r_rule(), "bank_pow", eai_num("Reinf_BankPow", eai_num("Spend_BankPow", 300)),
+		"exit_k", eai_num("Reinf_ExitK", 0.5), "low_hp", eai_num("Reinf_LowHp", 0.5), "full_hp", eai_num("Reinf_FullHp", 0.8), "share", r_share(),
+		"save_spawn_mult", eai_num("Reinf_SaveSpawnMult", 0.4), "pause", eai_num("Reinf_PauseSecs", 45), "save_max", eai_num("Reinf_SaveMax", 240),
+		"req_margin", eai_num("Reinf_ReqMargin", 200), "need_max", eai_num("Reinf_NeedMax", 600), "conf_hold", eai_num("Reinf_ConfHold", 10),
+		"scan", eai_num("Reinf_ScanSecs", 6), "pow_unit", eai_num("Spend_PowUnit", 40))
+end
+EliteAI_ReinforceInit = r_init_log
 
 strategy_unit_purchase =
 {
@@ -344,7 +723,12 @@ function strategy_unit_purchase.init()
 		EliteAI_S = { last_buy = 0, above_t = -1, hot = false, said = {}, n_buy = 0, n_none = 0, addon_floor = 0, bought_hot = 0, cool = -1 }
 		eai_log("SPEND", "init", "version", EliteAI_SPEND_VERSION, "bank", eai_num("Spend_BankReq", 400) .. "/" .. eai_num("Spend_BankPow", 300),
 			"idle", eai_num("Spend_IdleSecs", 45), "retry", eai_num("Spend_RetrySecs", 12), "addon_floor", eai_num("Spend_AddonFloor", 8),
-			"kill_inactive", eai_num("Spend_KillInactive", 1), "pow_unit", eai_num("Spend_PowUnit", 40), "lowpow_mult", eai_num("Spend_LowPowMult", 0.25))
+			"kill_inactive", eai_num("Spend_KillInactive", 1), "pow_unit", eai_num("Spend_PowUnit", 40), "lowpow_mult", eai_num("Spend_LowPowMult", 0.25),
+			"over_lock", eai_num("Spend_OverLock", 1))
+		EliteAI_G = { said = {}, n_drop = 0 }                                 -- gate: fresh state + "GATE init"
+		eai_log("GATE", "init", "version", EliteAI_GATE_VERSION, "super_min_time", eai_num("SuperMinTime", 1080), "super_min_army", eai_num("SuperMinArmy", 8),
+			"super_cost", eai_num("SuperCost", 1000), "log", eai_num("Gate_LogSecs", 30))
+		EliteAI_ReinforceInit()                                              -- reinf: fresh state + "REINF init"
 	end
 end
 
@@ -356,6 +740,10 @@ function AccumulateReinforceDemand( availableResources )
 
 		aitrace("Units needing reinforcement:"..reinforcecount)
 		
+		-- EliteAI (reinf): the verdict per blueprint of the new logic (nil for Elite's AIs = everything as before)
+		local gate = nil
+		if EliteAI and EliteAI.on then gate = EliteAI_ReinforceGate( reinforcecount, availableResources ) end
+
 		for i=0, reinforcecount-1 do 
 			local squadpbg = AIProduction_GetReinforcementSquadPBGAt( s_selfplayer, i )
 			local reinforce_cost = AIPlayer_GetProductionCost( s_self_modplayer, PITEM_SquadReinforce, squadpbg )
@@ -363,7 +751,12 @@ function AccumulateReinforceDemand( availableResources )
 			aitrace("ReinforceCost:"..res_to_str( reinforce_cost ).. " total cost:"..res_to_str(AIProduction_GetReinforcementSquadCostAt( s_selfplayer, i )))
 			
 			local eta = GetETAFromCost( reinforce_cost, availableResources )
-			if (eta <= s_reinforce_wait_time) then
+			local allowed = true
+			if gate ~= nil then
+				local key = (squadpbg ~= nil) and (string.gsub(string.lower(PBG_GetName( squadpbg ) or ""), "\\", "/")) or ""
+				allowed = (gate[key] ~= false)                                 -- false = the arbiter skips this blueprint now
+			end
+			if (eta <= s_reinforce_wait_time) and allowed then
 
 				local sk_reinforce_mult = 50				-- kk increased from 20 to incr total reinforce demand
 				
@@ -460,6 +853,9 @@ function AccumulateSquadDemand( availableResources, reinforce_only )
 		
 			-- since we can produce this unit - lets determine this units demand
 			local demand = CalcSquadDemand( pbg )
+			-- EliteAI (gate, step 15): a blueprint we forbid (super unit outside its window, limit 0) gets no demand at all - no
+			-- ETA, no entry in HighestSquadDemand, never the "first" choice TryPurchaseUnitChoice stalls on ("GATE drop" in the log)
+			if eai_on and EliteAI_GateDrop( pbg, string.lower(PBG_GetName( pbg ) or "") ) then demand = 0 end
 			
 			-- add capturer demand (only if pbg can capture NOW)
 			if (PBG_CanCapture( s_selfplayer, pbg )) then
@@ -806,6 +1202,7 @@ function TryPurchaseUnitChoice( best_choice, availableResources )
 		elseif (purchase_type==PURCHASETYPE_REINFORCE) then
 			
 			Request_Production( s_selfplayer, TGROUP_BuildUnits, TPRIORITY_BuildUnits+20, PITEM_SquadReinforce, pbg )
+			if EliteAI and EliteAI.on then EliteAI_ReinforceNoteRequest( unitCost ) end   -- reinf: the ledger of the last minute
 
 		elseif (purchase_type==PURCHASETYPE_RESURRECT) then
 			
@@ -830,6 +1227,7 @@ function TryPurchaseUnitChoice( best_choice, availableResources )
 				local bname = string.lower(PBG_GetName(pbg) or "")
 				eai_log("buy", eai_time(), bname, "army", (cache and cache.military_count) or -1, "tier", EliteAI_P.tier_seen[bname] or (cache and cache.tech_tier_level) or -1)
 				EliteAI_S.last_buy = eai_time()                                   -- spend: a spawn request resets the idle clock
+				EliteAI_ReinforceNoteBuy( bname, unitCost, World_GetGameTime() )   -- reinf: a power unit ends the save state
 			end
 		end
 		
@@ -859,6 +1257,7 @@ function strategy_unit_purchase.do_purchase( availableResources, purchase_count 
 
 	-- EliteAI (spend): the idle-bank watchdog goes first - before reinforcements, the difficulty cap and Elite's demand
 	if EliteAI and EliteAI.on then
+		EliteAI_ReinforceTick( availableResources, purchase_count )         -- reinf: squad scan, save state, stats (numbers only)
 		local sp, sc = EliteAI_SpendIdle( availableResources, purchase_count )
 		if sp then
 			aipoptrace()
