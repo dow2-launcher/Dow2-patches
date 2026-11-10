@@ -181,7 +181,16 @@ static int __stdcall load_hook(void *L, LuaReader reader, void *data, const char
         if (!strcmp(rel, "simulation\\ai\\default.ai")) {           // Elite's default.ai + our module at its end
             _snwprintf(p, MAX_PATH, L"%lsEliteAI\\main.ai", g_dir);
             size_t mlen = 0; char *mod = read_file(p, &mlen);
-            if (mod) {
+            if (mod) {                                               // mechanics.ai (10.11): right after main.ai, same chunk
+                _snwprintf(p, MAX_PATH, L"%lsEliteAI\\mechanics.ai", g_dir);
+                size_t xlen = 0; char *mech = read_file(p, &xlen);
+                if (mech) {
+                    static const char ms[] = "\n-- ===== EliteAI mechanics.ai =====\n";
+                    char *both = malloc(mlen + sizeof ms + xlen);
+                    memcpy(both, mod, mlen); memcpy(both + mlen, ms, sizeof ms - 1); memcpy(both + mlen + sizeof ms - 1, mech, xlen);
+                    mlen += sizeof ms - 1 + xlen; free(mod); free(mech); mod = both;
+                    logmsg("main.ai + mechanics.ai (%u bytes)", (unsigned)xlen);
+                }
                 size_t cap = 1 << 16, n = 0; char *all = malloc(cap + mlen + 64);
                 for (;;) {                                           // the original chunk, as the engine's reader gives it
                     size_t sz = 0; const char *part = reader(L, data, &sz);
