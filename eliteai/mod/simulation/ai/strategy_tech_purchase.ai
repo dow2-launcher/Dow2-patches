@@ -1,0 +1,688 @@
+-- EliteAI 10.11 (tech): copy of Elite 3.2.1 strategy_tech_purchase.ai + a tech plan for the new logic (EliteAI.on, set in main.ai).
+-- Elite's AIs (EliteAI.on false/nil) run exactly the original code (two latent nil-concat errors in TechTierUpgradeDemand fixed).
+--
+-- WHY ELITE'S NORMAL STAYS IN TIER 1 (Elite 3.2.1): the tier research (upgrade/pvp/<race>/research/tier_2, 300 req / 125 power,
+-- 75 s, at the HQ; tier_3 = 300/150, needs tier_2) is just one more candidate of the tech budget: demand AI_RandRange(3,5) + the
+-- budget level (15..250, rules_tech_purchase.ai:83), it is SKIPPED when its ETA at the current income is over 90 s + 5 s per squad
+-- (eta_production_wait_time, personality.ai:57 / CalculateTechETA), when ANY generator task exists (TGROUP_ResourceAddOns, :198) and
+-- when the HQ channel has a request (PBG_GetNumRequestsForProducer, :337 - the units budget puts a squad there every 3 s, its weight
+-- is 50..5000 against 15..250 for tech, state_analysis.ai:190-264), and it is bought only when the money is at hand at that very
+-- moment (ResourceAmount_Has, :328) - otherwise the units/addons/abilities budgets spend it first. Nothing in the personality says
+-- "tier 2 at minute N". With the new logic (director, abilities with a bigger budget, varied purchases) the bank never reaches the
+-- research cost -> 35 minutes in tier 1 (tester's log, tyranids, newai-6).
+--
+-- THE TECH PLAN (new logic only):
+--  * targets: T2 from Tech_T2Time (420 s) - or from Tech_T2Early (240 s) when the bank already holds Tech_EarlyK x the cost and the
+--    army has Tech_MinArmy squads; T3 from Tech_T3Time (900 s) / Tech_T3Early (660 s). After Tech_T2Late (720 s) / Tech_T3Late (1320 s)
+--    the research goes whatever the army ratio (only a base under attack still waits).
+--  * reservation without stopping the army: while the plan wants the research and the arbiter says "tech", the tech budget is put
+--    FIRST in the purchase order (EliteAI_TechPromote, every 0.5 s before the purchases): it locks the research cost, every other
+--    budget (units, addons, abilities) buys from the surplus only. The HQ channel: Elite requests a research only when no unit is
+--    queued there; being first, the research takes the channel when the current unit is out, the next unit waits for it (75 s).
+--  * relaxed rules while wanted: ETA up to Tech_ETAMax (240 s) instead of 90 s, a generator task does not block, demand Tech_Demand
+--    (1000) so no building/upgrade of the tech budget outranks the tier.
+--  * the arbiter Conf_TechVsArmy (A=1 B=2 C=3, EliteAI.ini [Lua] Conf_TechVsArmy=n overrides; hysteresis Tech_ConfHold=10 s,
+--    log "TECH Conf_TechVsArmy T2 army->tech <why>"): 1 = tech on schedule unless the army is below Tech_MinArmy, we are losing badly
+--    (military_percent_value < Tech_LosingPct) or the base is under attack; 2 = army first: tech only with Tech_MinArmy+2 squads,
+--    not behind the enemy (>= Tech_B_MinPct), no army retreat running, no base attack; 3 = tech first: once the time has come the
+--    research goes with any army of Tech_C_MinArmy (2) squads, only a base under attack waits. "army" = no promotion and Elite's
+--    own demand (the research is bought only from leftovers) - the money stays with the units and abilities budgets.
+--  * tech level while a research is queued/running: Elite's CalculateCurrentTechLevel jumps to 3 (neither tier producible) for the
+--    75 s of the research - generator caps, addon multipliers and purchase rules see "tier 3"; for the new logic the level stays.
+--  * log (EliteAI.log, prefix "TECH <race>"): "T2 want <t> <time|early> army N bank req/pow cost req/pow", "T2 start <t>" (request
+--    placed), "T2 research <t>" (the task is active), "T2 done <t> took N", "T2 wait <why> <t> ..." at most once per Tech_WaitLog
+--    (30 s) per reason: money (bank/cost), queue (HQ channel busy), eta, army, losing, base_attack, retreat, gen_task;
+--    "stats tier N t <t> T2 <state> conf <tech|army> rule R bank req/pow rate req/pow army N waits ..." every Tech_StatsSecs (60).
+-- SAFETY: no engine object kept between ticks (the tier PBGs are Elite's own s_personality handles), no pcall around engine calls,
+-- deterministic (engine time and state only), every function below exists in Elite's scripts (file:line in reports/TECH_RU.md).
+
+import("rules_tech_purchase.ai")
+
+strategy_tech_purchase = {}
+
+-- purchase variables - help to determine how long we will wait for something good
+s_eta_structure_wait_time = 120
+s_eta_production_wait_time = 90
+
+-- types for tech demand
+DEMAND_Building = 1
+DEMAND_Upgrade = 2
+
+DEMAND_NeverBuild = -99999
+
+-------------------------------------------------------------------------------------------------
+-- EliteAI tech plan (state: numbers, strings and plain tables only)
+EliteAI_TECH_VERSION = "0.1"
+EliteAI_T = { st = {}, said = {}, conf = {}, waits = {}, last_stats = -1, eval_t = -1, cost_t = -1, level = 1 }
+
+local function t_on() return EliteAI ~= nil and EliteAI.on == true end
+local function t_num(key, default)
+	if EliteAI and EliteAI.num then return EliteAI.num(key, default) end
+	return default
+end
+local function t_log(...)
+	if EliteAI and EliteAI.log then EliteAI.log("TECH", tostring(s_current_race), ...) end
+end
+local function t_fmt(...) return string.format(...) end
+local function t_vidx()
+	local v = EliteAI and EliteAI.variant
+	return (v == "B" and 2) or (v == "C" and 3) or 1
+end
+local function t_rule()                                                      -- Conf_TechVsArmy = 1/2/3 (default: the variant)
+	local r = math.floor(t_num("Conf_TechVsArmy", t_vidx()))
+	if r < 1 then r = 1 elseif r > 3 then r = 3 end
+	return r
+end
+-- the arbiter's memory: a decision holds Tech_ConfHold seconds (hysteresis); the first decision and every switch are logged
+local function t_decide(subject, v, why, now)
+	local T = EliteAI_T
+	local c = T.conf[subject]
+	if not c then
+		T.conf[subject] = { v = v, t = now }
+		t_log("Conf_TechVsArmy", subject, "->" .. v, why, "rule", t_rule())
+		return v
+	end
+	if c.v == v then return v end
+	if now - c.t < t_num("Tech_ConfHold", 10) then return c.v end
+	t_log("Conf_TechVsArmy", subject, c.v .. "->" .. v, why, "rule", t_rule())
+	c.v, c.t = v, now
+	T.switches = (T.switches or 0) + 1
+	return v
+end
+-- a delay reason: counted always, logged at most once per Tech_WaitLog seconds per reason
+local function t_wait(now, why, ...)
+	local T = EliteAI_T
+	T.waits[why] = (T.waits[why] or 0) + 1
+	local last = T.said[why]
+	if last and now - last < t_num("Tech_WaitLog", 30) then return end
+	T.said[why] = now
+	t_log(T.tag or "T?", "wait", why, math.floor(now), ...)
+end
+-- tier k of the personality table (1 = the T2 research, 2 = T3): personality/<race>/standard.ai tech_tier_upgrades
+local function t_tier_pbg(k)
+	local ups = s_tech_tier_upgrades or (s_personality and s_personality.tech_tier_upgrades)
+	local u = ups and ups[k]
+	return u and u.pbg
+end
+local function t_tiers()
+	local ups = s_tech_tier_upgrades or (s_personality and s_personality.tech_tier_upgrades)
+	if type(ups) ~= "table" then return 0 end
+	return table.getn(ups)
+end
+
+-- the level for the new logic: a tier whose research is queued or running still counts as not reached (Elite: 3 while researching)
+local Elite_CalculateCurrentTechLevel = CalculateCurrentTechLevel
+CalculateCurrentTechLevel = function()
+	if not t_on() then return Elite_CalculateCurrentTechLevel() end
+	local ups = s_personality and s_personality.tech_tier_upgrades
+	if ups == nil then return 0 end
+	local n = table.getn(ups)
+	for i = 1, n do
+		local u = ups[i]
+		if u and u.pbg then
+			if AIProduction_CanNonSquadProduce( s_selfplayer, PITEM_Upgrade, u.pbg ) or Task_CountActivePBG( s_selfplayer, u.pbg, nil ) > 0 then
+				return i
+			end
+		end
+	end
+	return n + 1
+end
+function EliteAI_TechLevel()
+	return EliteAI_T.level or (cache and cache.tech_tier_level) or 1
+end
+
+-- the plan for this tick: which tier we want, whether the arbiter gives the money to the research or to the army
+local function t_eval(now)
+	local T = EliteAI_T
+	if T.eval_t == now then return T end
+	T.eval_t = now
+	local n = t_tiers()
+	local lvl = (cache and cache.tech_tier_level) or 1
+	if lvl ~= T.level then                                                  -- every tier change, also when Elite's own demand bought it
+		t_log("level", T.level, "->", lvl, "t", math.floor(now), (T.st[lvl - 1] and T.st[lvl - 1].started) and "plan" or "elite")
+	end
+	T.level = lvl
+	T.k, T.want, T.decision, T.late = nil, false, nil, false
+	if n == 0 or lvl < 1 or lvl > n then T.tag = "T" .. tostring(lvl); return T end   -- all tiers done (or none defined)
+	local k = lvl
+	local pbg = t_tier_pbg(k)
+	if not pbg then return T end
+	T.k, T.tag = k, "T" .. (k + 1)
+	if now - T.cost_t >= 10 or T.cost_k ~= k then
+		local cost = AIPlayer_GetProductionCost( s_self_modplayer, PITEM_Upgrade, pbg )
+		T.cost_req, T.cost_pow, T.cost_t, T.cost_k = (cost and cost.requisition) or 0, (cost and cost.power) or 0, now, k
+	end
+	local tt = (k == 1) and t_num("Tech_T2Time", 420) or t_num("Tech_T3Time", 900)
+	local early = (k == 1) and t_num("Tech_T2Early", 240) or t_num("Tech_T3Early", 660)
+	local late = (k == 1) and t_num("Tech_T2Late", 720) or t_num("Tech_T3Late", 1320)
+	local min_army = (k == 1) and t_num("Tech_MinArmy", 4) or t_num("Tech_MinArmyT3", 6)
+	local army = (cache and cache.military_count) or 0
+	local res = cache and cache.resources
+	local bank_req, bank_pow = (res and res.requisition) or 0, (res and res.power) or 0
+	T.late = now >= late
+	local reason
+	if now >= tt then
+		reason = "time"
+	elseif now >= early and army >= min_army then
+		local ek = t_num("Tech_EarlyK", 1.3)
+		if bank_req >= T.cost_req * ek and bank_pow >= T.cost_pow * ek then reason = "early" end
+	end
+	if not reason then return T end
+	T.want, T.want_reason = true, reason
+	local st = T.st[k]
+	if not st then
+		st = { want = now }
+		T.st[k] = st
+		t_log(T.tag, "want", math.floor(now), reason, "army", army, "bank", math.floor(bank_req) .. "/" .. math.floor(bank_pow),
+			"cost", math.floor(T.cost_req) .. "/" .. math.floor(T.cost_pow))
+	end
+	-- the conflict with the army: who gets the money now
+	local threat = (cache and cache.threat_at_base) or 0
+	local pct = (cache and cache.military_percent_value) or 0
+	local retreat = (EliteAI and EliteAI.mech and EliteAI.mech.retreat) and true or false
+	local r = t_rule()
+	local v, why = "tech", "clear"
+	if threat > t_num("Tech_MaxBaseThreat", 50) then
+		v, why = "army", "base_attack " .. math.floor(threat)
+	elseif T.late then
+		v, why = "tech", "late"
+	elseif r == 1 then
+		if army < min_army then v, why = "army", "army " .. army .. "<" .. min_army
+		elseif pct < t_num("Tech_LosingPct", -0.35) then v, why = "army", t_fmt("losing %.2f", pct) end
+	elseif r == 2 then
+		if army < min_army + 2 then v, why = "army", "army " .. army .. "<" .. (min_army + 2)
+		elseif pct < t_num("Tech_B_MinPct", 0) then v, why = "army", t_fmt("behind %.2f", pct)
+		elseif retreat then v, why = "army", "retreat" end
+	else
+		if army < t_num("Tech_C_MinArmy", 2) then v, why = "army", "army " .. army .. "<2" end
+	end
+	T.decision = t_decide(T.tag, v, why, now)
+	T.conf_why = why
+	return T
+end
+
+-- transitions of the tiers we asked for (start/research/done) and the stats line
+local function t_track(now, T)
+	local n = t_tiers()
+	for i = 1, n do
+		local st = T.st[i]
+		if st and st.started and not st.done then
+			local pbg = t_tier_pbg(i)
+			if pbg then
+				if PBG_GetCount( s_selfplayer, pbg ) >= 1 or T.level > i then
+					st.done = now
+					t_log("T" .. (i + 1), "done", math.floor(now), "took", math.floor(now - st.started), "level", T.level)
+				elseif not st.research and Task_CountActivePBG( s_selfplayer, pbg, true ) > 0 then
+					st.research = now
+					t_log("T" .. (i + 1), "research", math.floor(now), "queued_for", math.floor(now - st.started))
+				end
+			end
+		end
+	end
+	if now - T.last_stats < t_num("Tech_StatsSecs", 60) then return end
+	T.last_stats = now
+	local state, k = "done", T.k
+	if k then
+		local st = T.st[k]
+		if not st then state = "idle"
+		elseif st.done then state = "done"
+		elseif st.research then state = "research"
+		elseif st.started then state = "requested"
+		else state = "wanted" end
+	end
+	local res = (cache and cache.resources) or {}
+	local rate = (cache and cache.resources_rate) or {}
+	local w = {}
+	for _, key in ipairs({ "money", "queue", "eta", "other", "restart", "base_attack", "gen_task" }) do
+		if T.waits[key] then table.insert(w, key .. "=" .. T.waits[key]) end
+	end
+	t_log("stats", "tier", T.level, "t", math.floor(now), T.tag or "-", state, "conf", T.decision or "-", "rule", t_rule(),
+		"bank", math.floor(res.requisition or 0) .. "/" .. math.floor(res.power or 0),
+		"rate", math.floor(rate.requisition or 0) .. "/" .. math.floor(rate.power or 0),
+		"army", (cache and cache.military_count) or -1, "threat", math.floor((cache and cache.threat_at_base) or 0),
+		"cost", math.floor(T.cost_req or 0) .. "/" .. math.floor(T.cost_pow or 0), "switches", T.switches or 0,
+		"waits", table.concat(w, ","))
+end
+
+-- every 0.5 s (wrapped state_analysis.recalculate_budgets, before the purchases): the tech budget goes first in the purchase
+-- order while the research is wanted and the arbiter says "tech" (the order is by currentTotal, util/budget.ai:310)
+function EliteAI_TechPromote()
+	if not t_on() or ai_budget == nil or ai_budget.budget_list == nil then return end
+	local tech = ai_budget.budget_list["BUDGET_Tech"]
+	if tech == nil then return end
+	local now = World_GetGameTime()
+	local T = t_eval(now)
+	if not T.want or T.decision ~= "tech" or not T.k then return end
+	local pbg = t_tier_pbg(T.k)
+	if pbg and Task_CountActivePBG( s_selfplayer, pbg, true ) > 0 then return end   -- the research is running: nothing to reserve
+	local mx = -100000
+	for name, b in pairs(ai_budget.budget_list) do
+		if name ~= "BUDGET_Tech" and b.currentTotal > mx then mx = b.currentTotal end
+	end
+	if tech.currentTotal <= mx then
+		local add = ResourceAmount_Zero()
+		add.requisition = mx - tech.currentTotal + 1
+		ai_budget:add_resources( add, "BUDGET_Tech" )
+	end
+end
+if state_analysis and state_analysis.recalculate_budgets and not EliteAI_TechPromoteWrapped then
+	EliteAI_TechPromoteWrapped = true
+	local Elite_recalculate_budgets = state_analysis.recalculate_budgets
+	state_analysis.recalculate_budgets = function()
+		Elite_recalculate_budgets()
+		EliteAI_TechPromote()
+	end
+end
+
+-----------------------------------------------
+-- INIT TECH PURCHASE SYSTEM
+
+function strategy_tech_purchase.init()
+
+	print("strategy_tech_purchase.init")
+
+	s_tech_tier_upgrades = s_personality.tech_tier_upgrades
+
+	s_eta_structure_wait_time = s_personality.eta_structure_wait_time
+	s_eta_production_wait_time = s_personality.eta_production_wait_time
+
+	s_techDemand = {}
+	if t_on() then
+		EliteAI_T = { st = {}, said = {}, conf = {}, waits = {}, last_stats = -1, eval_t = -1, cost_t = -1, level = 1 }
+		local tiers = {}
+		for i = 1, t_tiers() do
+			local pbg = t_tier_pbg(i)
+			table.insert(tiers, pbg and PBG_GetName(pbg) or "nil")
+		end
+		t_log("init", "version", EliteAI_TECH_VERSION, "tiers", table.concat(tiers, " "), "rule", t_rule(),
+			"T2", t_num("Tech_T2Time", 420) .. "/" .. t_num("Tech_T2Early", 240) .. "/" .. t_num("Tech_T2Late", 720),
+			"T3", t_num("Tech_T3Time", 900) .. "/" .. t_num("Tech_T3Early", 660) .. "/" .. t_num("Tech_T3Late", 1320),
+			"min_army", t_num("Tech_MinArmy", 4) .. "/" .. t_num("Tech_MinArmyT3", 6))
+	end
+end
+
+function strategy_tech_purchase.simulate_pre()
+
+end
+
+function Util_CountTechTierUpgradeRequests( )
+
+	local count = 0
+	for k,v in pairs(s_tech_tier_upgrades) do
+		count = count + Task_CountPBG( s_selfplayer, v.pbg )
+	end
+
+	return count
+end
+
+function CalculateTechETA()
+
+	aitrace("CalculateTechETA")
+
+	local offset_eta = 0
+	-- if we have some military units then we have some safe-guard so we can increase it slightly			-- kk count incr from 3 to 4
+	if (cache.military_count > 4) then
+		offset_eta = offset_eta + (cache.military_count-4)*5
+	end
+
+	aitrace("OffsetETA:"..offset_eta)
+
+	-- get the base rate from the personality file
+	s_eta_structure_wait_time = s_personality.eta_structure_wait_time + offset_eta
+	s_eta_production_wait_time = s_personality.eta_production_wait_time + offset_eta
+
+	aitrace("NewTechETA:"..s_eta_structure_wait_time)
+	aitrace("NewProductionETA:"..s_eta_production_wait_time)
+end
+
+-- rules to determine what structure to build
+function MilitaryStructureDemand()
+
+	-- is building disabled?
+	if (s_components[COMPONENT_BuildStructures] == false) then
+		aitrace("BuildStructures Component Disabled!")
+		return
+	end
+
+	-----------------------------------------------------------------------------
+	--
+	local bcount = AIProduction_GetBuildableBuildingCount( s_selfplayer )-1
+	aitrace("Considering "..bcount.." military/tech buildings for purchase")
+	for i=0, bcount do
+
+		-- go through each building we can get and determine its priority
+		local pbg = AIProduction_GetBuildableBuildingAt( s_selfplayer, i )
+
+		local spawnCount = PBG_ProductionItemCount( pbg, PITEM_Spawn )
+		local upgradeCount = PBG_ProductionItemCount( pbg, PITEM_Upgrade )
+		local defPriority = PBG_GetDefencePriority( pbg )
+
+		--aitrace("SpawnCount:"..spawnCount.." UpgradeCount:"..upgradeCount.."Def:"..defPriority.." Name:"..PBG_GetName( pbg ) )
+
+		-- don't consider securing buildings or defence buildings - they are done elsewhere
+		if (defPriority==0 and (spawnCount>0 or upgradeCount>0)) then
+
+			-- get the total number of current structures plus those that are requested
+			local structureCount = UtilPBG_CountTotal( pbg )
+			aitrace("Name:"..PBG_GetName( pbg ).." StructureCount:"..structureCount)
+
+			if (structureCount <= 0) then
+
+				if (Construction_CanConstruct(s_selfplayer, pbg)) then
+
+					local calcbuildstyle=BS_NearBase
+
+					local techdemand = AI_RandRange( 1, 10 )
+
+					local structureETA = GetStructureETA( pbg )
+					aitrace("CAN CONSTRUCT:"..PBG_GetName( pbg ).. "Demand:"..techdemand.." ETA:"..structureETA )
+
+					if (structureETA < s_eta_structure_wait_time ) then
+
+						local demand_offset = 0
+						-- test special rules for the given race
+						if (s_special_techtree_rules) then
+							demand_offset = s_special_techtree_rules(pbg)
+							aitrace("DemandOffset:"..demand_offset)
+						end
+
+						s_techDemand[ pbg ] = {demand=techdemand+demand_offset, buildstyle = calcbuildstyle, demand_type = DEMAND_Building }
+					else
+						aitrace("SKIPPING BECAUSE OF ETA:"..PBG_GetName( pbg ).." Limit:"..s_eta_structure_wait_time )
+					end
+
+
+				else
+					aitrace("CANNOT CONSTRUCT:"..PBG_GetName( pbg ) )
+				end
+
+			else
+				aitrace("ALREADY HAVE ENOUGH:"..PBG_GetName( pbg ) )
+			end
+		end
+ 	end
+end
+
+function UpgradeDemand()
+
+	-- determine how many requests for upgrades are outstanding. We shouldn't request another
+	-- upgrade unless the required building doesn't already have an outstanding request
+
+	local ucount = AIProduction_GetProductionItemCount( s_selfplayer, PITEM_Upgrade ) - 1
+	aitrace("UpgradeDemand: Considering "..ucount.." upgrades!" )
+	for i=0, ucount do
+		local upgradePBG = AIProduction_GetProductionItemAt( s_selfplayer, PITEM_Upgrade, i )
+
+		local numRequested = Task_CountActivePBG( s_selfplayer, upgradePBG, false )
+
+		-- extract info about this upgrade, does it match our demands/ strategies
+		if (numRequested == 0 and AIProduction_CanNonSquadProduce( s_selfplayer, PITEM_Upgrade, upgradePBG )) then
+
+			local productionETA = GetProductionETA( PITEM_Upgrade, upgradePBG )
+			aitrace("UpgradeList"..i..":"..PBG_GetName( upgradePBG ).." ETA:"..productionETA)
+
+			if (productionETA < s_eta_production_wait_time) then
+
+				local demandoffset = 0
+				if (s_special_upgrade_rules) then
+					demandoffset = s_special_upgrade_rules( upgradePBG )
+					aitrace("DemandOffset:"..demandoffset)
+				end
+				local demandval = AI_RandRange(1,5) + demandoffset
+				aitrace("UpgDemand:"..demandval )
+				-- currently random, will definitely need rules for each upgrade
+				s_techDemand[ upgradePBG ] = {demand=demandval, buildstyle = nil, demand_type = DEMAND_Upgrade }
+			else
+				aitrace("--Skipping because ETA is too long")
+			end
+		end
+	end
+end
+
+
+function TechTierUpgradeDemand()
+
+	local ucount = table.getn(s_tech_tier_upgrades)
+	aitrace("TechTierUpgradeDemand: Considering "..ucount.." upgrades!" )
+
+	-- is upgrading disabled?
+	if (s_components[COMPONENT_BuildResearch] == false) then
+		aitrace("BuildResearch Component Disabled!")
+		return
+	end
+
+	if (cache.tech_tier_level > table.getn(s_tech_tier_upgrades)) then
+		aitrace("MaxTechTierRule: Hit the maximum tech level: "..cache.tech_tier_level)
+		return
+	end
+
+	local upgradeRequests = Util_CountTechTierUpgradeRequests()
+	aitrace("TechTierUpgradeReq:"..upgradeRequests)
+	if (upgradeRequests >= 1) then
+		aitrace("Reached tech tier upgrade request limit of: 1")
+		return
+	end
+
+	-- EliteAI: the plan of this tick (nil for Elite's AIs)
+	local T = nil
+	local now = 0
+	if t_on() then
+		now = World_GetGameTime()
+		T = t_eval(now)
+		if not (T.want and T.k == cache.tech_tier_level) then T = nil end
+	end
+
+	local res_tasks = Task_CountInGroup( s_selfplayer, TGROUP_ResourceAddOns )
+	if (res_tasks > 0) then
+		aitrace("ResourceBuildRule:Only one CapturePointConstruction build task at a time: "..res_tasks)
+		if T then
+			t_wait(now, "gen_task", res_tasks)         -- new logic: a generator being built does not block the research
+		else
+			return
+		end
+	end
+
+	dbAssert(cache.tech_tier_level > 0 and cache.tech_tier_level <= table.getn(s_tech_tier_upgrades))
+
+	-- determine if we can build these upgrades
+	local upgrade = s_tech_tier_upgrades[cache.tech_tier_level]
+
+	if (upgrade and upgrade.pbg) then
+		local upgradePBG = upgrade.pbg
+
+		local hit_limit_cap = false
+		local counttotal = UtilPBG_CountTotal( upgradePBG )
+		if (counttotal > 1) then
+			aitrace("HitLimitCap:"..PBG_GetName( upgradePBG ).." Limit: 1, Count:"..tostring(counttotal))
+			hit_limit_cap = true
+		end
+
+		if (not hit_limit_cap) then
+
+			local numRequested = Task_CountActivePBG( s_selfplayer, upgradePBG, false )
+
+			-- extract info about this upgrade, does it match our demands/ strategies
+			if (numRequested == 0 and AIProduction_CanNonSquadProduce( s_selfplayer, PITEM_Upgrade, upgradePBG )) then
+				local productionETA = GetProductionETA( PITEM_Upgrade, upgradePBG )
+				aitrace("UpgradeList:"..tostring(cache.tech_tier_level)..":"..PBG_GetName( upgradePBG ).." ETA:"..productionETA)
+
+				local eta_limit = s_eta_production_wait_time
+				if T then eta_limit = math.max( eta_limit, t_num("Tech_ETAMax", 240) ) end
+				if (productionETA < eta_limit) then
+					if (upgrade.condition_func==nil or upgrade.condition_func()) then
+						local demandoffset = 0
+						if (SpecialTechBuildingRules) then			-- kk corrected as had wrong function name
+							demandoffset = SpecialTechBuildingRules( upgradePBG )
+							aitrace("DemandOffset:"..demandoffset)
+						end
+
+						local demandval = AI_RandRange(3,5) + demandoffset
+						if T and T.decision == "tech" then
+							demandval = math.max( demandval, t_num("Tech_Demand", 1000) )   -- nothing else of the tech budget outranks the tier
+						end
+						aitrace("UpgDemand:"..demandval )
+
+						-- currently random, will definitely need rules for each upgrade
+						s_techDemand[ upgradePBG ] = {demand=demandval, buildstyle = nil, demand_type = DEMAND_Upgrade }
+					else
+						aitrace("--Skipping because 'condition_func()' failed.")
+					end
+				else
+					aitrace("--Skipping because ETA is too long")
+					if T then t_wait(now, "eta", math.floor(productionETA), "limit", math.floor(eta_limit)) end
+				end
+			end
+		else
+			aitrace("CANNOT BUILD TECH-TIER UPGRADE:"..PBG_GetName( upgradePBG ) )
+		end
+	end
+end
+
+
+function HighestTechDemand()
+
+	local best_pbg = nil
+	local highest_demand_tbl = {demand=-100, buildstyle=nil, demand_type = nil}
+
+	for pbg,demTbl in pairs(s_techDemand) do
+		if (pbg and demTbl ~= false) then
+
+			-- other considerations (?)
+
+			if (demTbl.demand > highest_demand_tbl.demand) then
+				best_pbg = pbg
+				highest_demand_tbl = demTbl
+			end
+
+		end
+	end
+
+	return best_pbg, highest_demand_tbl
+
+end
+
+
+function strategy_tech_purchase.do_purchase( availableResources )
+
+	aipushtrace("StrategyTechPurchase")
+
+	AIProfile_Marker2("AITechPurchase")
+
+	-- determine what building/ tech we should get next
+	-- go through each option and choose the one with the highest demand
+
+	-- if we have builders and our demand for teching up is large enough then lets
+	-- see what we should purchase next, we may want to include
+
+	-- reset tech demand
+	clear_kv_list(s_techDemand)
+
+	-- EliteAI: the plan (transitions, stats) - every purchase tick (3 s)
+	local T = nil
+	local now = 0
+	if t_on() then
+		now = World_GetGameTime()
+		T = t_eval(now)
+		t_track(now, T)
+		if not T.want then T = nil end
+	end
+
+	-- is base under attack? if it is we should not build here, unless.. we don't have a spawner or we don't have any military to deal with it (then do as we use to)
+	if (cache.threat_at_base > 50 and cache.military_value > cache.threat_at_base/2 ) then
+		aitrace("No tech building because we are underattack:")
+		if T then t_wait(now, "base_attack", math.floor(cache.threat_at_base), "mil", math.floor(cache.military_value)) end
+		aipoptrace();
+		return
+	end
+
+	CalculateTechETA()
+
+	-- 1. The AI's resource rates should determine the number of spawner buildings it should have
+	-- With a lower rate the less buildings we would want. If our rate is lowered, we might even
+	-- want to sell our buildings to give some money back to the player.
+
+	-- NOTE: order is important since s_techDemand[PBG] may have different demand values (i.e., depending on demand calculation)
+	MilitaryStructureDemand()
+	UpgradeDemand()
+	TechTierUpgradeDemand()
+
+	-- rule: make sure to have buildings so we can build more and better units.
+	-- should look at our resource rates, economy, and military to determine what
+	-- buildings to make
+
+	local pbg, demandTbl = HighestTechDemand()
+
+	if (pbg) then
+
+		aitrace("Highest demand:"..PBG_GetName( pbg ) .." Demand:".. demandTbl.demand .. " Demand-Type:" .. demandTbl.demand_type );
+
+		-- EliteAI: is the chosen item the tier research of the plan?
+		local is_tier = false
+		if T and T.k then
+			local tpbg = t_tier_pbg(T.k)
+			if tpbg and demandTbl.demand_type == DEMAND_Upgrade and PBG_IsSame( pbg, tpbg ) then is_tier = true end
+		end
+		if T and not is_tier and T.decision == "tech" then
+			t_wait(now, "other", PBG_GetName( pbg ), "type", demandTbl.demand_type)   -- the tier is not even a candidate (see TechTierUpgradeDemand)
+		end
+
+		local unitCost
+		if (demandTbl.demand_type == DEMAND_Building) then
+			unitCost = AIPlayer_GetStructureCost( s_self_modplayer, pbg )
+		elseif (demandTbl.demand_type == DEMAND_Upgrade) then
+			unitCost = AIPlayer_GetProductionCost( s_self_modplayer, PITEM_Upgrade, pbg )
+		end
+
+		-- determine if this can purchase this item
+		if (not ResourceAmount_Has( availableResources, unitCost )) then
+			aitrace("Not enough moola - locking resources!")
+			if is_tier then
+				t_wait(now, "money", "avail", math.floor(availableResources.requisition or 0) .. "/" .. math.floor(availableResources.power or 0),
+					"bank", math.floor(cache.resources.requisition or 0) .. "/" .. math.floor(cache.resources.power or 0),
+					"cost", math.floor(unitCost.requisition or 0) .. "/" .. math.floor(unitCost.power or 0), "conf", T.decision or "-")
+			end
+			aipoptrace()
+			return false, unitCost
+		end
+
+		if (demandTbl.demand_type == DEMAND_Upgrade) then
+			-- this checks all the production-channels and counts all the requests in each of these channels
+			-- this returns the min-number of items in all of these channels
+			local prevReq = PBG_GetNumRequestsForProducer( s_selfplayer, PITEM_Upgrade, pbg )
+
+			if (prevReq > 0) then
+				aitrace("Stalling upgrade because of lack of production channels:"..PBG_GetName(pbg))
+				if is_tier then t_wait(now, "queue", prevReq) end
+				aipoptrace()
+				return false, unitCost
+			end
+		end
+
+		-- request
+		if (demandTbl.demand_type == DEMAND_Building) then
+			Request_Construction( s_selfplayer, TGROUP_Tech, TPRIORITY_Tech, pbg, demandTbl.buildstyle )
+		elseif (demandTbl.demand_type == DEMAND_Upgrade) then
+			Request_Production( s_selfplayer, TGROUP_Tech, TPRIORITY_Tech, PITEM_Upgrade, pbg )
+			if is_tier then
+				local st = EliteAI_T.st[T.k]
+				if st and not st.started then
+					st.started = now
+					t_log(T.tag, "start", math.floor(now), "army", (cache and cache.military_count) or -1, "conf", T.decision or "-",
+						"bank", math.floor(cache.resources.requisition or 0) .. "/" .. math.floor(cache.resources.power or 0))
+				elseif st then
+					st.restarts = (st.restarts or 0) + 1
+					t_wait(now, "restart", st.restarts)     -- the earlier request was killed as inactive (money gone) and placed again
+				end
+			end
+		end
+
+		aipoptrace()
+		return true, unitCost
+
+	end
+
+	aipoptrace()
+
+	return false
+end
+
