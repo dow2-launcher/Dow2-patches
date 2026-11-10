@@ -52,6 +52,7 @@ are client-side, and the other players in the match don't need them.
 | **Russian translation (by Gosudar)** | Russian text for Dawn of War II and Elite 3.2; the English files come back when it is off. | `rusifikator` → `rusifikator-text-1` | not in this repo (Gosudar's text files) | no |
 | Developer diagnostics (off) | Turned off for everyone. | `frameprobe_r2` → `frameprobe-off` | `frameprobe/` | no |
 | New AI (removed) | Removed, turned off for everyone. | `eliteai_off` → `eliteai-off` | `eliteai/` | was skirmish-only |
+| **New AI** (new, staging, experiment) | Early test of our rework of Elite's computer opponent: the army gathers and fights together, holds its target, pulls hurt squads back. In the skirmish setup "Add NEW AI Computer" (the Normal slot). Elite only. | `newai` → `newai-1` (staging) | `eliteai/` | no (single-player skirmish only; online and replays stay Elite's AI) |
 
 The full texts in five languages are in the store; `addons.json` repeats them for the add-ons it manages (see below).
 
@@ -256,7 +257,7 @@ continue/ - Continue.dll (Continue 1) - research, not released
     answers "no" for custom games, Continue.dll lets it answer as for the other match types. Taken out of the store on 03.11.2026:
     Relic's relay closes the match session 61 s after the match. With it: own_lobby "reopen" on the dow2-ladder side.
 
-frameprobe/ - FrameProbe.dll (off), eliteai/ - EliteAI.dll (removed)
+frameprobe/ - FrameProbe.dll (off), eliteai/ - EliteAI.dll (store id newai since 0.2.33; the old eliteai_off stays off)
     FrameProbe: the diagnostics DLL that found the observer lag (frame times, sim ticks, a stack sampler, a probe on Continue).
     EliteAI: the new AI for skirmishes - Elite's default.ai gets eliteai/mod/main.ai; only in single-player games (online it
     would desync everyone). Both are in the store only as "off" entries.

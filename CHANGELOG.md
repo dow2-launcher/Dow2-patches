@@ -4,6 +4,15 @@ Every version gets an entry here before it reaches `main`. CI then tags `vX.Y.Z`
 version (`X.Y.0`) it also publishes a GitHub Release with the DLLs and the entries since the previous `X.Y.0`.
 The version of the set lives only in `VERSION`; each DLL still writes its own version to its log.
 
+## 0.2.33 — 2026-11-10
+New AI 1 (new, store newai-1, category experiment, order 1000, off by default, Elite only; EliteAI.dll 0.7 + eliteai/mod/main.ai,
+append/scar/elite/elite.scar). The store id is new (`newai`); the old `eliteai_off` stays off.
+- Same source as the store EliteAI 0.7; Elite 3.2.1 AI scripts and ai_tuning are byte for byte those of 3.2, so nothing to port.
+  On 3.2.1 the lua_load and Localizer hooks install, the skirmish setup shows "Add NEW AI Computer" (in place of Normal).
+- Stand 1 (3.2.1, -dev, 5x speed) AI vs AI against Elite Normal: no crash to desktop; two long matches froze at ~26 min of game
+  time (all threads waiting, under investigation; an Elite-vs-Elite control run is going). Store text: skirmish against the
+  computer only, untick for multiplayer with people.
+
 ## 0.2.32 — 2026-11-09
 UIFilter 1 (new, store uifilter-1, category performance, order 60, off by default, Elite + vanilla; UIFilter.dll).
 - uifilter/: the Scaleform GFx D3D9 renderer in Spooge.dll draws through a proxy device (BeginDisplay 0x100513B8 /

@@ -597,5 +597,23 @@
       "fr": "Supprime la limite d'images de DXVK (le mode DXVK d'Elite limite à 60 FPS) ; synchro verticale comme dans le jeu. Mieux avec Sound bug fix : un FPS élevé aggrave le bug de son. Dans Elite, il fonctionne avec Automatch coché.",
       "de": "Entfernt das DXVK-Bildlimit (Elites DXVK-Modus begrenzt auf 60 FPS); VSync wie im Spiel eingestellt. Besser zusammen mit Sound bug fix: hohe FPS verschlimmern den Soundbug. In Elite funktioniert es mit aktiviertem Automatch."
     }
+  },
+  "newai": {
+    "category": "experiment",
+    "order": 1000,
+    "name": {
+      "en": "New AI",
+      "ru": "New AI",
+      "es": "New AI",
+      "fr": "New AI",
+      "de": "New AI"
+    },
+    "description": {
+      "en": "Early test version of our rework of Elite's computer opponent for skirmish: the computer's army gathers and fights together, holds its target instead of running to the points one squad at a time, and pulls hurt squads back. To play against it: tick it, start the game, and in the skirmish setup pick \"Add NEW AI Computer\" (it takes the place of Normal; Easy, Hard and Insane stay Elite's AI). Single-player skirmish only: online games and replays always use Elite's own AI. It is an early version - if a match crashes or the AI does something odd, press \"Send logs\" in the launcher settings right after (EliteAI.log goes with them) and tell us what happened. Only for skirmish against the computer; untick it for multiplayer with people - the game may desync.",
+      "ru": "Ранняя тестовая версия нашей переработки компьютерного противника Elite для скирмиша: армия компьютера собирается и воюет вместе, держит цель, а не бегает по точкам поотрядно, и отводит потрёпанные отряды. Как сыграть против него: включите галочку, запустите игру и в настройке скирмиша выберите «Добавить НОВЫЙ ИИ» / «Add NEW AI Computer» (он встаёт вместо Normal; Easy, Hard и Insane остаются ИИ Elite). Только одиночный скирмиш: в сетевых играх и реплеях всегда ИИ Elite. Это ранняя версия - если матч вылетел или ИИ ведёт себя странно, сразу после этого нажмите «Отправить логи» в настройках лаунчера (EliteAI.log уйдёт вместе с ними) и напишите, что случилось. Только для скирмиша с компьютером; в мультиплеере с людьми выключайте — может разойтись.",
+      "es": "Versión de prueba temprana de nuestra revisión del oponente por ordenador de Elite para escaramuzas: el ejército del ordenador se agrupa y lucha unido, mantiene su objetivo en lugar de ir a los puntos escuadra a escuadra, y retira las escuadras heridas. Para jugar contra ella: márcala, inicia el juego y en la escaramuza elige \"Add NEW AI Computer\" (ocupa el lugar de Normal; Easy, Hard e Insane siguen siendo la IA de Elite). Solo escaramuza de un jugador: en línea y en repeticiones siempre se usa la IA de Elite. Es una versión temprana: si una partida se cierra o la IA hace algo raro, pulsa \"Send logs\" en los ajustes del lanzador justo después y cuéntanos qué pasó. Solo para escaramuzas contra el ordenador; desmárcala para jugar en línea con personas: la partida puede desincronizarse.",
+      "fr": "Première version de test de notre refonte de l'adversaire ordinateur d'Elite en escarmouche : l'armée de l'ordinateur se regroupe et combat ensemble, tient son objectif au lieu de courir aux points escouade par escouade, et replie les escouades blessées. Pour jouer contre elle : cochez-la, lancez le jeu et, en escarmouche, choisissez \"Add NEW AI Computer\" (à la place de Normal ; Easy, Hard et Insane restent l'IA d'Elite). Escarmouche solo uniquement : en ligne et dans les replays, c'est toujours l'IA d'Elite. C'est une version précoce : si une partie plante ou si l'IA fait quelque chose d'étrange, appuyez aussitôt sur \"Send logs\" dans les réglages du lanceur et dites-nous ce qui s'est passé. Uniquement pour l'escarmouche contre l'ordinateur ; décochez-la en multijoueur avec des humains : la partie peut se désynchroniser.",
+      "de": "Frühe Testversion unserer Überarbeitung des Elite-Computergegners für Gefechte: die Armee des Computers sammelt sich und kämpft geschlossen, hält ihr Ziel statt Trupp für Trupp zu den Punkten zu laufen und zieht angeschlagene Trupps zurück. Zum Spielen: Haken setzen, Spiel starten und im Gefecht \"Add NEW AI Computer\" wählen (statt Normal; Easy, Hard und Insane bleiben die Elite-KI). Nur Einzelspieler-Gefecht: online und in Wiederholungen immer die Elite-KI. Frühe Version - wenn ein Spiel abstürzt oder die KI sich seltsam verhält, gleich danach in den Launcher-Einstellungen \"Send logs\" drücken und uns schreiben, was passiert ist. Nur für Gefechte gegen den Computer; im Mehrspieler mit Menschen ausschalten - das Spiel kann desynchronisieren."
+    }
   }
 }
