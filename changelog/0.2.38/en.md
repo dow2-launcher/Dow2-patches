@@ -1,0 +1,1 @@
+- New AI 6: unit purchase - a more varied army, super units (Baneblade and the like) not before minute 18.

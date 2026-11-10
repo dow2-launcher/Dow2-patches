@@ -4,6 +4,12 @@ Every version gets an entry here before it reaches `main`. CI then tags `vX.Y.Z`
 version (`X.Y.0`) it also publishes a GitHub Release with the DLLs and the entries since the previous `X.Y.0`.
 The version of the set lives only in `VERSION`; each DLL still writes its own version to its log.
 
+## 0.2.38 — 2026-11-10
+New AI 6 (store newai-6, experiment, off by default, Elite only) = newai-5 + simulation/ai/strategy_unit_purchase.ai
+(EliteAI.dll gives it to the game instead of Elite's script: Elite_DLLs\EliteAI\simulation\ai\...).
+- Unit purchase: diversity demand (a more varied army), super units (Baneblade etc.) gated by game time (not before 18 min) and army size.
+- Lua syntax checked (luac 5.1); the file loads without errors on stand 1. No new stand runs for this package.
+
 ## 0.2.37 — 2026-11-10
 New AI 5 (store newai-5, experiment, off by default, Elite only): EliteAI.dll splices mechanics.ai after main.ai; main.ai 0.10, mechanics.ai 0.2, elite.scar.
 - mechanics.ai: 8 combat mechanics of the director (FocusFire, ArmyRetreat, PreRetreat, PunishTurn, MeleeTie, Repair,
