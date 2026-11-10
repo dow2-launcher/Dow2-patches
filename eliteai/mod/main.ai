@@ -4,7 +4,34 @@
 -- (all | none | normal | <player ids, e.g. 1000>) so one match can pit the new logic against Elite's (A/B).
 -- Every tuning value can be overridden from EliteAI.ini [Lua] without rebuilding (EliteAI.num("Key", default)).
 
-EliteAI = { version = "0.8" }
+EliteAI = { version = "0.9" }
+
+-- 0.9 (10.11): THREE VARIANTS for testers to compare, chosen in the skirmish menu by the computer slot's difficulty:
+-- Easy = "NEW AI A", Normal = "NEW AI B", Hard = "NEW AI C" (EliteAI.dll relabels them); Expert = Elite's AI, untouched.
+-- All three play with the standard personality (s_diffLevel/AIPlayer_GetDifficultyLevel -> AD_Standard).
+-- A value here is used when EliteAI.ini [Lua] has no such key (ini > variant > default in the code).
+-- Mech_* = switches of mechanics from mod/mechanics.ai (another agent; while it is missing they do nothing).
+-- Kite* multiply Elite's personality kite_chance / kite_ratio (NB: Elite 3.2.1 itself does not read them yet).
+--   key            A focus+purchase   B retreats   C attack     what it does (existing logic)
+--   RetreatHP         0.35             0.50         0.22        squad health share below which the director sends it home
+--   RetreatSecs       40               30           50          how long a retreated squad stays out of the army
+--   AggrMin           0.75             0.60         0.90        floor of Military_SetSquadAggression (lower = breaks off sooner)
+--   AttackTargets     2                1            3           attack targets kept for the army
+--   Inertia           4                3            6           keep the chosen target (combat task score)
+--   TargetTicks       450              300          700         ticks (0.1 s) a task stays at its target before giving up
+--   GatherR           30               24           36          army spread before it regroups
+--   KiteChance/Ratio  x1 / x1          x1.3 / x1.25 x0.6 / x0.7
+EliteAI_VARIANTS = {
+	A = { name = "focus+purchase", RetreatHP = 0.35, RetreatSecs = 40, AggrMin = 0.75, AttackTargets = 2, Inertia = 4, TargetTicks = 450,
+		GatherR = 30, KiteChance = 1, KiteRatio = 1,
+		Mech_Purchase = 1, Mech_FocusFire = 1, Mech_Repair = 1, Mech_ArmyRetreat = 0, Mech_PreRetreat = 0, Mech_PunishTurn = 0, Mech_MeleeTie = 0 },
+	B = { name = "retreats", RetreatHP = 0.50, RetreatSecs = 30, AggrMin = 0.60, AttackTargets = 1, Inertia = 3, TargetTicks = 300,
+		GatherR = 24, KiteChance = 1.3, KiteRatio = 1.25,
+		Mech_Purchase = 0, Mech_FocusFire = 0, Mech_Repair = 0, Mech_ArmyRetreat = 1, Mech_PreRetreat = 1, Mech_PunishTurn = 0, Mech_MeleeTie = 0 },
+	C = { name = "attack", RetreatHP = 0.22, RetreatSecs = 50, AggrMin = 0.90, AttackTargets = 3, Inertia = 6, TargetTicks = 700,
+		GatherR = 36, KiteChance = 0.6, KiteRatio = 0.7,
+		Mech_Purchase = 0, Mech_FocusFire = 0, Mech_Repair = 0, Mech_ArmyRetreat = 0, Mech_PreRetreat = 0, Mech_PunishTurn = 1, Mech_MeleeTie = 1 },
+}
 
 -- C functions from EliteAI.dll: global, or (AI scripts run in their own environment) via the shared string table
 local G0 = getfenv and getfenv(0) or {}
@@ -31,11 +58,13 @@ local function cfg(key, default)
 end
 local function num(key, default)
 	local v = tonumber(cfg(key, nil))
+	if v == nil and EliteAI.vp then v = EliteAI.vp[key] end           -- the match variant's value
 	if v == nil then return default end
 	return v
 end
 EliteAI.cfg, EliteAI.num = cfg, num
 
+EliteAI.real_diff = s_diffLevel                                    -- the slot's difficulty = the variant (before ForceDiff)
 -- tests: the local slot handed to the AI gets Hard; ForceDiff makes the scripts of every AI see the same level
 do
 	local fd = tonumber(eliteai_cfg and eliteai_cfg("ForceDiff") or "")
@@ -47,13 +76,25 @@ local function new_logic_on()
 	local mode = cfg("NewAI", "normal")
 	if mode == "all" then return true end
 	if mode == "none" then return false end
-	if mode == "normal" then return s_diffLevel == AD_Standard end
+	if mode == "normal" then                                         -- the menu: Easy/Normal/Hard = A/B/C, Expert = Elite
+		local d = EliteAI.real_diff
+		return d == AD_Easy or d == AD_Standard or d == AD_Hard
+	end
 	for id in (string.gmatch or string.gfind)(mode, "%d+") do
 		if tonumber(id) == s_selfplayerid then return true end
 	end
 	return false
 end
 EliteAI.on = new_logic_on()
+if EliteAI.on then
+	local d, v = EliteAI.real_diff, string.upper(cfg("Variant" .. tostring(s_selfplayerid), nil) or cfg("Variant", "") or "")  -- tests: [Lua] Variant1000=A or Variant=A
+	if not EliteAI_VARIANTS[v] then v = (d == AD_Easy and "A") or (d == AD_Hard and "C") or "B" end
+	EliteAI.variant, EliteAI.vp = v, EliteAI_VARIANTS[v]
+	-- every variant plays the standard personality and build orders (Elite reads the level again in Reset/buildorder conditions)
+	s_diffLevel = AD_Standard
+	local Elite_GetDiff = AIPlayer_GetDifficultyLevel
+	AIPlayer_GetDifficultyLevel = function(p) Elite_GetDiff(p); return AD_Standard end
+end
 
 --------------------------------------------------------------------------------------------------
 -- STAGE 1, the skeleton: fight as an army, hold the target, take real fights instead of running between points.
@@ -136,6 +177,8 @@ s_personality.Create = function()
 	Elite_PersonalityCreate()
 	if EliteAI.on then
 		s_personality.attack_prefer_threat = cfg("AttackPreferThreat", "1") == "1"
+		if s_personality.kite_chance then s_personality.kite_chance = s_personality.kite_chance * num("KiteChance", 1) end
+		if s_personality.kite_ratio then s_personality.kite_ratio = s_personality.kite_ratio * num("KiteRatio", 1) end
 	end
 end
 
@@ -302,6 +345,14 @@ function InitializeAI()
 		table.insert(avail, n .. "=" .. type(getfenv(1)[n]))
 	end
 	log("api", table.concat(avail, " "))
+	if EliteAI.on then
+		log("variant", EliteAI.variant, EliteAI.vp.name, "real_diff", tostring(EliteAI.real_diff))
+		-- the SCAR side shows it to the player: a pseudo-order, id = player id, x = variant 1..3, mode 9
+		local okv, ev = pcall(function()
+			if _order then _order(s_selfplayerid or 0, string.byte(EliteAI.variant) - 64, 0, 0, 9) end
+		end)
+		if not okv then perr("variant_msg", ev) end
+	end
 	TimeRule_AddInterval(EliteAI_Sample, 5, 0)
 	if EliteAI.director then TimeRule_AddInterval(EliteAI_Director, num("DirectorSecs", 3), 0) end
 	TimeRule_AddInterval(EliteAI_Telemetry, 30, 0)

@@ -216,16 +216,21 @@ typedef LocString *(__fastcall *LsAssign)(LocString *self, void *edx, const wcha
 typedef const wchar_t *(__fastcall *LsCstr)(const LocString *self, void *edx);
 static GetStrV o_getv; static GetStrB o_getb; static ConvId o_conv; static LsAssign p_assign; static LsCstr p_cstr;
 
+// 0.9 (10.11): three variants of the new AI for testers to compare - the slot's difficulty picks it: Easy = A, Normal = B,
+// Hard = C (main.ai EliteAI_VARIANTS); Expert stays Elite's AI. ucs: Add Easy/Normal/Hard 555026-555028, players 555035-555037.
 static void relabel(int id, LocString *ls) {
-    const wchar_t *w = NULL;
-    if (id != 555027 && id != 555036) return;
-    if (!single_player()) return;                    // online lobbies: Normal there is Elite's AI - no "new AI" label
+    const wchar_t *w = NULL; int v;
+    if (id >= 555026 && id <= 555028) v = id - 555026; else if (id >= 555035 && id <= 555037) v = id - 555035; else return;
+    if (!single_player()) return;                    // online lobbies: Elite's AI - no "new AI" label
     const wchar_t *orig = p_cstr(ls, NULL); int ru = 0;
     for (const wchar_t *c = orig; c && *c; c++) if (*c >= 0x400 && *c < 0x500) { ru = 1; break; }
-    if (id == 555027) w = ru ? L"Добавить НОВЫЙ ИИ" : L"Add NEW AI Computer";
-    else              w = ru ? L"НОВЫЙ ИИ (компьютер)" : L"NEW AI Computer";
+    static const wchar_t *add_en[3] = { L"Add NEW AI A", L"Add NEW AI B", L"Add NEW AI C" };
+    static const wchar_t *add_ru[3] = { L"Добавить НОВЫЙ ИИ A", L"Добавить НОВЫЙ ИИ B", L"Добавить НОВЫЙ ИИ C" };
+    static const wchar_t *pl_en[3]  = { L"NEW AI A", L"NEW AI B", L"NEW AI C" };
+    static const wchar_t *pl_ru[3]  = { L"НОВЫЙ ИИ A", L"НОВЫЙ ИИ B", L"НОВЫЙ ИИ C" };
+    if (id <= 555028) w = ru ? add_ru[v] : add_en[v]; else w = ru ? pl_ru[v] : pl_en[v];
     p_assign(ls, NULL, w);
-    static int said; if (said++ < 4) logmsg("label %d -> new AI (game type %lX)", id, game_type());
+    static int said; if (said++ < 6) logmsg("label %d -> new AI %c (game type %lX)", id, 'A' + v, game_type());
 }
 static LocString *__stdcall h_getv(LocString *ret, int id) { LocString *r = o_getv(ret, id); relabel(id, r); return r; }
 static unsigned char __stdcall h_getb(int id, LocString *out) { unsigned char ok = o_getb(id, out); if (ok) relabel(id, out); return ok; }

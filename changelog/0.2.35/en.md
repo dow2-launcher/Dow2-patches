@@ -1,0 +1,1 @@
+- New AI 3: three variants of the new computer opponent - in the skirmish setup Easy = NEW AI A, Normal = NEW AI B, Hard = NEW AI C (Insane stays Elite's AI). The letter is shown at the start of the match - tell us which one plays better.
