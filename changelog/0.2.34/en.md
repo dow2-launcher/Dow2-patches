@@ -1,0 +1,1 @@
+- New AI 2: fixed AI-vs-AI skirmish matches freezing a few minutes in when the new AI controls its army.
