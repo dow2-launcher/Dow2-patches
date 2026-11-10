@@ -1,0 +1,1 @@
+- New (Experiment, off by default): New AI - early test of our rework of Elite's computer opponent for skirmish; pick "Add NEW AI Computer" in the skirmish setup. Skirmish against the computer only - untick it for multiplayer with people.
