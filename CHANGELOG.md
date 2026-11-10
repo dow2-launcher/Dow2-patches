@@ -4,6 +4,13 @@ Every version gets an entry here before it reaches `main`. CI then tags `vX.Y.Z`
 version (`X.Y.0`) it also publishes a GitHub Release with the DLLs and the entries since the previous `X.Y.0`.
 The version of the set lives only in `VERSION`; each DLL still writes its own version to its log.
 
+## 0.2.40 — 2026-11-10
+New AI 8 (store newai-8, experiment, off by default, Elite only) = newai-7 + spending in simulation/ai/strategy_unit_purchase.ai.
+- Idle-bank watchdog (SPEND): when the bank stays above 400 req or 300 power without a spawn, the new logic buys the best affordable unit;
+  with only power piling up it buys units with >= 40 power (T2/T3, vehicles), not 0-power T1. SPEND lines in EliteAI.log.
+- While power >= 300, units that use < 40 power (guardsmen, heavy weapons, termagaunts) get x0.25 demand so the req goes to power units.
+- Not run in game after the last change (static check, luac, spend_stub). Elite's AIs run Elite's code.
+
 ## 0.2.39 — 2026-11-10
 New AI 7 (store newai-7, experiment, off by default, Elite only) = newai-6 + simulation/ai/strategy_tech_purchase.ai
 (EliteAI.dll gives it to the game instead of Elite's script, like strategy_unit_purchase.ai).

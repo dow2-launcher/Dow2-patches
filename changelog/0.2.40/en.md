@@ -1,0 +1,1 @@
+- New AI 8: does not hoard money - spare power goes into units (power-heavy units are preferred while power piles up; an idle-bank watchdog buys a unit when the bank sits unused).
