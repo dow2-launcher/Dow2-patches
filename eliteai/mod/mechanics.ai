@@ -1,0 +1,1171 @@
+-- EliteAI mechanics.ai: combat mechanics of the director + the conflict arbiters that make variants A/B/C differ.
+-- (10.11, the owner) The variants are NOT difficulty or temperament: every mechanic is ON in every variant, the goal is one
+-- good player. A, B, C differ ONLY where the logic hits a genuine conflict of decisions (hold cover or kite from melee,
+-- focus a target or stay put under fire, chase or regroup, split to capture or keep the army ...): every such place is an
+-- arbiter function with a rule picked by EliteAI.num("Conf_<Name>", <variant index A=1 B=2 C=3>), hysteresis (a decision
+-- holds for Mech_ConfHold seconds) and a log line on every switch: "MECH Conf_<Name> <subject> X->Y <reason>".
+-- Mechanics: FocusFire, ArmyRetreat, PunishTurn, PreRetreat, MeleeTie, Repair, RaceAbilities, ArmyRoles - each behind
+-- EliteAI.num("Mech_<Name>", 1) read from EliteAI.ini [Lua] (1 = on; the variant tables of main.ai do not switch mechanics).
+--
+-- LOADING: the AI environment has no dofile/include (import() reads only files that exist inside Elite's archives), so this
+-- text is appended to main.ai: EliteAI.dll reads Elite_DLLs\EliteAI\mechanics.ai and puts it right after main.ai in the
+-- default.ai chunk (dll/eliteai.c); without a rebuilt DLL: cat mod/main.ai mod/mechanics.ai > Elite_DLLs\EliteAI\main.ai.
+-- The file uses only globals (EliteAI.*, engine API), nothing local to main.ai, so it works as part of the main.ai chunk
+-- and as a separate chunk alike. Orders go through the DLL queue (eliteai_order) to elite.scar; modes added there:
+-- 4 = attack a squad, 5 = capture the point at a position, 100+k = ability k at a position, 200+k = ability k on a squad
+-- (k: ABIL below = EliteAI_MECH_ABILITIES in elite.scar).
+--
+-- CALL: EliteAI_Mechanics(state) from EliteAI_Director (main.ai) after the hurt squads were sent home and before the
+-- director's own orders; state = { now, army, active }: the director's lists of { sq, id, pos = {x,y,z}, hp (0..1), hit }
+-- (sq is valid for this tick only). Returns true when the mechanics ordered the army this tick (the director then issues
+-- nothing); otherwise false, having removed from state.active the squads it ordered.
+--
+-- SAFETY (from real hangs/crashes - HANDOFF steps 3-4, 0.7 R6025): no engine object is kept between ticks (numeric ids and
+-- {x,y,z} only); every engine call on a squad is preceded by "squad exists and has models"; no pcall around engine calls
+-- (an error inside leaks the Lua mutex -> hang); deterministic decisions only (engine time/data, no os.time/math.random);
+-- the enemy and the points are scanned once per director tick (3 s), names of own squads are fetched once per squad id.
+
+EliteAI_MECH_VERSION = "0.2"
+
+-- every tunable (EliteAI.ini [Lua] Mech_<Key> overrides); metres and seconds of game time; "strength" = health points
+-- (a squad ~ 300-900, a tank ~ 1500+), vehicles weighted by VehW
+local MP = {
+	-- shared
+	ZoneR = 45,          -- the fight zone: enemies within this distance of the army centre
+	SightR = 30,         -- an enemy is "in contact" when it is under attack or within SightR of one of our squads
+	HomeR = 40,          -- within this distance of our HQ the army never retreats (it fights at home)
+	VehW = 1.3,          -- weight of a vehicle's health in strength sums
+	ScanSecs = 0,        -- rescan the enemy at most this often (0 = every director tick)
+	StatsSecs = 60,      -- period of the "MECH stats" log line
+	ConfHold = 6,        -- a conflict decision holds at least this long (hysteresis against flapping)
+	-- FocusFire
+	FocusR = 40,         -- candidates: enemies in contact within FocusR of the army centre or FocusNear of a squad under attack
+	FocusNear = 25,
+	FocusKeep = 0.5,     -- inertia: keep the current target while its score >= best score - FocusKeep ...
+	FocusMinSecs = 6,    -- ... and always for this long after choosing it
+	FocusHpW = 2.0, FocusCntW = 1.0, FocusValW = 0.5, FocusDistW = 0.5, FocusVehPen = 0.4,
+	FocusLeaveR = 25,    -- Conf_FocusLeave: a squad under fire farther than this from the target would have to leave its spot
+	FocusLeaveHp = 0.35, -- Conf_FocusLeave rule 2: it leaves only for a target below this health share
+	-- ArmyRetreat
+	RetreatRatio = 1.6,  -- enemy strength in the zone / ours >= this -> the whole army goes home
+	RetreatMinW = 600,   -- ... and the enemy strength is at least this
+	RetreatHold = 15,    -- no "come back" check for this long after the retreat started
+	RetreatMax = 75,     -- the retreat ends after this whatever the enemy does
+	ReturnRatio = 1.0,   -- come back when enemy strength near the old fight spot <= our total strength * ReturnRatio
+	VPHoldR = 25,        -- Conf_HoldVP: a victory point we own/capture within this distance of the army centre ...
+	HoldVPMult = 1.6,    -- ... multiplies RetreatRatio (rule 2: only while we lose the ticker race, rule 3: always)
+	-- PreRetreat
+	PreR = 90,           -- incoming enemy groups are looked for up to this distance
+	PreClose = 6,        -- "approaching": the enemy squad moved at least this much towards our centre since the last scan
+	PreAngle = 60,       -- degrees off the direction of the current fight/target: beyond = flank/rear (full weight)
+	PreFrontW = 0.5,     -- weight of forces coming head-on (Conf_PreEngage rule 3: 0)
+	PreRatio = 1.4,      -- (zone + incoming) / ours >= PreRatio -> retreat before the blow
+	PreMinW = 400,       -- ... and the incoming force is at least this
+	PreWinK = 0.5,       -- Conf_PreEngage rule 2: finish the current fight when the zone enemy is below ours * PreWinK
+	-- PunishTurn
+	PunishR = 45,        -- a retreating enemy within this distance of the army centre
+	PunishMove = 5,      -- "moving away": moved at least this much away from our centre since the last scan
+	PunishHp = 0.6,      -- ... and either lost health since the last scan or is below this share
+	PunishMaxRatio = 1.0,-- only while the enemy in the zone is not stronger than us
+	PunishMaxHome = 130, -- never chase farther than this from our HQ
+	PunishSecs = 10,     -- a chase ends after this ...
+	PunishLostR = 70,    -- ... or when the target is farther than this from the army centre
+	ChaseR = 35,         -- Conf_Chase rule 1: only squads within this distance of the target chase, the rest regroup
+	-- MeleeTie
+	TieR = 35,           -- ranged enemies within this distance of our melee squad
+	TieMinHP = 0.45,     -- our melee squad needs this health share
+	TieSecs = 10,        -- keep the chosen shooter this long
+	RangedMinD = 12,     -- an enemy squad shooting its target from at least this distance counts as a ranged squad
+	TieHeroes = 1,       -- melee heroes take part too
+	JumpMin = 12, JumpMax = 32, JumpCd = 25,   -- jump squads jump on a target this far away, once per JumpCd
+	-- Conf_MeleeApproach (enemy melee coming at our ranged squad)
+	MeleeThreatR = 18,   -- an enemy melee squad this close and closing ...
+	MeleeClose = 3,      -- ... by at least this much since the last scan
+	FriendR = 15,        -- rule 1: hold when at least MeleeHoldFriends own squads are within FriendR, else kite
+	MeleeHoldFriends = 2,
+	MeleeKiteK = 1.0,    -- rule 2: kite when the attacker is stronger than our squad * MeleeKiteK
+	KiteD = 14,          -- kite: move this far away from the attacker
+	-- Repair
+	RepairHP = 0.7,      -- a vehicle below this health share wants repair ...
+	RepairDoneHP = 0.95, -- ... until this
+	RepairSafeR = 40,    -- no enemy within this distance of the vehicle and of the repairer
+	RepairSafeR2 = 20,   -- Conf_RepairVsFight rule 2: a repair in progress on a vehicle below RepairKeepHp goes on until this
+	RepairKeepHp = 0.5,
+	RepairMaxD = 70,     -- the repairer is at most this far from the vehicle
+	RepairSecs = 30,     -- an assignment is re-made after this
+	-- RaceAbilities (player/global abilities through Elite's own player_abilities.ai)
+	AbilBudget = 60,     -- weight of BUDGET_PlayerAbility (Elite: 25 of ~265 -> ~9 % of the income)
+	AbilDemand = 30,     -- demand of an ability we want now (Elite adds -5..5; > 1 is needed)
+	AbilSpawnDemand = 12,-- demand of spawn/reinforcement abilities out of a fight
+	AbilFightSecs = 8,   -- "in a fight": enemy contact within this many seconds
+	AbilR = 60,          -- our clump search: enemies in contact within this distance of the army centre
+	AbilClumpR = 12,     -- a clump = enemy squads within this distance of one of them
+	AbilMinClump = 2,    -- Conf_AbilitySave rule 2: damage abilities need a clump of at least this many squads
+	AbilFriendR = 10,    -- no own squad within this distance of the clump position (friendly fire)
+	-- ArmyRoles
+	Runners = 1,         -- secondary squads that run between points ...
+	Runners2At = 8,      -- ... two of them when the army has at least this many squads
+	RunnerFleeR = 30,    -- enemy squads within this distance of the runner: fight one (Conf_RunnerFight) or go elsewhere
+	RunnerPointR = 40,   -- a point with enemies within this distance is skipped by the runner
+	RunnerAvoidR = 80,   -- after a threat the runner prefers points at least this far from it (the other flank)
+	RunnerAvoidSecs = 45,
+	RunnerVpBonus = 30,  -- victory points count this many metres closer
+	RunnerReissue = 20,  -- the capture order is repeated after this (safety)
+	EliteCapturers = 1,  -- Elite's own capture tasks left (s_personality.max_num_capturers; Elite: 8)
+	SplitAfter = 6,      -- the core splits to the points this long after the last enemy contact ...
+	SplitWindow = 30,    -- ... but only within this time after a fight
+	SplitR = 70,         -- points within this distance of the army centre
+	SplitPointSafeR = 50,-- a point with enemies within this distance is not taken by the split
+	SplitSecs = 40,      -- the split ends after this at the latest
+	SplitReissue = 20,
+	SplitCooldown = 30,  -- no new split this long after the last one
+	SplitMinHp = 0.5,    -- a squad below this health share does not go
+	EnemyHalfK = 1.0,    -- "enemy half": the point is closer to an enemy HQ than EnemyHalfK * its distance to our base
+	DecapEnemyR = 50,    -- Conf_Decap rule 2/3: enemies within this distance of the point -> neutralise only
+}
+
+-- squad abilities cast through elite.scar (EliteAI_MECH_ABILITIES there: THE SAME NUMBERING, keep both in sync)
+local ABIL_REPAIR_SM, ABIL_REPAIR_IG, ABIL_REPAIR_ORK, ABIL_REPAIR_GROT, ABIL_REPAIR_ELD, ABIL_REPAIR_CSM, ABIL_REPAIR_TAU = 1, 2, 3, 4, 5, 6, 7
+local ABIL_JUMP_SM, ABIL_JUMP_CSM, ABIL_JUMP_ORK, ABIL_JUMP_TYR, ABIL_JUMP_ELD = 8, 9, 10, 11, 12
+-- our squads by sbps name (PBG_GetName -> "sbps\pvp\race_marine\troops\sm_assault_marine", lower case, '\' -> '/'), substrings
+local REPAIRERS = {                                                  -- who repairs (ebps with the ability, Elite attrib)
+	{ "heroes/sm_techmarine", ABIL_REPAIR_SM }, { "sm_scout_marine", ABIL_REPAIR_SM },
+	{ "ig_guardsmen_squad", ABIL_REPAIR_IG }, { "ig_heavy_weapon_squad", ABIL_REPAIR_IG }, { "troops/ig_commissar", ABIL_REPAIR_IG },
+	{ "heroes/ork_hero_mekboy", ABIL_REPAIR_ORK }, { "ork_slugga", ABIL_REPAIR_ORK }, { "ork_gretchin", ABIL_REPAIR_GROT },
+	{ "eld_guardian", ABIL_REPAIR_ELD }, { "heroes/eld_warlock", ABIL_REPAIR_ELD },
+	{ "csm_cultist", ABIL_REPAIR_CSM }, { "heroes/csm_plague_marine_champion", ABIL_REPAIR_CSM },
+	{ "tau_pathfinders", ABIL_REPAIR_TAU },
+}
+local JUMPERS = {                                                    -- who jumps (position-targeted jump abilities)
+	{ "sm_assault_marine", ABIL_JUMP_SM }, { "sm_vanguard_veteran", ABIL_JUMP_SM }, { "csm_raptor", ABIL_JUMP_CSM },
+	{ "ork_stormboy", ABIL_JUMP_ORK }, { "troops/tyr_ravener", ABIL_JUMP_TYR }, { "eld_autarch", ABIL_JUMP_ELD },
+}
+local MELEE = { "assault_marine", "vanguard_veteran", "terminator_assault", "csm_raptor", "bloodletter", "khorne", "berzerk",
+	"juggernaut", "ork_slugga", "ork_stormboy", "ork_nob_squad", "kommandos_melee", "eld_banshee", "eld_scorpion", "eld_autarch",
+	"tyr_hormagaunt", "tyr_genestealer", "troops/tyr_ravener", "troops/tyr_lictor", "ig_ogryn", "ig_bullgryn", "gk_interceptor", "gk_crusaders" }
+local MELEE_HEROES = { "sm_force_commander", "ork_warboss", "csm_chaos_lord", "ork_hero_kommando", "tyr_hero_lictor", "tyr_hero_ravener", "gk_brother_captain" }
+local RUNNER_KEYS = { "sm_scout_marine", "ork_gretchin", "eld_ranger", "eld_guardian", "csm_cultist", "ig_guardsmen_squad",   -- cheap/fast capturers first
+	"tyr_hormagaunt", "tyr_termagaunt", "tau_pathfinders", "tau_kroot", "gk_strike_squad" }
+local SPAWN_KEYS = { "spawn", "without_number", "drop_pod", "respawn" }
+
+-- modes of the DLL order queue (elite.scar): 1-3 = the director's, the rest are ours
+local ORD_MOVE, ORD_RETREAT, ORD_ATTACK_SQUAD, ORD_CAPTURE, ORD_ABILITY_POS, ORD_ABILITY_SQUAD = 1, 3, 4, 5, 100, 200
+
+-- state between ticks: numbers and plain tables only
+local M = { names = {}, cls = {}, own = {}, en = nil, en_prev = {}, pts = {}, pts_by_key = {}, hqs = {}, conf = {},
+	tie = {}, repair = {}, jumped = {}, runner = {}, bad_pt = {}, last_scan = -1, last_stats = 0, last_contact = nil, said = {},
+	st = { focus = 0, focus_sw = 0, retreat = 0, pre = 0, punish = 0, tie = 0, jump = 0, repair = 0, kite = 0, abil = 0,
+		conf = 0, runner = 0, split = 0, decap = 0, orders = 0 } }
+EliteAI.mech = M
+
+local function mlog(...) if EliteAI.log then EliteAI.log("MECH", ...) end end
+local function fmt(...) return string.format(...) end
+local function prm(k) return EliteAI.num("Mech_" .. k, MP[k]) end
+local function mech_on(name)                                                  -- ini only: Mech_<Name>=0 switches it off
+	local v = tonumber(EliteAI.cfg("Mech_" .. name, nil))
+	if v == nil then return true end
+	return v >= 1
+end
+local function vidx() local v = EliteAI.variant; return (v == "B" and 2) or (v == "C" and 3) or 1 end
+local function rule(name)                                                     -- Conf_<Name> = 1/2/3 (default: the variant)
+	local r = math.floor(EliteAI.num("Conf_" .. name, vidx()))
+	if r < 1 then r = 1 elseif r > 3 then r = 3 end
+	return r
+end
+-- the conflict arbiter's memory: a decision holds ConfHold seconds (hysteresis), every switch is logged
+local function decide(name, subject, v, reason, now)
+	local key = name .. ":" .. tostring(subject)
+	local c = M.conf[key]
+	if not c then M.conf[key] = { v = v, t = now }; return v end
+	if c.v == v then return v end
+	if now - c.t < prm("ConfHold") then return c.v end
+	mlog("Conf_" .. name, subject, c.v .. "->" .. v, reason or "")
+	c.v, c.t = v, now
+	M.st.conf = M.st.conf + 1
+	return v
+end
+
+local _morder = eliteai_order or (string and string.eliteai_order)
+local function morder(id, x, y, z, mode)                                      -- the DLL only stores five numbers: cannot raise
+	if not _morder or not id then return end
+	_morder(id, x or 0, y or 0, z or 0, mode)
+	M.st.orders = M.st.orders + 1
+	if EliteAI.orders then EliteAI.orders = EliteAI.orders + 1 end
+end
+
+local function d2(ax, az, bx, bz) local dx, dz = ax - bx, az - bz; return math.sqrt(dx * dx + dz * dz) end
+local function centre(list)
+	local n = table.getn(list)
+	if n == 0 then return nil end
+	local cx, cz = 0, 0
+	for _, u in ipairs(list) do cx = cx + u.pos.x; cz = cz + u.pos.z end
+	return cx / n, cz / n
+end
+local function spread_of(list, cx, cz)
+	local n = table.getn(list)
+	if n == 0 then return 0 end
+	local s = 0
+	for _, u in ipairs(list) do s = s + d2(u.pos.x, u.pos.z, cx, cz) end
+	return s / n
+end
+local function home()                                                         -- our HQ, read once (tactics.ai:508)
+	if not M.home then
+		local p = AIPlayer_GetHomePosition(s_self_modplayer)
+		if p and p.x then M.home = { x = p.x, y = p.y, z = p.z } end
+	end
+	return M.home
+end
+-- strength of one of our squads (director entry: sq valid this tick, Squad_Count > 0 checked by the director)
+local function weight_of(u)
+	if u.hmax == nil then u.hmax = Squad_GetHealthMax(u.sq); u.veh = SquadQuery_IsVehicle(u.sq) end
+	return u.hmax * u.hp * (u.veh and prm("VehW") or 1)
+end
+local function our_weight(list)
+	local w = 0
+	for _, u in ipairs(list) do w = w + weight_of(u) end
+	return w
+end
+local function has_key(name, keys)
+	for _, k in ipairs(keys) do if string.find(name, k, 1, true) then return true end end
+	return false
+end
+
+-- how much the enemy squad moved towards a point since the last scan (negative = away); nil without a last scan
+local function approach(e, x, z)
+	if not e.px then return nil end
+	local d = d2(e.x, e.z, x, z)
+	if d <= 0 then return nil end
+	local mx, mz = e.x - e.px, e.z - e.pz
+	return (mx * (x - e.x) + mz * (z - e.z)) / d
+end
+--------------------------------------------------------------------------------------------------
+-- the enemy, once per tick: { id, x, y, z, hp, hmax, n, veh, hit, w, d (to our centre), contact, tdist (distance to the
+-- squad it is fighting), px/pz/php (last scan) }; nothing but numbers survives the tick
+local function scan_enemies(now, cx, cz, army, want_tdist)
+	local ss = prm("ScanSecs")
+	if M.en and ss > 0 and now - M.last_scan < ss then
+		for _, e in ipairs(M.en) do e.d = d2(e.x, e.z, cx, cz) end
+		return M.en
+	end
+	local list, prev, seen, vw = {}, M.en_prev, {}, prm("VehW")
+	local n_pl = World_GetPlayerCount()                                       -- cache.ai:62-64
+	for i = 1, n_pl do
+		local p = World_GetPlayerAt(i)
+		if p and Player_IsAlive(p) and Player_GetRelationship(s_self_modplayer, p) == R_ENEMY then   -- cache.ai:65, tactics.ai:22
+			local sg = Player_GetSquads(p)                                    -- main.ai Sample; tactics.ai:109-112
+			local cnt = sg and SGroup_CountSpawned(sg) or 0
+			for j = 1, cnt do
+				local sq = SGroup_GetSpawnedSquadAt(sg, j)
+				local n = sq and Squad_Count(sq) or 0
+				if n > 0 then                                                  -- no position/health for a squad without models
+					local id, pos, hmax = Squad_GetGameID(sq), Squad_GetPosition(sq), Squad_GetHealthMax(sq)
+					local hp, veh = Squad_GetHealth(sq) / math.max(hmax, 1), SquadQuery_IsVehicle(sq)
+					local e = { id = id, x = pos.x, y = pos.y, z = pos.z, hp = hp, hmax = hmax, n = n, veh = veh,
+						hit = Squad_IsUnderAttack(sq, 3), w = hmax * hp * (veh and vw or 1) }
+					e.d = d2(e.x, e.z, cx, cz)
+					local pr = prev[id]
+					if pr then e.px, e.pz, e.php = pr.x, pr.z, pr.hp end
+					seen[id] = { x = e.x, z = e.z, hp = hp }
+					table.insert(list, e)
+				end
+			end
+		end
+	end
+	local sr, contact = prm("SightR"), false
+	for _, e in ipairs(list) do
+		e.contact = e.hit
+		if not e.contact then
+			for _, u in ipairs(army) do if d2(e.x, e.z, u.pos.x, u.pos.z) <= sr then e.contact = true; break end end
+		end
+		if e.contact then contact = true end
+		-- verify 10.11: SquadQuery_GetAnySquadCombatTarget is no longer called on ENEMY squads (Elite calls it on its own
+		-- squads only; unproven on others = hang risk). "Ranged" surrogate from numbers only: in contact, not a vehicle,
+		-- not closing in since the last scan, and keeps tdist = distance to our nearest squad
+		if want_tdist and e.contact and not e.veh and e.px then
+			local nd, nu
+			for _, u in ipairs(army) do local d = d2(e.x, e.z, u.pos.x, u.pos.z); if not nd or d < nd then nd, nu = d, u end end
+			if nd then
+				local a = approach(e, nu.pos.x, nu.pos.z)
+				if a and a < prm("MeleeClose") then e.tdist = nd end
+			end
+		end
+	end
+	if contact then M.last_contact = now end
+	M.en, M.en_prev, M.last_scan = list, seen, now
+	return list
+end
+local function enemy_weight_near(en, x, z, r)
+	local w, n = 0, 0
+	for _, e in ipairs(en) do if d2(e.x, e.z, x, z) <= r then w = w + e.w; n = n + 1 end end
+	return w, n
+end
+
+-- our squads through the AI side, every tick: sbps name once per squad id (AISquad -> PBG -> name: strategy_addon.ai:188,
+-- strategy_unit_purchase.ai:104) and the melee flags (tactics.ai:280, 327)
+local function scan_own(army)
+	local own = {}
+	local n = Military_SquadTotalCount(s_selfplayer)
+	for i = 0, n - 1 do
+		local aisq = Military_GetAISquadAtIndex(s_selfplayer, i)
+		local sq = aisq and not AISquad_InCaptureTask(aisq) and AISquad_ConvertToSimSquad(aisq)   -- as main.ai 0.8 (hang fix)
+		if sq and Squad_Count(sq) > 0 then
+			local id = Squad_GetGameID(sq)
+			if M.names[id] == nil then
+				local pbg = AISquad_ConvertToPBG(aisq)
+				local nm = pbg and PBG_GetName(pbg) or ""
+				M.names[id] = string.gsub(string.lower(nm or ""), "\\", "/")
+			end
+			own[id] = { meleed = AISquad_IsUnderMeleeAttack(aisq), mstance = AISquad_IsInMeleeStance(aisq) }
+		end
+	end
+	for _, u in ipairs(army) do if M.names[u.id] == nil then M.names[u.id] = "" end end
+	M.own = own
+end
+local function cls_of(name)                                                   -- melee / jump ability / repair ability / runner
+	local c = M.cls[name]
+	if c then return c end
+	c = { melee = has_key(name, MELEE) or (prm("TieHeroes") >= 1 and has_key(name, MELEE_HEROES)), runner = has_key(name, RUNNER_KEYS) }
+	for _, r in ipairs(REPAIRERS) do if string.find(name, r[1], 1, true) then c.repair = r[2]; break end end
+	for _, j in ipairs(JUMPERS) do if string.find(name, j[1], 1, true) then c.jump = j[2]; break end end
+	M.cls[name] = c
+	return c
+end
+local function ucls(u) return cls_of(M.names[u.id] or "") end
+-- a jump squad jumps on the target when it is JumpMin..JumpMax away (once per JumpCd), otherwise an attack order
+local function attack_or_jump(u, e, now)
+	local c = ucls(u)
+	local d = d2(u.pos.x, u.pos.z, e.x, e.z)
+	if c.jump and d >= prm("JumpMin") and d <= prm("JumpMax") and now - (M.jumped[u.id] or -1000) >= prm("JumpCd") then
+		M.jumped[u.id] = now; M.st.jump = M.st.jump + 1
+		morder(u.id, e.x, e.y, e.z, ORD_ABILITY_POS + c.jump)
+		mlog("Jump", u.id, "->", e.id, fmt("d %.0f ability %d", d, c.jump))
+	else
+		morder(u.id, e.id, 0, 0, ORD_ATTACK_SQUAD)
+	end
+end
+
+--------------------------------------------------------------------------------------------------
+-- capturable points (targets.ai:453-495 pattern), every tick, numbers only: Elite rebuilds its military points, a kept
+-- point object is a dead one (0.7 R6025). owner = team number or -1 (neutral)
+local function scan_points()
+	local pts, byk, hqs = {}, {}, {}
+	local function add(mp, team)
+		if not Military_IsMilitaryPointValid(mp) then return end
+		local t = Military_GetMilitaryPointType(mp)
+		local p = Military_GetMilitaryPointPosition(mp)
+		if not p then return end
+		if t == MPT_HQ then
+			if team ~= s_self_team then table.insert(hqs, { x = p.x, z = p.z }) end
+			return
+		end
+		if t ~= MPT_VictoryPoint and t ~= MPT_PowerPoint and t ~= MPT_RequisitionPoint then return end
+		local e = { x = p.x, y = p.y, z = p.z, vp = (t == MPT_VictoryPoint), owner = team,
+			dbase = Military_GetMilitaryPointDistanceToBase(s_selfplayer, mp),
+			enemy_cap = Military_IsMilitaryPointBeingCapturedByEnemy(s_selfplayer, mp),
+			us_cap = Military_IsMilitaryPointBeingCapturedByUs(s_selfplayer, mp) }
+		e.key = fmt("%.0f/%.0f", e.x, e.z)
+		e.ours = (team == s_self_team)
+		e.enemy = (team ~= -1 and team ~= s_self_team)
+		table.insert(pts, e); byk[e.key] = e
+	end
+	local n_pl = World_GetPlayerCount()
+	for i = 1, n_pl do
+		local pl = World_GetPlayerAt(i)
+		if pl then
+			local team = Player_GetTeam(pl)
+			local cnt = Military_GetMilitaryPointCount(s_selfplayer, pl)
+			for j = 0, cnt - 1 do add(Military_GetMilitaryPointAt(s_selfplayer, pl, j), team) end
+		end
+	end
+	local cnt = Military_GetNeutralMilitaryPointCount(s_selfplayer)
+	for j = 0, cnt - 1 do add(Military_GetNeutralMilitaryPointAt(s_selfplayer, j), -1) end
+	local k = prm("EnemyHalfK")
+	for _, e in ipairs(pts) do                                                -- "enemy half": closer to an enemy HQ than to our base
+		local dh
+		for _, h in ipairs(hqs) do local d = d2(e.x, e.z, h.x, h.z); if not dh or d < dh then dh = d end end
+		e.enemy_half = (dh ~= nil and e.dbase ~= nil and dh < e.dbase * k)
+	end
+	M.pts, M.pts_by_key, M.hqs = pts, byk, hqs
+	return pts
+end
+-- Conf_Decap: a point on the enemy half - neutralise only, or capture fully (victory points: always fully)
+local function decap_only(p, en, now)
+	if p.vp then return false end
+	local r, v = rule("Decap"), "full"
+	local ew = enemy_weight_near(en, p.x, p.z, prm("DecapEnemyR"))
+	if r == 1 then
+		if EliteAI.num("DecapOnly_EnemyHalf", 1) >= 1 and p.enemy_half then v = "decap" end
+	elseif r == 2 then
+		if p.enemy_half and ew > 0 then v = "decap" end
+	else
+		if ew > 0 then v = "decap" end
+	end
+	return decide("Decap", p.key, v, fmt("enemy_half %s enemies %.0f", tostring(p.enemy_half), ew), now) == "decap"
+end
+-- is the capture job at this point finished for us?
+local function point_done(p, en, now)
+	if p.ours then return true, "ours" end
+	if not p.enemy and decap_only(p, en, now) then return true, "neutralised" end
+	return false
+end
+
+--------------------------------------------------------------------------------------------------
+-- ArmyRetreat / PreRetreat: one retreat state for both (M.retreat = { t0, reason, bx, bz, last })
+local function start_retreat(state, reason, cx, cz, info)
+	M.retreat = { t0 = state.now, reason = reason, bx = cx, bz = cz, last = state.now }
+	M.punish, M.focus, M.split = nil, nil, nil
+	for _, u in ipairs(state.active) do morder(u.id, u.pos.x, u.pos.y, u.pos.z, ORD_RETREAT) end
+	M.st[reason] = M.st[reason] + 1
+	mlog(reason == "pre" and "PreRetreat" or "ArmyRetreat", "start", info, "squads", table.getn(state.active), "t", math.floor(state.now))
+	EliteAI.phase = "m_retreat"
+end
+local function run_retreat(state, en, cx, cz, h)
+	local r, now = M.retreat, state.now
+	if now - r.last >= 9 then                                                 -- keep those still out there going home
+		r.last = now
+		for _, u in ipairs(state.active) do
+			if not h or d2(u.pos.x, u.pos.z, h.x, h.z) > prm("HomeR") then morder(u.id, u.pos.x, u.pos.y, u.pos.z, ORD_RETREAT) end
+		end
+	end
+	EliteAI.phase = "m_retreat"
+	if now - r.t0 < prm("RetreatHold") then return true end
+	local ours, there, athome, zr = our_weight(state.army), 0, 0, prm("ZoneR") * 1.2
+	for _, e in ipairs(en) do
+		if d2(e.x, e.z, r.bx, r.bz) <= zr then there = there + e.w end
+		if h and d2(e.x, e.z, h.x, h.z) <= prm("HomeR") then athome = athome + e.w end
+	end
+	local why
+	if athome > 0 then why = "enemy at home"
+	elseif there <= ours * prm("ReturnRatio") then why = "enemy gone or we recovered"
+	elseif now - r.t0 > prm("RetreatMax") then why = "timeout" end
+	if why then
+		mlog(r.reason == "pre" and "PreRetreat" or "ArmyRetreat", "end", why, fmt("there %.0f ours %.0f after %.0f s", there, ours, now - r.t0))
+		M.retreat = nil
+		return false                                                          -- the director resumes this tick
+	end
+	return true
+end
+-- Conf_HoldVP: a victory point under our feet raises the retreat threshold (rule 1: never, 2: while we lose the ticker
+-- race, 3: always)
+local function hold_vp_mult(cx, cz, now)
+	local r = rule("HoldVP")
+	local v = "normal"
+	if r >= 2 then
+		local vp
+		for _, p in ipairs(M.pts) do
+			if p.vp and (p.ours or p.us_cap) and d2(p.x, p.z, cx, cz) <= prm("VPHoldR") then vp = p; break end
+		end
+		if vp then
+			local losing = cache and cache.self_vp_tickers and cache.enemy_vp_tickers and cache.self_vp_tickers < cache.enemy_vp_tickers
+			if r == 3 or losing then v = "hold" end
+		end
+	end
+	v = decide("HoldVP", "army", v, "", now)
+	return v == "hold" and prm("HoldVPMult") or 1
+end
+-- the enemy in the fight zone outweighs us -> go home before the squads are broken one by one
+local function check_army_retreat(state, en, cx, cz, h)
+	if not h or d2(cx, cz, h.x, h.z) <= prm("HomeR") then return false end
+	local zr, enw = prm("ZoneR"), 0
+	for _, e in ipairs(en) do if e.d <= zr then enw = enw + e.w end end
+	if enw < prm("RetreatMinW") then return false end
+	local ours = our_weight(state.active)
+	local ratio = prm("RetreatRatio") * hold_vp_mult(cx, cz, state.now)
+	if enw >= ours * ratio then
+		start_retreat(state, "retreat", cx, cz, fmt("enemy %.0f ours %.0f ratio %.2f need %.2f", enw, ours, enw / math.max(ours, 1), ratio))
+		return true
+	end
+	return false
+end
+-- a big force is coming at us from the flank/rear (approaching squads outside the zone, direction off the fight axis);
+-- Conf_PreEngage: 1 = retreat as computed, 2 = finish a fight we are winning first, 3 = flank forces only, higher bar
+local function check_pre_retreat(state, en, cx, cz, h)
+	if not h or d2(cx, cz, h.x, h.z) <= prm("HomeR") then return false end
+	local now, r = state.now, rule("PreEngage")
+	local zr, pr, close = prm("ZoneR"), prm("PreR"), prm("PreClose")
+	local zonew, nearest = 0, nil
+	for _, e in ipairs(en) do
+		if e.d <= zr then zonew = zonew + e.w; if not nearest or e.d < nearest.d then nearest = e end end
+	end
+	local rx, rz                                                              -- the fight axis: nearest enemy in the zone, else the attack target
+	if nearest then rx, rz = nearest.x - cx, nearest.z - cz
+	elseif EliteAI.best_pos then rx, rz = EliteAI.best_pos.x - cx, EliteAI.best_pos.z - cz end
+	local rl = rx and math.sqrt(rx * rx + rz * rz) or 0
+	local frontw = (r == 3) and 0 or prm("PreFrontW")
+	local cosmin, inc, ninc, flank = math.cos(prm("PreAngle") * math.pi / 180), 0, 0, 0
+	for _, e in ipairs(en) do
+		if e.d > zr and e.d <= pr then
+			local app = approach(e, cx, cz)
+			if app and app >= close then
+				local wgt = 1
+				if rl > 0 then
+					local vx, vz = e.x - cx, e.z - cz
+					local vl = math.sqrt(vx * vx + vz * vz)
+					local c = vl > 0 and (vx * rx + vz * rz) / (vl * rl) or 1
+					if c >= cosmin then wgt = frontw else flank = flank + 1 end
+				else flank = flank + 1 end
+				inc, ninc = inc + e.w * wgt, ninc + 1
+			end
+		end
+	end
+	if ninc == 0 or inc < prm("PreMinW") then return false end
+	local ours = our_weight(state.active)
+	local need = prm("PreRatio") * ((r == 3) and 1.3 or 1)
+	local v = "retreat"
+	if zonew + inc < ours * need then v = "stay"
+	elseif r == 2 and zonew > 0 and zonew < ours * prm("PreWinK") then v = "engage" end
+	v = decide("PreEngage", "army", v, fmt("incoming %.0f zone %.0f ours %.0f", inc, zonew, ours), now)
+	if v == "retreat" then
+		start_retreat(state, "pre", cx, cz, fmt("incoming %.0f (%d squads, %d flank) zone %.0f ours %.0f", inc, ninc, flank, zonew, ours))
+		return true
+	end
+	return false
+end
+
+--------------------------------------------------------------------------------------------------
+-- PunishTurn: an enemy squad that took damage and moves away from us -> the army (jump squads by jumping) hits its back,
+-- while the enemy in the zone is not stronger than us and not far from our HQ. Conf_Chase: 1 = only squads near the
+-- target chase, the rest regroup at the centre; 2 = chase only with a compact army, else regroup; 3 = everybody chases
+local function run_punish(state, en, cx, cz, h, taken)
+	local now, p, zr, enw = state.now, M.punish, prm("ZoneR"), 0
+	for _, e in ipairs(en) do if e.d <= zr then enw = enw + e.w end end
+	local ratio = enw / math.max(our_weight(state.active), 1)
+	local byid = {}
+	for _, e in ipairs(en) do byid[e.id] = e end
+	if p then
+		local e, why = byid[p.id], nil
+		if not e then why = "target gone"
+		elseif now - p.t0 > prm("PunishSecs") then why = "timeout"
+		elseif e.d > prm("PunishLostR") then why = "too far"
+		elseif h and d2(e.x, e.z, h.x, h.z) > prm("PunishMaxHome") then why = "too far from home"
+		elseif ratio > prm("PunishMaxRatio") * 1.3 then why = "enemy too strong" end
+		if why then mlog("PunishTurn", "end", why, "target", p.id, fmt("after %.0f s", now - p.t0)); M.punish = nil; p = nil end
+	end
+	if not p then
+		if ratio > prm("PunishMaxRatio") then return false end
+		local best
+		for _, e in ipairs(en) do
+			if e.contact and e.d <= prm("PunishR") and (not h or d2(e.x, e.z, h.x, h.z) <= prm("PunishMaxHome")) then
+				local app = approach(e, cx, cz)
+				if app and -app >= prm("PunishMove") and (e.hp < e.php - 0.03 or e.hp <= prm("PunishHp")) then
+					if not best or e.hp < best.hp or (e.hp == best.hp and e.d < best.d) then best = e end
+				end
+			end
+		end
+		if not best then return false end
+		p = { id = best.id, t0 = now }
+		M.punish, M.st.punish = p, M.st.punish + 1
+		mlog("PunishTurn", "start", "target", best.id, fmt("hp %.2f d %.0f %s ratio %.2f", best.hp, best.d, best.veh and "veh" or "inf", ratio))
+	end
+	local e = byid[p.id]
+	local r, v = rule("Chase"), "all"
+	if r == 1 then v = "near" elseif r == 2 then v = (spread_of(state.active, cx, cz) <= EliteAI.num("GatherR", 30)) and "all" or "regroup" end
+	v = decide("Chase", "army", v, fmt("target %d spread %.0f", e.id, spread_of(state.active, cx, cz)), now)
+	if v == "regroup" then M.punish = nil; return false end                   -- the director gathers the army instead
+	local n = 0
+	for _, u in ipairs(state.active) do
+		if not taken[u.id] then
+			if v == "all" or d2(u.pos.x, u.pos.z, e.x, e.z) <= prm("ChaseR") then attack_or_jump(u, e, now)
+			else morder(u.id, cx, u.pos.y, cz, ORD_MOVE) end
+			taken[u.id] = true; n = n + 1
+		end
+	end
+	EliteAI.phase = "m_punish"
+	return n > 0
+end
+
+--------------------------------------------------------------------------------------------------
+-- FocusFire: everybody shoots the most vulnerable enemy squad in contact (low health, few models, valuable and hurt),
+-- with inertia so the target does not flip every tick. Conf_FocusLeave for a squad under fire that would have to leave
+-- its spot: 1 = it stays and keeps its own fight, 2 = it goes only for a nearly dead target, 3 = it always goes
+local function run_focus(state, en, cx, cz, taken)
+	local now, fr, fn = state.now, prm("FocusR"), prm("FocusNear")
+	local hits = {}
+	for _, u in ipairs(state.active) do if u.hit then table.insert(hits, u) end end
+	local best, bests, cur, curs
+	for _, e in ipairs(en) do
+		if e.contact then
+			local near = e.d <= fr
+			if not near then for _, u in ipairs(hits) do if d2(e.x, e.z, u.pos.x, u.pos.z) <= fn then near = true; break end end end
+			if near then
+				local s = (1 - e.hp) * prm("FocusHpW") + (1 / math.max(e.n, 1)) * prm("FocusCntW")
+					+ math.min(e.hmax / 1500, 2) * (1 - e.hp) * prm("FocusValW") - (e.d / fr) * prm("FocusDistW")
+				if e.hit then s = s + 0.3 end
+				if e.veh and e.hp > 0.4 then s = s - prm("FocusVehPen") end
+				if M.focus_force == e.id then s = s + 5 end                      -- Conf_MeleeApproach rule 3: shoot the attacker
+				if not best or s > bests or (s == bests and e.id < best.id) then best, bests = e, s end
+				if M.focus and e.id == M.focus.id then cur, curs = e, s end
+			end
+		end
+	end
+	if not best then
+		if M.focus then mlog("FocusFire", "end", "no target", fmt("after %.0f s", now - M.focus.t0)); M.focus = nil end
+		return false
+	end
+	local pick, picks = best, bests
+	if cur and (now - M.focus.t0 < prm("FocusMinSecs") or curs >= bests - prm("FocusKeep")) then pick, picks = cur, curs end
+	if not M.focus or M.focus.id ~= pick.id then
+		if M.focus then M.st.focus_sw = M.st.focus_sw + 1 end
+		M.focus = { id = pick.id, t0 = now }
+		M.st.focus = M.st.focus + 1
+		mlog("FocusFire", "target", pick.id, fmt("hp %.2f n %d hmax %.0f d %.0f %s score %.2f", pick.hp, pick.n, pick.hmax, pick.d, pick.veh and "veh" or "inf", picks))
+	end
+	local n, r = 0, rule("FocusLeave")
+	for _, u in ipairs(state.active) do
+		if not taken[u.id] then
+			local go, d = true, d2(u.pos.x, u.pos.z, pick.x, pick.z)
+			if u.hit and d > prm("FocusLeaveR") then                             -- it would leave its spot under fire
+				local v = "go"
+				if r == 1 then v = "stay" elseif r == 2 then v = (pick.hp < prm("FocusLeaveHp")) and "go" or "stay" end
+				go = decide("FocusLeave", u.id, v, fmt("target %d d %.0f hp %.2f", pick.id, d, pick.hp), now) == "go"
+			end
+			if go then morder(u.id, pick.id, 0, 0, ORD_ATTACK_SQUAD) end        -- "stay": no order, it keeps its own fight
+			taken[u.id] = true; n = n + 1
+		end
+	end
+	EliteAI.phase = "m_focus"
+	return n > 0
+end
+
+--------------------------------------------------------------------------------------------------
+-- Conf_MeleeApproach: an enemy melee squad is coming at one of our ranged squads - hold the spot (cover, friends) or kite
+-- away. 1 = hold with MeleeHoldFriends friends near, else kite; 2 = kite when the attacker is stronger; 3 = never kite,
+-- the army focuses the attacker (M.focus_force)
+local function run_melee_approach(state, en, cx, cz, taken)
+	local now, n, tr = state.now, 0, prm("MeleeThreatR")
+	for _, u in ipairs(state.active) do
+		if not taken[u.id] and not ucls(u).melee then
+			weight_of(u)
+			if not u.veh then
+				local thr, thd
+				for _, e in ipairs(en) do
+					if not e.veh and e.px and not (e.tdist and e.tdist >= prm("RangedMinD")) then
+						local d = d2(e.x, e.z, u.pos.x, u.pos.z)
+						if d <= tr and d2(e.px, e.pz, u.pos.x, u.pos.z) - d >= prm("MeleeClose") and (not thr or d < thd) then thr, thd = e, d end
+					end
+				end
+				local o = M.own[u.id]
+				if thr and not (o and o.meleed) then                           -- already in melee: kiting is too late, the director's RetreatHP handles it
+					local r, v = rule("MeleeApproach"), "hold"
+					if r == 1 then
+						local friends = 0
+						for _, f in ipairs(state.active) do if f.id ~= u.id and d2(f.pos.x, f.pos.z, u.pos.x, u.pos.z) <= prm("FriendR") then friends = friends + 1 end end
+						if friends < prm("MeleeHoldFriends") then v = "kite" end
+					elseif r == 2 then
+						if thr.w > weight_of(u) * prm("MeleeKiteK") then v = "kite" end
+					else
+						M.focus_force = thr.id
+					end
+					v = decide("MeleeApproach", u.id, v, fmt("melee %d d %.0f w %.0f/%.0f", thr.id, thd, thr.w, weight_of(u)), now)
+					if v == "kite" then
+						local ax, az = u.pos.x - thr.x, u.pos.z - thr.z
+						local al = math.sqrt(ax * ax + az * az)
+						if al < 1 then ax, az = cx - u.pos.x, cz - u.pos.z; al = math.max(math.sqrt(ax * ax + az * az), 1) end
+						local k = prm("KiteD") / al
+						morder(u.id, u.pos.x + ax * k, u.pos.y, u.pos.z + az * k, ORD_MOVE)
+						taken[u.id] = true; n = n + 1; M.st.kite = M.st.kite + 1
+					end
+				end
+			end
+		end
+	end
+	return n
+end
+
+--------------------------------------------------------------------------------------------------
+-- MeleeTie: our melee squads (jump squads by jumping) go into the enemy's ranged squads - the ones shooting their target
+-- from a distance - to tie them up. jumpers_only: Conf_TieVsFocus rule 3
+local function run_tie(state, en, taken, jumpers_only)
+	local now, tr, rmin, n = state.now, prm("TieR"), prm("RangedMinD"), 0
+	local byid = {}
+	for _, e in ipairs(en) do byid[e.id] = e end
+	for _, u in ipairs(state.active) do
+		local c = ucls(u)
+		if not taken[u.id] and u.hp >= prm("TieMinHP") and c.melee and (not jumpers_only or c.jump) then
+			local t = M.tie[u.id]
+			local e = t and byid[t.id]
+			if e and (now - t.t0 > prm("TieSecs") or d2(u.pos.x, u.pos.z, e.x, e.z) > tr * 1.3) then e = nil end
+			if not e then
+				local best, bd
+				for _, f in ipairs(en) do
+					if f.contact and not f.veh and f.tdist and f.tdist >= rmin then
+						local d = d2(u.pos.x, u.pos.z, f.x, f.z)
+						if d <= tr then
+							local s = d / tr + f.hp                                -- close and hurt first
+							if not best or s < bd or (s == bd and f.id < best.id) then best, bd = f, s end
+						end
+					end
+				end
+				if best then
+					e = best; M.tie[u.id] = { id = e.id, t0 = now }; M.st.tie = M.st.tie + 1
+					mlog("MeleeTie", u.id, "->", e.id, fmt("hp %.2f d %.0f shooting from %.0f", e.hp, d2(u.pos.x, u.pos.z, e.x, e.z), e.tdist))
+				else M.tie[u.id] = nil end
+			end
+			if e then attack_or_jump(u, e, now); taken[u.id] = true; n = n + 1 end
+		end
+	end
+	return n
+end
+
+--------------------------------------------------------------------------------------------------
+-- Repair: repair-capable squads (REPAIRERS) repair our damaged vehicles out of combat (no enemy near either of them).
+-- Conf_RepairVsFight: 1 = stop at RepairSafeR; 2 = a repair in progress on a badly damaged vehicle goes on down to
+-- RepairSafeR2; 3 = no repair at all while the army is in a fight
+local function run_repair(state, en, taken)
+	local now, n, r = state.now, 0, rule("RepairVsFight")
+	local infight = M.last_contact and now - M.last_contact <= prm("AbilFightSecs")
+	local function threatened(x, z, rad)
+		for _, e in ipairs(en) do if d2(e.x, e.z, x, z) <= rad then return true end end
+		return false
+	end
+	local byid, act, vehs = {}, {}, {}
+	for _, u in ipairs(state.active) do act[u.id] = true end
+	for _, u in ipairs(state.army) do                                          -- vehicles: also the ones sent home
+		byid[u.id] = u
+		weight_of(u)
+		if u.veh and u.hp < prm("RepairHP") and not u.hit and not threatened(u.pos.x, u.pos.z, prm("RepairSafeR")) then table.insert(vehs, u) end
+	end
+	-- current assignments (sorted: no dependence on the order of pairs())
+	local rids, assigned = {}, {}
+	for rid in pairs(M.repair) do table.insert(rids, rid) end
+	table.sort(rids)
+	for _, rid in ipairs(rids) do
+		local a = M.repair[rid]
+		local u, v = byid[rid], byid[a.vid]
+		local safe = prm("RepairSafeR")
+		if r == 2 and v and v.hp < prm("RepairKeepHp") then safe = prm("RepairSafeR2") end
+		local ok = u and v and act[rid] and not taken[rid] and u.hp >= 0.4 and not u.hit and v.hp < prm("RepairDoneHP")
+			and now - a.t0 <= prm("RepairSecs") and not threatened(u.pos.x, u.pos.z, safe) and not threatened(v.pos.x, v.pos.z, safe)
+			and d2(u.pos.x, u.pos.z, v.pos.x, v.pos.z) <= prm("RepairMaxD")
+		if ok and r == 3 and infight then ok = false end
+		if ok and u and v and threatened(v.pos.x, v.pos.z, 60) then         -- the conflict is real: log the decision
+			ok = decide("RepairVsFight", rid, "repair", fmt("vehicle %d hp %.2f", a.vid, v.hp), now) == "repair"
+		end
+		if ok then assigned[a.vid] = rid
+		else
+			M.repair[rid] = nil
+			if u and v and threatened(v.pos.x, v.pos.z, 60) then decide("RepairVsFight", rid, "fight", fmt("vehicle %d hp %.2f", a.vid, v.hp), now) end
+			mlog("Repair", "end", rid, "vehicle", a.vid, v and fmt("hp %.2f", v.hp) or "gone", fmt("after %.0f s", now - a.t0))
+		end
+	end
+	-- new assignments: the most damaged vehicle first, the nearest free repairer
+	if not (r == 3 and infight) then
+		table.sort(vehs, function(a, b) if a.hp ~= b.hp then return a.hp < b.hp end return a.id < b.id end)
+		for _, v in ipairs(vehs) do
+			if not assigned[v.id] then
+				local best, bd
+				for _, u in ipairs(state.active) do
+					if not taken[u.id] and not M.repair[u.id] and u.id ~= v.id and u.hp >= 0.4 and not u.hit and ucls(u).repair then
+						local d = d2(u.pos.x, u.pos.z, v.pos.x, v.pos.z)
+						if d <= prm("RepairMaxD") and (not best or d < bd or (d == bd and u.id < best.id)) and not threatened(u.pos.x, u.pos.z, prm("RepairSafeR")) then best, bd = u, d end
+					end
+				end
+				if best then
+					M.repair[best.id] = { vid = v.id, t0 = now }
+					assigned[v.id] = best.id
+					M.st.repair = M.st.repair + 1
+					mlog("Repair", best.id, "->", "vehicle", v.id, fmt("hp %.2f d %.0f ability %d", v.hp, bd, ucls(best).repair))
+				end
+			end
+		end
+	end
+	local vids = {}
+	for vid in pairs(assigned) do table.insert(vids, vid) end
+	table.sort(vids)
+	for _, vid in ipairs(vids) do
+		local rid = assigned[vid]
+		local c = cls_of(M.names[rid] or "")
+		if c.repair then
+			morder(rid, vid, 0, 0, ORD_ABILITY_SQUAD + c.repair)
+			taken[rid] = true
+			if act[vid] then taken[vid] = true end                            -- the vehicle stays put while being repaired
+			n = n + 1
+		end
+	end
+	return n
+end
+
+--------------------------------------------------------------------------------------------------
+-- RaceAbilities: the race's global (player) abilities through Elite's own player_abilities.ai, which on its own hardly
+-- ever casts them: BUDGET_PlayerAbility gets ~9 % of the income, AITacticDemand_Default returns 5 (-5..5 random, > 1
+-- needed), and a targeted ability needs PositionTargetFilter_EnemyClumpPosition = a clump the AI "sees" with threat >= 2,
+-- else the money is held and nothing is cast. Here: the budget weight is raised, the demand is ours (in a fight: high;
+-- spawn abilities: moderate at any time) and when Elite finds no clump, the biggest enemy clump in contact with the
+-- army is the target. Conf_AbilitySave: 1 = in a fight (spawns any time); 2 = damage abilities only on a real clump;
+-- 3 = whenever castable
+local function ra_on() return EliteAI.on and mech_on("RaceAbilities") end
+local function ra_name(pbg) return string.lower(PBG_GetName(pbg) or "") end  -- player_abilities.ai:60
+local function ra_clump(en, cx, cz, army)                                     -- the biggest clump of enemies in contact
+	local best, bw, bn
+	local cr, fr = prm("AbilClumpR"), prm("AbilFriendR")
+	for _, e in ipairs(en) do
+		if e.contact and e.d <= prm("AbilR") then
+			local w, n = enemy_weight_near(en, e.x, e.z, cr)
+			local friend = false
+			for _, u in ipairs(army) do if d2(u.pos.x, u.pos.z, e.x, e.z) <= fr then friend = true; break end end
+			if not friend and (not best or w > bw or (w == bw and e.id < best.id)) then best, bw, bn = e, w, n end
+		end
+	end
+	if best then M.clump = { x = best.x, y = best.y, z = best.z, n = bn, w = bw, id = best.id } else M.clump = nil end
+end
+local function ra_demand(pbg, d)
+	local name, now = ra_name(pbg), World_GetGameTime()
+	-- verify 10.11: a squad-targeted ability (buff on a squad) is never cast by Elite (PlayerAbility_CastOnTarget does
+	-- positions only) - a raised demand made it the top ability forever and held the money of ALL abilities (stand: ork camo,
+	-- eldar damage buff "no target" every few s). Such abilities keep Elite's own demand (player_abilities.ai:179, 196)
+	if AIAbility_IsTargeted(pbg) and not AIAbility_DoesTargetPosition(pbg) then return d end
+	local fight = M.last_contact and now - M.last_contact <= prm("AbilFightSecs")
+	local spawn = has_key(name, SPAWN_KEYS)
+	local r, dem = rule("AbilitySave"), 1
+	if r == 3 then dem = prm("AbilDemand")
+	elseif fight then
+		if r == 2 and not spawn and not has_key(name, { "buff" }) then
+			dem = (M.clump and M.clump.n >= prm("AbilMinClump")) and prm("AbilDemand") or 1
+		else dem = prm("AbilDemand") end
+	elseif spawn then dem = prm("AbilSpawnDemand") end
+	if dem > 1 then
+		M.ra_said = M.ra_said or {}
+		if not M.ra_said[name] or now - M.ra_said[name] > 30 then M.ra_said[name] = now; mlog("RaceAbilities", "demand", name, dem, fight and "fight" or "quiet") end
+	end
+	return dem
+end
+if type(CalcPlayerAbilityDemand) == "function" and type(PlayerAbility_Cast) == "function" and not EliteAI_MechRA_Wrapped then
+	EliteAI_MechRA_Wrapped = true
+	local E_Calc, E_Demand, E_Cast, E_Pos = CalcPlayerAbilityDemand, AITacticDemand_Default, PlayerAbility_Cast, PositionTargetFilter_EnemyClumpPosition
+	CalcPlayerAbilityDemand = function() M.in_pa = true; E_Calc(); M.in_pa = nil end
+	AITacticDemand_Default = function(pbg)                                    -- also the demand of squad tactics: only inside CalcPlayerAbilityDemand
+		local d = E_Demand(pbg)
+		if M.in_pa and ra_on() then return ra_demand(pbg, d) end
+		return d
+	end
+	PlayerAbility_Cast = function(pbg)
+		if not ra_on() then return E_Cast(pbg) end
+		M.in_cast = true
+		local ok = E_Cast(pbg)
+		M.in_cast = nil
+		if ok then M.st.abil = M.st.abil + 1 end
+		local nm, t = ra_name(pbg), World_GetGameTime()
+		M.ra_nt = M.ra_nt or {}
+		if ok then mlog("RaceAbilities", "cast", nm)
+		else                                                                  -- "no target": once per 30 s per ability, with a count
+			local r = M.ra_nt[nm] or { t = -1000, n = 0 }
+			r.n = r.n + 1; M.ra_nt[nm] = r
+			if t - r.t >= 30 then mlog("RaceAbilities", "no target", nm, "x" .. r.n); r.t, r.n = t, 0 end
+		end
+		return ok
+	end
+	PositionTargetFilter_EnemyClumpPosition = function(a1, a2)             -- also a squad tactic filter: only inside PlayerAbility_Cast
+		local p = E_Pos(a1, a2)
+		if M.in_cast and ra_on() and M.clump and (not p or p.x == COORD_INVALID) then
+			mlog("RaceAbilities", "pos", fmt("clump %d squads %.0f at %.0f %.0f", M.clump.n, M.clump.w, M.clump.x, M.clump.z))
+			return World_Pos(M.clump.x, M.clump.y, M.clump.z)                -- player-tactics.ai:188
+		end
+		return p
+	end
+end
+local function run_race_abilities()
+	s_playerabilities_enabled = true
+	local w = prm("AbilBudget")
+	if ai_budget and ai_budget.budget_list and ai_budget.budget_list["BUDGET_PlayerAbility"] and ai_budget:getweight("BUDGET_PlayerAbility") ~= w then
+		ai_budget:setweight("BUDGET_PlayerAbility", w)
+		mlog("RaceAbilities", "budget weight", w)
+	end
+end
+
+--------------------------------------------------------------------------------------------------
+-- ArmyRoles: the core (the director's army) fights together; right after a won fight it splits briefly to take the points
+-- around, then gathers again (Conf_Split). 1-2 cheap/fast squads are runners: they go from point to point, fight a lone
+-- weaker squad (Conf_RunnerFight), leave for the other flank when they meet an army. Points on the enemy half are only
+-- neutralised (Conf_Decap, DecapOnly_EnemyHalf), victory points always captured fully. Elite's own capture tasks are
+-- capped at EliteCapturers.
+local function pick_runners(state, taken)
+	local want = prm("Runners")
+	if table.getn(state.army) >= prm("Runners2At") then want = want + 1 end
+	local alive, have, ids = {}, 0, {}
+	for _, u in ipairs(state.army) do alive[u.id] = u end
+	for id in pairs(M.runner) do table.insert(ids, id) end
+	table.sort(ids)
+	for _, id in ipairs(ids) do
+		if not alive[id] then M.runner[id] = nil; mlog("ArmyRoles", "runner gone", id)
+		elseif have >= want then M.runner[id] = nil; mlog("ArmyRoles", "runner released", id)
+		else have = have + 1 end
+	end
+	while have < want do
+		local best, bs
+		for _, u in ipairs(state.active) do
+			if not M.runner[u.id] and not taken[u.id] then
+				weight_of(u)
+				local c = ucls(u)
+				if not u.veh then
+					local s = (c.runner and 0 or 100000) + u.hmax
+					if not best or s < bs or (s == bs and u.id < best.id) then best, bs = u, s end
+				end
+			end
+		end
+		if not best then break end
+		M.runner[best.id] = { t0 = state.now, last = -1000 }
+		M.st.runner = M.st.runner + 1
+		have = have + 1
+		mlog("ArmyRoles", "runner", best.id, M.names[best.id] or "?")
+	end
+end
+local function pick_runner_point(u, en, now, R)
+	local best, bs
+	local ar, av = prm("RunnerAvoidR"), (R.avoid_t and now - R.avoid_t <= prm("RunnerAvoidSecs"))
+	for _, p in ipairs(M.pts) do
+		if not p.ours and not point_done(p, en, now) and not (M.bad_pt[p.key] and now - M.bad_pt[p.key] < 40) then   -- verify 10.11: a neutralised point on the enemy half is done (was: endless "-> x neutral decap / neutralised" loop)
+			local ew, en_n = enemy_weight_near(en, p.x, p.z, prm("RunnerPointR"))
+			if en_n == 0 then
+				local s = d2(u.pos.x, u.pos.z, p.x, p.z) - (p.vp and prm("RunnerVpBonus") or 0)
+				if av then s = s + math.max(0, ar - d2(p.x, p.z, R.avoid_x, R.avoid_z)) * 2 end
+				if not best or s < bs or (s == bs and p.key < best.key) then best, bs = p, s end
+			end
+		end
+	end
+	return best
+end
+local function run_runners(state, en, taken, cx, cz)
+	local now = state.now
+	local ids = {}
+	for id in pairs(M.runner) do table.insert(ids, id) end
+	table.sort(ids)
+	local act = {}
+	for _, u in ipairs(state.active) do act[u.id] = u end
+	for _, id in ipairs(ids) do
+		local u, R = act[id], M.runner[id]
+		if u and not taken[id] then
+			taken[id] = true                                                   -- a runner is never the director's
+			-- enemies around the runner
+			local near, nn, nw = nil, 0, 0
+			for _, e in ipairs(en) do
+				local d = d2(e.x, e.z, u.pos.x, u.pos.z)
+				if d <= prm("RunnerFleeR") then nn = nn + 1; nw = nw + e.w; if not near or d < near.du then e.du = d; near = e end end
+			end
+			local fought = false
+			if nn > 0 then
+				local uw, v = weight_of(u), "flee"
+				if nn == 1 and not near.veh then
+					local r = rule("RunnerFight")
+					if r == 1 then v = (near.w <= uw) and "fight" or "flee"
+					elseif r == 2 then v = (near.w <= uw and near.hp < 0.7) and "fight" or "flee" end
+				end
+				v = decide("RunnerFight", id, v, fmt("enemies %d w %.0f ours %.0f", nn, nw, uw), now)
+				if v == "fight" then
+					morder(id, near.id, 0, 0, ORD_ATTACK_SQUAD); fought = true; R.last = -1000
+				else
+					if R.tgt then M.bad_pt[R.tgt] = now end
+					R.avoid_x, R.avoid_z, R.avoid_t, R.tgt = near.x, near.z, now, nil
+				end
+			end
+			if not fought then
+				local p = R.tgt and M.pts_by_key[R.tgt]
+				if p then
+					local done, why = point_done(p, en, now)
+					if done then
+						if why == "neutralised" then M.st.decap = M.st.decap + 1 end
+						mlog("ArmyRoles", "runner", id, "point", p.key, why)
+						p, R.tgt = nil, nil
+						morder(id, cx, u.pos.y, cz, ORD_MOVE)                   -- a move cancels the capture (decap only)
+					end
+				end
+				if not p then
+					p = pick_runner_point(u, en, now, R)
+					if p then
+						R.tgt, R.last = p.key, -1000
+						mlog("ArmyRoles", "runner", id, "->", p.key, p.vp and "VP" or (p.enemy and "enemy" or "neutral"), decap_only(p, en, now) and "decap" or "capture")
+					end
+				end
+				if p then
+					if now - R.last >= prm("RunnerReissue") then morder(id, p.x, p.y, p.z, ORD_CAPTURE); R.last = now end
+				else
+					taken[id] = nil                                            -- nothing to capture: the director may use it
+				end
+			end
+		end
+	end
+end
+-- Conf_Split: how much of the core goes to the points right after a fight. 1 = up to 2 squads (a third of the army);
+-- 2 = up to half of an army of 5+; 3 = never (only the runners capture, the army stays one fist)
+local function split_max(n)
+	local r = rule("Split")
+	if r == 1 then return math.min(2, math.floor(n / 3)) end
+	if r == 2 then return (n >= 5) and math.min(3, math.floor(n / 2)) or 0 end
+	return 0
+end
+local function run_split(state, en, cx, cz, taken)
+	local now = state.now
+	local contact = M.last_contact and now - M.last_contact < 1
+	local sp = M.split
+	if sp then
+		local why, left = nil, 0
+		if contact then why = "enemy contact" elseif now - sp.t0 > prm("SplitSecs") then why = "timeout" end
+		local act = {}
+		for _, u in ipairs(state.active) do act[u.id] = u end
+		local ids = {}
+		for id in pairs(sp.assign) do table.insert(ids, id) end
+		table.sort(ids)
+		for _, id in ipairs(ids) do
+			local a, u = sp.assign[id], act[id]
+			local p = M.pts_by_key[a.key]
+			local done, dwhy = true, "gone"
+			if u and p then done, dwhy = point_done(p, en, now) end
+			if done then
+				if dwhy == "neutralised" then M.st.decap = M.st.decap + 1 end
+				mlog("ArmyRoles", "split", id, "point", a.key, dwhy)
+				sp.assign[id] = nil
+				if u then morder(id, cx, u.pos.y, cz, ORD_MOVE); taken[id] = true end   -- back to the army (and the capture is cancelled)
+			else
+				if now - a.last >= prm("SplitReissue") then morder(id, p.x, p.y, p.z, ORD_CAPTURE); a.last = now end
+				taken[id] = true; left = left + 1
+			end
+		end
+		if left == 0 and not why then why = "points taken" end
+		if why then
+			mlog("ArmyRoles", "split end", why, fmt("after %.0f s", now - sp.t0))
+			decide("Split", "army", "keep", why, now)
+			M.split, M.split_end = nil, now
+			return false
+		end
+		EliteAI.phase = "m_split"
+		return true                                                           -- the rest of the army stays where it is
+	end
+	if contact or not M.last_contact then return false end
+	local since = now - M.last_contact
+	if since < prm("SplitAfter") or since > prm("SplitWindow") then return false end
+	if M.split_end and now - M.split_end < prm("SplitCooldown") then return false end
+	local free = {}
+	for _, u in ipairs(state.active) do if not taken[u.id] then table.insert(free, u) end end
+	local maxs = split_max(table.getn(free))
+	local v = decide("Split", "army", (maxs > 0) and "split" or "keep", fmt("squads %d after fight %.0f s", table.getn(free), since), now)
+	if v ~= "split" or maxs <= 0 then return false end
+	-- points around the army, free of enemies, the nearest free squad for each
+	local cands = {}
+	for _, p in ipairs(M.pts) do
+		if not p.ours and d2(p.x, p.z, cx, cz) <= prm("SplitR") and not point_done(p, en, now) then
+			local _, n = enemy_weight_near(en, p.x, p.z, prm("SplitPointSafeR"))
+			if n == 0 then table.insert(cands, p) end
+		end
+	end
+	table.sort(cands, function(a, b) local da, db = d2(a.x, a.z, cx, cz), d2(b.x, b.z, cx, cz); if da ~= db then return da < db end return a.key < b.key end)
+	local assign, cnt, used, keys = {}, 0, {}, ""
+	for _, p in ipairs(cands) do
+		if cnt >= maxs then break end
+		local best, bd
+		for _, u in ipairs(free) do
+			if not used[u.id] and u.hp >= prm("SplitMinHp") then
+				weight_of(u)
+				if not u.veh then
+					local d = d2(u.pos.x, u.pos.z, p.x, p.z)
+					if not best or d < bd or (d == bd and u.id < best.id) then best, bd = u, d end
+				end
+			end
+		end
+		if best then
+			used[best.id] = true
+			assign[best.id] = { key = p.key, last = now }
+			morder(best.id, p.x, p.y, p.z, ORD_CAPTURE)
+			taken[best.id] = true
+			cnt = cnt + 1
+			keys = keys .. " " .. p.key .. (decap_only(p, en, now) and "(decap)" or "")
+		end
+	end
+	if cnt == 0 then return false end
+	M.split = { t0 = now, assign = assign }
+	M.st.split = M.st.split + 1
+	mlog("ArmyRoles", "split start", cnt, "squads ->", keys, fmt("army %d", table.getn(free)))
+	EliteAI.phase = "m_split"
+	return true
+end
+local function run_army_roles(state, en, cx, cz, taken)
+	if s_personality then
+		local cap = prm("EliteCapturers")
+		if s_personality.max_num_capturers ~= cap then s_personality.max_num_capturers = cap; mlog("ArmyRoles", "Elite capturers", cap) end
+	end
+	pick_runners(state, taken)
+	run_runners(state, en, taken, cx, cz)
+	if M.retreat then return false end
+	return run_split(state, en, cx, cz, taken)
+end
+
+--------------------------------------------------------------------------------------------------
+local function stats(state)
+	if state.now - M.last_stats < prm("StatsSecs") then return end
+	M.last_stats = state.now
+	local alive = {}
+	for _, u in ipairs(state.army) do alive[u.id] = true end
+	for _, t in ipairs({ M.tie, M.repair, M.jumped, M.names }) do             -- forget squads that are gone
+		for id in pairs(t) do if not alive[id] then t[id] = nil end end
+	end
+	for key, c in pairs(M.conf) do                                             -- old decisions of dead squads / points
+		if state.now - c.t > 300 then M.conf[key] = nil end
+	end
+	local s = M.st
+	local tasks = -1
+	if TASK_PlayerAbility ~= nil then tasks = Task_CountActive(s_selfplayer, TASK_PlayerAbility, false) end   -- player_abilities.ai:242
+	mlog("stats", "t", math.floor(state.now), "focus", s.focus, "switch", s.focus_sw, "retreat", s.retreat, "pre", s.pre, "punish", s.punish,
+		"tie", s.tie, "jump", s.jump, "kite", s.kite, "repair", s.repair, "abil", s.abil, "abil_tasks", tasks, "runner", s.runner, "split", s.split,
+		"decap", s.decap, "conf_sw", s.conf, "orders", s.orders, "enemies", table.getn(M.en or {}), "points", table.getn(M.pts or {}), "phase", EliteAI.phase or "-")
+end
+
+-- entry point (see the header); the order inside a tick: retreats (whole army) > runners, split > Repair, MeleeApproach,
+-- MeleeTie (per squad) > PunishTurn > FocusFire
+function EliteAI_Mechanics(state)
+	if not state or not state.army or not state.active then return false end
+	local now = state.now or World_GetGameTime()
+	state.now = now
+	local on = {}
+	for _, k in ipairs({ "FocusFire", "Repair", "ArmyRetreat", "PreRetreat", "PunishTurn", "MeleeTie", "RaceAbilities", "ArmyRoles" }) do on[k] = mech_on(k) end
+	if not M.said.on then
+		M.said.on = true
+		mlog("on", "variant", tostring(EliteAI.variant or "-"), "idx", vidx(), "version", EliteAI_MECH_VERSION,
+			"FocusFire", on.FocusFire and 1 or 0, "Repair", on.Repair and 1 or 0, "ArmyRetreat", on.ArmyRetreat and 1 or 0, "PreRetreat", on.PreRetreat and 1 or 0,
+			"PunishTurn", on.PunishTurn and 1 or 0, "MeleeTie", on.MeleeTie and 1 or 0, "RaceAbilities", on.RaceAbilities and 1 or 0, "ArmyRoles", on.ArmyRoles and 1 or 0)
+		mlog("rules", "MeleeApproach", rule("MeleeApproach"), "FocusLeave", rule("FocusLeave"), "Chase", rule("Chase"), "Split", rule("Split"),
+			"Decap", rule("Decap"), "HoldVP", rule("HoldVP"), "TieVsFocus", rule("TieVsFocus"), "RepairVsFight", rule("RepairVsFight"),
+			"PreEngage", rule("PreEngage"), "RunnerFight", rule("RunnerFight"), "AbilitySave", rule("AbilitySave"))
+	end
+	if not (on.FocusFire or on.Repair or on.ArmyRetreat or on.PreRetreat or on.PunishTurn or on.MeleeTie or on.RaceAbilities or on.ArmyRoles) then return false end
+	M.focus_force = nil
+	local cx, cz = centre(state.active)
+	if not cx then cx, cz = centre(state.army) end
+	local h = home()
+	if not cx then
+		if not h then return false end
+		cx, cz = h.x, h.z
+	end
+	local en = scan_enemies(now, cx, cz, state.army, on.MeleeTie or on.FocusFire)
+	scan_own(state.army)
+	if on.ArmyRoles or rule("HoldVP") >= 2 then scan_points() end
+	if on.RaceAbilities then ra_clump(en, cx, cz, state.army); run_race_abilities() end
+	stats(state)
+	-- 1) the whole army: retreats
+	if M.retreat then
+		if run_retreat(state, en, cx, cz, h) then return true end
+	elseif table.getn(state.active) > 0 then
+		if on.ArmyRetreat and check_army_retreat(state, en, cx, cz, h) then return true end
+		if on.PreRetreat and check_pre_retreat(state, en, cx, cz, h) then return true end
+	end
+	if table.getn(state.active) == 0 then return false end
+	local taken = {}
+	-- 2) roles: runners (always theirs), the split after a fight
+	if on.ArmyRoles and run_army_roles(state, en, cx, cz, taken) then return true end
+	-- 3) per squad
+	if on.Repair then run_repair(state, en, taken) end
+	run_melee_approach(state, en, cx, cz, taken)
+	local r7 = rule("TieVsFocus")
+	if on.MeleeTie and r7 == 1 then run_tie(state, en, taken, false) end       -- tie first, the rest focus
+	-- 4) the rest of the army
+	local took = false
+	if on.PunishTurn then took = run_punish(state, en, cx, cz, h, taken) end
+	if on.MeleeTie and r7 == 3 and not took then run_tie(state, en, taken, true) end   -- jump squads tie, the rest focus
+	if not took and on.FocusFire then took = run_focus(state, en, cx, cz, taken) end
+	if on.MeleeTie and r7 == 2 and not took then run_tie(state, en, taken, false) end  -- focus first; tie only without a focus target
+	-- the squads ordered here are not the director's this tick
+	local keep, removed = {}, 0
+	for _, u in ipairs(state.active) do if taken[u.id] then removed = removed + 1 else table.insert(keep, u) end end
+	if removed > 0 then
+		for i = table.getn(state.active), 1, -1 do table.remove(state.active, i) end
+		for _, u in ipairs(keep) do table.insert(state.active, u) end
+	end
+	return took
+end

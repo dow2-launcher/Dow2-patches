@@ -4,6 +4,18 @@ Every version gets an entry here before it reaches `main`. CI then tags `vX.Y.Z`
 version (`X.Y.0`) it also publishes a GitHub Release with the DLLs and the entries since the previous `X.Y.0`.
 The version of the set lives only in `VERSION`; each DLL still writes its own version to its log.
 
+## 0.2.37 — 2026-11-10
+New AI 5 (store newai-5, experiment, off by default, Elite only): EliteAI.dll splices mechanics.ai after main.ai; main.ai 0.10, mechanics.ai 0.2, elite.scar.
+- mechanics.ai: 8 combat mechanics of the director (FocusFire, ArmyRetreat, PreRetreat, PunishTurn, MeleeTie, Repair,
+  RaceAbilities, ArmyRoles) and 11 conflict arbiters Conf_* with hysteresis (a decision holds 6 s, every switch logged as
+  `MECH Conf_<name> <who> X->Y <why>`). No pcall around engine calls; no engine queries on enemy squads beyond position/health.
+- Variants A/B/C: same parameters, all mechanics on; they differ ONLY by Conf_* (A = rule 1, B = 2, C = 3). EliteAI.ini [Lua]
+  still overrides any Conf_* / Mech_* key.
+- elite.scar: order modes 4 (attack squad), 5 (capture point), 100+k / 200+k (squad ability at a position / on a squad).
+- Verified on stand 1 (Elite 3.2.1, 4 matches ~27 min game time, 1v1 and 2v2, IG/Tyranids/Eldar/SM/Orks): no hang, no crash,
+  PCALLERR 0; fixed before the release: runner loop on neutralised points, squad-targeted global abilities holding the money,
+  three ability paths. Stand md5 back.
+
 ## 0.2.36 — 2026-11-10
 Replay takeover 3 (store replaytakeover-3, experiment, off by default) + New AI 4 (store newai-4: EliteAI.dll 0.10, scripts unchanged).
 - ReplayTakeover.ini Others = elite (old "ai") | newai_a | newai_b | newai_c | idle. The new AI picks its variant by the

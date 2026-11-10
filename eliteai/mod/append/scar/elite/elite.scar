@@ -32,6 +32,85 @@ local function variant_show()
 	if not ok then _log("PCALLERR scar_variant", tostring(err)); EliteAI_VariantShows = 0 end
 end
 
+-- mechanics.ai (combat mechanics of the director) orders: 4 = attack the squad with world id x; 5 = capture the strategic
+-- point at x,y,z (the entity is looked up near the position); 100+k = squad ability k at x,y,z; 200+k = squad ability k on
+-- the squad with world id x. k = index in EliteAI_MECH_ABILITIES - THE SAME NUMBERING as ABIL in mechanics.ai (keep in sync).
+-- Ability ids are resolved lazily (World_GetPropertyBagGroupID, as unitstats v3) - an unused race's abilities are never looked up.
+EliteAI_MECH_ABILITIES = {
+	[1] = "ability/pvp/race_marine/sm_repair_pvp",
+	[2] = "ability/pvp/race_imperial_guard/ig_repair_pvp",
+	[3] = "ability/pvp/race_ork/sluggas/ork_repair",
+	[4] = "ability/pvp/race_ork/gretchin/grot_repair",
+	[5] = "ability/pvp/race_eldar/guardian/eld_repair",
+	[6] = "ability/pvp/race_chaos/cultist/csm_repair",
+	[7] = "ability/pvp/race_tau/pathfinders/tau_repair",
+	[8] = "ability/pvp/race_marine/assault_marine/sm_jump_target_assault",
+	[9] = "ability/pvp/race_chaos/raptor/csm_jump_raptor",
+	[10] = "ability/pvp/race_ork/stormboys/ork_jump_target_stormboy",
+	[11] = "ability/pvp/race_tyranid/ravener/tyr_jump_target_ravener",
+	[12] = "ability/pvp/race_eldar/autarch/eld_autarch_jump",
+}
+EliteAI_MechAbilityIDs = {}
+local function mech_ability(k)
+	local name = EliteAI_MECH_ABILITIES[k]
+	if not name then return nil end
+	local id = EliteAI_MechAbilityIDs[k]
+	if id == nil then
+		local ok, v = pcall(World_GetPropertyBagGroupID, name)
+		id = (ok and v) or false
+		EliteAI_MechAbilityIDs[k] = id
+		_log("MECH ability", k, name, id and "ok" or ("NOT FOUND " .. tostring(v)))
+	end
+	return id or nil
+end
+-- the strategic point entity nearest to pos (neutral or enemy-owned), into the egroup; nil when none within 8 m
+local function mech_point(player, pos)
+	local eg = EGroup_CreateIfNotFound("eliteai_mech_pts")
+	local best, bd
+	for _, ot in ipairs({ OT_Neutral, OT_Enemy }) do
+		EGroup_Clear(eg)
+		World_GetEntitiesNearPoint(player, eg, pos, 8, ot)
+		for i = 1, EGroup_CountSpawned(eg) do
+			local e = EGroup_GetSpawnedEntityAt(eg, i)
+			if Entity_IsStrategicPoint(e) then
+				local p = Entity_GetPosition(e)
+				local d = (p.x - pos.x) * (p.x - pos.x) + (p.z - pos.z) * (p.z - pos.z)
+				if not best or d < bd then best, bd = e, d end
+			end
+		end
+	end
+	if not best then return nil end
+	EGroup_Clear(eg); EGroup_Add(eg, best)
+	return eg
+end
+local function mech_order(sg, sq, m, x, y, z)
+	if m == 4 or m >= 200 then
+		local tid = tonumber(x)
+		local tsq = Squad_IsValid and Squad_IsValid(tid) and Squad_FromWorldID(tid)
+		if not tsq or Squad_Count(tsq) == 0 then return end
+		if m == 4 then
+			local tg = SGroup_CreateIfNotFound("eliteai_mech_target")
+			SGroup_Clear(tg); SGroup_Add(tg, tsq)
+			Cmd_AttackSGroup(sg, tg)                                          -- command.scar:685
+		else
+			local abid = mech_ability(m - 200)
+			if abid then Cmd_Ability(sg, abid, tsq, false) end              -- command.scar:1863 (squad target -> Cmd_SquadAbilitySquad)
+		end
+	elseif m == 5 then
+		local pos = World_Pos(tonumber(x), tonumber(y), tonumber(z))
+		local eg = mech_point(Squad_GetPlayerOwner(sq), pos)
+		if eg then
+			Command_SquadEntity(Squad_GetPlayerOwner(sq), sg, SCMD_Capture, eg, false)   -- as Cmd_MoveThenCapture (command.scar:2353) without its ever-growing _activeAttackerTable
+		else
+			EliteAI_MechNoPoint = (EliteAI_MechNoPoint or 0) + 1
+			if EliteAI_MechNoPoint <= 5 then _log("MECH no point at", x, z) end
+		end
+	elseif m >= 100 then
+		local abid = mech_ability(m - 100)
+		if abid then Cmd_SquadAbilityPos(sg, abid, World_Pos(tonumber(x), tonumber(y), tonumber(z)), false) end   -- command.scar:1930, autarch.scar:38
+	end
+end
+
 function EliteAI_ExecuteOrders()
 	if not _take then return end
 	local q = _take()
@@ -57,6 +136,7 @@ function EliteAI_ExecuteOrders()
 			if m == 1 then Cmd_MoveToPos(sg, pos)
 			elseif m == 2 then Cmd_AttackMovePos(sg, pos)
 			elseif m == 3 then Cmd_Retreat(sg)
+			else mech_order(sg, sq, m, x, y, z)                                 -- 4, 5, 100+k, 200+k: mechanics.ai
 			end
 		end) end
 		if not ok and alive then EliteAI_ErrN = (EliteAI_ErrN or 0) + 1
