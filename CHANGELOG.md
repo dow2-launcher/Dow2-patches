@@ -4,6 +4,12 @@ Every version gets an entry here before it reaches `main`. CI then tags `vX.Y.Z`
 version (`X.Y.0`) it also publishes a GitHub Release with the DLLs and the entries since the previous `X.Y.0`.
 The version of the set lives only in `VERSION`; each DLL still writes its own version to its log.
 
+## 0.2.50 — 2026-11-11
+New AI 18 (store newai-18, experiment, off by default, Elite only) = newai-17 + safer SCAR-to-AI path (elite.scar from eliteai 3550da8).
+- elite.scar no longer calls AI_DoString by default (the enemy squad names every 2 s, the dodge note): the only place where our
+  scripts crossed from the SCAR state into the AI states, a suspect of a rare stand hang. The AI reads the names itself
+  (Squad_GetBlueprintName); the grenade dodge works without the note. Switches: CounterScarNames=1, DodgeTell=1.
+
 ## 0.2.49 — 2026-11-11
 New AI 17 (store newai-17, experiment, off by default, Elite only) = newai-16 + no retreat for suppression alone
 (mechanics.ai from eliteai df2d0f5).

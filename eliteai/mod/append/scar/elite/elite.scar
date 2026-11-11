@@ -334,7 +334,7 @@ local function dodge_api()
 	D.hold = (type(Squad_IsInHoldEntity) == "function")
 	D.name = (type(Squad_GetBlueprintName) == "function")
 	D.see = (type(Player_CanSeeEntity) == "function") and OT_Enemy ~= nil and dnum("DodgeMines", 1) >= 1
-	D.tell = (type(AI_DoString) == "function") and dnum("DodgeTell", 1) >= 1
+	D.tell = (type(AI_DoString) == "function") and dnum("DodgeTell", 0) >= 1
 	D.pad, D.scan, D.cluster = dnum("DodgePad", 3), dnum("DodgeScanR", 30), dnum("DodgeCluster", 25)
 	D.horizon, D.fly, D.ahead = dnum("DodgeHorizon", 2.5), dnum("DodgeFly", 2), dnum("DodgeAhead", 60)
 	D.dmin, D.dstep, D.speed, D.minr = dnum("DodgeDelay", 0.5), dnum("DodgeDelayStep", 0.25), dnum("DodgeWalk", 4), dnum("DodgeMinRange", 8)
@@ -596,7 +596,7 @@ local function bp_tell(D)
 		D.bp_api = (type(AI_DoString) == "function" and type(Squad_GetBlueprintName) == "function" and type(World_GetPlayerCount) == "function"
 			and type(World_GetPlayerAt) == "function" and type(Player_GetSquads) == "function" and type(SGroup_CountSpawned) == "function"
 			and type(SGroup_GetSpawnedSquadAt) == "function" and type(Squad_Count) == "function" and type(Squad_GetGameID) == "function"
-			and type(Player_FromId) == "function" and type(Player_IsAlive) == "function") and dnum("CounterScarNames", 1) >= 1
+			and type(Player_FromId) == "function" and type(Player_IsAlive) == "function") and dnum("CounterScarNames", 0) >= 1
 		D.bp_told, D.bp_n = {}, 0
 		_log("COUNTER", "names", "elite.scar tells the AI the blueprint names of the squads it sees:", D.bp_api and 1 or 0, "Squad_GetBlueprintName", type(Squad_GetBlueprintName),
 			"AI_DoString", type(AI_DoString), "World_GetPlayerAt", type(World_GetPlayerAt))
