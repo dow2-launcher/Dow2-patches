@@ -4,6 +4,10 @@ Every version gets an entry here before it reaches `main`. CI then tags `vX.Y.Z`
 version (`X.Y.0`) it also publishes a GitHub Release with the DLLs and the entries since the previous `X.Y.0`.
 The version of the set lives only in `VERSION`; each DLL still writes its own version to its log.
 
+## 0.2.53 — 2026-11-11
+Elite maps (vanilla) turned off for everyone (store version "off"): a vanilla player WITHOUT the add-on who joins a lobby whose host
+has an Elite map selected crashes (stand test with two accounts, 11.11). Back after the DLL keeps Elite maps out of public lobbies.
+
 ## 0.2.52 — 2026-11-11
 Overwatch once (store overwatchonce-1, experiment, order 1020, off by default, Elite and vanilla): OverwatchOnce.dll (overwatchonce/).
 - Owner's request: a right-click (overwatch) on a unit button kept building that unit forever (players got a second batch of

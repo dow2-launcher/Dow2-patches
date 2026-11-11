@@ -1163,7 +1163,7 @@
     }
   },
   "elitemaps": {
-    "version": "1",
+    "version": "off",
     "dll": "EliteMaps.dll",
     "default": false,
     "games": [
