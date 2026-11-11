@@ -1,0 +1,1 @@
+- New AI 14: respects base turrets, keeps vehicles with the army and pulls damaged ones back, hunts set-up teams and support heroes first.

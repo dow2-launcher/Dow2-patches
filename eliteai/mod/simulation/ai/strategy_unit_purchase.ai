@@ -169,6 +169,8 @@ function EliteAI_PurchaseMult(pbg, curAmount)
 	end
 	-- garrison (11.11): the counter units while an enemy squad holds a building next to our point (EliteAI_GarMult below)
 	if EliteAI_GarMult then mult = mult * EliteAI_GarMult( name, curAmount ) end
+	-- set-up teams (11.11, step 22): the counter units while the enemy fields two or more of them (EliteAI_SetupMult below)
+	if EliteAI_SetupMult then mult = mult * EliteAI_SetupMult( name, curAmount ) end
 	return mult
 end
 
@@ -207,7 +209,7 @@ import("rules_unit_purchase.ai")
 -- silent exit of the next match; "SPEND idle end bank R/P after T s bought N" when the bank is below the threshold again.
 -- SAFETY: numbers/strings between ticks only (EliteAI_S), PBGs are read and used within the tick, no pcall around engine
 -- calls, every engine function is one Elite's own scripts call (file:line in reports/newai_1110/TECH_RU.md).
-EliteAI_SPEND_VERSION = "0.3"
+EliteAI_SPEND_VERSION = "0.4"
 EliteAI_S = { last_buy = 0, above_t = -1, hot = false, said = {}, n_buy = 0, n_none = 0, addon_floor = 0, bought_hot = 0, cool = -1 }
 local function s_on() return EliteAI ~= nil and EliteAI.on == true end
 local function s_rp(r) return math.floor((r and r.requisition) or 0) .. "/" .. math.floor((r and r.power) or 0) end
@@ -652,7 +654,9 @@ end
 local function r_claim( now )                                               -- quick (bool), the record { name, req, pow, eta, why, msince } or nil
 	local st = EliteAI_E and EliteAI_E.stall
 	if st == nil or now - st.t > 7 or eai_num("Reinf_UnitFirst", 1) < 1 then return false, nil end
-	return (st.why ~= "money") or ((st.eta or 0) <= eai_num("Reinf_UnitEta", 45)), st
+	local reach = eai_num("Reinf_UnitEta", 45)
+	if type(EliteAI_TechUnitFirst) == "function" and EliteAI_TechUnitFirst() == true then reach = math.max(reach, eai_num("Tech_FloatUnitEta", 75) * 1.5) end   -- 0.5 (TECH_RU.md 15.3)
+	return (st.why ~= "money") or ((st.eta or 0) <= reach), st
 end
 local function r_need_now()                                                 -- what the save state saves for: req, name
 	local R = EliteAI_R
@@ -1119,6 +1123,10 @@ e_reset()
 local GAR_COUNTER_UNITS = { "ig_devils", "ig_kasrkin_squad", "ig_banewolf", "sm_scout_marine", "sm_tactical_marine", "eld_fire_dragon", "eld_guardian",
 	"ork_stikkbommas", "csm_cultist", "csm_noise_marines", "gk_purgation_squad", "tau_vespid_squad" }   -- kb.yaml garrisoned_enemy (tyranids: no buildable counter)
 local GAR_ADDON_KEYS = { "flamer", "flame", "grenade", "burna", "incinerat", "battle_equipment" }
+-- 0.6: who answers set-up teams (kb.yaml threats.suppression_spam.responses + units.*.counters setup_team), by the end of the sbps name
+local SETUP_COUNTER_UNITS = { "sm_assault_marine", "sm_scout_marine", "sm_devastator_plasma_cannon", "sm_whirlwind",
+	"ig_devils", "ig_manticore", "eld_ranger", "eld_banshee", "eld_warp_spider", "ork_stormboy", "ork_stikkbommas", "ork_kommandos",
+	"tyr_ravener", "tyr_lictor", "csm_raptor", "csm_noise_marines", "gk_interceptor_squad", "gk_operatives", "tau_vespid_squad", "tau_stealth_suits" }
 local function e_ends(name, key)
 	local n, k = string.len(name), string.len(key)
 	return n >= k and string.sub(name, n - k + 1) == key
@@ -1217,6 +1225,31 @@ function EliteAI_GarMult( name, curAmount )
 	end
 	return 1
 end
+-- 0.6 (TECH_RU.md 15.9; Orca, fb 511: "it does not use its anti-set-up squads") THE ENEMY'S SET-UP TEAMS. mod/mechanics.ai counts the
+-- enemy squads that set a heavy weapon up (EliteAI.setup = { n, t0, t }, numbers; there from SetupBuyMin = 2 teams on). While it
+-- has stood for Setup_BuySecs (20 s) and is fresh (30 s), the race's answers - reports/tactics_kb/kb.yaml threats.suppression_spam
+-- .responses and the units whose "counters" name setup_team: jump squads, grenades, snipers, artillery (SETUP_COUNTER_UNITS, by
+-- the end of the sbps name; the squads Elite's own gates drop - spotters, spore mines - stay dropped) - get x Setup_BuyMult
+-- (2.0) while we have none of that kind, x Setup_BuyMultHave (1.3) with one, x 1 with two or more: an answer, not an army of
+-- them. Log "SETUP demand <sbps> x2 enemy set-up teams N for S s have H" (once per 30 s per unit). Setup_Buy=0 = off.
+function EliteAI_SetupMult( name, curAmount )
+	if not s_on() or eai_num("Setup_Buy", 1) < 1 then return 1 end
+	local S = EliteAI and EliteAI.setup
+	if type(S) ~= "table" or S.t0 == nil then return 1 end
+	local now = World_GetGameTime()
+	if now - (S.t or -1000) > 30 or now - S.t0 < eai_num("Setup_BuySecs", 20) then return 1 end
+	local have = curAmount or 0
+	if have >= 2 then return 1 end
+	for _, k in ipairs(SETUP_COUNTER_UNITS) do
+		if e_ends(name, k) then
+			local m = (have == 0) and eai_num("Setup_BuyMult", 2.0) or eai_num("Setup_BuyMultHave", 1.3)
+			EliteAI_E.n_setup = (EliteAI_E.n_setup or 0) + 1
+			e_say("setup|" .. k, 30, "SETUP", "demand", r_short(name), "x" .. tostring(m), "enemy set-up teams", tostring(S.n), "for", math.floor(now - S.t0), "s", "have", have)
+			return m
+		end
+	end
+	return 1
+end
 -- a flamer / grenade upgrade while a garrison holds (the floor of CalcSquadUpgradeDemand above lets it be a candidate)
 function EliteAI_GarAddon( upgradePBG )
 	if not s_on() or not EliteAI_E.gar_on or upgradePBG == nil then return false end
@@ -1294,6 +1327,9 @@ local function e_hold_tick( now )
 	local st = E.stall
 	local fresh = (st ~= nil and now - st.t <= 7)                           -- a spawn stalled within the last two purchase ticks
 	local eta_max = eai_num("Spend_UnitFirstEta", (r == 1) and 60 or 40)
+	-- 0.6 (TECH_RU.md 15.3): the tech plan gave the float research's money to this unit - the upgrades leave it its req as well
+	local tuf = (r < 3) and type(EliteAI_TechUnitFirst) == "function" and EliteAI_TechUnitFirst() == true
+	if tuf then eta_max = math.max(eta_max, eai_num("Tech_FloatUnitEta", 75)) end
 	local eta_off = eta_max * eai_num("Spend_UnitFirstOffK", 1.5)           -- 0.2: a band, not one threshold
 	local max_s = eai_num("Spend_UnitFirstMax", (r == 1) and 75 or 45)
 	local want, why, paused = E.hold, "-", false
@@ -1429,6 +1465,34 @@ function EliteAI_UnitCallIn( name, cost )
 	EliteAI_ReinforceNoteBuy( r_short(name), cost, World_GetGameTime() )
 	EliteAI_E.stall = nil
 end
+-- 0.6 (TECH_RU.md 15.2) THE CALL-IN OR THE UNIT, BEFORE THE UNIT IS BOUGHT (mod/mechanics.ai EliteAI_MechCallInFirst). The polygon's
+-- scene d (newai-13): the bank reached 355, this budget bought the genestealer (350) in that tick, and the ability budget -
+-- which runs after it - found no money for the spore (350): the arbiter Conf_AbilityVsUnit never saw the pair. Now
+-- TryPurchaseUnitChoice asks at the three places a spawn is decided: it would be bought now ("ready"), it has its money and
+-- waits for the HQ ("channel"), it is short of money and would lock its cost ("money"). The unit is the claim the arbiter
+-- reads (EliteAI_E.stall); a call-in the arbiter lets pass over it is cast at once and this budget is charged with it
+-- (returns its name and cost; nil = the unit goes on as before). Mech_AbilCallInFirst=0 = off.
+function EliteAI_CallInFirst( pbg, unitCost, why, availableResources )
+	if not s_on() or type(EliteAI_MechCallInFirst) ~= "function" or pbg == nil or unitCost == nil or availableResources == nil then return nil end
+	if why == "ready" then EliteAI_EnergyNoteStall( pbg, unitCost, "ready", availableResources, 0 ) end   -- this unit is the claim (the stalls noted it already)
+	local name, cost = EliteAI_MechCallInFirst( availableResources )
+	if name == nil then return nil end
+	EliteAI_E.n_callin_first = (EliteAI_E.n_callin_first or 0) + 1
+	eai_log("SPEND", "callin_first", r_short(name), s_rp(cost), "over", r_short(PBG_GetName( pbg )), s_rp(unitCost), why, "avail", s_rp(availableResources))
+	return name, cost
+end
+-- 0.6 (TECH_RU.md 15.3) how many units were bought so far - the spawn requests of the units budget and of the watchdog (the book's
+-- "unit") and the call-ins: strategy_tech_purchase.ai ends its "unit first" with the next one
+function EliteAI_UnitBuys()
+	if not s_on() then return 0 end
+	local tt = EliteAI_E and EliteAI_E.tot and EliteAI_E.tot.unit
+	return ((tt and tt.n) or 0) + ((EliteAI_S and EliteAI_S.n_callin) or 0)
+end
+-- 0.6 (TECH_RU.md 15.3): is the tech plan's "unit first" on (the float research stepped back for the unit that was waited for)?
+-- While it is, that unit is "within reach" for everything that steps back for a unit - the reinforcements (r_claim) and the
+-- upgrades (Conf_AddonVsUnit) - up to Tech_FloatUnitEta: s18, 11:03 - the arbiter said "unit_first tyr_warrior_venom_cannon eta 63"
+-- and in the next 5 s two models (36 req) and two upgrades (90 req) were bought with the req that was left to the unit.
+-- (EliteAI_TechUnitFirst of strategy_tech_purchase.ai is asked in r_claim and e_hold_tick.)
 -- 0.5 (TECH_RU.md 14) strategy_tech_purchase.ai, the reason "float": the unit the plan waited for BEFORE the research was wanted
 -- (t_want) and that the income brings within Tech_FloatUnitEta (75 s = the time of a research) - name, eta, req, pow; nil = none.
 -- s17: the zoanthrope (360/40) had been waited for since 9:07; at 11:02 the float state asked for T3, the plan's reserve took
@@ -2323,7 +2387,12 @@ function TryPurchaseUnitChoice( best_choice, availableResources )
 		if (not ResourceAmount_Has( availableResources, unitCost )) then
 			aitrace("Stalling because of lack of moola("..PBG_GetName(pbg)..") Demand:"..demand)
 			-- EliteAI (energy): the spawn the pipeline waits for - squad upgrades wait for it when it is within reach (Conf_AddonVsUnit)
-			if EliteAI and EliteAI.on and purchase_type == PURCHASETYPE_SPAWN then EliteAI_EnergyNoteStall( pbg, unitCost, "money", availableResources, 0 ) end
+			if EliteAI and EliteAI.on and purchase_type == PURCHASETYPE_SPAWN then
+				EliteAI_EnergyNoteStall( pbg, unitCost, "money", availableResources, 0 )
+				-- 0.6: a call-in this budget can pay and the arbiter lets pass over the unit goes now - nothing is locked for the unit
+				local cn, cc = EliteAI_CallInFirst( pbg, unitCost, "money", availableResources )
+				if cn then return true, cc end
+			end
 			return false, unitCost
 		end
 	
@@ -2361,10 +2430,20 @@ function TryPurchaseUnitChoice( best_choice, availableResources )
 			if (prevReq > 0) then
 				aitrace("Stalling unitbuild because of lack of production channels("..PBG_GetName(pbg)..") Demand:"..demand)
 				-- EliteAI (energy): the money is there, the HQ is busy - the upgrades of the other run leave this unit its req (Conf_AddonVsUnit)
-				if EliteAI and EliteAI.on then EliteAI_EnergyNoteStall( pbg, unitCost, "channel", availableResources, prevReq ) end
+				if EliteAI and EliteAI.on then
+					EliteAI_EnergyNoteStall( pbg, unitCost, "channel", availableResources, prevReq )
+					local cn, cc = EliteAI_CallInFirst( pbg, unitCost, "channel", availableResources )   -- 0.6: the HQ is busy, the call-in needs none
+					if cn then return true, cc end
+				end
 				return false, unitCost
 			end
 	
+			-- EliteAI 0.6 (TECH_RU.md 15.2): the call-in or this unit is decided before the unit is bought (the scene d: the unit took
+			-- the bank in the tick the call-in of the same price could first be cast, the arbiter never saw the pair)
+			if EliteAI and EliteAI.on then
+				local cn, cc = EliteAI_CallInFirst( pbg, unitCost, "ready", availableResources )
+				if cn then return true, cc end
+			end
 			aitrace("Producing a unit("..PBG_GetName(pbg)..") Demand:"..demand)
 			Request_Production( s_selfplayer, TGROUP_BuildUnits, TPRIORITY_BuildUnits, PITEM_Spawn, pbg )
 			print("UnitPurchase: Produce:"..PBG_GetName(pbg)  )

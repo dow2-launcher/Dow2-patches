@@ -4,6 +4,16 @@ Every version gets an entry here before it reaches `main`. CI then tags `vX.Y.Z`
 version (`X.Y.0`) it also publishes a GitHub Release with the DLLs and the entries since the previous `X.Y.0`.
 The version of the set lives only in `VERSION`; each DLL still writes its own version to its log.
 
+## 0.2.46 — 2026-11-11
+New AI 14 (store newai-14, experiment, off by default, Elite only) = newai-13 + base defences, vehicles, set-up teams
+(main.ai, mechanics.ai, simulation/ai/strategy_unit_purchase.ai, strategy_tech_purchase.ai, append/scar/elite/elite.scar from eliteai 6caf4bc).
+- Base turrets: found from the entity list (or a 55 m zone at an enemy HQ); entered only with a 1.5 lead (1.1 with vehicles, anti-armour
+  or artillery), which hit the turret itself; otherwise squads leave the zone and the army picks another goal; losses there make it "stronger".
+- Vehicles: a damaged one (below 0.4) moves back behind the infantry, one ahead of the army comes back to it.
+- Set-up teams and support heroes: focus priority, grenades, jump and melee from the flank; anti-set-up units wanted against 2+ set-ups.
+- Call-in or unit decided before the unit buy; tech-vs-army decision held per tier; an unbuildable building request no longer locks the bank
+  (pauses 120-600 s); builders are left alone; refill stops when no models arrive; SCAR order mode 7 (attack a building).
+
 ## 0.2.45 — 2026-11-11
 New AI 13 (store newai-13, experiment, off by default, Elite only) = newai-12 + race abilities back, safer runners, reinforcements
 (main.ai, mechanics.ai, simulation/ai/strategy_unit_purchase.ai, strategy_tech_purchase.ai, append/scar/elite/elite.scar from eliteai 8affec3).

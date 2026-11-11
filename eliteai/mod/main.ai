@@ -4,7 +4,7 @@
 -- (all | none | normal | <player ids, e.g. 1000>) so one match can pit the new logic against Elite's (A/B).
 -- Every tuning value can be overridden from EliteAI.ini [Lua] without rebuilding (EliteAI.num("Key", default)).
 
-EliteAI = { version = "0.15" }
+EliteAI = { version = "0.16" }
 
 -- 0.9 (10.11): THREE VARIANTS for testers to compare, chosen in the skirmish menu by the computer slot's difficulty:
 -- Easy = "NEW AI A", Normal = "NEW AI B", Hard = "NEW AI C" (EliteAI.dll relabels them); Expert = Elite's AI, untouched.
@@ -208,6 +208,7 @@ local _order = eliteai_order or (string and string.eliteai_order)
 EliteAI.retreating, EliteAI.orders, EliteAI.dir_squads = {}, 0, 0
 EliteAI.weak_n = {}                                                -- 0.13: models a squad had when it last went home to be refilled (numbers by squad id)
 EliteAI.refill = {}                                                -- 0.14: squads on a refill stay { t, home_t, prog, n, got } (numbers by squad id)
+EliteAI.refill_ban = {}                                            -- 0.16: no "ordered" stay for this squad until then (its models did not come)
 
 local function dist(a, b) return math.sqrt((a.x - b.x) ^ 2 + (a.z - b.z) ^ 2) end
 
@@ -243,6 +244,27 @@ function EliteAI_OrderGate(id, mode, x, z, now, owner, urgent)
 	local hold = (owner == "idle") and (now + num("OrderOwnerHold", 9)) or nil
 	if mode == 4 then                                                       -- attack the squad with id x
 		if r.cls == 4 and r.tid == x and now - r.t < num("OrderAttackSecs", 10) then st.skip = st.skip + 1; return nil end
+		-- 0.16 (TECH_RU.md 15.6; the polygon's scene a, newai-13: a carnifex that drops every order within a second got an
+		-- attack-move, an attack on a squad 56 m away (FocusFire), an attack-move ... - each a new order for this book, the
+		-- attack on a squad was outside the series and wiped the "attack-move had no effect" check). An attack on a squad given
+		-- to a squad that stands quiet (did not move, was not hit, did not fire for OrderStuckSecs) is a march to that target:
+		-- it counts in the series and falls under the ceiling. A squad that shoots is not quiet - its focus orders pass as before.
+		local p4 = EliteAI.sqpos[id]
+		if p4 and (EliteAI.idle_for[id] or 0) >= num("OrderStuckSecs", 4) then
+			if r.ax == nil or now - r.at > num("OrderWindow", 30) or math.sqrt((p4.x - r.ax) ^ 2 + (p4.z - r.az) ^ 2) > num("OrderProgressD", 8) then
+				r.ax, r.az, r.at, r.n, r.alt, r.hist = p4.x, p4.z, now, 0, nil, nil
+			end
+			if r.n >= num("OrderBurst", 3) then
+				st.cap = st.cap + 1
+				if not r.said or now - r.said >= 30 then
+					r.said = now
+					log("MECH", "Order", id, "no effect:", r.n, "orders in", string.format("%.0f s", now - r.at), "without", num("OrderProgressD", 8), "m of movement - none until the window is over", "last", r.hist or "-")
+				end
+				return nil
+			end
+			r.n = r.n + 1
+			r.hist = (r.hist and (r.hist .. " ") or "") .. string.format("%.0f:4:%s", now, tostring(owner))
+		end
 		r.cls, r.tid, r.x, r.z, r.t, r.hold = 4, x, nil, nil, now, hold
 		st.sent = st.sent + 1
 		return mode
@@ -254,15 +276,16 @@ function EliteAI_OrderGate(id, mode, x, z, now, owner, urgent)
 	-- the series: where the squad stood when the orders to a spot began; it starts anew once the squad has moved or the window is over
 	local unstuck = false
 	if r.ax == nil or now - r.at > num("OrderWindow", 30) then
-		r.ax, r.az, r.at, r.n, r.alt = p and p.x, p and p.z, now, 0, nil
+		r.ax, r.az, r.at, r.n, r.alt, r.hist = p and p.x, p and p.z, now, 0, nil, nil
 	elseif p and math.sqrt((p.x - r.ax) ^ 2 + (p.z - r.az) ^ 2) > pd then
 		unstuck = (r.alt == true)
-		r.ax, r.az, r.at, r.n, r.alt = p.x, p.z, now, 0, nil
+		r.ax, r.az, r.at, r.n, r.alt, r.hist = p.x, p.z, now, 0, nil, nil
 	end
 	local same = (r.cls == mode and r.x ~= nil and math.sqrt((r.x - x) ^ 2 + (r.z - z) ^ 2) <= num("OrderSameR", 10))
 	-- no effect: the series began OrderStuckAfter seconds ago with an attack-move, and the squad stands quiet where it began
 	-- (whatever the spots were: the fight the army is called to may move)
-	local stuck = (p ~= nil and r.ax ~= nil and r.n >= 1 and r.cls == 2 and math.sqrt((p.x - r.ax) ^ 2 + (p.z - r.az) ^ 2) <= num("OrderStuckD", 4)
+	-- (0.16: the last order of the series may also have been an attack on a squad - see mode 4 above)
+	local stuck = (p ~= nil and r.ax ~= nil and r.n >= 1 and (r.cls == 2 or r.cls == 4) and math.sqrt((p.x - r.ax) ^ 2 + (p.z - r.az) ^ 2) <= num("OrderStuckD", 4)
 		and (EliteAI.idle_for[id] or 0) >= num("OrderStuckSecs", 4) and now - r.at >= num("OrderStuckAfter", 6))
 	local alt = (mode == 2 and stuck and not r.alt)
 	if same and not alt and not unstuck and now - r.t < num("OrderMoveSecs", 12) then st.skip = st.skip + 1; return nil end
@@ -272,7 +295,7 @@ function EliteAI_OrderGate(id, mode, x, z, now, owner, urgent)
 		st.cap = st.cap + 1
 		if not r.said or now - r.said >= 30 then
 			r.said = now
-			log("MECH", "Order", id, "no effect:", r.n, "orders to a spot in", string.format("%.0f s", now - r.at), "without", pd, "m of movement - none until the window is over")
+			log("MECH", "Order", id, "no effect:", r.n, "orders to a spot in", string.format("%.0f s", now - r.at), "without", pd, "m of movement - none until the window is over", "last", r.hist or "-")
 		end
 		return nil
 	end
@@ -280,8 +303,9 @@ function EliteAI_OrderGate(id, mode, x, z, now, owner, urgent)
 	if alt then
 		send, r.alt = 1, true
 		st.alt = st.alt + 1
-		log("MECH", "Order", id, "attack-move had no effect (stands quiet", string.format("%.0f s", EliteAI.idle_for[id] or 0), "): -> move", string.format("to %.0f %.0f", x, z), "by", tostring(owner))
+		log("MECH", "Order", id, "attack-move had no effect (stands quiet", string.format("%.0f s", EliteAI.idle_for[id] or 0), "): -> move", string.format("to %.0f %.0f", x, z), "by", tostring(owner), "last", r.hist or "-")
 	end
+	r.hist = (r.hist and (r.hist .. " ") or "") .. string.format("%.0f:%d:%s", now, send, tostring(owner))   -- 0.16: the series, for the "no effect" lines (time:mode:owner)
 	r.cls, r.tid, r.x, r.z, r.t, r.n, r.hold = mode, nil, x, z, now, r.n + 1, hold
 	r.sx, r.sz = p and p.x, p and p.z
 	st.sent = st.sent + 1
@@ -303,6 +327,50 @@ local function halt(u)
 	_order(u.id, u.pos.x, u.pos.y, u.pos.z, ORD_MOVE)
 	EliteAI.orders = EliteAI.orders + 1
 	EliteAI.ord[u.id] = nil
+end
+
+-- 0.16 (TECH_RU.md 15.5): a squad that models were ordered for and that stands farther than RefillNearD from the HQ walks up to
+-- it (a plain move past the book, as halt): "at home" is 40 m of the HQ, the reach of the reinforce point is the engine's own
+-- and smaller for all we know (s18: "dir no effect 50023 ... out of reach of a reinforce point?" for a squad that was "at home")
+local function to_hq(u, hq, d)
+	if not _order or not u or not u.id or not u.pos or not hq then return end
+	local dh = u.dhome or 0
+	if dh <= d or dh <= 0 then halt(u); return end
+	local k = d / dh
+	_order(u.id, hq.x + (u.pos.x - hq.x) * k, u.pos.y, hq.z + (u.pos.z - hq.z) * k, ORD_MOVE)
+	EliteAI.orders = EliteAI.orders + 1
+	EliteAI.ord[u.id] = nil
+end
+-- 0.16: enemy squads at our base by the last scan of mechanics.ai (numbers: EliteAI.mech.en = { x, z }, at most 10 s old;
+-- strategy_tech_purchase.ai reads the same for its "enemy_at_base") - how many within r of the HQ; 0 without a fresh scan
+local function base_enemies(hq, now, r)
+	local m = EliteAI.mech
+	if type(m) ~= "table" or type(m.en) ~= "table" or hq == nil or now - (m.last_scan or -1000) > 10 then return 0 end
+	local n = 0
+	for _, e in ipairs(m.en) do
+		if e.x ~= nil and e.z ~= nil and (e.x - hq.x) ^ 2 + (e.z - hq.z) ^ 2 <= r * r then n = n + 1 end
+	end
+	return n
+end
+-- 0.16 (mechanics.ai 0.7 Defence): is the spot under a turret the army stays away from this tick (EliteAI.def_block: numbers)
+local function def_blocked(pos)
+	local b = EliteAI.def_block
+	if type(b) ~= "table" or pos == nil or pos.x == nil then return false end
+	for _, q in ipairs(b) do if (pos.x - q.x) ^ 2 + (pos.z - q.z) ^ 2 <= q.r * q.r then return true end end
+	return false
+end
+-- 0.16: does the squad build (Elite's construction task: a generator, a power node, a turret)? The engine's functions of the
+-- SCAR library, looked up once - a missing one switches the check off, never a call of nil (as mechanics.ai api()):
+-- Squad_HasActiveCommand / Squad_GetActiveCommand / SQUADSTATEID_Construction (the polygon's SCAR side reads the same every
+-- second for every squad: "POLY ST ... AttackMove->Construction"). The squad exists and has models (the caller checked).
+local function builds(sq)
+	if EliteAI.api_build == nil then
+		EliteAI.api_build = (type(Squad_HasActiveCommand) == "function" and type(Squad_GetActiveCommand) == "function" and type(SQUADSTATEID_Construction) == "number")
+		log("api", "Squad_HasActiveCommand", type(Squad_HasActiveCommand), "Squad_GetActiveCommand", type(Squad_GetActiveCommand),
+			"SQUADSTATEID_Construction", type(SQUADSTATEID_Construction), "builder check", EliteAI.api_build and 1 or 0)
+	end
+	if not EliteAI.api_build then return false end
+	return Squad_HasActiveCommand(sq) == true and Squad_GetActiveCommand(sq) == SQUADSTATEID_Construction
 end
 
 -- Elite's combat tasks would take the squads back: none for a directed AI (snipers, capture etc. stay Elite's)
@@ -348,11 +416,25 @@ end
 --    would pay RefillTripModels (2) models now, the HQ is within RefillTripD (160 m), and no more than a third of the army
 --    is away refilling; once per loss. RefillQuiet=0 = off;
 --  * a fight at home (a squad of the army there is under attack) ends every stay: "why fight at home".
+-- 0.16 (TECH_RU.md 15.5; the verification of newai-13):
+--  * a squad that builds is Elite's (see builds above): it is not in the army at all, no stay is begun or kept for it
+--    (scene b: "Refill 50010 start ... ordered" and "AttackMove->Construction" in the same second, 27 s, got 0);
+--  * a stay "ordered" that brought no model within RefillOrderedSecs (15 s, counted from the moment the squad stands) ends -
+--    "why nothing came" - and so does one whose purse says "mute" (REINF dir no effect); the squad is not held by "ordered"
+--    again for RefillBanSecs (90 s) (s18: 50023, 2 of 3, stood 24 s for nothing); the squad walks up to the HQ first (to_hq);
+--  * the quiet trip is a plain move, not a retreat (a retreat cannot be called off), and is not begun while an enemy squad
+--    stands within RefillBaseR (70 m) of the HQ; on its way it ends when the squad is hit or the enemy comes to the base -
+--    "why attacked on the way" / "why enemy at home" (s18 5:44: "-> home to refill (quiet)" 11 s after "enemy_at_base 675",
+--    the squad ran into them: "end ... got 0 why under attack", 3 models ordered for nothing). RefillQuietMove=0 = a retreat.
 local function refill_step(u, f, now)
 	local why = nil
 	if not u.home then
 		if f.home_t then why = "left home"
-		elseif now - f.t >= num("RefillWalkSecs", 45) then why = "did not get home" end
+		elseif now - f.t >= num("RefillWalkSecs", 45) then why = "did not get home"
+		elseif f.why == "quiet" and f.walk then
+			if u.hit then why = "attacked on the way"
+			elseif (EliteAI.base_en or 0) > 0 then why = "enemy at home" end
+		end
 	else
 		if not f.home_t then
 			f.home_t, f.prog, f.n, f.got = now, now, u.n, 0
@@ -364,13 +446,17 @@ local function refill_step(u, f, now)
 			f.prog, f.got = now, f.got + (u.n - f.n)
 		end
 		f.n = u.n
+		if u.moving or f.stand_t == nil then f.stand_t = now end                -- 0.16: the clock of "nothing came" starts when it stands
 		local fit = (u.n > u.full * num("RetreatModels", 0.34))
 		if u.hit then why = "under attack"
 		elseif EliteAI.home_hit then why = "fight at home"
 		elseif u.full > 0 and u.n >= u.full then why = "full"
 		elseif now - f.home_t >= num("RefillMaxSecs", 75) then why = "timeout"
+		elseif f.why == "ordered" and u.refill_why == "mute" then why = "purse mute"                          -- 0.16: REINF dir no effect
+		elseif f.why == "ordered" and f.got == 0 and now - f.stand_t >= num("RefillOrderedSecs", 15) then why = "nothing came"
 		elseif fit and not u.refill and now - f.prog >= num("RefillWaitSecs", 9) then why = "enough, purse " .. tostring(u.refill_why or "-")
 		end
+		if (why == "purse mute" or why == "nothing came") then EliteAI.refill_ban[u.id] = now + num("RefillBanSecs", 90) end
 	end
 	if why then
 		EliteAI.refills = (EliteAI.refills or 0) + 1
@@ -386,6 +472,8 @@ function EliteAI_Director()
 	local hq, home_r = home_pos(), num("Reinf_HomeR", 40)
 	local any_hit, home_hit = false, false
 	local wm, stand_d = num("RefillModels", 0.5), num("RefillStandD", 3)
+	local bfree, rhp, nbuild = (num("BuilderFree", 1) >= 1), num("RetreatHP", 0.35), 0
+	EliteAI.build_said = EliteAI.build_said or {}
 	for i = 0, n - 1 do
 		-- 0.8: an engine call that raises a Lua error inside the AI job leaks the Lua mutex (LuaBinding::GetMutex) on
 		-- the xthread worker -> the main thread waits forever (hang). Seen: AISquad_ConvertToSimSquad -> nil for a squad
@@ -397,9 +485,21 @@ function EliteAI_Director()
 			local sq = AISquad_ConvertToSimSquad(aisq)
 			if sq ~= nil and Squad_Count(sq) > 0 then
 				local id, pos = Squad_GetGameID(sq), Squad_GetPosition(sq)
-				if id ~= nil and pos ~= nil and pos.x ~= nil and pos.z ~= nil then
-					local hp = Squad_GetHealth(sq) / math.max(Squad_GetHealthMax(sq) or 1, 1)
-					local u = { sq = sq, id = id, pos = pos, hp = hp, hit = Squad_IsUnderAttack(sq, 3), n = Squad_Count(sq), full = 0 }
+				local hp = Squad_GetHealth(sq) / math.max(Squad_GetHealthMax(sq) or 1, 1)
+				local hit = Squad_IsUnderAttack(sq, 3)
+				-- 0.16: a squad that builds is left to Elite's construction task, as one in a capture task (the director led the
+				-- builders away: "ENERGY gen hold dead", "TECH build hold dead" - nobody builds it). One that is badly hurt
+				-- under fire is the director's all the same (it goes home below)
+				if id ~= nil and bfree and builds(sq) and not (hit and hp < rhp) then
+					nbuild = nbuild + 1
+					local bs = EliteAI.build_said[id]
+					if bs == nil or now - bs >= 60 then
+						EliteAI.build_said[id] = now
+						log("MECH", "Builder", id, "builds: left to its task", "hp", string.format("%.2f", hp))
+					end
+				elseif id ~= nil and pos ~= nil and pos.x ~= nil and pos.z ~= nil then
+					local u = { sq = sq, id = id, pos = pos, hp = hp, hit = hit, n = Squad_Count(sq), full = 0 }
+					u.veh = (SquadQuery_IsVehicle(sq) == true)                    -- 0.16 (tactics.ai; mechanics.ai weight_of reads the same)
 					if EliteAI_ReinforceFull then u.full = EliteAI_ReinforceFull(aisq) or 0 end   -- models of a complete squad of its kind
 					-- 0.13 (TECH_RU.md 12): a squad of the director's army never asked for reinforcements - the engine's list is filled
 					-- by Elite's squad tasks, which do not run for it. At home (Reinf_HomeR of our HQ) a squad that misses models gets
@@ -414,6 +514,7 @@ function EliteAI_Director()
 							-- does not count a model as lost before the squad has arrived
 							local was = EliteAI.sqpos[id]
 							local moving = (was == nil) or (math.sqrt((pos.x - was.x) ^ 2 + (pos.z - was.z) ^ 2) > stand_d)
+							u.moving = moving
 							local k, busy, why = EliteAI_ReinforceDir(aisq, id, u.n, now, moving)
 							if type(k) == "number" and k >= 1 then
 								_order(id, k, 0, 0, 6); EliteAI.reinf_orders = (EliteAI.reinf_orders or 0) + k
@@ -431,7 +532,8 @@ function EliteAI_Director()
 			end
 		end
 	end
-	EliteAI.dir_squads = table.getn(army)
+	EliteAI.dir_squads, EliteAI.builders = table.getn(army), nbuild
+	EliteAI.base_en = base_enemies(hq, now, num("RefillBaseR", 70))             -- 0.16: enemy squads at our base (the quiet trip)
 	-- 0.12: the order book reads the time and the positions of this tick (numbers only)
 	EliteAI.now, EliteAI.sqpos = now, {}
 	for _, u in ipairs(army) do EliteAI.sqpos[u.id] = { x = u.pos.x, z = u.pos.z } end
@@ -441,6 +543,7 @@ function EliteAI_Director()
 	local in_army, away = {}, 0
 	for _, u in ipairs(army) do in_army[u.id] = true end
 	for id in pairs(EliteAI.refill) do if in_army[id] then away = away + 1 else EliteAI.refill[id] = nil end end   -- (each entry on its own)
+	for id, t in pairs(EliteAI.refill_ban) do if now >= t then EliteAI.refill_ban[id] = nil end end              -- (each entry on its own)
 	local away_max = math.max(1, math.floor(table.getn(army) / 3))
 	-- "quiet": nobody of the army is under attack and the mechanics saw no enemy in contact for RefillQuietSecs
 	local mech_c = (type(EliteAI.mech) == "table") and EliteAI.mech.army_contact or nil
@@ -448,6 +551,7 @@ function EliteAI_Director()
 	-- badly hurt squads go home (once; they come back to the army after RetreatSecs)
 	local active = {}
 	local rm, stay = num("RetreatModels", 0.34), (num("Refill", 1) >= 1)
+	local vehs_on = (EliteAI_Mechanics ~= nil and tonumber(cfg("Mech_Vehicles", nil) or 1) >= 1)
 	for _, u in ipairs(army) do
 		local r = EliteAI.retreating[u.id]
 		local f = EliteAI.refill[u.id]
@@ -457,6 +561,8 @@ function EliteAI_Director()
 			if refill_step(u, f, now) then
 				EliteAI.refill[u.id], EliteAI.retreating[u.id] = nil, nil
 				table.insert(active, u)
+			elseif f.walk and not u.home and hq ~= nil then
+				order(u, hq, ORD_MOVE, true)                                     -- 0.16: the quiet trip is a plain move (the book repeats it when due)
 			end
 		elseif r and now - r < num("RetreatSecs", 40) then
 			-- still on the way / healing
@@ -471,6 +577,10 @@ function EliteAI_Director()
 				EliteAI.back_early = (EliteAI.back_early or 0) + 1
 				log("MECH", "Retreat", u.id, "back early after", math.floor(now - r), "s at home hp", string.format("%.2f", u.hp))
 			end
+		elseif u.veh and vehs_on then
+			-- 0.16 (TECH_RU.md 15.8): a vehicle has no retreat - the order did nothing and the vehicle then stood 40 s without any
+			-- (it was "on its way home"). It stays the army's: mechanics.ai (Vehicles) takes a damaged one out of the fire
+			EliteAI.retreating[u.id] = nil; table.insert(active, u)
 		elseif u.hp < num("RetreatHP", 0.35) then
 			EliteAI.retreating[u.id] = now; order(u, u.pos, ORD_RETREAT, true)
 		elseif thin and u.n < (EliteAI.weak_n[u.id] or 9999) and not (u.home and (u.hit or not stay)) then
@@ -484,19 +594,24 @@ function EliteAI_Director()
 				log("MECH", "Retreat", u.id, "models", u.n, "of", u.full, "-> home to refill")
 			end
 			if stay then EliteAI.refill[u.id] = { t = now }; away = away + 1 elseif u.home then table.insert(active, u) end
-		elseif stay and u.home and (u.ordered or 0) >= 1 and not u.hit and not home_hit then
+		elseif stay and u.home and (u.ordered or 0) >= 1 and not u.hit and not home_hit and now >= (EliteAI.refill_ban[u.id] or 0) then
 			-- 0.15: models were ordered for it this tick - it stays at home until they have come (refill_step lets it go: full,
 			-- nothing more to come, a fight, the timeout). Was: it marched off with the army, the models were lost
+			-- 0.16: not a squad whose models did not come the last time (refill_ban); it walks up to the HQ (to_hq)
 			EliteAI.retreating[u.id] = nil
 			EliteAI.refill[u.id] = { t = now, why = "ordered", home_t = now, prog = now, n = u.n, got = 0 }
 			log("MECH", "Refill", u.id, "start", "models", u.n, "of", u.full, "ordered")
-			halt(u)
+			to_hq(u, hq, num("RefillNearD", 18))
 		elseif stay and quiet and not u.home and u.full >= 3 and u.n <= u.full * wm and u.n < (EliteAI.weak_n[u.id] or 9999)
-			and (u.can or 0) >= num("RefillTripModels", 2) and away < away_max and (u.dhome or 99999) <= num("RefillTripD", 160) then
+			and (u.can or 0) >= num("RefillTripModels", 2) and away < away_max and (u.dhome or 99999) <= num("RefillTripD", 160)
+			and (EliteAI.base_en or 0) == 0 then
 			-- 0.15: weak (half its models or fewer) and nobody fights - home to refill, once per loss
+			-- 0.16: not while the enemy is at our base, and by a plain move it can be called off on the way (refill_step)
 			EliteAI.weak_n[u.id] = u.n
-			EliteAI.retreating[u.id] = now; order(u, u.pos, ORD_RETREAT, true)
-			EliteAI.refill[u.id] = { t = now, why = "quiet" }; away = away + 1
+			local walk = (num("RefillQuietMove", 1) >= 1 and hq ~= nil)
+			EliteAI.retreating[u.id] = now
+			if walk then order(u, hq, ORD_MOVE, true) else order(u, u.pos, ORD_RETREAT, true) end
+			EliteAI.refill[u.id] = { t = now, why = "quiet", walk = walk }; away = away + 1
 			log("MECH", "Retreat", u.id, "models", u.n, "of", u.full, "-> home to refill (quiet)", "purse", u.can, "home", math.floor(u.dhome or -1), "m")
 		else
 			-- (0.15: "once per loss" holds up to the weak threshold - a squad back from a trip that brought nothing does not go again)
@@ -509,7 +624,7 @@ function EliteAI_Director()
 	if table.getn(active) == 0 then return end
 	-- 1) a fight is on: everybody goes there (help, don't trickle)
 	for _, u in ipairs(active) do
-		if u.hit then
+		if u.hit and not def_blocked(u.pos) then                 -- (0.16: a squad shot under a turret the army stays away from does not call it there)
 			-- (0.12: the order book repeats it to a squad only when the fight has moved or after OrderMoveSecs)
 			for _, v in ipairs(active) do order(v, u.pos, ORD_ATTACK, true) end
 			EliteAI.phase = "fight"; return
@@ -524,6 +639,7 @@ function EliteAI_Director()
 		target, tkey = goal, "goal " .. tostring(goal.kind) .. " " .. tostring(goal.key)
 	end
 	if not target then return end
+	if def_blocked(target) then EliteAI.phase = "def_hold"; return end         -- 0.16: the target is under such a turret - nobody is marched in (mechanics.ai gives the goal)
 	local cx, cz = 0, 0
 	for _, u in ipairs(active) do cx = cx + u.pos.x; cz = cz + u.pos.z end
 	cx, cz = cx / table.getn(active), cz / table.getn(active)

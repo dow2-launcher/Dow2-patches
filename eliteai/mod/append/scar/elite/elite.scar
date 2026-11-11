@@ -127,6 +127,31 @@ local function mech_order(sg, sq, m, x, y, z)
 			EliteAI_MechNoPoint = (EliteAI_MechNoPoint or 0) + 1
 			if EliteAI_MechNoPoint <= 5 then _log("MECH no point at", x, z) end
 		end
+	elseif m == 7 then
+		-- mechanics.ai 0.7 (Defence): attack the enemy building nearest to the position (a turret) - found as mech_point finds a
+		-- strategic point, attacked as the building of a garrison above (Cmd_AttackEGroup, command.scar:709)
+		local pos = World_Pos(tonumber(x), tonumber(y), tonumber(z))
+		local eg = EGroup_CreateIfNotFound("eliteai_mech_def")
+		EGroup_Clear(eg)
+		World_GetEntitiesNearPoint(Squad_GetPlayerOwner(sq), eg, pos, 10, OT_Enemy)
+		local best, bd
+		for i = 1, EGroup_CountSpawned(eg) do
+			local e = EGroup_GetSpawnedEntityAt(eg, i)
+			if e and (Entity_IsBuilding == nil or Entity_IsBuilding(e)) and not (Entity_IsStrategicPoint and Entity_IsStrategicPoint(e)) then
+				local p = Entity_GetPosition(e)
+				local d = (p.x - pos.x) * (p.x - pos.x) + (p.z - pos.z) * (p.z - pos.z)
+				if not best or d < bd then best, bd = e, d end
+			end
+		end
+		if best then
+			EGroup_Clear(eg); EGroup_Add(eg, best)
+			Cmd_AttackEGroup(sg, eg)
+			EliteAI_MechDefAtt = (EliteAI_MechDefAtt or 0) + 1
+			if EliteAI_MechDefAtt <= 3 then _log("MECH attack building at", x, z, "x" .. EliteAI_MechDefAtt) end
+		else
+			EliteAI_MechNoBld = (EliteAI_MechNoBld or 0) + 1
+			if EliteAI_MechNoBld <= 5 then _log("MECH no enemy building at", x, z) end
+		end
 	elseif m == 6 then
 		-- main.ai 0.13: one reinforcement for a squad of the director's army that stands at home (Elite's squad tasks, which ask
 		-- the engine for reinforcements, do not run for it). The command of the player's reinforce button: the engine checks
