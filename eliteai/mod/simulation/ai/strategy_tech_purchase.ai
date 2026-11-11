@@ -99,7 +99,7 @@ DEMAND_NeverBuild = -99999
 
 -------------------------------------------------------------------------------------------------
 -- EliteAI tech plan (state: numbers, strings and plain tables only)
-EliteAI_TECH_VERSION = "0.6"
+EliteAI_TECH_VERSION = "0.7"
 EliteAI_T = { st = {}, said = {}, conf = {}, waits = {}, last_stats = -1, eval_t = -1, cost_t = -1, level = 1 }
 
 local function t_on() return EliteAI ~= nil and EliteAI.on == true end
@@ -266,8 +266,8 @@ local function t_eval(now)
 		local cost = AIPlayer_GetProductionCost( s_self_modplayer, PITEM_Upgrade, pbg )
 		T.cost_req, T.cost_pow, T.cost_t, T.cost_k = (cost and cost.requisition) or 0, (cost and cost.power) or 0, now, k
 	end
-	local tt = (k == 1) and t_num("Tech_T2Time", 270) or t_num("Tech_T3Time", 900)       -- 0.3: T2 270 / 210 / 450 (was 420 / 240 / 720)
-	local early = (k == 1) and t_num("Tech_T2Early", 210) or t_num("Tech_T3Early", 660)
+	local tt = (k == 1) and t_num("Tech_T2Time", 250) or t_num("Tech_T3Time", 780)       -- 0.3: T2 270 / 210 / 450 (was 420 / 240 / 720)
+	local early = (k == 1) and t_num("Tech_T2Early", 195) or t_num("Tech_T3Early", 660)
 	local late = (k == 1) and t_num("Tech_T2Late", 450) or t_num("Tech_T3Late", 1320)
 	-- 0.6 (TECH_RU.md 17.4): the enemy holds a line of set-up teams and we have a tool against them - the tier comes earlier
 	-- (mod/mechanics.ai EliteAI_MechCounterTech: the Counter layer, its arbiter Conf_CounterVsPlan; 0 = as planned)
@@ -275,7 +275,15 @@ local function t_eval(now)
 		local cs = EliteAI_MechCounterTech( k ) or 0
 		if cs > 0 then tt, early = tt - cs, early - cs end
 	end
-	T.plan_tt, T.plan_early = tt, early
+	-- 0.7 (TECH_RU.md 21.3; Malum fb 623: grey knights, variant B - "T3 wait ... conf army" from 13:15 to 22:00, T3 at 24:34. Rule 2
+	-- wants 8 squads and an army not behind the enemy's, rule 1 six and "not losing": against a player who kills squads neither
+	-- comes true, and the tier waited for Tech_T3Late = 22 minutes). A player who is behind techs all the same - the next tier's
+	-- units are how he comes back. The arbiter's wait now has a DEADLINE: Tech_T2Deadline (75 s) / Tech_T3Deadline (150 s) after
+	-- the plan's time the verdict is "tech" (why "late") under every rule; only the enemy at our base keeps it back. And the
+	-- plan's times are a player's: T2 from 250 s (was 270; early 195), T3 from 780 s = 13:00 (was 900). 0 = no deadline.
+	local dl = (k == 1) and t_num("Tech_T2Deadline", 75) or t_num("Tech_T3Deadline", 150)
+	if dl > 0 and tt + dl < late then late = tt + dl end
+	T.plan_tt, T.plan_early, T.plan_late = tt, early, late
 	local min_army = (k == 1) and t_num("Tech_MinArmy", 4) or t_num("Tech_MinArmyT3", 6)
 	local army = (cache and cache.military_count) or 0
 	local res = cache and cache.resources
@@ -501,7 +509,7 @@ function EliteAI_TechPowerFloor()
 	local now = World_GetGameTime()
 	if now >= t_num("Tech_T2Late", 450) + t_num("Tech_PowFloorSecs", 180) then return 0 end   -- something else keeps T2 away: the upgrades do not wait for ever
 	local rate = (cache and cache.resources_rate and cache.resources_rate.power) or 0    -- per minute (cache.ai:156)
-	local left = math.max(0, t_num("Tech_T2Time", 270) - now)
+	local left = math.max(0, t_num("Tech_T2Time", 250) - now)
 	return math.max(0, (T.cost_pow or 0) - rate * left / 60)
 end
 if state_analysis and state_analysis.recalculate_budgets and not EliteAI_TechPromoteWrapped then
@@ -534,8 +542,8 @@ function strategy_tech_purchase.init()
 			table.insert(tiers, pbg and PBG_GetName(pbg) or "nil")
 		end
 		t_log("init", "version", EliteAI_TECH_VERSION, "tiers", table.concat(tiers, " "), "rule", t_rule(),
-			"T2", t_num("Tech_T2Time", 270) .. "/" .. t_num("Tech_T2Early", 210) .. "/" .. t_num("Tech_T2Late", 450),
-			"T3", t_num("Tech_T3Time", 900) .. "/" .. t_num("Tech_T3Early", 660) .. "/" .. t_num("Tech_T3Late", 1320),
+			"T2", t_num("Tech_T2Time", 250) .. "/" .. t_num("Tech_T2Early", 195) .. "/" .. t_num("Tech_T2Late", 450),
+			"T3", t_num("Tech_T3Time", 780) .. "/" .. t_num("Tech_T3Early", 660) .. "/" .. t_num("Tech_T3Late", 1320), "deadline", t_num("Tech_T2Deadline", 75) .. "/" .. t_num("Tech_T3Deadline", 150),
 			"min_army", t_num("Tech_MinArmy", 4) .. "/" .. t_num("Tech_MinArmyT3", 6),
 			"plan_only", t_num("Tech_PlanOnly", 1), "pow_floor", t_num("Tech_PowFloor", 1), "b_extra", t_num("Tech_B_ExtraT2", 1) .. "/" .. t_num("Tech_B_ExtraT3", 2))
 	end

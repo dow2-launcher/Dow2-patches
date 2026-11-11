@@ -58,7 +58,7 @@
 --    heavy-weapon teams are the first focus target, get a grenade / a jump / a squad from the side; the purchase scripts
 --    are told to buy the race's answers.
 
-EliteAI_MECH_VERSION = "1.2"
+EliteAI_MECH_VERSION = "1.3"
 
 -- every tunable (EliteAI.ini [Lua] Mech_<Key> overrides); metres and seconds of game time; "strength" = health points
 -- (a squad ~ 300-900, a tank ~ 1500+), vehicles weighted by VehW
@@ -322,7 +322,7 @@ local MP = {
 	MapThreatR = 35,     -- an enemy squad within this distance of a point threatens it (the generators stand around a power point)
 	MapHomeR = 110,      -- "our side": within this distance of our HQ, or closer to our base than to an enemy HQ (enemy_half is false)
 	MapLostSecs = 180,   -- a point that was ours within this many seconds and is not now is "lost": taken back before any other point
-	MapDefRatio = 0.7,   -- the army goes to a threatened point of ours when ours >= theirs there x this (ArmyRetreat leaves at 1 / 1.6)
+	MapDefRatio = 0.85,  -- the army goes to a threatened point of ours when ours >= theirs there x this (1.3: was 0.7 = 1 / 1.43 - the very odds the fight is left at, 1 / RetreatLocalRatio; Malum fb 621: "Goal defend ... enemy 2469 ours 2008", lost)
 	MapDefSecs = 12,     -- the goal "defend" lives this long after the last threat was seen at its point
 	MapFarD = 120,       -- Conf_MapDefend rules 2 and 3: a requisition point farther than this from the army is left to the runners
 	MapCappers = 2,      -- squads of the army that capture its goal points at a time (1.0: one)
@@ -338,6 +338,40 @@ local MP = {
 	MapOnRatio = 0.5,
 	MapBusySecs = 10,    -- Conf_MapDefend 2 / 3: the far requisition point is left only while the army is busy (an enemy in contact this many seconds ago, or storming)
 	RoleSecs = 120,      -- a squad that was a runner / a capturing squad within this many seconds is still one for the refill (EliteAI_MechRole)
+	-- 1.3 (TECH_RU.md 21.4 / 21.5; Malum fb 621 / 623: 15 squads lost, Orca fb 634: 105 models): the fight is judged where it is,
+	-- and the army does not march into a force it cannot beat
+	RetreatLocal = 1,    -- 1 = the strengths of a retreat are those AT THE FIGHT (X.fight), 0 = as 1.2 (the whole army against the zone of its centre)
+	FightR = 45,         -- the fight: our squads and the enemy's within this distance of the squad of ours that has the most enemy on it
+	FightSupportR = 90,  -- our squads of the line outside the fight but within this distance of it ...
+	FightSupportK = 0.5, -- ... count this much (they arrive during it)
+	RetreatLocalRatio = 1.4, -- enemy strength at the fight / ours there >= this -> they leave (HoldVP multiplies it as RetreatRatio)
+	FightArmyShare = 0.5,    -- the squads at the fight weigh this share of the army or more: the whole army goes home; less: only they do ("FightLeave")
+	Trade = 1,           -- 1 = a fight that is being lost by the trade is left before the ratio says so
+	TradeSecs = 9,       -- ... it has lasted this long,
+	TradeLoss = 0.3,     -- we have lost this share of the strength we had in it at our best,
+	TradeEnemyK = 0.5,   -- the enemy less than this much of that share of his,
+	TradeRatio = 1.1,    -- and he outweighs us there by this
+	Engage = 1,          -- 1 = the march is judged before it starts (X.run_engage); 0 = as 1.2
+	EngageR = 55,        -- the force the march meets: enemy squads within this distance of the target ...
+	EngagePathR = 35,    -- ... or of the straight way to it
+	EngageMinW = 500,    -- a force below this stops nobody
+	EngageNeed = 1.0,    -- the army goes when ours + the allies' there x EngageAllyK >= that force x this (Conf_Engage: x1.15 / x1 / x0.85)
+	EngageAllyK = 0.7,
+	EngageAllies = 1,    -- 1 = the allies' squads at the target are looked up when ours alone are not enough (0 = never)
+	EngageStandoff = 65, -- the rally point lies at least this far from the target
+	EngageHomeR = 80,    -- a target this close to our HQ is always marched at; a fight this close is left at RetreatRatio, not by the trade (the army stands longer at home)
+	EngageDecayAfter = 90,   -- a hold longer than this lowers the need ...
+	EngageDecaySecs = 240,   -- ... over this many seconds ...
+	EngageDecayMin = 0.65,   -- ... down to this share of it (no standing at home for ever, Orca fb 559)
+	EngageVpK = 0.8,     -- the need x this while we are behind in the ticker race with EngageVpLow tickets or fewer
+	EngageVpLow = 200,
+	EngageHold = 9,      -- hysteresis of the verdict, seconds
+	EngageBadSecs = 45,  -- an enemy squad that was dropped as a goal is not one again for this long
+	RunnerSafe2At = 6,   -- a second runner from this many squads while the map is quiet (0 = only from Runners2At)
+	RunnerSafeSecs = 20, -- ... "quiet": the army out of contact for this long and no enemy squad within MapHomeR of our HQ
+	MapWay = 1,          -- 1 = a free point within MapWayR of the marching army is captured by one of its squads on the way (TECH_RU.md 21.5)
+	MapWayR = 40,
+	MapWayArmy = 3,      -- ... by an army of this many squads of the line or more
 	-- 1.1 the raider role (Orca fb 538: "the lictor went head-on; it is a side capper, infiltration, sudden attacks")
 	Raid = 1,
 	RaidFleeR = 28,      -- enemy squads within this distance: one that is weaker is fought, anything else is left (back towards the army)
@@ -915,13 +949,102 @@ local function hold_vp_mult(cx, cz, now)
 	return v == "hold" and prm("HoldVPMult") or 1
 end
 -- the enemy in the fight zone outweighs us -> go home before the squads are broken one by one
+-- 1.3 (TECH_RU.md 21.5) THE FIGHT WHERE IT IS. Malum's log (fb 621, grey knights): "ArmyRetreat start enemy 2635 ours 485 ratio 5.44
+-- squads 2", "enemy 1601 ours 853 ratio 1.88 squads 2" - the retreat came when two squads were left of seven. The old check
+-- weighed the enemy within ZoneR of the CENTRE of all active squads against ALL of them: a squad that had just left the base
+-- pulled the centre away from the fight and counted as its strength. X.fight finds the fight - the squad of the line with
+-- the most enemy strength within FightR of it, the others in contact around it - and weighs what is THERE: ours at the fight,
+-- half of ours within FightSupportR (they arrive), the enemy at the fight. Lost at RetreatLocalRatio (1.4), or by the TRADE
+-- (TradeSecs in, we lost TradeLoss of our best strength there, the enemy less than half that share, and he outweighs us).
+-- Who leaves: the whole army when the squads at the fight are FightArmyShare of it (as before: M.retreat), else only they
+-- ("MECH FightLeave ...": a retreat order each, EliteAI.retreating - the director keeps them out of the army until they are home
+-- and healthy or RetreatSecs have passed). The old check still runs after it. Mech_RetreatLocal=0 = 1.2.
+function X.fight(state, en)
+	local sr, fr = prm("SightR"), prm("FightR")
+	local best, bw
+	for _, u in ipairs(state.active) do
+		if not M.runner[u.id] and not X.is_raider(u.id) then
+			local inf, w = u.hit, 0
+			for _, e in ipairs(en) do
+				local d = d2(e.x, e.z, u.pos.x, u.pos.z)
+				if d <= fr then w = w + e.w end
+				if not inf and e.contact and d <= sr then inf = true end
+			end
+			if inf and w > 0 and (not best or w > bw or (w == bw and u.id < best.id)) then best, bw = u, w end
+		end
+	end
+	if not best then return nil end
+	local F = { x = best.pos.x, z = best.pos.z, ours = 0, sup = 0, enw = 0, n = 0, ids = {} }
+	for _, u in ipairs(state.active) do
+		local d = d2(u.pos.x, u.pos.z, F.x, F.z)
+		if d <= fr then F.ours, F.n = F.ours + weight_of(u), F.n + 1; table.insert(F.ids, u.id)
+		elseif d <= prm("FightSupportR") and not M.runner[u.id] and not X.is_raider(u.id) then F.sup = F.sup + weight_of(u) end
+	end
+	for _, e in ipairs(en) do if d2(e.x, e.z, F.x, F.z) <= fr then F.enw = F.enw + e.w end end
+	return F
+end
 local function check_army_retreat(state, en, cx, cz, h)
-	if not h or d2(cx, cz, h.x, h.z) <= prm("HomeR") then return false end
+	if not h then return false end
+	local now = state.now
+	local F = (prm("RetreatLocal") >= 1) and X.fight(state, en) or nil
+	local vpm = hold_vp_mult(F and F.x or cx, F and F.z or cz, now)
+	if F and d2(F.x, F.z, h.x, h.z) > prm("HomeR") then
+		local T = M.trade
+		if T == nil or now - T.last > 12 or d2(T.x, T.z, F.x, F.z) > prm("FightSupportR") then T = { t0 = now, opk = F.ours, epk = F.enw } end
+		T.last, T.x, T.z = now, F.x, F.z
+		if F.ours > T.opk then T.opk = F.ours end
+		if F.enw > T.epk then T.epk = F.enw end
+		M.trade = T
+		local ours = F.ours + F.sup * prm("FightSupportK")
+		-- (next to our base - within EngageHomeR of the HQ - the army stands longer: the old ratio on the numbers of the fight, no trade rule)
+		local at_home = d2(F.x, F.z, h.x, h.z) <= prm("EngageHomeR")
+		local need = (at_home and prm("RetreatRatio") or prm("RetreatLocalRatio")) * vpm
+		local why = nil
+		if F.enw >= prm("RetreatMinW") and F.enw >= ours * need then
+			why = fmt("enemy %.0f ours %.0f (+%.0f near) ratio %.2f need %.2f at the fight", F.enw, F.ours, F.sup, F.enw / math.max(ours, 1), need)
+		elseif prm("Trade") >= 1 and not at_home and now - T.t0 >= prm("TradeSecs") and F.enw >= prm("RetreatMinW")
+			and F.ours <= T.opk * (1 - prm("TradeLoss")) and F.enw >= T.epk * (1 - prm("TradeLoss") * prm("TradeEnemyK"))
+			and F.enw >= ours * prm("TradeRatio") * vpm then
+			why = fmt("trade: ours %.0f of %.0f, the enemy %.0f of %.0f after %.0f s", F.ours, T.opk, F.enw, T.epk, now - T.t0)
+			M.st.trade = (M.st.trade or 0) + 1
+		end
+		if why then
+			local line = 0
+			for _, u in ipairs(state.active) do if not M.runner[u.id] and not X.is_raider(u.id) then line = line + weight_of(u) end end
+			M.trade = nil
+			if F.ours + F.sup >= line * prm("FightArmyShare") then
+				M.st.fight_army = (M.st.fight_army or 0) + 1
+				start_retreat(state, "retreat", F.x, F.z, why)
+				return true
+			end
+			-- a detachment: only the squads at the fight leave, the army goes on
+			local gone = {}
+			for _, id in ipairs(F.ids) do gone[id] = true end
+			for i = table.getn(state.active), 1, -1 do
+				local u = state.active[i]
+				if gone[u.id] then
+					if u.veh then
+						morder(u.id, h.x, u.pos.y, h.z, ORD_MOVE)                        -- a vehicle has no retreat (main.ai 0.16): a plain move towards home, the army's next tick
+					else
+						morder(u.id, u.pos.x, u.pos.y, u.pos.z, ORD_RETREAT)
+						if type(EliteAI.retreating) == "table" then EliteAI.retreating[u.id] = now end
+					end
+					table.remove(state.active, i)
+				end
+			end
+			if M.fl_t == nil or now - M.fl_t >= 15 then                           -- (a vehicle is still the army's next tick: one line per 15 s)
+				M.fl_t = now
+				M.st.fight_leave = (M.st.fight_leave or 0) + 1
+				mlog("FightLeave", F.n, "squads", why, fmt("the army %.0f is elsewhere", line))
+			end
+		end
+	end
+	if d2(cx, cz, h.x, h.z) <= prm("HomeR") then return false end
 	local zr, enw = prm("ZoneR"), 0
 	for _, e in ipairs(en) do if e.d <= zr then enw = enw + e.w end end
 	if enw < prm("RetreatMinW") then return false end
 	local ours = our_weight(state.active)
-	local ratio = prm("RetreatRatio") * hold_vp_mult(cx, cz, state.now)
+	local ratio = prm("RetreatRatio") * vpm
 	if enw >= ours * ratio then
 		start_retreat(state, "retreat", cx, cz, fmt("enemy %.0f ours %.0f ratio %.2f need %.2f", enw, ours, enw / math.max(ours, 1), ratio))
 		return true
@@ -1804,6 +1927,23 @@ local function runner_plan(state)
 	-- squads: a ravener was made a runner, sent to a point and released three times in a minute, and stood in between)
 	if n >= prm("Runners2At") then M.runner2 = true elseif n <= prm("Runners2At") - 2 then M.runner2 = false end
 	if M.runner2 then want = want + 1 end
+	-- 1.3 (TECH_RU.md 21.5; Malum fb 623: 2-4 points for 26 minutes with an army of 4-7 squads - one runner, 19 trips): a second
+	-- runner already from RunnerSafe2At (6) squads while the map is QUIET - the army out of contact for RunnerSafeSecs and no
+	-- enemy squad within MapHomeR of our HQ; the verdict holds 20 s. RunnerSafe2At=0 = off.
+	local s2 = prm("RunnerSafe2At")
+	if s2 > 0 and want >= 1 and not M.runner2 and n >= s2 then                -- (a SECOND runner: none with Mech_Runners=0)
+		local quiet = (M.army_contact == nil or now - M.army_contact >= prm("RunnerSafeSecs"))
+		local h = home()
+		if quiet and h then
+			for _, e in ipairs(M.en or {}) do
+				if d2(e.x, e.z, h.x, h.z) <= prm("MapHomeR") then quiet = false; break end
+			end
+		end
+		if decide("RunnerSafe", "army", quiet and "two" or "one", fmt("squads %d", n), now, 20) == "two" then
+			want = want + 1
+			M.st.runner_safe = (M.st.runner_safe or 0) + 1
+		end
+	end
 	local r, mode = rule("RunnerArmy"), "all"
 	local small = prm("RunnerMinArmy") + ((r == 3) and 1 or 0)
 	if n <= small and now >= prm("RunnerOpenSecs") then mode = (r == 2) and "near" or "none" end
@@ -1880,8 +2020,11 @@ end
 local function pick_runner_point(u, en, now, R, cx, cz)
 	local best, bs
 	local ar, av = prm("RunnerAvoidR"), (R.avoid_t and now - R.avoid_t <= prm("RunnerAvoidSecs"))
+	local busy = {}                                                          -- 1.3: a point another runner goes to or a squad of the army captures is not this runner's
+	for _, R2 in pairs(M.runner) do if R2 ~= R and R2.tgt then busy[R2.tgt] = true end end   -- (a set: the order of pairs() does not matter)
+	for _, c in ipairs(M.cappers or {}) do busy[c.key] = true end
 	for _, p in ipairs(M.pts) do
-		if not p.ours and not point_done(p, en, now) and not (M.bad_pt[p.key] and now - M.bad_pt[p.key] < 40)   -- verify 10.11: a neutralised point on the enemy half is done (was: endless "-> x neutral decap / neutralised" loop)
+		if not p.ours and not busy[p.key] and not point_done(p, en, now) and not (M.bad_pt[p.key] and now - M.bad_pt[p.key] < 40)   -- verify 10.11: a neutralised point on the enemy half is done (was: endless "-> x neutral decap / neutralised" loop)
 			and not (M.dead_pt[p.key] and now - M.dead_pt[p.key] < prm("RunnerDeadSecs")) then
 			if runner_safe(u, p, en, now, cx, cz) then
 				local s = d2(u.pos.x, u.pos.z, p.x, p.z) - (p.vp and prm("RunnerVpBonus") or 0)
@@ -2148,7 +2291,7 @@ local function next_goal(state, en, cx, cz, skip, safe)
 	if safe then return nil end                                               -- (the army covers; it does not go for an enemy squad while its point is taken)
 	local be, bd
 	for _, e in ipairs(en) do
-		if not e.held and not e.nogo then
+		if not e.held and not e.nogo and not (M.eng_bad and M.eng_bad[tostring(e.id)] and now - M.eng_bad[tostring(e.id)] < prm("EngageBadSecs")) then   -- (1.3)
 			local inbase = false
 			for _, q in ipairs(M.hqs) do if d2(e.x, e.z, q.x, q.z) <= prm("GoalBaseR") then inbase = true; break end end
 			if not inbase then
@@ -2442,7 +2585,8 @@ local function run_idle(state, en, cx, cz, taken, covering)
 		local at = (g == nil) or (g.x ~= nil and d2(cx, cz, g.x, g.z) <= prm("IdleTargetR") * 1.5)
 		local gc = EliteAI.goal and X.capper_at(EliteAI.goal.key) or nil
 		-- a squad is taking the goal point: wait a little; 1.1: the army that covers its capturing squad waits for it (goal_tick ends the cover)
-		if at and not (EliteAI.goal and EliteAI.goal.kind == "cover") and not (EliteAI.goal and EliteAI.goal.pt and gc and now - gc.t0 < prm("GoalWait")) then
+		if at and not (EliteAI.goal and EliteAI.goal.kind == "cover") and not (EliteAI.goal and EliteAI.goal.pt and gc and now - gc.t0 < prm("GoalWait"))
+			and not (M.eng and M.eng.hold) then                                   -- 1.3: while the army holds, X.run_engage gives the goals (safe points, the rally point)
 
 			local kind, key, x, y, z = next_goal(state, en, cx, cz)
 			if kind then
@@ -4144,6 +4288,207 @@ end
 --  * a lost point of ours on our side is the first of the points for the army's next goal and for the runners (X.map_lost).
 --  * the capture is one or two squads' work (goal_tick above), the army goes on or covers.
 -- The Garrison pattern's goals are not touched (an enemy in a building at our point is its case). Mech_Map=0 = as 1.0.
+-- 1.3 (TECH_RU.md 21.5; Malum fb 623: "bad map control" - 2-4 points for 26 minutes): A FREE POINT ON THE WAY. The army took points
+-- only as goals (when it stood at its target with nothing to do) and by its one or two runners. Now a point that is not ours,
+-- has no enemy at it (RunnerPointR), is not under a turret and lies within MapWayR of the army's centre while it is out of
+-- contact is captured by ONE squad of the army (the same roll as the goal's capturing squads: MapCappers at a time, its life
+-- is goal_tick's), the army goes on. Mech_MapWay=0 = off. Line "MECH Goal capture <id> ... point K on the way".
+function X.way_capture(state, en, cx, cz, taken)
+	if prm("MapWay") < 1 or prm("Map") < 1 then return end
+	local now = state.now
+	if M.army_contact ~= nil and now - M.army_contact <= prm("MapBusySecs") then return end
+	M.cappers = M.cappers or {}
+	local n_army = 0
+	for _, u in ipairs(state.active) do if not M.runner[u.id] and not X.is_raider(u.id) then n_army = n_army + 1 end end
+	if n_army < prm("MapWayArmy") then return end
+	if table.getn(M.cappers) >= math.min(prm("MapCappers"), math.max(1, math.floor(n_army / 3))) then return end
+	local best, bd
+	for _, p in ipairs(M.pts) do
+		if not p.ours and not p.us_cap and not X.capper_at(p.key) and not point_done(p, en, now)
+			and not (M.bad_pt[p.key] and now - M.bad_pt[p.key] < 60) and not X.under_turret(p.x, p.z) then
+			local d = d2(cx, cz, p.x, p.z)
+			if d <= prm("MapWayR") then
+				local _, n = enemy_weight_near(en, p.x, p.z, prm("RunnerPointR"))
+				if n == 0 and (not best or d < bd or (d == bd and p.key < best.key)) then best, bd = p, d end
+			end
+		end
+	end
+	if not best then return end
+	local sq, sd
+	for _, u in ipairs(state.active) do
+		if not taken[u.id] and not M.runner[u.id] and not X.capper_of(u.id) and not X.is_raider(u.id) and can_cap(u.id) and not u.veh
+			and not (M.norole[u.id] and now - M.norole[u.id] < prm("IdleRoleBan")) then
+			local du = d2(u.pos.x, u.pos.z, best.x, best.z)
+			if not sq or du < sd or (du == sd and u.id < sq.id) then sq, sd = u, du end
+		end
+	end
+	if not sq then M.bad_pt[best.key] = now; return end
+	table.insert(M.cappers, { id = sq.id, key = best.key, t0 = now, last = now })
+	morder(sq.id, best.x, best.y, best.z, ORD_CAPTURE)
+	taken[sq.id] = true
+	M.st.capper, M.st.way_cap = (M.st.capper or 0) + 1, (M.st.way_cap or 0) + 1
+	mlog("Goal", "capture", sq.id, M.names[sq.id] or "?", "point", best.key, fmt("on the way: the army %.0f m from it", bd))
+end
+-- 1.3 (TECH_RU.md 21.4) THE MARCH IS JUDGED BEFORE IT STARTS. The testers: "it does not gather its army, it runs in single squads, it
+-- throws its units away" (Malum fb 593 / 614 / 623, Orca fb 557 / 634). Malum's log (fb 621): after "ArmyRetreat end timeout there
+-- 3670 ours 1731" the director marched the two squads back at the same force ("ArmyRetreat start enemy 1601 ours 853" 3 minutes
+-- later, "end timeout there 3915 ours 1837") - a retreat ended by its clock, and nothing asked whether the army could win where
+-- it was sent. ArmyRetreat and PreRetreat judge a fight that is on or a force that comes; nobody judged the one that waits.
+-- Every tick, for the target the director would march at (the fresh goal of this file, else Elite's own target):
+--   the force there = the enemy squads within EngageR of the target or EngagePathR of the straight way to it (all of them: this
+--   file reads every enemy squad's place, the turrets are the Defence pattern's); ours = the squads of the line the director
+--   has now; the allies' squads within EngageR of the target or of our own centre x EngageAllyK (looked up only when ours alone
+--   are not enough).
+--   GO when the force is below EngageMinW or ours + allies >= force x EngageNeed x (Conf_Engage 1 / 2 / 3: 1.15 / 1 / 0.85).
+--   Else HOLD: a goal of ours that is not safe is dropped (a point: not chosen again for a minute); Elite's target is not
+--   marched at - the army takes the nearest SAFE point instead (next_goal's "safe": no enemy base near, no force there), and
+--   with none it waits at the RALLY point: our own point nearest to the target that is on our side, has no enemy at it and
+--   lies EngageStandoff away, else our HQ. There the squads that were refilled and the new ones join it, and the verdict is
+--   asked again every tick. A hold longer than EngageDecayAfter lowers the need (down to EngageDecayMin over EngageDecaySecs)
+--   and so does a ticker race we are losing (EngageVpK): the army does not stand at home for ever.
+-- Not asked: for a target at our base (EngageHomeR; enemy squads that close to our HQ are in no force either), for the goals of the Garrison / Defence patterns and "defend" (run_map has its own
+-- ratio), while the army is in contact (the fight is ArmyRetreat's). EliteAI.eng = { t, threat, hold } for the director (it
+-- gathers on its middle squad, not on the one nearest to the target, while a force waits there). Lines "MECH Conf_Engage army
+-- go->hold ...", "MECH Engage hold|go ...", "MECH Goal rally ...". Mech_Engage=0 = 1.2.
+function X.allies_near(x, z, r, x2, z2)                                       -- within r of the target, or of our own centre (they march with us)
+	local w, n = 0, 0
+	local n_pl = World_GetPlayerCount()
+	for i = 1, n_pl do
+		local p = World_GetPlayerAt(i)
+		if p and Player_IsAlive(p) and Player_GetTeam(p) == s_self_team then    -- (scan_points asks the team of every player)
+			local sg = Player_GetSquads(p)                                    -- the calls of scan_enemies, on the squads of our own team
+			local cnt = sg and SGroup_CountSpawned(sg) or 0
+			for j = 1, cnt do
+				local sq = SGroup_GetSpawnedSquadAt(sg, j)
+				if sq and Squad_Count(sq) > 0 then
+					local id = Squad_GetGameID(sq)
+					if id ~= nil and not M.exists[id] then                     -- not a squad of ours (scan_own)
+						local pos = Squad_GetPosition(sq)
+						if pos ~= nil and pos.x ~= nil and pos.z ~= nil and (d2(pos.x, pos.z, x, z) <= r or (x2 ~= nil and d2(pos.x, pos.z, x2, z2) <= r)) then
+							w = w + Squad_GetHealth(sq) * (SquadQuery_IsVehicle(sq) and prm("VehW") or 1)   -- (an enemy's weight is hmax x hp share: the same number)
+							n = n + 1
+						end
+					end
+				end
+			end
+		end
+	end
+	return w, n
+end
+function X.engage_force(en, cx, cz, tx, tz, h)
+	local w, n, er, pr, hr = 0, 0, prm("EngageR"), prm("EngagePathR"), prm("EngageHomeR")
+	for _, e in ipairs(en) do
+		-- (an enemy squad at our base is no force "on the way": the army fights at home whatever the odds - HomeR, the director)
+		if (d2(e.x, e.z, tx, tz) <= er or seg_dist(e.x, e.z, cx, cz, tx, tz) <= pr) and not (h and d2(e.x, e.z, h.x, h.z) <= hr) then w, n = w + e.w, n + 1 end
+	end
+	return w, n
+end
+function X.engage_rally(en, tx, tz, h, cur)                                   -- cur: the rally point of now - it stays while it is good (no walking to and fro)
+	local best, bd
+	for _, p in ipairs(M.pts) do
+		if p.ours and X.map_side(p) and not X.under_turret(p.x, p.z) then
+			local d = d2(p.x, p.z, tx, tz)
+			if d >= prm("EngageStandoff") then
+				local _, n = enemy_weight_near(en, p.x, p.z, prm("MapThreatR"))
+				if n == 0 then
+					if cur ~= nil and p.key == cur then return p.key, p.x, p.y, p.z end
+					if not best or d < bd or (d == bd and p.key < best.key) then best, bd = p, d end
+				end
+			end
+		end
+	end
+	if best then return best.key, best.x, best.y, best.z end
+	return "home", h.x, h.y or 0, h.z
+end
+function X.run_engage(state, en, cx, cz, h)
+	local now = state.now
+	local G = M.eng or { hold = false }
+	M.eng = G
+	EliteAI.eng = nil
+	local function release(why)
+		if EliteAI.goal and EliteAI.goal.kind == "rally" then clear_goal(why) end
+		if G.hold then
+			G.hold, G.t0 = false, nil
+			mlog("Engage", "go", why)
+		end
+	end
+	if not h then return end
+	local g = EliteAI.goal
+	if g and (GAR_GOALS[g.kind] or g.kind == "def_hold" or g.kind == "defend") then release("the goal " .. g.kind .. " leads"); return end
+	local ow, on = 0, 0
+	for _, u in ipairs(state.active) do if not M.runner[u.id] and not X.is_raider(u.id) then ow, on = ow + weight_of(u), on + 1 end end
+	if on == 0 then return end
+	if M.army_contact ~= nil and now - M.army_contact <= 3 then                -- the fight is on: ArmyRetreat's
+		if g and g.kind == "rally" then g.t = now end
+		return
+	end
+	-- the need: the rule, the length of the hold, the ticker race
+	local r = rule("Engage")
+	local need = prm("EngageNeed") * ((r == 1) and 1.15 or ((r == 3) and 0.85 or 1))
+	if G.hold and G.t0 ~= nil and now - G.t0 > prm("EngageDecayAfter") then
+		local k = 1 - (1 - prm("EngageDecayMin")) * math.min(1, (now - G.t0 - prm("EngageDecayAfter")) / math.max(prm("EngageDecaySecs"), 1))
+		need = need * k
+	end
+	if cache and cache.self_vp_tickers and cache.enemy_vp_tickers and cache.self_vp_tickers < cache.enemy_vp_tickers
+		and cache.self_vp_tickers <= prm("EngageVpLow") then need = need * prm("EngageVpK") end
+	local function judge(tx, tz)                                               -- true = the army may go; the force, the allies counted
+		local tw, tn = X.engage_force(en, cx, cz, tx, tz, h)
+		if tw < prm("EngageMinW") then return true, tw, 0, tn end
+		if ow >= tw * need then return true, tw, 0, tn end
+		local aw = 0
+		if prm("EngageAllies") >= 1 then aw = X.allies_near(tx, tz, prm("EngageR"), cx, cz) * prm("EngageAllyK") end
+		return (ow + aw >= tw * need), tw, aw, tn
+	end
+	-- 1) a goal of ours (a point, an enemy squad, a cover) that the army cannot take is dropped
+	local fresh = g ~= nil and g.x ~= nil and now - (g.t or -1000) <= EliteAI.num("Mech_GoalSecs", 60)
+	local gtw = 0
+	if fresh and g.kind ~= "rally" then
+		local ok, tw, aw, tn = judge(g.x, g.z)
+		gtw = tw
+		if not ok and d2(g.x, g.z, h.x, h.z) > prm("EngageHomeR") then
+			if g.pt then M.bad_pt[g.key] = now end
+			if g.kind == "enemy" then M.eng_bad = M.eng_bad or {}; M.eng_bad[g.key] = now end   -- (next_goal: not this squad again for EngageBadSecs)
+			M.st.eng_drop = (M.st.eng_drop or 0) + 1
+			clear_goal(fmt("Engage: the force there %.0f (%d squads) ours %.0f allies %.0f need %.2f", tw, tn, ow, aw, need))
+			g, fresh = nil, false
+		end
+	end
+	-- 2) Elite's own target
+	local bp = EliteAI.best_pos
+	if not (bp and bp.x and bp.z) then
+		release("Elite has no target")
+		EliteAI.eng = { t = now, hold = false, threat = (fresh and gtw >= prm("EngageMinW")) }
+		return
+	end
+	local eok, etw, eaw, etn = true, 0, 0, 0
+	if d2(bp.x, bp.z, h.x, h.z) > prm("EngageHomeR") then eok, etw, eaw, etn = judge(bp.x, bp.z) end
+	local v = decide("Engage", "army", eok and "go" or "hold", fmt("the force at Elite's target %.0f (%d squads) ours %.0f allies %.0f need %.2f", etw, etn, ow, eaw, need), now, prm("EngageHold"))
+	if v == "go" then
+		release(fmt("the force at the target %.0f ours %.0f allies %.0f need %.2f", etw, ow, eaw, need))
+		EliteAI.eng = { t = now, hold = false, threat = ((fresh and gtw or etw) >= prm("EngageMinW")) }
+		return
+	end
+	if not G.hold then
+		G.hold, G.t0 = true, now
+		M.st.eng_hold = (M.st.eng_hold or 0) + 1
+		mlog("Engage", "hold", fmt("the force at Elite's target %.0f (%d squads) ours %.0f (%d squads) allies %.0f need %.2f rule %d", etw, etn, ow, on, eaw, need, r))
+	end
+	M.st.eng_ticks = (M.st.eng_ticks or 0) + 1
+	EliteAI.eng = { t = now, hold = true, threat = (fresh and gtw >= prm("EngageMinW")) }
+	if fresh and g.kind ~= "rally" then return end                             -- a safe goal: the army does that
+	-- 3) the nearest safe point, else the rally point
+	local kind, key, x, y, z = next_goal(state, en, cx, cz, nil, true)
+	if kind == "point" then
+		if g and g.kind == "rally" then clear_goal("a safe point: " .. tostring(key)) end
+		M.st.eng_point = (M.st.eng_point or 0) + 1
+		set_goal("point", key, x, y, z, now, "Engage: a safe point while the army cannot take Elite's target", true)
+		return
+	end
+	local rkey, rx, ry, rz = X.engage_rally(en, bp.x, bp.z, h, (g and g.kind == "rally") and g.key or nil)
+	if g and g.kind == "rally" and g.key ~= rkey then clear_goal("the rally point moves to " .. rkey) end
+	if not (EliteAI.goal and EliteAI.goal.kind == "rally") then M.st.eng_rally = (M.st.eng_rally or 0) + 1 end
+	set_goal("rally", rkey, rx, ry, rz, now, fmt("Engage: the army waits for its squads, the force at the target %.0f ours %.0f need %.2f", etw, ow, need))
+end
 function X.run_map(state, en, cx, cz, h)
 	local now = state.now
 	local g = EliteAI.goal
@@ -4344,6 +4689,8 @@ local function stats(state)
 	for _ in pairs(M.rdr or {}) do nr = nr + 1 end                              -- (a count)
 	mlog("stats7", "t", math.floor(state.now), "map_defend", s.map_def or 0, "map_left", s.map_left or 0, "cappers", s.capper or 0, "cappers_now", table.getn(M.cappers or {}),
 		"map_on", s.map_on or 0, "map_cover", s.map_cover or 0, "raiders", s.raid or 0, "raiders_now", nr, "map_rule", rule("MapDefend"))
+	mlog("stats8", "t", math.floor(state.now), "eng_hold", s.eng_hold or 0, "eng_ticks", s.eng_ticks or 0, "eng_drop", s.eng_drop or 0, "eng_point", s.eng_point or 0, "eng_rally", s.eng_rally or 0,
+		"holding", (M.eng and M.eng.hold) and 1 or 0, "fight_army", s.fight_army or 0, "fight_leave", s.fight_leave or 0, "trade", s.trade or 0, "way_cap", s.way_cap or 0, "runner_safe", s.runner_safe or 0, "engage_rule", rule("Engage"))
 	local o = EliteAI.ord_st
 	if o then mlog("stats3", "t", math.floor(state.now), "orders_sent", o.sent, "repeat_skipped", o.skip, "to_move", o.alt, "ceiling", o.cap, "director_waited", o.held, "approach", s.gar_appr or 0, "escalated", o.esc or 0, "build_wait", o.bwait or 0, "build_near", o.bnear or 0) end
 end
@@ -4367,7 +4714,7 @@ function EliteAI_Mechanics(state)
 		mlog("rules", "MeleeApproach", rule("MeleeApproach"), "FocusLeave", rule("FocusLeave"), "Chase", rule("Chase"), "Split", rule("Split"),
 			"Decap", rule("Decap"), "HoldVP", rule("HoldVP"), "TieVsFocus", rule("TieVsFocus"), "RepairVsFight", rule("RepairVsFight"),
 			"PreEngage", rule("PreEngage"), "RunnerFight", rule("RunnerFight"), "AbilitySave", rule("AbilitySave"), "Garrison", rule("Garrison"),
-			"AbilityVsUnit", rule("AbilityVsUnit"), "RunnerArmy", rule("RunnerArmy"), "CounterVsPlan", rule("CounterVsPlan"), "MapDefend", rule("MapDefend"),
+			"AbilityVsUnit", rule("AbilityVsUnit"), "RunnerArmy", rule("RunnerArmy"), "CounterVsPlan", rule("CounterVsPlan"), "MapDefend", rule("MapDefend"), "Engage", rule("Engage"),
 			"Map", prm("Map"), "Raid", prm("Raid"))
 		api()
 	end
@@ -4425,7 +4772,9 @@ function EliteAI_Mechanics(state)
 	end
 	if table.getn(state.active) == 0 then return false end
 	if map_on then X.run_map(state, en, ax, az, h) end                          -- 1.1: a point of ours that is attacked - before any other goal
+	if prm("Engage") >= 1 then X.run_engage(state, en, ax, az, h) elseif EliteAI.eng then EliteAI.eng = nil end   -- 1.3: may the army march where it is sent
 	if on.Idle or on.Garrison or map_on then goal_tick(state, en, ax, az, taken) end   -- the goal's life, the squads that take the goal points
+	if map_on then X.way_capture(state, en, ax, az, taken) end                  -- 1.3: a free point next to the marching army
 	-- 2) roles: runners (always theirs), the split after a fight (true = the rest of the army covers the split)
 	local covering = false
 	if on.Vehicles and on.ArmyRoles and prm("VehRunner") >= 1 then X.run_veh(state, en, ax, az, h, taken, true) end   -- 1.0: a runner that is a vehicle leaves the fire too

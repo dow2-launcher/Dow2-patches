@@ -4,7 +4,7 @@
 -- (all | none | normal | <player ids, e.g. 1000>) so one match can pit the new logic against Elite's (A/B).
 -- Every tuning value can be overridden from EliteAI.ini [Lua] without rebuilding (EliteAI.num("Key", default)).
 
-EliteAI = { version = "0.19" }
+EliteAI = { version = "0.20" }
 
 -- 0.9 (10.11): THREE VARIANTS for testers to compare, chosen in the skirmish menu by the computer slot's difficulty:
 -- Easy = "NEW AI A", Normal = "NEW AI B", Hard = "NEW AI C" (EliteAI.dll relabels them); Expert = Elite's AI, untouched.
@@ -772,7 +772,18 @@ function EliteAI_Director()
 	local gr = num("GatherR", 30)
 	if spread > gr then                                          -- gather on the squad that is closest to the target
 		local lead = active[1]
-		for _, u in ipairs(active) do if dist(u.pos, target) < dist(lead.pos, target) then lead = u end end
+		-- 0.20 (TECH_RU.md 21.4; "it does not gather its army, it comes in single squads"): while an enemy force waits at the target
+		-- or on the way (mechanics.ai X.run_engage: EliteAI.eng.threat of this tick) the army gathers on its MIDDLE squad - the one
+		-- nearest to the centre - not on the one nearest to the enemy, which then stood there alone. GatherRear=0 = as before
+		local eg = EliteAI.eng
+		local rear = (type(eg) == "table" and eg.t == now and eg.threat == true and num("GatherRear", 1) >= 1)
+		local cpos = { x = cx, z = cz }
+		for _, u in ipairs(active) do
+			if rear then
+				if dist(u.pos, cpos) < dist(lead.pos, cpos) then lead = u end
+			elseif dist(u.pos, target) < dist(lead.pos, target) then lead = u end
+		end
+		if rear then EliteAI.gather_rear = (EliteAI.gather_rear or 0) + 1 end
 		for _, u in ipairs(active) do if u ~= lead and dist(u.pos, lead.pos) > gr * 0.6 then order(u, lead.pos, ORD_MOVE) end end
 		EliteAI.phase = "gather"
 	else

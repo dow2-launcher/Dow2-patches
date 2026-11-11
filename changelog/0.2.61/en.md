@@ -1,0 +1,1 @@
+- New AI 21: a bigger army sooner (population near the cap by minute 10-12), fewer lost squads (judges a fight before it and pulls out of a losing one), buys the answer to your army first, faster T2/T3.
