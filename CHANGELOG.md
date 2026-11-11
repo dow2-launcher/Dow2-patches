@@ -4,6 +4,23 @@ Every version gets an entry here before it reaches `main`. CI then tags `vX.Y.Z`
 version (`X.Y.0`) it also publishes a GitHub Release with the DLLs and the entries since the previous `X.Y.0`.
 The version of the set lives only in `VERSION`; each DLL still writes its own version to its log.
 
+## 0.2.51 — 2026-11-11
+Elite maps (store elitemaps-1, NEW, experiment, off by default, VANILLA only - `games: ["vanilla"]`): EliteMaps.dll.
+- Vanilla Retribution gets Elite's maps: DOW2.exe's import of ConfigFile::GetString answers the missing archive.NN keys of the
+  module's [data:common] with Elite\Archives\Elite_Data_21_Maps_01.sga, Elite_Data_22_Maps_02.sga, Elite_Data_20_UI_Maps.sga
+  of the player's own Elite installation (after the game's archives = lowest priority, no vanilla file replaced). No big download
+  (the archives are already on the disk), nothing written to DOW2.module / DOW2Multiplayer.module: untick = plain vanilla.
+- Stand 1 (cherpekat, vanilla 3.19 + vloader-2): hooked 49 ms after the start, archives mounted at ~170 ms (archive.29-31 of
+  DOW2.module); the data checksum stays vanilla's 371005917 (0x007A0A30 = the CRC blocks + maps\pvp\_cameras only); the maps
+  are in the custom game's map list; a private online game (no -dev) on (2p) Bay of Grots vs the computer loads and plays, the
+  lobby's requests to Relic carry dataChecksum=371005917; -dev skirmishes vs AI with the 6 vanilla races spread over all slots:
+  all 60 Elite pvp maps load (LOAD_Done, game alive 20 s later), no error line beyond the vanilla control map's except the
+  harmless "Health command ... doesn't have a HealthExt" of 3 props (6p_ashesarena, 6p_ulthanetemple). The 2 FFA maps
+  (maps\freeforall) are not offered by vanilla ("invalid MP scenario"). Without the add-on an Elite map is "invalid MP scenario".
+  Not tested: a second real player in the lobby (stand 2's Steam is offline).
+- Limits: vanilla has no map download - a new map only in a lobby where everyone has it on (and the same Elite version);
+  the automatch and the vanilla maps are unchanged. Under Elite (-modname) the DLL does nothing.
+
 ## 0.2.50 — 2026-11-11
 New AI 18 (store newai-18, experiment, off by default, Elite only) = newai-17 + safer SCAR-to-AI path (elite.scar from eliteai 3550da8).
 - elite.scar no longer calls AI_DoString by default (the enemy squad names every 2 s, the dodge note): the only place where our

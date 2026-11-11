@@ -615,5 +615,23 @@
       "fr": "Première version de test de notre refonte de l'adversaire ordinateur d'Elite en escarmouche : l'armée de l'ordinateur se regroupe et combat ensemble, tient son objectif au lieu de courir aux points escouade par escouade, et replie les escouades blessées. Pour jouer contre elle : cochez-la, lancez le jeu et, en escarmouche, choisissez \"Add NEW AI Computer\" (à la place de Normal ; Easy, Hard et Insane restent l'IA d'Elite). Escarmouche solo uniquement : en ligne et dans les replays, c'est toujours l'IA d'Elite. C'est une version précoce : si une partie plante ou si l'IA fait quelque chose d'étrange, appuyez aussitôt sur \"Send logs\" dans les réglages du lanceur et dites-nous ce qui s'est passé. Uniquement pour l'escarmouche contre l'ordinateur ; décochez-la en multijoueur avec des humains : la partie peut se désynchroniser.",
       "de": "Frühe Testversion unserer Überarbeitung des Elite-Computergegners für Gefechte: die Armee des Computers sammelt sich und kämpft geschlossen, hält ihr Ziel statt Trupp für Trupp zu den Punkten zu laufen und zieht angeschlagene Trupps zurück. Zum Spielen: Haken setzen, Spiel starten und im Gefecht \"Add NEW AI Computer\" wählen (statt Normal; Easy, Hard und Insane bleiben die Elite-KI). Nur Einzelspieler-Gefecht: online und in Wiederholungen immer die Elite-KI. Frühe Version - wenn ein Spiel abstürzt oder die KI sich seltsam verhält, gleich danach in den Launcher-Einstellungen \"Send logs\" drücken und uns schreiben, was passiert ist. Nur für Gefechte gegen den Computer; im Mehrspieler mit Menschen ausschalten - das Spiel kann desynchronisieren."
     }
+  },
+  "elitemaps": {
+    "category": "experiment",
+    "order": 1010,
+    "name": {
+      "en": "Elite maps",
+      "ru": "Elite maps",
+      "es": "Elite maps",
+      "fr": "Elite maps",
+      "de": "Elite maps"
+    },
+    "description": {
+      "en": "Vanilla Retribution only: Elite's 1v1-3v3 maps in the game's map list, taken from your Elite install. Play a new map only with players who have this on too.",
+      "ru": "Только ваниль Retribution: карты Elite 1×1–3×3 в списке карт игры, из вашей установки Elite. Новую карту играйте только с теми, у кого это тоже включено.",
+      "es": "Solo Retribution vanilla: los mapas 1v1-3v3 de Elite en la lista de mapas, desde tu Elite instalado. Juega un mapa nuevo solo con quien también lo tenga activado.",
+      "fr": "Retribution vanilla uniquement : les cartes 1v1-3v3 d'Elite dans la liste, depuis votre Elite installé. Jouez une nouvelle carte seulement avec ceux qui l'ont aussi activé.",
+      "de": "Nur Vanilla Retribution: Elites 1v1-3v3-Karten in der Kartenliste, aus deiner Elite-Installation. Neue Karten nur mit Spielern, die das auch aktiviert haben."
+    }
   }
 }

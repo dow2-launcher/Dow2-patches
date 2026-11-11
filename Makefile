@@ -24,6 +24,7 @@ all: $(OUT)/PerfLog.dll
 all: $(OUT)/CursorScale.dll
 all: $(OUT)/DXVK.dll $(OUT)/FpsUnlock.dll
 all: $(OUT)/UIFilter.dll
+all: $(OUT)/EliteMaps.dll
 
 $(OUT):
 	mkdir -p $(OUT)
@@ -191,6 +192,11 @@ $(OUT)/FpsUnlock.dll: fpsunlock/fpsunlock.c | $(OUT)
 # 09.11.2026 (performance): the interface (Scaleform) renderer's repeated Direct3D state calls dropped inside one display - a proxy
 # device only for that renderer (BeginDisplay/EndDisplay patched in Spooge.dll), the real device untouched; UIFilter.ini Enabled/Verify
 $(OUT)/UIFilter.dll: uifilter/uifilter.c | $(OUT)
+	$(CC) $(CFLAGS) -shared -o $@ $< -static-libgcc -Wl,--exclude-all-symbols
+
+# 11.11.2026 (experiment, vanilla only): Elite's map archives of the same game folder appended to vanilla's [data:common] archive
+# list (DOW2.exe's import of ConfigFile::GetString answers the missing archive.NN keys); maps only - the data checksum stays vanilla's
+$(OUT)/EliteMaps.dll: elitemaps/elitemaps.c | $(OUT)
 	$(CC) $(CFLAGS) -shared -o $@ $< -static-libgcc -Wl,--exclude-all-symbols
 
 # 06.11.2026 (experiment): continue a replay as a skirmish from any tick, as any of its players (the pause menu's
