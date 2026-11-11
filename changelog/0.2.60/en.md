@@ -1,0 +1,1 @@
+- New: Speech streak fix (experiment, off by default, Elite and vanilla): fixes a rare game crash when a unit gets a kill (unit speech about kill streaks).
