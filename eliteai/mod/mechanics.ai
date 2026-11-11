@@ -2916,7 +2916,9 @@ function X.run_def(state, en, cx, cz, h, taken)
 							local why = nil
 							local sup = api().sup and u.sq ~= nil and Squad_IsSuppressed(u.sq) == true
 							if prm("DefRetreat") >= 1 and (u.hit or sup) and not u.veh then
-								if sup then why = "suppressed"
+								-- 11.11 (Orca fb 550: squads pressed retreat at every banshee scream / ranger volley near his base):
+								-- suppressed alone is no reason - a suppressed squad walks out unless it is deep in the zone or hurt
+								if sup and (depth > prm("DefWalkD") or u.hp < prm("DefRetreatHP")) then why = "suppressed"
 								elseif depth > prm("DefWalkD") then why = "deep"
 								elseif u.hp < prm("DefRetreatHP") then why = "hurt"
 								elseif now - first >= prm("DefOutSecs") then why = "slow" end
