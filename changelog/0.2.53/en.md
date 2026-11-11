@@ -1,0 +1,1 @@
+- Elite maps (vanilla) is off for now: players without it crashed when joining a lobby with an Elite map. It comes back with a fix.
