@@ -47,7 +47,7 @@ are client-side, and the other players in the match don't need them.
 | **Elite maps** (new, staging, experiment, vanilla only) | Vanilla Retribution: Elite's 1v1-3v3 maps (60 of its 62; the 2 FFA maps are not offered by vanilla) in the map list of skirmish and custom games, read from the player's own Elite installation in the same game folder. EliteMaps 3: in any room, public ones too (EliteMaps.ini BlockPublic=1 keeps them out of public rooms, as EliteMaps 2 did); a player without it crashes joining a room with an Elite map already picked, and with him already in the lobby an Elite-map match does not start (vanilla has no map download) - pick the Elite map once everyone is in. Vanilla maps, the data checksum and the automatch stay vanilla's. | `elitemaps` → `elitemaps-3` (staging) | `elitemaps/` | maps only (no game data) |
 | **Overwatch once** (new, staging, experiment) | Right-click (overwatch) on a unit's build button orders one squad: it is built as soon as it is affordable, then the overwatch mark goes off by itself (no surprise second squad). Elite and vanilla. | `overwatchonce` → `overwatchonce-1` (staging) | `overwatchonce/` | no (overwatch lives in the HUD only; at most one build order less) |
 | **Speech streak fix** (new, staging, experiment) | Fixes a rare crash of the game when a unit gets a kill: the unit speech about kill streaks read past its list for a unit's first kill. Elite and vanilla. | `speechstreakfix` → `speechstreakfix-1` (staging) | `speechstreakfix/` | no (speech only) |
-| **Ctrl attack ground** (new, staging, experiment) | Hold Ctrl and right-click the ground: the selected squads that can attack the ground (wraithguard, D-cannon, predators, tankbustas, zoanthropes...) fire at that point - the game's own Attack ground (core action G) without pressing G; Shift queues it. The other squads get the plain right-click order; with Reverse on (same key) vehicles keep backing off. Only while Ctrl is held. Elite and vanilla. | `ctrlattack` → `ctrlattack-1` (staging) | `ctrlattack/` | no (the game's own SCMD_Attack order, the same as G + click) |
+| **Ctrl attack ground** (new, staging, experiment) | Hold Ctrl and LEFT-click the ground: the selected squads that can attack the ground (wraithguard, D-cannon, predators, tankbustas, zoanthropes...) fire at that point - the game's own Attack ground (core action G) without pressing G; Shift queues it. Ctrl + right-click is not touched (Reverse). Ctrl + left click on a unit, or with no squad that can: the game's own click. Elite and vanilla. | `ctrlattack` → `ctrlattack-2` (staging) | `ctrlattack/` | no (the game's own SCMD_Attack order, the same as G + click) |
 | **Observer lag fix (experimental)** | Spectating a live game no longer stutters. | `obsfix_r2` → `obsfix-1` | `obsfix/` | no |
 | **Join a lobby from the launcher (test)** | Experiment by siritos: a Join button on the launcher's Lobbies tab (and elite:// links of the ladder site); the game starts and walks into the room by itself. | `roomjoin` → `roomjoin-4` (staging; live: `roomjoin-3`) | `roomjoin/` | no |
 | **Fix: the game closes when a match starts** (new, not released yet) | Repairs Elite's ShellPatch.dll (the race meter) when it could not hook in at the game's start - then every match crashed a second in. Otherwise does nothing. | `shellfix` → `shellfix-1` (staging) | `shellfix/` | no |
@@ -211,16 +211,15 @@ cursorscale/ - **CursorScale.dll** (CursorScale 1)
     input object's vector. No drawing of our own, no Direct3D. CursorScale.ini: Scale=auto|1.0-4.0 (auto = the game window's client
     height / 1080, i.e. the game's own resolution, not the desktop's), Filter=smooth|sharp.
 
-ctrlattack/ - **CtrlAttack.dll** (CtrlAttack 1)
-    The game has Attack ground: core action BindingAttackGround (vftable 0x0111977C, hotkey "attackground" = G). Its click handler
-    0x00B70610 takes the selected squads passing the game's check 0x00B70240 (EAX = squad: spawned, not garrisoned/retreating, a weapon
-    with weapon_bag behaviour attack_ground = true, read at 0x00820C77 into weapon+0xEC) and the min-range check 0x00B70290, and
-    sends WorldDoCommandSquads(SCMD_Attack = 48, queued, player, squads) with the point as SingleTargetData (0x007ED520) through
-    CommandProxy +0x5C. CtrlAttack hooks DefaultAction (the right-click order: slot +0x74 of CommandProxy 0x0110E514 and
-    EventGeneratorCommandProxy 0x01117704, 0x00AF62E0) in the vftables: key held + a ground position -> the capable squads get that
-    very order, the rest of the group goes on to 0x00AF62E0 (so Reverse.dll, which patches its first bytes, still backs them off;
-    vehicles stay with Reverse when it is on with the same key, VehiclesReverse=1). Replays, other players' squads, no key: untouched.
-    Bytes/slots checked before hooking. CtrlAttack.ini: Enabled, Key=Ctrl|Alt|<vk>, VehiclesReverse, Verbose.
+ctrlattack/ - **CtrlAttack.dll** (CtrlAttack 2)
+    The game has Attack ground: core action BindingAttackGround (vftable 0x0111977C, hotkey G). G puts the HUD into targeting
+    mode; the next world click goes, through the HUD update's dispatch 0x00AD59C0 (ESI = targeting object: +0x08 the active
+    binding, +0x0C the last world click: position, +0x0C, +0x10 button, +0x11 Shift, +0x12 consumed), to the binding's +0x34,
+    0x00B70610: the selected squads passing the game's check 0x00B70240 (a weapon with attack_ground = true) and the min-range
+    check 0x00B70290 get WorldDoCommandSquads(SCMD_Attack = 48) with the point. CtrlAttack 2 hooks 0x00AD59C0's first bytes: with
+    no targeting mode, a new left click on the ground (not on a unit) and Ctrl held, it calls 0x00B70610 with that click, exactly
+    as after G, and marks the click consumed when an order went out; otherwise the game's own click. The right click is not
+    touched (CtrlAttack 1 used Ctrl + right-click, which is Reverse's). Replays untouched. CtrlAttack.ini: Enabled, Key, Verbose.
 
 overwatchonce/ - **OverwatchOnce.dll** (OverwatchOnce 1)
     Overwatch is the HUD's, not the simulation's: a right-click on a unit button toggles { building id -> squad blueprint } in the

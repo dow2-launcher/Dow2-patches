@@ -4,6 +4,18 @@ Every version gets an entry here before it reaches `main`. CI then tags `vX.Y.Z`
 version (`X.Y.0`) it also publishes a GitHub Release with the DLLs and the entries since the previous `X.Y.0`.
 The version of the set lives only in `VERSION`; each DLL still writes its own version to its log.
 
+## 0.2.62 — 2026-11-12
+Ctrl attack ground 2 (store ctrlattack-2, experiment, Elite and vanilla): CtrlAttack.dll 2.
+- Owner: Ctrl + right-click is Reverse's (backing off) - attack ground goes to Ctrl + LEFT click on the ground. The right click
+  is not touched any more (CtrlAttack 1's DefaultAction hook is gone).
+- How: a WM_LBUTTONDOWN with Ctrl (game window subclassed), a selected squad that can (the answer of BindingAttackGround's own
+  per-frame update 0x00B703B0, vftable +0x0C wrapped), no targeting mode and no unit within 3 m of the cursor's ground point ->
+  the game's own "enter targeting" 0x00AD5B50 for Attack ground, exactly what G does (0x00B73570), before the game sees the
+  click; the click then goes to Attack ground (0x00B70610: SCMD_Attack with the point, Shift = queued). Still in the mode 0.4 s
+  after the button is up (no order, e.g. inside the minimum range): left the way 0x00AD59C0 leaves it (hooked there).
+  Ctrl + left click on a unit or with no squad that can: the game's own click. Replays: nothing.
+- Stand 1 (vanilla): Ctrl+LMB ground -> wraithguard attacks the point; RMB move then Ctrl+Shift+LMB -> moves, then attacks;
+  Ctrl+RMB behind the fire prism -> Reverse backs it off; the replay without DLLs gives the same SCAR log as the live game.
 ## 0.2.61 — 2026-11-12
 New AI 21 (store newai-21, experiment, off by default, Elite only) = newai-20 + army tempo and trading, real purchases
 (main.ai, mechanics.ai, simulation/ai/strategy_unit_purchase.ai, strategy_tech_purchase.ai, append/scar/elite/elite.scar from eliteai e141310; EliteAI.dll unchanged).
