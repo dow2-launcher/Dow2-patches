@@ -1,0 +1,1 @@
+- New AI 18: safety fix - one script path suspected of a rare freeze is off.
