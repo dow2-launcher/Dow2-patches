@@ -32,8 +32,8 @@ local function eai_log(...)
 	if EliteAI and EliteAI.log then EliteAI.log(...) end
 end
 local function eai_time()
-	local ok, t = pcall(World_GetGameTime)
-	if ok and t then return math.floor(t) end
+	local t = World_GetGameTime()                                           -- 12: direct (was a silent pcall)
+	if t then return math.floor(t) end
 	return -1
 end
 local SUPER_NAMES = { "baneblade", "landraider", "land_raider", "great_unclean_one", "avatar", "swarmlord", "squiggoth", "stompa" }
@@ -46,6 +46,7 @@ end
 function EliteAI_PurchasePrep()
 	local P = EliteAI_P
 	P.cls = { inf = 0, veh = 0, hero = 0 }; P.total = 0; P.supers = 0
+	local worth = 0                                    -- 12: req worth of the squads we have (alive + ordered) - the army's share below
 	local seen = { inf = false, veh = false }          -- which classes this race can build at all (tyranids: "inf" only)
 	local n = AIProduction_GetBuildableSquadCount( s_selfplayer )
 	for i = 0, n - 1 do
@@ -62,16 +63,25 @@ function EliteAI_PurchasePrep()
 		end
 		P.cls[k] = P.cls[k] + c
 		if k ~= "hero" then P.total = P.total + c end
+		if k ~= "hero" and c > 0 then
+			local cost = SquadStats_GetCost( s_self_modplayer, pbg )
+			worth = worth + c * ((cost and cost.requisition) or 0)
+		end
 		if EliteAI_IsSuper(pbg, name) then P.supers = P.supers + c end
 	end
 	P.ncls = (seen.inf and 1 or 0) + (seen.veh and 1 or 0)
+	P.army_req = worth
 end
 function EliteAI_IsSuper(pbg, name)
 	for _, s in ipairs(SUPER_NAMES) do
 		if string.find(name, s, 1, true) then return true end
 	end
-	local ok, cost = pcall(SquadStats_GetCost, s_self_modplayer, pbg)
-	if ok and cost and (cost.requisition or 0) + (cost.power or 0) >= eai_num("SuperCost", 1000) then return true end
+	-- 12 (TECH_RU.md 11.10): direct, the blueprint checked first - was a pcall that swallowed the error without a line, on
+	-- every blueprint of the demand every tick. The same call with the same arguments has run bare since step 13 (r_need,
+	-- EliteAI_PurchaseMult with a power bank, the watchdog) and is Elite's own (TryPurchaseUnitChoice).
+	if pbg == nil then return false end
+	local cost = SquadStats_GetCost( s_self_modplayer, pbg )
+	if cost and (cost.requisition or 0) + (cost.power or 0) >= eai_num("SuperCost", 1000) then return true end
 	return false
 end
 -- gate (10.11, step 15): the one verdict for a blueprint we forbid - why (a string) or nil = allowed. "cap0" = s_unit_purchase_limit 0
@@ -112,8 +122,8 @@ function EliteAI_PurchaseMult(pbg, curAmount)
 	local name = string.lower(PBG_GetName(pbg) or "")
 	if not P.cost_logged[name] then
 		P.cost_logged[name] = true
-		local ok, cost = pcall(SquadStats_GetCost, s_self_modplayer, pbg)
-		if ok and cost then eai_log("cost", name, math.floor(cost.requisition or -1), math.floor(cost.power or -1), EliteAI_IsSuper(pbg, name) and "super" or "") end
+		local cost = SquadStats_GetCost( s_self_modplayer, pbg )             -- 12: direct (was a silent pcall); pbg comes from the buildable list of this tick
+		if cost then eai_log("cost", name, math.floor(cost.requisition or -1), math.floor(cost.power or -1), EliteAI_IsSuper(pbg, name) and "super" or "") end
 	end
 	-- tech (10.11): the tier a unit belongs to = our level when it first became producible (cache.tech_tier_level stays
 	-- during a research for the new logic, see strategy_tech_purchase.ai); units of the tier we just reached get a bonus
@@ -379,6 +389,11 @@ if type(CalcSquadUpgradeDemand) == "function" and not EliteAI_SpendAddonWrapped 
 		if (EliteAI_S.hot or (EliteAI_E and EliteAI_E.float) or (EliteAI_GarAddon and EliteAI_GarAddon( upgradePBG ))) and s_on() then
 			local f = eai_num("Spend_AddonFloor", 8)
 			if d < f then
+				-- energy 0.3 (TECH_RU.md 12): never for an upgrade that was bought before in this match - a second purchase is
+				-- by the engine's own rating alone (s15, floating: the hero's weapons acid_splatter / devourer_ap bought in turn,
+				-- four and three times, 110-145 req each - with the floor the item just replaced is a candidate again)
+				local nm = (upgradePBG ~= nil) and string.lower(PBG_GetName( upgradePBG ) or "") or ""
+				if EliteAI_E and EliteAI_E.abought and EliteAI_E.abought[nm] then return d end
 				EliteAI_S.addon_floor = EliteAI_S.addon_floor + 1
 				return f
 			end
@@ -418,11 +433,12 @@ end
 -- SAFETY: numbers and strings between ticks only (EliteAI_R); squads are read and dropped within the tick (aisq / sim squad
 -- nil checks, Squad_Count > 0 before health); no pcall around engine calls; no randomness; every engine function is one
 -- Elite's scripts or our in-game-verified files call (file:line in reports/newai_1110/TECH_RU.md section 8).
-EliteAI_REINF_VERSION = "0.1"
+EliteAI_REINF_VERSION = "0.2"
 EliteAI_R = {}
 local function r_reset()
 	EliteAI_R = { save = false, save_t = -1, sw_t = -1000, pause_until = -1, need = 0, need_what = "-", need_t = -1000, conf = {}, said = {},
 		ledger = {}, sq = {}, maxc = {}, scan_t = -1000, last_stats = 0, n_skip = 0, n_allow = 0, n_sw = 0, n_req = 0, skip_est = 0,
+		dir = {}, n_dir = 0, n_dir_poor = 0, n_dir_cap = 0, n_dir_mute = 0, dir_now = -1, dir_used = 0,   -- 0.2: the director's squads
 		pow_buys = 0, last_pow_buy = -1, last_pow_name = "-", save_n = 0, save_secs = 0 }
 end
 r_reset()
@@ -712,7 +728,86 @@ function EliteAI_ReinforceTick( availableResources, purchase_count )
 		"saved_secs", math.floor(saved), "episodes", R.save_n, "need", math.floor(R.need), "(" .. R.need_what .. ")", "rule", r_rule(),
 		"bank", s_rp(cache.resources), "rate", s_rp(cache.resources_rate), "skip", R.n_skip, "allow", R.n_allow, "skip_est", math.floor(R.skip_est),
 		"requests", R.n_req, "reinf_req_min", math.floor(r_ledger( now )), "share", string.format("%.2f", r_share()),
-		"pow_buys", R.pow_buys, "switches", R.n_sw, "squads", nsq, "hit", nhit, "low", nlow)
+		"pow_buys", R.pow_buys, "switches", R.n_sw, "squads", nsq, "hit", nhit, "low", nlow,
+		"dir", R.n_dir, "dir_poor", R.n_dir_poor, "dir_cap", R.n_dir_cap, "dir_mute", R.n_dir_mute)
+end
+-- 0.2 (TECH_RU.md 12) THE DIRECTOR'S SQUADS. The engine's list of squads to reinforce (AIProduction_AnyReinforcementsNeeded,
+-- GetReinforcementSquad*) is filled by a squad's own AI task: AITaskCombatState::Enter_Reinforce -> AISquad::RequestReinforce ->
+-- AIProductionManager::RegisterForReinforcements (the symbols of the Mac build, decompiled). A squad the director moves has no
+-- combat task (strategy_military.execute kills them for a directed AI), so it never gets on that list: only the squads in
+-- Elite's capture tasks were ever reinforced. s15: 6-7 of the 8 tyranid squads were the director's all match - 28 models
+-- lost, 1 request (s14: 22 requests with half the squads in capture tasks; IG 15 against 25).
+-- Now the director asks for the model itself: a squad of its army that stands at home (within Reinf_HomeR of our HQ, main.ai)
+-- with fewer models than the most seen in a squad of its blueprint gets one reinforce order per director tick, through the DLL
+-- queue to the SCAR side (mode 6: Command_Squad(player, sgroup, SCMD_ReinforceUnit, false) - the command of the player's
+-- button; the engine checks the reach of a reinforce point and takes the money). This function is the purse: true = order.
+-- Not below the tech plan's reserve; within Reinf_DirShare (0.5) of the req income per minute - the arbiter's share
+-- (Reinf_Share 0.2 / 0.35 / 0.5) while the save state is on - counted with Elite's own requests in one ledger; never more
+-- orders than models missing nor more than Reinf_DirAhead (2) ahead of the models that came; Reinf_DirTries (2) orders and
+-- no model more Reinf_DirWait (20 s) after the first = none for that
+-- squad for Reinf_DirMute (60 s; "REINF dir no effect": out of reach of a reinforce point, or the command does not take).
+-- Returns order (true/false), busy (models are on their way or an order went: the director keeps the squad at home).
+-- Numbers per squad id between ticks (EliteAI_R.dir); the AISquad is the caller's, of this tick. Reinf_Dir=0 = off.
+function EliteAI_ReinforceDir( aisq, id, count, now )
+	if not s_on() or aisq == nil or id == nil or cache == nil or cache.resources == nil or eai_num("Reinf_Dir", 1) < 1 then return false, false end
+	local R = EliteAI_R
+	local pbg = AISquad_ConvertToPBG( aisq )                                 -- r_scan above; strategy_addon.ai:188
+	if pbg == nil then return false, false end
+	local key = r_key(PBG_GetName( pbg ))
+	local full = R.maxc[key] or 0                                           -- the most models seen in one squad of this blueprint (r_scan)
+	local d = R.dir[id]
+	if count >= full then R.dir[id] = nil; return false, false end          -- complete (heroes, vehicles: always)
+	if d ~= nil and now - d.last > eai_num("Reinf_DirGap", 30) then d = nil end   -- it was away: a new stay at home
+	if d == nil then d = { n0 = count, sent = 0, t0 = now, last = now, mute = -1 }; R.dir[id] = d end
+	if now < d.mute then return false, false end
+	local tries = math.min(eai_num("Reinf_DirTries", 2), full - d.n0)       -- (one model missing: one order is all there is to try)
+	if d.sent >= tries and d.sent > 0 and count <= d.n0 and now - d.t0 >= eai_num("Reinf_DirWait", 20) then
+		d.mute, d.sent, d.t0, d.last = now + eai_num("Reinf_DirMute", 60), 0, now, now
+		R.n_dir_mute = R.n_dir_mute + 1
+		eai_log("REINF", "dir", "no effect", tostring(id), r_short(key), "models", count, "of", full, "after", tries, "orders in",
+			eai_num("Reinf_DirWait", 20), "s: none for", eai_num("Reinf_DirMute", 60), "s (out of reach of a reinforce point?)")
+		return false, false
+	end
+	local coming = d.sent - math.max(0, count - d.n0)                      -- ordered and not there yet
+	if coming < 0 then coming = 0 end
+	if d.sent >= full - d.n0 then d.last = now; return false, (coming > 0) end   -- every missing model is ordered
+	if coming >= eai_num("Reinf_DirAhead", 2) then d.last = now; return false, true end   -- two on their way: the next when one has come
+	local per = AIPlayer_GetProductionCost( s_self_modplayer, PITEM_SquadReinforce, pbg )   -- AccumulateReinforceDemand below (Elite's)
+	local pr, pp = (per and per.requisition) or 0, (per and per.power) or 0
+	local bank = cache.resources
+	local rr, rp = 0, 0
+	if type(EliteAI_TechReserve) == "function" then rr, rp = EliteAI_TechReserve() end
+	local used = (R.dir_now == now) and R.dir_used or 0                     -- the orders of this director tick (the bank is the cache's)
+	if (bank.requisition or 0) - (rr or 0) - used < pr or (bank.power or 0) - (rp or 0) < pp then
+		R.n_dir_poor = R.n_dir_poor + 1
+		return false, (coming > 0)
+	end
+	local rate = (cache.resources_rate and cache.resources_rate.requisition) or 0   -- per minute (cache.ai:156)
+	local share = R.save and r_share() or eai_num("Reinf_DirShare", 0.5)
+	local spent = r_ledger( now )
+	if rate > 0 and spent + pr > rate * share then
+		R.n_dir_cap = R.n_dir_cap + 1
+		return false, (coming > 0)
+	end
+	d.sent, d.last = d.sent + 1, now
+	table.insert(R.ledger, { t = now, req = pr })
+	R.n_dir, R.dir_now, R.dir_used = R.n_dir + 1, now, used + pr
+	if EliteAI_EnergyNote then EliteAI_EnergyNote( "reinf", per ) end       -- the book of purchases (an order; "no effect" tells when it did not take)
+	local sk = "dir:" .. key
+	local last = R.said[sk]
+	if last == nil or now - last >= eai_num("Reinf_LogSecs", 30) then
+		R.said[sk] = now
+		eai_log("REINF", "dir", "order", tostring(id), r_short(key), "models", count, "of", full, "per", math.floor(pr) .. "/" .. math.floor(pp),
+			"bank", s_rp(bank), "spent60", math.floor(spent), "cap", math.floor(rate * share), R.save and "save" or "-", "orders", R.n_dir)
+	end
+	return true, true
+end
+-- the most models seen in one squad of this squad's blueprint (0 = unknown yet): the director's "is it worth going home for" check
+function EliteAI_ReinforceFull( aisq )
+	if not s_on() or aisq == nil then return 0 end
+	local pbg = AISquad_ConvertToPBG( aisq )
+	if pbg == nil then return 0 end
+	return EliteAI_R.maxc[r_key(PBG_GetName( pbg ))] or 0
 end
 local function r_init_log()
 	r_reset()
@@ -781,12 +876,14 @@ EliteAI_ReinforceInit = r_init_log
 --    (it read "secure 137x 19125" - more than the whole income); the requests are counted apart (stats: secure_req / dead / hold).
 -- SAFETY: numbers and strings between ticks only (EliteAI_E); PBGs are read within the tick; no pcall around engine calls; no
 -- randomness; engine functions are the ones Elite's scripts call (file:line in reports/newai_1110/TECH_RU.md sections 10, 11).
-EliteAI_ENERGY_VERSION = "0.2"
+EliteAI_ENERGY_VERSION = "0.3"
 EliteAI_E = {}
 local function e_reset()
 	EliteAI_E = { float = false, float_t = -1, sw_t = -1000, said = {}, stall = nil, hold = false, hold_t = -1000, hold_sw = -1000, hold_pause = -1,
 		led = {}, tot = {}, n_addon = 0, n_addon_skip = 0, n_addon_boost = 0, n_gen_skip = 0, n_gar = 0, last_stats = 0, gar_on = false,
 		hold_req = 0, idle_t = -1000, n_hold_sw = 0, n_res_skip = 0,          -- 0.2: the arbiter's reserve; purchases of the other run held back by a reserve
+		areq = {}, adead = {}, amute = {}, abought = {}, n_addon_req = 0, n_addon_dead = 0,   -- 0.3: upgrade requests waiting for their verdict (names, numbers)
+		cap_t = -1, cap = nil, cap_why = "-", n_share_skip = 0, n_hold_keep = 0,              -- 0.3: the army's share
 		sec_t = nil, sec_req = 0, sec_pow = 0, sec_n = 0, sec_dead = 0, sec_mute = -1, n_sec_req = 0, n_sec_dead = 0, n_sec_hold = 0 }   -- 0.2: BUDGET_Secure
 end
 e_reset()
@@ -892,6 +989,66 @@ function EliteAI_GarAddon( upgradePBG )
 	if not s_on() or not EliteAI_E.gar_on or upgradePBG == nil then return false end
 	return e_has(string.lower(PBG_GetName( upgradePBG ) or ""), GAR_ADDON_KEYS)
 end
+-- 0.3 THE ARMY'S SHARE (TECH_RU.md 12; s15, 4p_tharsisforge: 6 / 5 units by 12:00 against 8 / 9 in s13; IG paid ~1650 req for
+-- upgrades and 1500 for units in those 12 minutes, 23 upgrade lines against 3 units between 4:30 and 9:00). Elite's addon
+-- budget asks for the best upgrade every 3 s and buys it as soon as the bank holds its 50-150 req, so a unit of 300-575 req
+-- is always "far" (ETA by the bank it never gets), and the arbiter below only protects a unit that is already within reach.
+-- A good player in T1-T2 puts most of the req into squads and upgrades them once the army is there. The rule, one for all
+-- races, by real costs (the book of purchases, bought requests only):
+--   upgrades may take at most Share_AddonT1 / T2 / T3 (0.15 / 0.20 / 0.30) of the req spent on the army so far - spawns,
+--   reinforcements, the globals that spawn squads (book kinds unit, reinf, abil; or the worth of the squads we have, when
+--   that is more) plus the upgrades themselves;
+--   half of that (Share_SmallK) while the army is below Share_ArmyT1 / T2 / T3 (4 / 6 / 8) squads - "the army is not there yet";
+--   half of that (Share_BehindK) while our team's army is behind the closest enemy's (cache.military_percent_value <
+--   Share_BehindPct 0, the value Elite and the tech arbiter use);
+--   no cap at Share_PopFree (0.9) of the population cap (no unit can come), while Share_RichReq (400) req lie in the bank
+--   beyond the cost of the unit that is waited for (the money is idle), and for the Garrison pattern's flamers / grenades.
+-- An upgrade that would take the share over the cap is not a candidate this tick ("ENERGY addon skip <name> why share ...").
+-- The cap is an upper bound; the lower bound is the arbiter's window: after Spend_UnitFirstMax of waiting for a unit the
+-- upgrades get their Spend_UnitFirstPause only while they are below Share_FloorK (0.5) of the cap - with their share taken
+-- the unit stays first (s15, IG: "unit->addons waited 46 s" three times at a unit ETA of 12-36 s). Share_On=0 = as before.
+local function e_tot( kind )
+	local tt = EliteAI_E.tot[kind]
+	return (tt and tt.r) or 0
+end
+-- req on the army so far; req on upgrades (bought, plus the requests that wait for their verdict). The army: what the book
+-- says we paid, or what the squads we have are worth when that is more (EliteAI_PurchasePrep of the last units tick: an army
+-- that was not bought through these scripts - the polygon's scenes place it, the build order's first squads).
+local function e_spent()
+	local pend = 0
+	for _, q in ipairs(EliteAI_E.areq) do pend = pend + q.r end
+	local army = e_tot("unit") + e_tot("reinf") + e_tot("abil")
+	local have = (EliteAI_P and EliteAI_P.army_req) or 0
+	if have > army then army = have end
+	return army, e_tot("addon") + pend
+end
+local function e_addon_share()
+	local army, add = e_spent()
+	if army + add <= 0 then return 0 end
+	return add / (army + add)
+end
+-- the cap of this tick: share, why
+local function e_share_cap()
+	local E, now = EliteAI_E, World_GetGameTime()
+	if E.cap_t == now and E.cap ~= nil then return E.cap, E.cap_why end
+	local c = cache or {}
+	local lvl = c.tech_tier_level or 1
+	local cap = (lvl <= 1 and eai_num("Share_AddonT1", 0.15)) or (lvl == 2 and eai_num("Share_AddonT2", 0.20)) or eai_num("Share_AddonT3", 0.30)
+	local need = (lvl <= 1 and eai_num("Share_ArmyT1", 4)) or (lvl == 2 and eai_num("Share_ArmyT2", 6)) or eai_num("Share_ArmyT3", 8)
+	local why = "T" .. tostring(lvl)
+	local army, pct = c.military_count or 0, c.military_percent_value or 0
+	local pop, popmax = c.current_population_personnel or 0, c.max_population_personnel or 0
+	if eai_num("Share_On", 1) < 1 then cap, why = 1, "off"
+	elseif popmax > 0 and pop >= popmax * eai_num("Share_PopFree", 0.9) then cap, why = 1, "pop " .. pop .. "/" .. popmax
+	elseif ((c.resources and c.resources.requisition) or 0) - (E.hold_req or 0) >= eai_num("Share_RichReq", 400) then cap, why = 1, "rich"   -- req lies idle beyond the unit that is waited for
+	elseif army < need then cap, why = cap * eai_num("Share_SmallK", 0.5), why .. " army " .. army .. "<" .. need
+	elseif pct < eai_num("Share_BehindPct", 0) then cap, why = cap * eai_num("Share_BehindK", 0.5), why .. string.format(" behind %.2f", pct)
+	end
+	E.cap_t, E.cap, E.cap_why = now, cap, why
+	return cap, why
+end
+EliteAI_EnergyShare = function() local cap, why = e_share_cap(); return e_addon_share(), cap, why end   -- the stub run, the stats
+
 -- Conf_AddonVsUnit: squad upgrades wait for the unit Elite's pipeline is short of money for, when it is within reach
 
 local function e_rule()
@@ -918,7 +1075,18 @@ local function e_hold_tick( now )
 			E.idle_t = now
 			if st.eta > 0 then E.hold_wait = (E.hold_wait or 0) + dt end
 			if st.eta > eta_off then want, why = false, string.format("%s eta %.0f>%.0f", st.name, st.eta, eta_off)
-			elseif (E.hold_wait or 0) >= max_s then want, why, paused = false, string.format("waited %.0f s", E.hold_wait), true end   -- the upgrades get their window
+			elseif (E.hold_wait or 0) >= max_s then
+				-- 0.3: the window is for upgrades that are short of their share; with the share taken the unit stays first
+				local cap = e_share_cap()
+				local sh, floor = e_addon_share(), cap * eai_num("Share_FloorK", 0.5)
+				if sh < floor then
+					want, why, paused = false, string.format("waited %.0f s share %.2f<%.2f", E.hold_wait, sh, floor), true   -- the upgrades get their window
+				else
+					E.n_hold_keep = E.n_hold_keep + 1
+					e_say("hold_keep", 60, "ENERGY", "Conf_AddonVsUnit", "bank", "unit kept", st.name, "eta", math.floor(st.eta), "waited", math.floor(E.hold_wait), "s",
+						"upgrades have their share", string.format("%.2f>=%.2f", sh, floor), "rule", r)
+				end
+			end
 		elseif now - E.idle_t >= eai_num("Spend_UnitFirstIdle", 20) then
 			want, why = false, "no stalled unit"
 		end
@@ -1026,23 +1194,42 @@ local function e_addon_filter( PITEM_type )
 	local E, now, bank = EliteAI_E, World_GetGameTime(), cache.resources
 	local float = EliteAI_EnergyFloat()
 	local save = (type(EliteAI_R) == "table" and EliteAI_R.save == true)
-	local rr = 0
+	local rr, rp, pfloor = 0, 0, 0
 	if type(EliteAI_TechEval) == "function" then EliteAI_TechEval() end      -- 0.2: the plan of this tick (this run comes before the tech budget's)
-	if type(EliteAI_TechReserve) == "function" then rr = EliteAI_TechReserve() end
+	if type(EliteAI_TechReserve) == "function" then rr, rp = EliteAI_TechReserve() end
+	if type(EliteAI_TechPowerFloor) == "function" then pfloor = EliteAI_TechPowerFloor() or 0 end   -- 0.3: the power the T2 research will need
+	rr, rp = rr or 0, rp or 0
 	local gar = e_gar_active( now )
 	local min_share, low_mult, share_k = eai_num("Energy_AddonMinShare", 0.15), eai_num("Energy_AddonLowMult", 0.25), eai_num("Energy_AddonShareK", 3)
+	local cap, cap_why = e_share_cap()                                      -- 0.3: the army's share
+	local army_r, add_r = e_spent()
 	for pbg, dem in pairs(s_addonDemand) do                                 -- each entry on its own: the order of pairs() does not matter
 		if pbg and dem ~= false and dem.pitem_type == PITEM_type then
 			local cost = AIPlayer_GetProductionCost( s_self_modplayer, PITEM_type, pbg )   -- strategy_addon_purchase.ai:236
-			local cr = (cost and cost.requisition) or 0
+			local cr, cp = (cost and cost.requisition) or 0, (cost and cost.power) or 0
 			local name = string.lower(PBG_GetName( pbg ) or "")
 			local share = e_share( cost )
 			local anti = gar and e_has(name, GAR_ADDON_KEYS)
 			local why = nil
-			if rr > 0 and (bank.requisition or 0) - cr < rr then why = "tech_reserve"
+			if E.amute[name] ~= nil and now < E.amute[name] then why = "dead_mute"   -- 0.3: its last requests were killed as inactive
+			elseif rr > 0 and (bank.requisition or 0) - cr < rr then why = "tech_reserve"
+			elseif rp > 0 and cp > 0 and (bank.power or 0) - cp < rp then why = "tech_reserve"   -- 0.3: the reserve's power too
+			elseif pfloor > 0 and cp > 0 and not anti and (bank.power or 0) - cp < pfloor then why = "t2_power"   -- 0.3: the power T2 will need
 			elseif E.hold and not anti and (bank.requisition or 0) - cr < (E.hold_req or 0) then why = "unit_first"   -- only what would take the unit's req
+			elseif cap < 1 and not anti and cr > 0 and (add_r + cr) > cap * (army_r + add_r + cr) then why = "share"   -- 0.3: over the upgrades' cap
 			elseif float and save and share < min_share and not anti then why = "low_pow_save" end
-			if why then
+			if why == "share" then
+				s_addonDemand[ pbg ] = false
+				E.n_addon_skip, E.n_share_skip = E.n_addon_skip + 1, E.n_share_skip + 1
+				e_say("skip|share", eai_num("Energy_LogSecs", 30), "ENERGY", "addon", "skip", r_short(name), "why", "share", "cost", s_rp(cost), "bank", s_rp(bank),
+					"upgrades", math.floor(add_r), "army", math.floor(army_r), "share", string.format("%.2f", (add_r + cr) / (army_r + add_r + cr)),
+					"cap", string.format("%.2f", cap), "(" .. cap_why .. ")")
+			elseif why == "t2_power" then
+				s_addonDemand[ pbg ] = false
+				E.n_addon_skip, E.n_pow_skip = E.n_addon_skip + 1, (E.n_pow_skip or 0) + 1
+				e_say("skip|t2_power", eai_num("Energy_LogSecs", 30), "ENERGY", "addon", "skip", r_short(name), "why", "t2_power", "cost", s_rp(cost), "bank", s_rp(bank),
+					"the T2 research needs", math.floor(pfloor), "power in the bank now")
+			elseif why then
 				s_addonDemand[ pbg ] = false
 				E.n_addon_skip = E.n_addon_skip + 1
 				e_say("skip|" .. why .. "|" .. name, eai_num("Energy_LogSecs", 30), "ENERGY", "addon", "skip", r_short(name), "why", why,
@@ -1065,17 +1252,83 @@ local function e_addon_filter( PITEM_type )
 		end
 	end
 end
+-- 0.3 (TECH_RU.md 12; s15: "buy_addon tyr_endless_swarm" 19 times in 75 s with a growing bank, "..execute_3" 8 times). The
+-- line was written when the request was PLACED. A request is a task; one the squad cannot start stays inactive, is killed at
+-- the next purchase tick (default.ai:201-217 Purchase_KillInActiveBudgetTasks, :249) and - still the highest demand - placed
+-- again. Every round it took its cost off what each budget may spend (util/budget.ai:271) for the units run of that tick
+-- ("tasks 50/15" in the SPEND stall lines), it was the one request of the addon budget in that pass (strategy_addon_purchase
+-- asks for the highest demand only: nothing else of that run was bought), and the book counted it as money spent.
+-- Now a request gets its verdict at the next addon tick, after the engine killed the inactive ones: BOUGHT when its task is
+-- active (Task_CountActivePBG, strategy_tech_purchase.ai:226), the player has one more of the upgrade (PBG_GetCount,
+-- strategy_addon_purchase.ai:119), it is no longer on offer, or the req bank is below what it was at the request; else DEAD.
+-- "buy_addon" and the book note the bought ones only (the line keeps the time and the bank of the request and says "by
+-- task|count|gone|bank"). Energy_AddonDeadTries (2) dead requests of one upgrade in a row = none for Energy_AddonDeadMute
+-- (60 s), then one try at a time: line "ENERGY addon dead ...", the filter's "dead_mute". Between ticks: names and numbers;
+-- the PBG is looked up again by its name among the production items of the tick.
+local function e_addon_pbg( name )
+	for _, pt in ipairs({ PITEM_Upgrade, PITEM_SquadUpgrade }) do
+		local n = AIProduction_GetProductionItemCount( s_selfplayer, pt )     -- strategy_addon_purchase.ai:103
+		for i = 0, n - 1 do
+			local pbg = AIProduction_GetProductionItemAt( s_selfplayer, pt, i )   -- strategy_addon_purchase.ai:105
+			if pbg ~= nil and string.lower(PBG_GetName( pbg ) or "") == name then return pbg end
+		end
+	end
+	return nil
+end
+local function e_addon_settle()
+	local E, now = EliteAI_E, World_GetGameTime()
+	if table.getn(E.areq) == 0 or cache == nil or cache.resources == nil then return end
+	local keep = {}
+	local bank_req = cache.resources.requisition or 0
+	local tries, mute = eai_num("Energy_AddonDeadTries", 2), eai_num("Energy_AddonDeadMute", 60)
+	for _, q in ipairs(E.areq) do
+		if q.t >= now then
+			table.insert(keep, q)                                           -- placed in this very tick (the budget loop re-runs)
+		else
+			local by = nil
+			local pbg = e_addon_pbg( q.name )
+			if pbg == nil then by = "gone"                                  -- not on offer any more: it was taken
+			elseif Task_CountActivePBG( s_selfplayer, pbg, true ) > 0 then by = "task"
+			elseif (PBG_GetCount( s_selfplayer, pbg ) or 0) > q.cnt then by = "count"
+			elseif q.r > 0 and bank_req < q.bank then by = "bank" end
+			if by then
+				E.abought[q.name] = (E.abought[q.name] or 0) + 1
+				E.adead[q.name] = nil
+				EliteAI_EnergyNote( "addon", { requisition = q.r, power = q.p } )
+				eai_log("buy_addon", q.gt, q.short, q.r .. "/" .. q.p, "bank", q.bank_s, "float", q.float, "share", string.format("%.2f", q.share), "by", by)
+			else
+				E.n_addon_dead = E.n_addon_dead + 1
+				local n = (E.adead[q.name] or 0) + 1
+				if n >= tries then
+					E.amute[q.name] = now + mute
+					E.adead[q.name] = tries - 1                                -- after the mute: one try at a time
+					eai_log("ENERGY", "addon", "dead", q.short, q.r .. "/" .. q.p, "killed as inactive", n, "in a row (the squad cannot start it): none for", mute, "s",
+						"bank", s_rp(cache.resources), "requests", E.n_addon_req, "dead", E.n_addon_dead)
+				else
+					E.adead[q.name] = n
+				end
+			end
+		end
+	end
+	E.areq = keep
+end
+EliteAI_EnergyAddonSettle = e_addon_settle                                  -- the stub run
 function EliteAI_EnergyNoteAddon( cost )                                    -- the addon budget placed a request: which upgrade it was
 	if not s_on() then return end
 	local E = EliteAI_E
-	local name = "?"
+	local name, short, cnt = "?", "?", 0
 	if type(HighestAddonDemand) == "function" then
 		local pbg = HighestAddonDemand()                                    -- strategy_addon_purchase.ai:22: the table of this tick is unchanged
-		if pbg then name = r_short(PBG_GetName( pbg )) end
+		if pbg then
+			name = string.lower(PBG_GetName( pbg ) or "?")
+			short = r_short(name)
+			cnt = PBG_GetCount( s_selfplayer, pbg ) or 0
+		end
 	end
-	E.n_addon = E.n_addon + 1
-	EliteAI_EnergyNote( "addon", cost )
-	eai_log("buy_addon", eai_time(), name, s_rp(cost), "bank", s_rp(cache and cache.resources), "float", E.float and 1 or 0, "share", string.format("%.2f", e_share(cost)))
+	E.n_addon, E.n_addon_req = E.n_addon + 1, E.n_addon_req + 1
+	table.insert(E.areq, { name = name, short = short, r = (cost and cost.requisition) or 0, p = (cost and cost.power) or 0,
+		t = World_GetGameTime(), gt = eai_time(), cnt = cnt, float = E.float and 1 or 0, share = e_share(cost),
+		bank = (cache and cache.resources and cache.resources.requisition) or 0, bank_s = s_rp(cache and cache.resources) })
 end
 -- every purchase tick, first pass of the budget loop (do_purchase): the float state, the arbiter, the stats line
 function EliteAI_EnergyTick( purchase_count )
@@ -1090,7 +1343,10 @@ function EliteAI_EnergyTick( purchase_count )
 	eai_log("ENERGY", "stats", "t", math.floor(now), "float", E.float and "on" or "off", "bank", s_rp(cache.resources), "rate", s_rp(cache.resources_rate),
 		"spent60", "[" .. last60 .. "]", "total", "[" .. total .. "]", "addon_skip", E.n_addon_skip, "addon_boost", E.n_addon_boost, "gen_hold", E.n_gen_skip,
 		"unit_first", E.hold and "on" or "off", "rule", e_rule(), "gar_demand", E.n_gar,
-		"unit_first_sw", E.n_hold_sw, "reserve_skip", E.n_res_skip, "secure_req", E.n_sec_req, "secure_dead", E.n_sec_dead, "secure_hold", E.n_sec_hold)
+		"unit_first_sw", E.n_hold_sw, "reserve_skip", E.n_res_skip, "secure_req", E.n_sec_req, "secure_dead", E.n_sec_dead, "secure_hold", E.n_sec_hold,
+		"addon_req", E.n_addon_req, "addon_dead", E.n_addon_dead,
+		"addon_share", string.format("%.2f", e_addon_share()), "cap", string.format("%.2f", (e_share_cap())), "(" .. tostring(E.cap_why) .. ")",
+		"share_skip", E.n_share_skip, "unit_kept", E.n_hold_keep, "t2_power_skip", E.n_pow_skip or 0)
 end
 -- once per (re)initialisation, new logic only: the wrappers around Elite's functions that are loaded after this file
 -- (strategy_addon_purchase.ai) and the purchase callbacks of the budgets of the other run
@@ -1127,6 +1383,7 @@ local function e_install()
 					if not s_on() then return Elite_purchase( availableResources, purchase_count ) end
 					local E = EliteAI_E
 					if kind == "secure" and e_secure_gate() then return false end
+					if kind == "addon" then e_addon_settle() end            -- 0.3: the requests of the earlier ticks - bought or killed
 					-- the upgrades have their own filter per item (e_addon_filter); Secure and the generators get the cut bank
 					local avail = availableResources
 					if kind ~= "addon" then avail = e_reserved( availableResources, true ) end
@@ -1156,7 +1413,10 @@ local function e_install()
 		"gar_buy", eai_num("Gar_BuySecs", 25) .. "/" .. eai_num("Gar_BuyMult", 2.5) .. "/" .. eai_num("Gar_AddonMult", 3),
 		"wrapped", (EliteAI_EnergyAddonWrapped and "addon" or "-") .. "," .. (EliteAI_EnergyGenWrapped and "gen" or "-"),
 		"unit_first_hold", eai_num("Spend_UnitFirstHold", 20), "off_k", eai_num("Spend_UnitFirstOffK", 1.5),
-		"secure", eai_num("Energy_SecureMax", 1) .. "/" .. eai_num("Energy_SecureTries", 2) .. "/" .. eai_num("Energy_SecureMute", 60) .. "/" .. eai_num("Energy_SecureHold", 1))
+		"secure", eai_num("Energy_SecureMax", 1) .. "/" .. eai_num("Energy_SecureTries", 2) .. "/" .. eai_num("Energy_SecureMute", 60) .. "/" .. eai_num("Energy_SecureHold", 1),
+		"share", eai_num("Share_On", 1) .. " " .. eai_num("Share_AddonT1", 0.15) .. "/" .. eai_num("Share_AddonT2", 0.20) .. "/" .. eai_num("Share_AddonT3", 0.30),
+		"army", eai_num("Share_ArmyT1", 4) .. "/" .. eai_num("Share_ArmyT2", 6) .. "/" .. eai_num("Share_ArmyT3", 8), "floor_k", eai_num("Share_FloorK", 0.5),
+		"addon_dead", eai_num("Energy_AddonDeadTries", 2) .. "/" .. eai_num("Energy_AddonDeadMute", 60))
 end
 EliteAI_EnergyInit = e_install
 

@@ -4,7 +4,7 @@
 -- (all | none | normal | <player ids, e.g. 1000>) so one match can pit the new logic against Elite's (A/B).
 -- Every tuning value can be overridden from EliteAI.ini [Lua] without rebuilding (EliteAI.num("Key", default)).
 
-EliteAI = { version = "0.12" }
+EliteAI = { version = "0.13" }
 
 -- 0.9 (10.11): THREE VARIANTS for testers to compare, chosen in the skirmish menu by the computer slot's difficulty:
 -- Easy = "NEW AI A", Normal = "NEW AI B", Hard = "NEW AI C" (EliteAI.dll relabels them); Expert = Elite's AI, untouched.
@@ -54,6 +54,8 @@ end
 EliteAI.log = log
 
 -- step 4 (10.11): every swallowed error is logged with its place (a pcall'd engine error leaked the Lua mutex -> hang)
+-- 0.13 (11.11, TECH_RU.md 11.10 / 12): no pcall is left around an engine call in this file - every call is preceded by the
+-- checks that made it fail (no squad, no models, no point) and goes direct. perr stays for the SCAR side's text and the stubs.
 EliteAI.errn = {}
 local function perr(tag, err)
 	local c = (EliteAI.errn[tag] or 0) + 1; EliteAI.errn[tag] = c
@@ -135,12 +137,15 @@ local Elite_CalcAttackPriority = Target_CalcAttackPriority
 Target_CalcAttackPriority = function(militaryPoint)
 	local r
 	if EliteAI.on and cfg("PointsOnly", "0") ~= "1" and (s_diffLevel == AD_Easy or s_diffLevel == AD_Standard) then
+		-- 0.13: direct (was a pcall around Elite's function and every engine call inside it). Elite calls the same function
+		-- with the same point for its Hard AI; a missing point is not ranked at all
 		local real = s_diffLevel
-		s_diffLevel = AD_Hard
-		local ok, v = pcall(Elite_CalcAttackPriority, militaryPoint)
-		s_diffLevel = real
-		if not ok then perr("calcprio", v) end
-		r = ok and v or 0
+		r = 0
+		if militaryPoint ~= nil then
+			s_diffLevel = AD_Hard
+			r = Elite_CalcAttackPriority(militaryPoint) or 0
+			s_diffLevel = real
+		end
 	else
 		r = Elite_CalcAttackPriority(militaryPoint)
 	end
@@ -154,17 +159,18 @@ local Elite_RankAttackTargets = RankAttackTargets
 RankAttackTargets = function()
 	if not EliteAI.on then return Elite_RankAttackTargets() end
 	EliteAI.collect = {}
-	local ok, err = pcall(Elite_RankAttackTargets)
-	local list = EliteAI.collect; EliteAI.collect = nil
-	if not ok then perr("rank", err); return end
+	Elite_RankAttackTargets()                                       -- 0.13: direct (was a pcall around all of Elite's ranking)
+	local list = EliteAI.collect or {}; EliteAI.collect = nil
 	table.sort(list, function(a, b) return a.pr > b.pr end)
 	-- 0.7: the position now, not the point: Elite rebuilds its military points, a point kept for the director's next
 	-- tick is a dead engine object - reading it crashed the game (R6025 pure virtual call, 0:30-3:00 into a match)
 	EliteAI.best_pos = nil
-	if list[1] and list[1].mp then
-		local ok, p = pcall(Military_GetMilitaryPointPosition, list[1].mp)
-		if not ok then perr("mppos", p) end
-		if ok and p then EliteAI.best_pos = { x = p.x, y = p.y, z = p.z }; EliteAI.best_key = string.format("%.0f %.0f", p.x, p.z) end
+	local mp = list[1] and list[1].mp                               -- collected in this very call: the point is alive
+	if mp ~= nil then
+		local p = Military_GetMilitaryPointPosition(mp)              -- 0.13: direct, the point checked first
+		if p ~= nil and p.x ~= nil and p.z ~= nil then
+			EliteAI.best_pos = { x = p.x, y = p.y, z = p.z }; EliteAI.best_key = string.format("%.0f %.0f", p.x, p.z)
+		end
 	end
 	local k = num("AttackTargets", 2)
 	if k <= 0 or table.getn(list) <= k then return end
@@ -200,6 +206,7 @@ EliteAI.director = EliteAI.on and cfg("Director", "1") == "1"
 local ORD_MOVE, ORD_ATTACK, ORD_RETREAT = 1, 2, 3
 local _order = eliteai_order or (string and string.eliteai_order)
 EliteAI.retreating, EliteAI.orders, EliteAI.dir_squads = {}, 0, 0
+EliteAI.weak_n = {}                                                -- 0.13: models a squad had when it last went home to be refilled (numbers by squad id)
 
 local function dist(a, b) return math.sqrt((a.x - b.x) ^ 2 + (a.z - b.z) ^ 2) end
 
@@ -293,32 +300,62 @@ end
 local Elite_MilitaryExecute = strategy_military.execute
 strategy_military.execute = function()
 	if EliteAI.director then
-		local ok1, e1 = pcall(Task_KillGroup, s_selfplayer, TGROUP_Attack)
-		if not ok1 then perr("kill_att", e1) end
-		local ok2, e2 = pcall(Task_KillGroup, s_selfplayer, TGROUP_Defend)
-		if not ok2 then perr("kill_def", e2) end
+		-- 0.13: direct, and only a group that has tasks (Task_CountInGroup: strategy_resourcing.ai:76, strategy_tech_purchase.ai:198).
+		-- Elite's execute does not run for a directed AI, so after the first kill the groups stay empty and nothing is called
+		if Task_CountInGroup(s_selfplayer, TGROUP_Attack) > 0 then Task_KillGroup(s_selfplayer, TGROUP_Attack) end
+		if Task_CountInGroup(s_selfplayer, TGROUP_Defend) > 0 then Task_KillGroup(s_selfplayer, TGROUP_Defend) end
 		return
 	end
 	return Elite_MilitaryExecute()
+end
+
+-- 0.13 our HQ: numbers, read once (AIPlayer_GetHomePosition: tactics.ai:508; mechanics.ai keeps the same in EliteAI.mech.home)
+local function home_pos()
+	local m = EliteAI.mech
+	if type(m) == "table" and m.home then return m.home end
+	if EliteAI.home == nil then
+		local p = AIPlayer_GetHomePosition(s_self_modplayer)
+		if p ~= nil and p.x ~= nil and p.z ~= nil then EliteAI.home = { x = p.x, y = p.y, z = p.z } end
+	end
+	return EliteAI.home
 end
 
 function EliteAI_Director()
 	if not EliteAI.director then return end
 	local now = World_GetGameTime()
 	local army, n = {}, Military_SquadTotalCount(s_selfplayer)
+	local hq, home_r = home_pos(), num("Reinf_HomeR", 40)
 	for i = 0, n - 1 do
-		local okq, eq = pcall(function()
-			-- 0.8: an engine call that raises a Lua error inside the AI job leaks the Lua mutex (LuaBinding::GetMutex) on
-			-- the xthread worker -> the main thread waits forever (hang). Seen: AISquad_ConvertToSimSquad -> nil for a squad
-			-- that is not spawned (dead/in reinforcement) and Squad_GetHealth(nil) raised. Check everything BEFORE the call.
-			local aisq = Military_GetAISquadAtIndex(s_selfplayer, i)
-			local sq = aisq and not AISquad_InCaptureTask(aisq) and AISquad_ConvertToSimSquad(aisq)
-			if sq and Squad_Count(sq) > 0 then
-				local hp = Squad_GetHealth(sq) / math.max(Squad_GetHealthMax(sq), 1)
-				table.insert(army, { sq = sq, id = Squad_GetGameID(sq), pos = Squad_GetPosition(sq), hp = hp, hit = Squad_IsUnderAttack(sq, 3) })
+		-- 0.8: an engine call that raises a Lua error inside the AI job leaks the Lua mutex (LuaBinding::GetMutex) on
+		-- the xthread worker -> the main thread waits forever (hang). Seen: AISquad_ConvertToSimSquad -> nil for a squad
+		-- that is not spawned (dead/in reinforcement) and Squad_GetHealth(nil) raised. Check everything BEFORE the call.
+		-- 0.13: the pcall around this scan is gone (it caught the error, the mutex leaked all the same): the squad exists, is
+		-- spawned and has models before anything is read from it; an entry without an id or a position is not taken
+		local aisq = Military_GetAISquadAtIndex(s_selfplayer, i)
+		if aisq ~= nil and not AISquad_InCaptureTask(aisq) then
+			local sq = AISquad_ConvertToSimSquad(aisq)
+			if sq ~= nil and Squad_Count(sq) > 0 then
+				local id, pos = Squad_GetGameID(sq), Squad_GetPosition(sq)
+				if id ~= nil and pos ~= nil and pos.x ~= nil and pos.z ~= nil then
+					local hp = Squad_GetHealth(sq) / math.max(Squad_GetHealthMax(sq) or 1, 1)
+					local u = { sq = sq, id = id, pos = pos, hp = hp, hit = Squad_IsUnderAttack(sq, 3), n = Squad_Count(sq), full = 0 }
+					if EliteAI_ReinforceFull then u.full = EliteAI_ReinforceFull(aisq) or 0 end   -- models of a complete squad of its kind
+					-- 0.13 (TECH_RU.md 12): a squad of the director's army never asked for reinforcements - the engine's list is filled
+					-- by Elite's squad tasks, which do not run for it. At home (Reinf_HomeR of our HQ) a squad that misses models gets
+					-- one reinforce order per tick through the SCAR side (mode 6); strategy_unit_purchase.ai (EliteAI_ReinforceDir)
+					-- is the purse and the count. u.refill = models are on their way: the squad is not sent out yet.
+					if hq ~= nil and math.sqrt((pos.x - hq.x) ^ 2 + (pos.z - hq.z) ^ 2) <= home_r then
+						u.home = true
+						if _order and EliteAI_ReinforceDir then
+							local send, busy = EliteAI_ReinforceDir(aisq, id, u.n, now)
+							if send then _order(id, 0, 0, 0, 6); EliteAI.reinf_orders = (EliteAI.reinf_orders or 0) + 1 end
+							u.refill = busy and true or false
+						end
+					end
+					table.insert(army, u)
+				end
 			end
-		end)
-		if not okq then perr("dir_sq", eq) end
+		end
 	end
 	EliteAI.dir_squads = table.getn(army)
 	-- 0.12: the order book reads the time and the positions of this tick (numbers only)
@@ -331,9 +368,24 @@ function EliteAI_Director()
 		local r = EliteAI.retreating[u.id]
 		if r and now - r < num("RetreatSecs", 40) then
 			-- still on the way / healing
+			-- 0.13 (the polygon's scene b: the hero stood at the base for 34 s after its retreat, healthy, until the 40 s were
+			-- over): back to the army before the timer once it is home, healthy again (RetreatBackHP) and has no model on its way
+			if u.home and not u.refill and u.hp >= num("RetreatBackHP", 0.9) and now - r >= num("RetreatMinSecs", 6) then
+				EliteAI.retreating[u.id] = nil; table.insert(active, u)
+				EliteAI.back_early = (EliteAI.back_early or 0) + 1
+				log("MECH", "Retreat", u.id, "back early after", math.floor(now - r), "s at home hp", string.format("%.2f", u.hp))
+			end
 		elseif u.hp < num("RetreatHP", 0.35) then
 			EliteAI.retreating[u.id] = now; order(u, u.pos, ORD_RETREAT, true)
+		elseif not u.home and u.full >= 3 and u.n <= u.full * num("RetreatModels", 0.34) and u.n < (EliteAI.weak_n[u.id] or 9999) then
+			-- 0.13: the same threshold by models - a squad down to a third of its models goes home to be refilled whatever the
+			-- health of the models left (the health share above is of the squad's health as the engine counts it). Once per
+			-- loss: it does not go again until it has lost another model (no walking to and fro when it could not be refilled).
+			EliteAI.weak_n[u.id] = u.n
+			EliteAI.retreating[u.id] = now; order(u, u.pos, ORD_RETREAT, true)
+			log("MECH", "Retreat", u.id, "models", u.n, "of", u.full, "-> home to refill")
 		else
+			if u.full > 0 and u.n > u.full * num("RetreatModels", 0.34) then EliteAI.weak_n[u.id] = nil end
 			EliteAI.retreating[u.id] = nil; table.insert(active, u)
 		end
 	end
@@ -381,60 +433,61 @@ end
 --------------------------------------------------------------------------------------------------
 -- telemetry: what this AI has and does, every 30 s of game time (A/B comparison, reading a match without video)
 local function gametime()
-	local ok, t = pcall(World_GetGameTime)
-	if not ok then perr("gametime", t) end
-	if ok and t then return math.floor(t) end
+	local t = World_GetGameTime()                                    -- 0.13: direct, as everywhere else in these scripts
+	if t then return math.floor(t) end
 	return -1
 end
 
 -- losses, counted every 5 s: models that left a squad (killed; reinforcements only add) and whole squads that are gone
 EliteAI.seen, EliteAI.models_lost, EliteAI.squads_lost, EliteAI.engaged = {}, 0, 0, 0
 function EliteAI_Sample()
-	local ok, err = pcall(function()
-		local sg = Player_GetSquads(s_self_modplayer)
-		local now, engaged = {}, 0
-		local xs, zs, n2 = {}, {}, 0
-		for i = 1, SGroup_CountSpawned(sg) do
-			local sq = SGroup_GetSpawnedSquadAt(sg, i)
-			local id, n = Squad_GetGameID(sq), Squad_Count(sq)
-			now[id] = n
-			local before = EliteAI.seen[id]
-			if before and n < before then EliteAI.models_lost = EliteAI.models_lost + (before - n) end
-			if Squad_IsUnderAttack(sq, 5) then engaged = engaged + 1 end
-			local okp, pos = true, nil
-			if n > 0 then okp, pos = pcall(Squad_GetPosition, sq) end         -- no position for a squad without models
-			if not okp then perr("sqpos", pos) end
-			if okp and pos then n2 = n2 + 1; xs[n2] = pos.x; zs[n2] = pos.z end
+	-- 0.13: no pcall around the scan (TECH_RU.md 12): the group and every squad are checked before they are read; a squad
+	-- without models is counted and nothing else is asked of it (no position, no "under attack")
+	local sg = Player_GetSquads(s_self_modplayer)
+	if sg == nil then return end
+	local now, engaged = {}, 0
+	local xs, zs, n2 = {}, {}, 0
+	for i = 1, (SGroup_CountSpawned(sg) or 0) do
+		local sq = SGroup_GetSpawnedSquadAt(sg, i)
+		if sq ~= nil then
+			local id, n = Squad_GetGameID(sq), Squad_Count(sq) or 0
+			if id ~= nil then
+				now[id] = n
+				local before = EliteAI.seen[id]
+				if before and n < before then EliteAI.models_lost = EliteAI.models_lost + (before - n) end
+				if n > 0 then
+					if Squad_IsUnderAttack(sq, 5) then engaged = engaged + 1 end
+					local pos = Squad_GetPosition(sq)
+					if pos ~= nil and pos.x ~= nil and pos.z ~= nil then n2 = n2 + 1; xs[n2] = pos.x; zs[n2] = pos.z end
+				end
+			end
 		end
-		for id, n in pairs(EliteAI.seen) do
-			if now[id] == nil then EliteAI.squads_lost = EliteAI.squads_lost + 1; EliteAI.models_lost = EliteAI.models_lost + n end
-		end
-		EliteAI.seen, EliteAI.engaged = now, engaged
-		-- army spread: mean distance of squads to their centre (a fist = small), averaged over the samples
-		if n2 >= 2 then
-			local cx, cz = 0, 0
-			for i = 1, n2 do cx = cx + xs[i]; cz = cz + zs[i] end
-			cx, cz = cx / n2, cz / n2
-			local d = 0
-			for i = 1, n2 do d = d + math.sqrt((xs[i] - cx) ^ 2 + (zs[i] - cz) ^ 2) end
-			EliteAI.spread_sum = (EliteAI.spread_sum or 0) + d / n2; EliteAI.spread_n = (EliteAI.spread_n or 0) + 1
-		end
-	end)
-	if not ok then perr("sample", err) end
+	end
+	for id, n in pairs(EliteAI.seen) do
+		if now[id] == nil then EliteAI.squads_lost = EliteAI.squads_lost + 1; EliteAI.models_lost = EliteAI.models_lost + n end
+	end
+	EliteAI.seen, EliteAI.engaged = now, engaged
+	-- army spread: mean distance of squads to their centre (a fist = small), averaged over the samples
+	if n2 >= 2 then
+		local cx, cz = 0, 0
+		for i = 1, n2 do cx = cx + xs[i]; cz = cz + zs[i] end
+		cx, cz = cx / n2, cz / n2
+		local d = 0
+		for i = 1, n2 do d = d + math.sqrt((xs[i] - cx) ^ 2 + (zs[i] - cz) ^ 2) end
+		EliteAI.spread_sum = (EliteAI.spread_sum or 0) + d / n2; EliteAI.spread_n = (EliteAI.spread_n or 0) + 1
+	end
 end
 
 function EliteAI_Telemetry()
 	local c = cache or {}
-	local okA, att = pcall(Task_CountCombat, s_selfplayer, COMBAT_Attack)
-	local okD, def = pcall(Task_CountCombat, s_selfplayer, COMBAT_Defend)
-	if not okA then perr("count_att", att) end
-	if not okD then perr("count_def", def) end
+	local att = Task_CountCombat(s_selfplayer, COMBAT_Attack)         -- 0.13: direct, as Elite's strategy_military.ai:98-99
+	local def = Task_CountCombat(s_selfplayer, COMBAT_Defend)
 	log("T", gametime(), EliteAI.on and "new" or "elite",
 		"mil", math.floor(c.military_value or -1), "lost", EliteAI.models_lost, "squads_lost", EliteAI.squads_lost, "engaged", EliteAI.engaged,
 		"spread", math.floor((EliteAI.spread_sum or 0) / math.max(EliteAI.spread_n or 0, 1)),
 		"squads", c.military_count or -1, "pop", c.current_population_personnel or -1, "pts", c.total_pts_owned or -1,
 		"vp", c.self_vp_tickers or -1, "vp_enemy", c.enemy_vp_tickers or -1,
-		"rc", EliteAI.rc, "dir", EliteAI.dir_squads, "orders", EliteAI.orders, "phase", EliteAI.phase or "-", "att", okA and att or -1, "def", okD and def or -1, "aggr", EliteAI.aggression or -1,
+		"rc", EliteAI.rc, "dir", EliteAI.dir_squads, "orders", EliteAI.orders, "phase", EliteAI.phase or "-", "att", att or -1, "def", def or -1, "aggr", EliteAI.aggression or -1,
 		"attpct", string.format("%.2f", (state_analysis and state_analysis.military_attackPercentage) or -1))
 end
 
@@ -454,10 +507,7 @@ function InitializeAI()
 	if EliteAI.on then
 		log("variant", EliteAI.variant, EliteAI.vp.name, "real_diff", tostring(EliteAI.real_diff))
 		-- the SCAR side shows it to the player: a pseudo-order, id = player id, x = variant 1..3, mode 9
-		local okv, ev = pcall(function()
-			if _order then _order(s_selfplayerid or 0, string.byte(EliteAI.variant) - 64, 0, 0, 9) end
-		end)
-		if not okv then perr("variant_msg", ev) end
+		if _order then _order(s_selfplayerid or 0, string.byte(EliteAI.variant) - 64, 0, 0, 9) end   -- (a DLL function: five numbers into its queue)
 	end
 	TimeRule_AddInterval(EliteAI_Sample, 5, 0)
 	if EliteAI.director then TimeRule_AddInterval(EliteAI_Director, num("DirectorSecs", 3), 0) end
