@@ -1,0 +1,1 @@
+- New AI 12: the next unit comes first - race abilities, upgrades and reinforcements no longer take its money; squads refill at home before going back.

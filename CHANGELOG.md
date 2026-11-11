@@ -4,6 +4,15 @@ Every version gets an entry here before it reaches `main`. CI then tags `vX.Y.Z`
 version (`X.Y.0`) it also publishes a GitHub Release with the DLLs and the entries since the previous `X.Y.0`.
 The version of the set lives only in `VERSION`; each DLL still writes its own version to its log.
 
+## 0.2.44 — 2026-11-11
+New AI 12 (store newai-12, experiment, off by default, Elite only) = newai-11 + unit-first spending
+(main.ai, mechanics.ai, simulation/ai/strategy_unit_purchase.ai, strategy_tech_purchase.ai, append/scar/elite/elite.scar from eliteai ac0be55).
+- The next unit of the plan is claimed before the pick (EliteAI_PlanClaim): upgrades, tech, reinforcements and race abilities see it.
+- Race abilities do not take the money of a waiting unit (Conf_AbilityVsUnit A/B/C); a held ability is no longer cast under save.
+- Reinforcements yield to a unit within 45 s (except weak squads and squads in a fight); save starts after 45 s short of a unit.
+- Spend books count paid amounts (reinf by arrived models, gen by live tasks); the upgrade share uses them.
+- Refill at home: a squad down to a third waits for its models (up to 3 per tick), no early return with one model.
+
 ## 0.2.43 — 2026-11-11
 New AI 11 (store newai-11, experiment, off by default, Elite only) = newai-10 + spending fixes
 (main.ai, mechanics.ai, simulation/ai/strategy_unit_purchase.ai, strategy_tech_purchase.ai, append/scar/elite/elite.scar from eliteai b5f0320).

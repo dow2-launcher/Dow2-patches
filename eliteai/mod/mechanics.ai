@@ -43,7 +43,7 @@
 --    then "the army" is at our HQ; a grenade squad farther than GarGrenR walks up to throw (b2: the devils stood 37 m off,
 --    no grenade in 120 s); a squad that is a tool against the garrison is no runner while the garrison is stormed or held.
 
-EliteAI_MECH_VERSION = "0.4"
+EliteAI_MECH_VERSION = "0.5"
 
 -- every tunable (EliteAI.ini [Lua] Mech_<Key> overrides); metres and seconds of game time; "strength" = health points
 -- (a squad ~ 300-900, a tank ~ 1500+), vehicles weighted by VehW
@@ -114,6 +114,8 @@ local MP = {
 	-- RaceAbilities (player/global abilities through Elite's own player_abilities.ai)
 	AbilBudget = 60,     -- weight of BUDGET_PlayerAbility (Elite: 25 of ~265 -> ~9 % of the income)
 	AbilSaveHold = 1,    -- 1 = spawn abilities wait while the reinforcement budget saves req (EliteAI_R.save); 0 = cast as before
+	AbilUnitHold = 1,    -- 0.5: 1 = an ability that takes req / power waits for the unit the plan waits for (Conf_AbilityVsUnit); 0 = as before
+	AbilUnitEta = 40,    -- Conf_AbilityVsUnit rule 3: a unit farther than this (s, at the income) is "far"
 	AbilDemand = 30,     -- demand of an ability we want now (Elite adds -5..5; > 1 is needed)
 	AbilSpawnDemand = 12,-- demand of spawn/reinforcement abilities out of a fight
 	AbilFightSecs = 8,   -- "in a fight": enemy contact within this many seconds
@@ -238,7 +240,7 @@ local M = { names = {}, cls = {}, own = {}, en = nil, en_prev = {}, pts = {}, pt
 	tie = {}, repair = {}, jumped = {}, runner = {}, bad_pt = {}, last_scan = -1, last_stats = 0, last_contact = nil, said = {},
 	cap = {}, idle = {}, norole = {}, gren = {}, gar_ord = {},                -- 0.3: can capture, idle clocks, role bans, grenade / assault order times
 	nocap = {}, capfail = {},                                                 -- 0.3: squads that twice stood idle as runners without ever capturing
-	st = { focus = 0, focus_sw = 0, retreat = 0, pre = 0, punish = 0, tie = 0, jump = 0, repair = 0, kite = 0, abil = 0,
+	st = { focus = 0, focus_sw = 0, retreat = 0, pre = 0, punish = 0, tie = 0, jump = 0, repair = 0, kite = 0, abil = 0, abil_held = 0, abil_over = 0,
 		conf = 0, runner = 0, split = 0, decap = 0, orders = 0, idle = 0, idle_role = 0, goal = 0, gar = 0, gar_assault = 0, gar_hold = 0, gar_bypass = 0, gren = 0 } }
 EliteAI.mech = M
 
@@ -973,9 +975,14 @@ local function ra_demand(pbg, d)
 		M.ra_said = M.ra_said or {}
 		local k = name .. "|hold"
 		if not M.ra_said[k] or now - M.ra_said[k] > 30 then
-			M.ra_said[k] = now; mlog("RaceAbilities", "hold", name, "save need", math.floor(EliteAI_R.need or 0), EliteAI_R.need_what or "-")
+			local need, what = EliteAI_R.need or 0, EliteAI_R.need_what or "-"
+			if type(EliteAI_ReinforceNeed) == "function" then need, what = EliteAI_ReinforceNeed() end
+			M.ra_said[k] = now; mlog("RaceAbilities", "hold", name, "save need", math.floor(need or 0), what or "-")
 		end
-		return d
+		-- 0.5: no candidate at all (was: Elite's own demand, 5 +- 5 - above the 1 that is needed, so the "held" ability was cast
+		-- all the same: s16, 13:20 - "hold tyr_spawn_without_number save need 350 tyr_genestealer" and "cast" in the same tick)
+		M.st.abil_held = (M.st.abil_held or 0) + 1
+		return 1
 	end
 	if dem > 1 then
 		M.ra_said = M.ra_said or {}
@@ -983,10 +990,66 @@ local function ra_demand(pbg, d)
 	end
 	return dem
 end
+-- 0.5 (TECH_RU.md 13) Conf_AbilityVsUnit - an ability that takes req or power against the unit the plan waits for. s16: at 6:55
+-- the genestealer (350/45) had its money and waited for the HQ (the T2 research); the ability budget came first in that tick and
+-- cast tyr_spawn_mycetic_spore_raveners (350 req; bank 394 -> 60) - the genestealer was not bought for the rest of the match.
+-- The rule: while a unit is waited for (EliteAI_UnitClaim of strategy_unit_purchase.ai: the plan's next unit, short of money
+-- or waiting for the HQ) an ability whose cost would leave the bank (less the tasks) below the unit's cost is no candidate -
+-- its entry in Elite's demand table is dropped after CalcPlayerAbilityDemand, whatever demand function rated it, so it is not
+-- chosen and locks nothing (a failed cast would hold its cost off the budgets after it, util/budget.ai:345). With a bank that
+-- pays both nothing is held; an ability that costs neither req nor power (the red resource only) is never held.
+-- Where the outcome is not clear the arbiter decides (A / B / C = 1 / 2 / 3):
+--   1 - the unit first, always;
+--   2 - an ability with a target goes: a damage (not spawn) ability while the army fights and the enemy clump in contact has
+--       at least AbilMinClump squads - the answer to what stands in front of us now; spawn abilities wait;
+--   3 - as 2, and a spawn ability goes in a fight when the unit is far: short of money by more than AbilUnitEta (40 s) of income.
+-- Lines: "RaceAbilities hold <ability> unit <sbps> R/P <why> eta N cost R/P free R/P rule K" and "... over unit <ability> target|unit_far ..."
+-- (once per 30 s per ability); stats: abil_held, abil_over. Mech_AbilUnitHold=0 = off.
+local function ra_unit_hold()
+	if not ra_on() or prm("AbilUnitHold") < 1 or type(s_player_ability_demand) ~= "table" or type(EliteAI_UnitClaim) ~= "function" then return end
+	local ur, up, eta, uname, why = EliteAI_UnitClaim()                      -- numbers and strings (nil = no unit is waited for)
+	local bank = cache and cache.resources
+	if ur == nil or bank == nil then return end
+	local tasks = Task_CountCost(s_selfplayer, false)                       -- util/budget.ai:271: what the requests placed already hold
+	local fr = (bank.requisition or 0) - ((tasks and tasks.requisition) or 0)
+	local fp = (bank.power or 0) - ((tasks and tasks.power) or 0)
+	local r, now = rule("AbilityVsUnit"), World_GetGameTime()
+	local fight = M.last_contact and now - M.last_contact <= prm("AbilFightSecs")
+	local far = (why == "money" and eta > prm("AbilUnitEta"))
+	M.ra_said = M.ra_said or {}
+	for pbg, dem in pairs(s_player_ability_demand) do                       -- each entry on its own: the order of pairs() does not matter
+		if pbg and dem ~= false then
+			local cost = AIAbility_GetCost(s_self_modplayer, pbg)                -- player_abilities.ai:259
+			local cr, cp = (cost and cost.requisition) or 0, (cost and cost.power) or 0
+			if (cr > 0 and fr - cr < ur) or (cp > 0 and fp - cp < up) then    -- the bank does not pay both
+				local name = ra_name(pbg)
+				local spawn = has_key(name, SPAWN_KEYS)
+				local pass = nil
+				if r >= 2 and not spawn and fight and M.clump and M.clump.n >= prm("AbilMinClump") then pass = "target"
+				elseif r >= 3 and spawn and fight and far then pass = "unit_far" end
+				local k = name .. (pass and "|over" or "|unit")
+				local say = (not M.ra_said[k] or now - M.ra_said[k] > 30)
+				if say then M.ra_said[k] = now end
+				if pass then
+					M.st.abil_over = (M.st.abil_over or 0) + 1
+					if say then mlog("RaceAbilities", "over unit", name, pass, "unit", uname, ur .. "/" .. up, why, "eta", math.floor(eta), "cost", cr .. "/" .. cp, "rule", r) end
+				else
+					s_player_ability_demand[pbg] = false                       -- HighestPlayerAbilityDemand skips it (player_abilities.ai:297)
+					M.st.abil_held = (M.st.abil_held or 0) + 1
+					if say then
+						mlog("RaceAbilities", "hold", name, "unit", uname, ur .. "/" .. up, why, "eta", math.floor(eta), "cost", cr .. "/" .. cp,
+							"free", math.floor(fr) .. "/" .. math.floor(fp), "rule", r)
+					end
+				end
+			end
+		end
+	end
+end
+EliteAI_MechAbilityUnitHold = ra_unit_hold                                    -- the stub run
 if type(CalcPlayerAbilityDemand) == "function" and type(PlayerAbility_Cast) == "function" and not EliteAI_MechRA_Wrapped then
 	EliteAI_MechRA_Wrapped = true
 	local E_Calc, E_Demand, E_Cast, E_Pos = CalcPlayerAbilityDemand, AITacticDemand_Default, PlayerAbility_Cast, PositionTargetFilter_EnemyClumpPosition
-	CalcPlayerAbilityDemand = function() M.in_pa = true; E_Calc(); M.in_pa = nil end
+	CalcPlayerAbilityDemand = function() M.in_pa = true; E_Calc(); M.in_pa = nil; ra_unit_hold() end   -- 0.5: the unit first
 	AITacticDemand_Default = function(pbg)                                    -- also the demand of squad tactics: only inside CalcPlayerAbilityDemand
 		local d = E_Demand(pbg)
 		if M.in_pa and ra_on() then return ra_demand(pbg, d) end
@@ -1001,6 +1064,8 @@ if type(CalcPlayerAbilityDemand) == "function" and type(PlayerAbility_Cast) == "
 			M.st.abil = M.st.abil + 1
 			-- 0.3: the purchase book of strategy_unit_purchase.ai (energy): what the ability cost (player_abilities.ai:259)
 			if type(EliteAI_EnergyNote) == "function" then EliteAI_EnergyNote("abil", AIAbility_GetCost(s_self_modplayer, pbg)) end
+			-- 0.5: the models a spawn ability brings are paid with it - not booked as reinforcements (strategy_unit_purchase.ai r_models)
+			if type(EliteAI_ReinforceFree) == "function" and has_key(ra_name(pbg), SPAWN_KEYS) then EliteAI_ReinforceFree() end
 		end
 		local nm, t = ra_name(pbg), World_GetGameTime()
 		M.ra_nt = M.ra_nt or {}
@@ -1851,7 +1916,8 @@ local function stats(state)
 	local tasks = -1
 	if TASK_PlayerAbility ~= nil then tasks = Task_CountActive(s_selfplayer, TASK_PlayerAbility, false) end   -- player_abilities.ai:242
 	mlog("stats", "t", math.floor(state.now), "focus", s.focus, "switch", s.focus_sw, "retreat", s.retreat, "pre", s.pre, "punish", s.punish,
-		"tie", s.tie, "jump", s.jump, "kite", s.kite, "repair", s.repair, "abil", s.abil, "abil_tasks", tasks, "runner", s.runner, "split", s.split,
+		"tie", s.tie, "jump", s.jump, "kite", s.kite, "repair", s.repair, "abil", s.abil, "abil_tasks", tasks, "abil_held", s.abil_held or 0, "abil_over", s.abil_over or 0,
+		"runner", s.runner, "split", s.split,
 		"decap", s.decap, "conf_sw", s.conf, "orders", s.orders, "enemies", table.getn(M.en or {}), "points", table.getn(M.pts or {}), "phase", EliteAI.phase or "-")
 	local g, G = EliteAI.goal, M.gar
 	mlog("stats2", "t", math.floor(state.now), "idle", s.idle, "idle_role", s.idle_role, "goals", s.goal, "goal", g and (g.kind .. " " .. tostring(g.key)) or "-",
@@ -1878,7 +1944,8 @@ function EliteAI_Mechanics(state)
 			"Idle", on.Idle and 1 or 0, "Garrison", on.Garrison and 1 or 0)
 		mlog("rules", "MeleeApproach", rule("MeleeApproach"), "FocusLeave", rule("FocusLeave"), "Chase", rule("Chase"), "Split", rule("Split"),
 			"Decap", rule("Decap"), "HoldVP", rule("HoldVP"), "TieVsFocus", rule("TieVsFocus"), "RepairVsFight", rule("RepairVsFight"),
-			"PreEngage", rule("PreEngage"), "RunnerFight", rule("RunnerFight"), "AbilitySave", rule("AbilitySave"), "Garrison", rule("Garrison"))
+			"PreEngage", rule("PreEngage"), "RunnerFight", rule("RunnerFight"), "AbilitySave", rule("AbilitySave"), "Garrison", rule("Garrison"),
+			"AbilityVsUnit", rule("AbilityVsUnit"))
 		api()
 	end
 	if not (on.FocusFire or on.Repair or on.ArmyRetreat or on.PreRetreat or on.PunishTurn or on.MeleeTie or on.RaceAbilities or on.ArmyRoles

@@ -1132,7 +1132,7 @@
     }
   },
   "newai": {
-    "version": "11",
+    "version": "12",
     "dll": "EliteAI.dll",
     "files": {
       "EliteAI/main.ai": "eliteai/mod/main.ai",
