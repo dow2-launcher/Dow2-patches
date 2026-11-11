@@ -26,6 +26,7 @@ all: $(OUT)/DXVK.dll $(OUT)/FpsUnlock.dll
 all: $(OUT)/UIFilter.dll
 all: $(OUT)/EliteMaps.dll
 all: $(OUT)/OverwatchOnce.dll
+all: $(OUT)/CtrlAttack.dll
 
 $(OUT):
 	mkdir -p $(OUT)
@@ -153,6 +154,10 @@ $(OUT)/Continue.dll: continue/continue.c | $(OUT)
 
 # 11.11.2026: an overwatch order (right-click on a unit button) builds one squad, then the HUD's overwatch entry is erased
 $(OUT)/OverwatchOnce.dll: overwatchonce/overwatchonce.c | $(OUT)
+	$(CC) $(CFLAGS) -shared -o $@ $< -static-libgcc
+
+# 11.11.2026: Ctrl + right-click on the ground = the game's own attack-ground order (core action G) for the squads that can
+$(OUT)/CtrlAttack.dll: ctrlattack/ctrlattack.c | $(OUT)
 	$(CC) $(CFLAGS) -shared -o $@ $< -static-libgcc
 
 # 03.11.2026: a jump order lost on an obstacle hop (Autarch) is sent again - client side, the game's own order
