@@ -1,0 +1,1 @@
+- New AI 13: uses race call-in abilities again, no lone squads sent to die on far points, refills damaged squads (Grey Knights too).

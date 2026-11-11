@@ -4,6 +4,17 @@ Every version gets an entry here before it reaches `main`. CI then tags `vX.Y.Z`
 version (`X.Y.0`) it also publishes a GitHub Release with the DLLs and the entries since the previous `X.Y.0`.
 The version of the set lives only in `VERSION`; each DLL still writes its own version to its log.
 
+## 0.2.45 — 2026-11-11
+New AI 13 (store newai-13, experiment, off by default, Elite only) = newai-12 + race abilities back, safer runners, reinforcements
+(main.ai, mechanics.ai, simulation/ai/strategy_unit_purchase.ai, strategy_tech_purchase.ai, append/scar/elite/elite.scar from eliteai 8affec3).
+- Race call-in abilities count as a unit buy through another channel: cast into the army's fight, on a raid at the base or power points,
+  or when the unit is far; save holds at most 90 s; abilities with no target are not picked. Squad buffs (no script way to target) removed.
+- Runners: none for a small army (Conf_RunnerArmy A/B/C), no target where the enemy is or was seen 45 s ago or on the path,
+  a target where a runner died is closed for 150 s, own lost points near the army first; the hero is a runner only in the opening.
+- Reinforcements: weak squads out of combat go home to refill, one model a minute always passes (expensive Grey Knights models),
+  squads with ordered models wait for them and are not taken as runners; dir_lost counted from the squad standing.
+- Tech by power float yields to a unit waited for and within 75 s of income; gen book counts generators that stood 20 s.
+
 ## 0.2.44 — 2026-11-11
 New AI 12 (store newai-12, experiment, off by default, Elite only) = newai-11 + unit-first spending
 (main.ai, mechanics.ai, simulation/ai/strategy_unit_purchase.ai, strategy_tech_purchase.ai, append/scar/elite/elite.scar from eliteai ac0be55).

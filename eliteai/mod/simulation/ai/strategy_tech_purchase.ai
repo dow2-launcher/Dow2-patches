@@ -74,6 +74,12 @@
 --      cost - rate x (Tech_T2Time - now), the whole cost from Tech_T2Time on (the addon filter of strategy_unit_purchase.ai,
 --      "addon skip ... why t2_power"; units are not held by it; off Tech_PowFloorSecs 180 s after Tech_T2Late).
 --      The plan's reserve now also keeps its POWER from the upgrades (the filter looked at the req alone).
+--  * 11.11, after the verification of newai-12 (s17; TECH_RU.md 13.10 / 14), version 0.4:
+--    - THE FLOAT RESEARCH DOES NOT TAKE THE REQ OF A UNIT THAT IS CLOSE (Tech_FloatUnit 1): with the reason "float" the unit the
+--      plan had waited for before the research was wanted, and that the income brings within Tech_FloatUnitEta (75 s), is
+--      bought first ("Conf_TechVsArmy T3 ->army unit_first tyr_zoanthrope eta 57", "T3 wait army_first unit 360/40 ...");
+--      its whole cost stays in the bank. One unit, Tech_FloatUnitMax (120 s) at most: the next unit's wait begins after the
+--      want and does not hold the research. The schedule ("time", "early") is as it was.
 -- SAFETY: no engine object kept between ticks (the tier PBGs are Elite's own s_personality handles), no pcall around engine calls,
 -- deterministic (engine time and state only), every function below exists in Elite's scripts (file:line in reports/TECH_RU.md).
 
@@ -93,7 +99,7 @@ DEMAND_NeverBuild = -99999
 
 -------------------------------------------------------------------------------------------------
 -- EliteAI tech plan (state: numbers, strings and plain tables only)
-EliteAI_TECH_VERSION = "0.3"
+EliteAI_TECH_VERSION = "0.4"
 EliteAI_T = { st = {}, said = {}, conf = {}, waits = {}, last_stats = -1, eval_t = -1, cost_t = -1, level = 1 }
 
 local function t_on() return EliteAI ~= nil and EliteAI.on == true end
@@ -183,7 +189,10 @@ local function t_eval(now)
 		t_log("level", T.level, "->", lvl, "t", math.floor(now), (T.st[lvl - 1] and T.st[lvl - 1].started) and "plan" or "elite")
 	end
 	T.level = lvl
+	local was_want, was_k = T.was_want, T.was_k                             -- 0.4: since when this research is wanted without a break (T.wsince)
+	T.was_want = false
 	T.k, T.want, T.decision, T.late = nil, false, nil, false
+	T.unit_req, T.unit_pow = 0, 0
 	if n == 0 or lvl < 1 or lvl > n then T.tag = "T" .. tostring(lvl); return T end   -- all tiers done (or none defined)
 	local k = lvl
 	local pbg = t_tier_pbg(k)
@@ -216,6 +225,8 @@ local function t_eval(now)
 	end
 	if not reason then return T end
 	T.want, T.want_reason = true, reason
+	if not (was_want and was_k == k) then T.wsince = now end
+	T.was_want, T.was_k = true, k
 	local st = T.st[k]
 	if not st then
 		st = { want = now }
@@ -254,7 +265,19 @@ local function t_eval(now)
 		why = "float"
 		if army < fa then v, why = "army", "army " .. army .. "<" .. fa
 		elseif r == 1 and pct < t_num("Tech_LosingPct", -0.35) then v, why = "army", t_fmt("losing %.2f", pct)
-		elseif r == 2 and retreat then v, why = "army", "retreat" end
+		elseif r == 2 and retreat then v, why = "army", "retreat"
+		elseif t_num("Tech_FloatUnit", 1) >= 1 and type(EliteAI_UnitAhead) == "function" and now - (T.wsince or now) <= t_num("Tech_FloatUnitMax", 120) then
+			-- 0.4 (TECH_RU.md 14; s17: the zoanthrope had waited 115 s and was 57 s away when the float asked for T3 - the
+			-- reserve took its req, the 7th unit came 110 s later): the unit that was waited for before the research was
+			-- wanted and is within Tech_FloatUnitEta of the income goes first - its cost stays in the bank (T.unit_req / pow,
+			-- the purchase function below); the next unit's wait begins after the want, so the research is next. Never for
+			-- longer than Tech_FloatUnitMax (120 s) after the want: a unit that is not bought by then does not hold the research
+			local un, ueta, ureq, upow = EliteAI_UnitAhead( T.wsince or now )
+			if un ~= nil then
+				v, why = "army", "unit_first " .. tostring(un) .. " eta " .. math.floor(ueta or 0)
+				T.unit_req, T.unit_pow = ureq or 0, upow or 0
+			end
+		end
 	elseif r == 1 then
 		if army < min_army then v, why = "army", "army " .. army .. "<" .. min_army
 		elseif pct < t_num("Tech_LosingPct", -0.35) then v, why = "army", t_fmt("losing %.2f", pct) end
@@ -774,6 +797,9 @@ function strategy_tech_purchase.do_purchase( availableResources )
 			local kr, kp = 0, 0
 			if type(EliteAI_UnitWant) == "function" then kr, kp = EliteAI_UnitWant() end
 			kr, kp = kr or 0, kp or 0
+			-- 0.4: the unit the float research steps back for keeps its whole cost, however far it still is (EliteAI_UnitWant
+			-- knows only a unit within 10 s: at 300 req the research would be bought under the zoanthrope's 360)
+			if (T.unit_req or 0) + (T.unit_pow or 0) > 0 then kr, kp = math.max(kr, T.unit_req or 0), math.max(kp, T.unit_pow or 0) end
 			local ar, ap = (availableResources.requisition or 0) - kr, (availableResources.power or 0) - kp
 			if T.emerg or (kr + kp > 0 and (ar < (unitCost.requisition or 0) or ap < (unitCost.power or 0))) then
 				t_wait(now, "army_first", "unit", math.floor(kr) .. "/" .. math.floor(kp),

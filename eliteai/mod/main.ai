@@ -4,7 +4,7 @@
 -- (all | none | normal | <player ids, e.g. 1000>) so one match can pit the new logic against Elite's (A/B).
 -- Every tuning value can be overridden from EliteAI.ini [Lua] without rebuilding (EliteAI.num("Key", default)).
 
-EliteAI = { version = "0.14" }
+EliteAI = { version = "0.15" }
 
 -- 0.9 (10.11): THREE VARIANTS for testers to compare, chosen in the skirmish menu by the computer slot's difficulty:
 -- Easy = "NEW AI A", Normal = "NEW AI B", Hard = "NEW AI C" (EliteAI.dll relabels them); Expert = Elite's AI, untouched.
@@ -296,6 +296,14 @@ local function order(u, pos, mode, urgent)
 	_order(u.id, pos.x, pos.y, pos.z, m)
 	EliteAI.orders = EliteAI.orders + 1
 end
+-- 0.15: the squad stops where it stands - a plain move to its own spot ends the march order it had (the order book would
+-- skip it as "it is there", so it goes past the book, and the book starts anew for this squad)
+local function halt(u)
+	if not _order or not u or not u.id or not u.pos then return end
+	_order(u.id, u.pos.x, u.pos.y, u.pos.z, ORD_MOVE)
+	EliteAI.orders = EliteAI.orders + 1
+	EliteAI.ord[u.id] = nil
+end
 
 -- Elite's combat tasks would take the squads back: none for a directed AI (snipers, capture etc. stay Elite's)
 local Elite_MilitaryExecute = strategy_military.execute
@@ -331,6 +339,15 @@ end
 -- its models until the timeout. Lines: "MECH Refill <id> start models N of M", "MECH Refill <id> models A->B of M" each time
 -- models came - the polygon's report (lib/report.py) reads these: a squad that stands at home while they keep coming is being
 -- refilled, not idle - and "MECH Refill <id> end models N of M after S s got K why <why>". Refill=0 = as 0.13.
+-- 0.15 (TECH_RU.md 14; s17: IG got 3 models in 13 minutes - one batch, and the squad it was ordered for, 6 of 9, was led away
+-- as a runner ten seconds later and died with 3; the tyranids' 50008 got 1 of 3 the same way):
+--  * a squad at home that models were ordered for stays until they have come - the same stay, entered from the army
+--    ("MECH Refill <id> start ... ordered"): it is in nobody's list meanwhile (no runner, no split, no march);
+--  * a weak squad (half its models or fewer: RefillModels, the purse's "weak") goes home to refill when nobody of the army
+--    is in a fight ("... -> home to refill (quiet)") - a third (RetreatModels) goes at once as before. Only when the purse
+--    would pay RefillTripModels (2) models now, the HQ is within RefillTripD (160 m), and no more than a third of the army
+--    is away refilling; once per loss. RefillQuiet=0 = off;
+--  * a fight at home (a squad of the army there is under attack) ends every stay: "why fight at home".
 local function refill_step(u, f, now)
 	local why = nil
 	if not u.home then
@@ -339,7 +356,8 @@ local function refill_step(u, f, now)
 	else
 		if not f.home_t then
 			f.home_t, f.prog, f.n, f.got = now, now, u.n, 0
-			log("MECH", "Refill", u.id, "start", "models", u.n, "of", u.full)
+			if f.why then log("MECH", "Refill", u.id, "start", "models", u.n, "of", u.full, f.why)
+			else log("MECH", "Refill", u.id, "start", "models", u.n, "of", u.full) end
 		end
 		if u.n > f.n then
 			log("MECH", "Refill", u.id, "models", f.n .. "->" .. u.n, "of", u.full)
@@ -348,6 +366,7 @@ local function refill_step(u, f, now)
 		f.n = u.n
 		local fit = (u.n > u.full * num("RetreatModels", 0.34))
 		if u.hit then why = "under attack"
+		elseif EliteAI.home_hit then why = "fight at home"
 		elseif u.full > 0 and u.n >= u.full then why = "full"
 		elseif now - f.home_t >= num("RefillMaxSecs", 75) then why = "timeout"
 		elseif fit and not u.refill and now - f.prog >= num("RefillWaitSecs", 9) then why = "enough, purse " .. tostring(u.refill_why or "-")
@@ -365,6 +384,8 @@ function EliteAI_Director()
 	local now = World_GetGameTime()
 	local army, n = {}, Military_SquadTotalCount(s_selfplayer)
 	local hq, home_r = home_pos(), num("Reinf_HomeR", 40)
+	local any_hit, home_hit = false, false
+	local wm, stand_d = num("RefillModels", 0.5), num("RefillStandD", 3)
 	for i = 0, n - 1 do
 		-- 0.8: an engine call that raises a Lua error inside the AI job leaks the Lua mutex (LuaBinding::GetMutex) on
 		-- the xthread worker -> the main thread waits forever (hang). Seen: AISquad_ConvertToSimSquad -> nil for a squad
@@ -384,15 +405,27 @@ function EliteAI_Director()
 					-- by Elite's squad tasks, which do not run for it. At home (Reinf_HomeR of our HQ) a squad that misses models gets
 					-- one reinforce order per tick through the SCAR side (mode 6); strategy_unit_purchase.ai (EliteAI_ReinforceDir)
 					-- is the purse and the count. u.refill = models are on their way: the squad is not sent out yet.
-					if hq ~= nil and math.sqrt((pos.x - hq.x) ^ 2 + (pos.z - hq.z) ^ 2) <= home_r then
+					if hq ~= nil then u.dhome = math.sqrt((pos.x - hq.x) ^ 2 + (pos.z - hq.z) ^ 2) end
+					if u.dhome ~= nil and u.dhome <= home_r then
 						u.home = true
 						if _order and EliteAI_ReinforceDir then
 							-- 0.14: k models at once when the purse pays them (x of the order = how many; elite.scar repeats the command)
-							local k, busy, why = EliteAI_ReinforceDir(aisq, id, u.n, now)
-							if type(k) == "number" and k >= 1 then _order(id, k, 0, 0, 6); EliteAI.reinf_orders = (EliteAI.reinf_orders or 0) + k end
+							-- 0.15: "moving" - it is not standing yet (EliteAI.sqpos still holds the positions of the last tick): the purse
+							-- does not count a model as lost before the squad has arrived
+							local was = EliteAI.sqpos[id]
+							local moving = (was == nil) or (math.sqrt((pos.x - was.x) ^ 2 + (pos.z - was.z) ^ 2) > stand_d)
+							local k, busy, why = EliteAI_ReinforceDir(aisq, id, u.n, now, moving)
+							if type(k) == "number" and k >= 1 then
+								_order(id, k, 0, 0, 6); EliteAI.reinf_orders = (EliteAI.reinf_orders or 0) + k
+								u.ordered = k
+							end
 							u.refill, u.refill_why = busy and true or false, why
 						end
+						if u.hit then home_hit = true end
+					elseif EliteAI_ReinforceCan and u.full >= 3 and u.n <= u.full * wm then
+						u.can = EliteAI_ReinforceCan(aisq, u.n) or 0                  -- 0.15: would the purse pay it now (the quiet refill trip)
 					end
+					if u.hit then any_hit = true end
 					table.insert(army, u)
 				end
 			end
@@ -403,6 +436,15 @@ function EliteAI_Director()
 	EliteAI.now, EliteAI.sqpos = now, {}
 	for _, u in ipairs(army) do EliteAI.sqpos[u.id] = { x = u.pos.x, z = u.pos.z } end
 	for id, r in pairs(EliteAI.ord) do if now - r.t > 120 then EliteAI.ord[id] = nil end end   -- squads that are gone (each entry on its own)
+	EliteAI.home_hit = home_hit
+	-- 0.15: the stays of squads that are gone (dead, or taken by Elite's capture task) end; how many of the army are away refilling
+	local in_army, away = {}, 0
+	for _, u in ipairs(army) do in_army[u.id] = true end
+	for id in pairs(EliteAI.refill) do if in_army[id] then away = away + 1 else EliteAI.refill[id] = nil end end   -- (each entry on its own)
+	local away_max = math.max(1, math.floor(table.getn(army) / 3))
+	-- "quiet": nobody of the army is under attack and the mechanics saw no enemy in contact for RefillQuietSecs
+	local mech_c = (type(EliteAI.mech) == "table") and EliteAI.mech.army_contact or nil
+	local quiet = (not any_hit) and (mech_c == nil or now - mech_c >= num("RefillQuietSecs", 9)) and num("RefillQuiet", 1) >= 1
 	-- badly hurt squads go home (once; they come back to the army after RetreatSecs)
 	local active = {}
 	local rm, stay = num("RetreatModels", 0.34), (num("Refill", 1) >= 1)
@@ -441,9 +483,24 @@ function EliteAI_Director()
 				EliteAI.retreating[u.id] = now; order(u, u.pos, ORD_RETREAT, true)
 				log("MECH", "Retreat", u.id, "models", u.n, "of", u.full, "-> home to refill")
 			end
-			if stay then EliteAI.refill[u.id] = { t = now } elseif u.home then table.insert(active, u) end
+			if stay then EliteAI.refill[u.id] = { t = now }; away = away + 1 elseif u.home then table.insert(active, u) end
+		elseif stay and u.home and (u.ordered or 0) >= 1 and not u.hit and not home_hit then
+			-- 0.15: models were ordered for it this tick - it stays at home until they have come (refill_step lets it go: full,
+			-- nothing more to come, a fight, the timeout). Was: it marched off with the army, the models were lost
+			EliteAI.retreating[u.id] = nil
+			EliteAI.refill[u.id] = { t = now, why = "ordered", home_t = now, prog = now, n = u.n, got = 0 }
+			log("MECH", "Refill", u.id, "start", "models", u.n, "of", u.full, "ordered")
+			halt(u)
+		elseif stay and quiet and not u.home and u.full >= 3 and u.n <= u.full * wm and u.n < (EliteAI.weak_n[u.id] or 9999)
+			and (u.can or 0) >= num("RefillTripModels", 2) and away < away_max and (u.dhome or 99999) <= num("RefillTripD", 160) then
+			-- 0.15: weak (half its models or fewer) and nobody fights - home to refill, once per loss
+			EliteAI.weak_n[u.id] = u.n
+			EliteAI.retreating[u.id] = now; order(u, u.pos, ORD_RETREAT, true)
+			EliteAI.refill[u.id] = { t = now, why = "quiet" }; away = away + 1
+			log("MECH", "Retreat", u.id, "models", u.n, "of", u.full, "-> home to refill (quiet)", "purse", u.can, "home", math.floor(u.dhome or -1), "m")
 		else
-			if u.full > 0 and u.n > u.full * rm then EliteAI.weak_n[u.id] = nil end
+			-- (0.15: "once per loss" holds up to the weak threshold - a squad back from a trip that brought nothing does not go again)
+			if u.full > 0 and u.n > u.full * math.max(rm, (num("RefillQuiet", 1) >= 1) and wm or 0) then EliteAI.weak_n[u.id] = nil end
 			EliteAI.retreating[u.id] = nil; table.insert(active, u)
 		end
 	end
