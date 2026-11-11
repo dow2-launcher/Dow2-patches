@@ -4,6 +4,12 @@ Every version gets an entry here before it reaches `main`. CI then tags `vX.Y.Z`
 version (`X.Y.0`) it also publishes a GitHub Release with the DLLs and the entries since the previous `X.Y.0`.
 The version of the set lives only in `VERSION`; each DLL still writes its own version to its log.
 
+## 0.2.49 — 2026-11-11
+New AI 17 (store newai-17, experiment, off by default, Elite only) = newai-16 + no retreat for suppression alone
+(mechanics.ai from eliteai df2d0f5).
+- Inside an enemy turret zone a suppressed squad walks out; it retreats only when deep in the zone or hurt (squads pressed retreat
+  at every banshee scream or ranger volley near the enemy base).
+
 ## 0.2.48 — 2026-11-11
 New AI 16 (store newai-16, experiment, off by default, Elite only) = newai-15 + answer to the enemy army, spending fixes
 (main.ai, mechanics.ai, simulation/ai/strategy_unit_purchase.ai, strategy_tech_purchase.ai, append/scar/elite/elite.scar from eliteai ad510cb).

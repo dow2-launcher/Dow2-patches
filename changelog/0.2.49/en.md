@@ -1,0 +1,1 @@
+- New AI 17: no more retreats at every suppression near the enemy base.
