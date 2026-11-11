@@ -4,6 +4,25 @@ Every version gets an entry here before it reaches `main`. CI then tags `vX.Y.Z`
 version (`X.Y.0`) it also publishes a GitHub Release with the DLLs and the entries since the previous `X.Y.0`.
 The version of the set lives only in `VERSION`; each DLL still writes its own version to its log.
 
+## 0.2.60 — 2026-11-12
+Speech streak fix (store speechstreakfix-1, new, experiment order 1040, off by default, games elite + vanilla) - TvangeS's crash of 11.11.2026
+(Access Violation DOW2.exe 0x00B8FC24, read 0x84B23004, 3v3 automatch at 1:34; report reports/crash_tvanges_1111).
+- The cause is DOW2.exe 3.19 itself: the unit speech counts kills per hero entity ("Killing_Streak" of speechtuning) in a sorted
+  vector map {Entity*, count} (listener +0x24/+0x28). FUN_00B8FB80 starts from end() and reads it->count also when equal_range
+  (0x815E30) found nothing - 4 bytes past the buffer for an entity's first kill when the list is not empty (e.g. a hero bought back
+  = a new entity). Mostly garbage; a crash when the buffer ends at an uncommitted page (the dump: begin 0x84B22FF8, end = capacity
+  = 0x84B23000). None of our DLLs was on the crashed thread's stack; FastBuffers/FastLocStrings do not touch this memory.
+- SpeechStreakFix.dll: 4 bytes at 0x00B8FC1C, "je +2; mov ebp,eax" -> "mov ebp,eax; je 0x00B8FC2D" (not found = 0 kills, nothing
+  read); one aligned store after checking the 13 bytes 0x00B8FC18..24, another build is left alone (logged). Speech only, no sync impact.
+- Stand 1: SM vs IG skirmish (AI off), waves of enemy squads at four lanes, the hero replaced by a new entity at 80 s (as a hero
+  bought back). Only hero entities are counted (health_ext +0x23C). Probe build (-DSTAND_PROBE, same logic + counters + killer's
+  blueprint): the first sm_force_commander 1 first kill on an empty list + 2 known, the new hero entity 1 first kill ON A NON-EMPTY
+  LIST (= the read past the list the fix removes) + 13 known (it counts from 1), no crash. Release DLL, Elite and vanilla: patched (13 bytes read back from the
+  process: 3B 44 24 14 8B E8 74 0D 85 ED 74 09 8B), same scenario, no crash. Replays of the Elite and the vanilla match played back
+  without the DLL: SCAR state (both players' squads, positions, health, req) every 5 s identical to the live game (33/33 lines each).
+  Normal launch through the main menu (Steam profile), Elite (Profiler InjectedFiles) and vanilla (winmm loader): patched, menu up,
+  alive 3 min. Unit tests under Wine: other bytes / no code at 0x00B8FC18 -> logged, nothing written.
+
 ## 0.2.59 — 2026-11-12
 - Sound bug test removed from the launcher (store version "off", out of the list): its job is done; the game gets the normal sound library back.
 - PerfLog off for everyone (store version "off"): the performance measurements are closed.

@@ -46,6 +46,7 @@ are client-side, and the other players in the match don't need them.
 | **Cursor Scale** (new, staging, experiment) | A bigger mouse cursor: Auto by the game's own resolution (height / 1080, so 1440p ×1.33, 4K ×2) or a chosen ×1.25 / ×1.5 / ×2 / ×2.5 / ×3 (launcher dropdown); the UI scale stays. Every cursor state, fullscreen and windowed, Elite and vanilla. | `cursorscale` → `cursorscale-1` (staging) | `cursorscale/` | no |
 | **Elite maps** (new, staging, experiment, vanilla only) | Vanilla Retribution: Elite's 1v1-3v3 maps (60 of its 62; the 2 FFA maps are not offered by vanilla) in the map list of skirmish and custom games, read from the player's own Elite installation in the same game folder. EliteMaps 3: in any room, public ones too (EliteMaps.ini BlockPublic=1 keeps them out of public rooms, as EliteMaps 2 did); a player without it crashes joining a room with an Elite map already picked, and with him already in the lobby an Elite-map match does not start (vanilla has no map download) - pick the Elite map once everyone is in. Vanilla maps, the data checksum and the automatch stay vanilla's. | `elitemaps` → `elitemaps-3` (staging) | `elitemaps/` | maps only (no game data) |
 | **Overwatch once** (new, staging, experiment) | Right-click (overwatch) on a unit's build button orders one squad: it is built as soon as it is affordable, then the overwatch mark goes off by itself (no surprise second squad). Elite and vanilla. | `overwatchonce` → `overwatchonce-1` (staging) | `overwatchonce/` | no (overwatch lives in the HUD only; at most one build order less) |
+| **Speech streak fix** (new, staging, experiment) | Fixes a rare crash of the game when a unit gets a kill: the unit speech about kill streaks read past its list for a unit's first kill. Elite and vanilla. | `speechstreakfix` → `speechstreakfix-1` (staging) | `speechstreakfix/` | no (speech only) |
 | **Ctrl attack ground** (new, staging, experiment) | Hold Ctrl and right-click the ground: the selected squads that can attack the ground (wraithguard, D-cannon, predators, tankbustas, zoanthropes...) fire at that point - the game's own Attack ground (core action G) without pressing G; Shift queues it. The other squads get the plain right-click order; with Reverse on (same key) vehicles keep backing off. Only while Ctrl is held. Elite and vanilla. | `ctrlattack` → `ctrlattack-1` (staging) | `ctrlattack/` | no (the game's own SCMD_Attack order, the same as G + click) |
 | **Observer lag fix (experimental)** | Spectating a live game no longer stutters. | `obsfix_r2` → `obsfix-1` | `obsfix/` | no |
 | **Join a lobby from the launcher (test)** | Experiment by siritos: a Join button on the launcher's Lobbies tab (and elite:// links of the ladder site); the game starts and walks into the room by itself. | `roomjoin` → `roomjoin-4` (staging; live: `roomjoin-3`) | `roomjoin/` | no |
@@ -229,6 +230,14 @@ overwatchonce/ - **OverwatchOnce.dll** (OverwatchOnce 1)
     production queue (EntityController::QI(7) +0x54, item vftable +8 = blueprint, +0x60 added counter) has it, the entry is erased
     with the game's own erase 0x00B26BD0 (the second right-click's) and the tech tree is redrawn (BindingBuildTech +0x1ED). Nothing
     in the simulation is touched and no command is added. Bytes/slots checked before hooking. OverwatchOnce.ini: Enabled, Verbose.
+
+speechstreakfix/ - **SpeechStreakFix.dll** (SpeechStreakFix 1)
+    The unit speech counts kills per entity ("Killing_Streak" of speechtuning) in a sorted vector map {Entity*, count} of its event
+    listener (+0x24/+0x28). FUN_00B8FB80 starts from end() and reads it->count also when equal_range found nothing, i.e. 4 bytes
+    past the buffer for a unit's first kill - garbage, or an Access Violation at 0x00B8FC24 when the buffer ends at an uncommitted
+    page (TvangeS 11.11.2026). 4 bytes at 0x00B8FC1C ("je +2; mov ebp,eax" -> "mov ebp,eax; je 0x00B8FC2D"): not found = 0 kills,
+    no read. The 13 bytes around it are checked first. Speech only, no sync impact. SpeechStreakFix.ini: Enabled.
+    Built with -DSTAND_PROBE (stand only, not shipped): the same logic in a stub that counts known / new killers.
 
 obsfix/ - **ObsFix.dll** (ObsFix v1)
     When you spectate a live game the client asks "which slot am I in" dozens of times per frame and rebuilds the whole match

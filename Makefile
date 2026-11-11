@@ -27,6 +27,7 @@ all: $(OUT)/UIFilter.dll
 all: $(OUT)/EliteMaps.dll
 all: $(OUT)/OverwatchOnce.dll
 all: $(OUT)/CtrlAttack.dll
+all: $(OUT)/SpeechStreakFix.dll
 
 $(OUT):
 	mkdir -p $(OUT)
@@ -154,6 +155,10 @@ $(OUT)/Continue.dll: continue/continue.c | $(OUT)
 
 # 11.11.2026: an overwatch order (right-click on a unit button) builds one squad, then the HUD's overwatch entry is erased
 $(OUT)/OverwatchOnce.dll: overwatchonce/overwatchonce.c | $(OUT)
+	$(CC) $(CFLAGS) -shared -o $@ $< -static-libgcc
+
+# 11.11.2026: the kill-streak speech read 4 bytes past its list for a unit's first kill (crash at 0x00B8FC24); 4 bytes patched
+$(OUT)/SpeechStreakFix.dll: speechstreakfix/speechstreakfix.c | $(OUT)
 	$(CC) $(CFLAGS) -shared -o $@ $< -static-libgcc
 
 # 11.11.2026: Ctrl + right-click on the ground = the game's own attack-ground order (core action G) for the squads that can

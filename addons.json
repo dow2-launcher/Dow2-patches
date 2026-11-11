@@ -1230,5 +1230,30 @@
       "fr": "Maintenez Ctrl et faites un clic droit au sol : les escouades sélectionnées capables d'attaquer le sol (wraithguard, canon D, predators, tankbustas...) tirent sur ce point : l'Attaque au sol (G) du jeu, sans appuyer sur G. Maj la met en file. Les autres se déplacent normalement ; avec Reverse, les véhicules reculent.",
       "de": "Strg gedrückt halten und auf den Boden rechtsklicken: ausgewählte Trupps, die den Boden angreifen können (Phantomwachen, D-Kanone, Predatoren, Panzaknakkaz...), feuern auf diesen Punkt - der Bodenangriff (G) des Spiels, ohne G zu drücken. Shift reiht ihn ein. Andere Trupps laufen wie gewohnt; mit Reverse fahren Fahrzeuge rückwärts."
     }
+  },
+  "speechstreakfix": {
+    "version": "1",
+    "dll": "SpeechStreakFix.dll",
+    "default": false,
+    "games": [
+      "elite",
+      "vanilla"
+    ],
+    "category": "experiment",
+    "order": 1040,
+    "name": {
+      "en": "Speech streak fix",
+      "ru": "Speech streak fix",
+      "es": "Speech streak fix",
+      "fr": "Speech streak fix",
+      "de": "Speech streak fix"
+    },
+    "description": {
+      "en": "Fixes a rare game crash when a unit gets a kill (unit speech about kill streaks).",
+      "ru": "Исправляет редкий вылет игры при убийстве (речь юнитов о серии убийств).",
+      "es": "Corrige un cierre poco frecuente del juego al conseguir una baja (frases de las unidades sobre rachas de bajas).",
+      "fr": "Corrige un plantage rare du jeu lors d'une élimination (répliques des unités sur les séries d'éliminations).",
+      "de": "Behebt einen seltenen Spielabsturz bei einem Abschuss (Einheitensprüche zu Abschussserien)."
+    }
   }
 }
