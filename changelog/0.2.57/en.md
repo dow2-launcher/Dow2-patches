@@ -1,0 +1,1 @@
+- New AI 20: the replay of every match against the new AI is sent to our replay site by itself, so we can see how it plays (off: EliteAI.ini [Replays] Upload=0).
