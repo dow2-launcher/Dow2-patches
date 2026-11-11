@@ -4,6 +4,22 @@ Every version gets an entry here before it reaches `main`. CI then tags `vX.Y.Z`
 version (`X.Y.0`) it also publishes a GitHub Release with the DLLs and the entries since the previous `X.Y.0`.
 The version of the set lives only in `VERSION`; each DLL still writes its own version to its log.
 
+## 0.2.54 — 2026-11-11
+Elite maps 2 (store elitemaps-2, experiment, off by default, vanilla only) - back after 0.2.53 switched it off.
+- Why it was off: a vanilla player WITHOUT the add-on who joins a lobby whose map he does not have crashes at once
+  (c0000005 at DOW2.exe 0x00470581: the map info at GameInfo+0x50 is NULL, read +0x54; twice on the stands, 11.11). A guest
+  already in the lobby when the host switches to an Elite map does not crash, but the match never starts (host "Waiting for
+  players"). Anyone can walk into a public room from the games list (a stranger did, within 2 minutes, on a stand room).
+- EliteMaps 2: no Elite map in a public room. The game setup's map handler 0x00487A7B(form, index) (map list form+0x64..+0x68,
+  0x7AC bytes per map, scenario name at +0x280; it also gives a new room its first map, the last used one) is hooked (5-byte jmp,
+  prologue checked); in a public room (GameInfo +0xC4 = 1, private 0 - diffed on the stand) a pick of an Elite map (names read
+  from the archives' tables: 60 pvp + 2 FFA) becomes the room's previous vanilla map, or the first vanilla map for as many
+  players; the dropdown shows the vanilla map. Private rooms keep Elite's maps. No guard (other DOW2.exe) = no Elite maps.
+- Stands (11.11, cherpekat host + pivolan guest, vanilla, no -dev): public room created with the last used map Bay of Grots ->
+  Calderis Refinery / Ashes of Typhon, picking Bay of Grots there is turned back (log "public room: Elite map ... not allowed"),
+  a guest without the add-on joins that public room fine; private room: Bay of Grots allowed, a guest WITH the add-on plays it
+  ~1.5 min (2 humans, drop=0, no sync error); a guest WITHOUT it still crashes joining the private room (stays, the card says so).
+
 ## 0.2.53 — 2026-11-11
 Elite maps (vanilla) turned off for everyone (store version "off"): a vanilla player WITHOUT the add-on who joins a lobby whose host
 has an Elite map selected crashes (stand test with two accounts, 11.11). Back after the DLL keeps Elite maps out of public lobbies.

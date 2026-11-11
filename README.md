@@ -44,7 +44,7 @@ are client-side, and the other players in the match don't need them.
 | **Reverse (test)** | Ctrl + right-click behind your vehicles: they back off driving backwards, front armour to the enemy. | `reverse_r2` → `reverse-4` | `reverse/` | no (the game's own orders) |
 | **Don't drop out of the match when Steam goes away** | A match is played to the end when Steam loses its connection, however long it is away. | `steamkeep` → `steamkeep-2` | `steamkeep/` | no |
 | **Cursor Scale** (new, staging, experiment) | A bigger mouse cursor: Auto by the game's own resolution (height / 1080, so 1440p ×1.33, 4K ×2) or a chosen ×1.25 / ×1.5 / ×2 / ×2.5 / ×3 (launcher dropdown); the UI scale stays. Every cursor state, fullscreen and windowed, Elite and vanilla. | `cursorscale` → `cursorscale-1` (staging) | `cursorscale/` | no |
-| **Elite maps** (new, staging, experiment, vanilla only) | Vanilla Retribution: Elite's 1v1-3v3 maps (60 of its 62; the 2 FFA maps are not offered by vanilla) in the map list of skirmish and custom games, read from the player's own Elite installation in the same game folder. A new map only for a lobby where everyone has it on (vanilla has no map download); vanilla maps, the data checksum and the automatch stay vanilla's. | `elitemaps` → `elitemaps-1` (staging) | `elitemaps/` | maps only (no game data) |
+| **Elite maps** (new, staging, experiment, vanilla only) | Vanilla Retribution: Elite's 1v1-3v3 maps (60 of its 62; the 2 FFA maps are not offered by vanilla) in the map list of skirmish and custom games, read from the player's own Elite installation in the same game folder. EliteMaps 2: never in a public room (the pick turns back to a vanilla map); in a private room only with friends who have it on - without it a guest's game crashes joining (vanilla has no map download). Vanilla maps, the data checksum and the automatch stay vanilla's. | `elitemaps` → `elitemaps-2` (staging) | `elitemaps/` | maps only (no game data) |
 | **Overwatch once** (new, staging, experiment) | Right-click (overwatch) on a unit's build button orders one squad: it is built as soon as it is affordable, then the overwatch mark goes off by itself (no surprise second squad). Elite and vanilla. | `overwatchonce` → `overwatchonce-1` (staging) | `overwatchonce/` | no (overwatch lives in the HUD only; at most one build order less) |
 | **Observer lag fix (experimental)** | Spectating a live game no longer stutters. | `obsfix_r2` → `obsfix-1` | `obsfix/` | no |
 | **Join a lobby from the launcher (test)** | Experiment by siritos: a Join button on the launcher's Lobbies tab (and elite:// links of the ladder site); the game starts and walks into the room by itself. | `roomjoin` → `roomjoin-4` (staging; live: `roomjoin-3`) | `roomjoin/` | no |
@@ -196,6 +196,9 @@ elitemaps/ - **EliteMaps.dll** (EliteMaps 1, vanilla only)
     the CRC blocks + data:maps\pvp\_cameras\*.*) does not see maps\pvp\<map>: it stays vanilla's 371005917. Has to be in
     before the mount (~170 ms after the start under Wine, after SteamAPI_Init); the vanilla loader loads it at ~50 ms. -modname
     (Elite): nothing. EliteMaps.ini Enabled=0: off. EliteMaps.log: the archives found and the archive.NN answered.
+    EliteMaps 2: a guest without the maps crashes joining a lobby with one (0x00470581, map info GameInfo+0x50 NULL), so the
+    game setup's map handler 0x00487A7B(form, index) is hooked: in a public room (GameInfo +0xC4 = 1) an Elite map pick (also
+    the new room's first map) becomes the previous / first vanilla map. Names of Elite's maps from the archives' tables.
 
 cursorscale/ - **CursorScale.dll** (CursorScale 1)
     The game's cursor is an ordinary Windows cursor: 45 48x48 TGAs of UI/cursor/cursorlist.lua -> Plat::Input::CreateCursor ->
