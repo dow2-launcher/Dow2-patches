@@ -4,6 +4,17 @@ Every version gets an entry here before it reaches `main`. CI then tags `vX.Y.Z`
 version (`X.Y.0`) it also publishes a GitHub Release with the DLLs and the entries since the previous `X.Y.0`.
 The version of the set lives only in `VERSION`; each DLL still writes its own version to its log.
 
+## 0.2.42 — 2026-11-11
+New AI 10 (store newai-10, experiment, off by default, Elite only) = newai-9 + fixes found by the scene test bench
+(main.ai, mechanics.ai, simulation/ai/strategy_unit_purchase.ai, strategy_tech_purchase.ai, append/scar/elite/elite.scar from eliteai 48765e1).
+- Idle squads: only squads that can capture get the capture role; a squad idle 12 s out of combat goes to the army or the next goal.
+- One order gate for the director and the mechanics: the same order is not repeated within 12 s, no attack-move loops.
+- Garrisoned enemy on a point is detected (Conf_Garrison A/B/C: assault / hold / bypass); on assault grenade carriers walk into
+  throw range and the building is attacked; counter units are wanted when the garrison holds.
+- Floating power goes into the tier research first (reserve kept from unit buys and reinforcement saving); power-heavy picks ranked up.
+- Conf_AddonVsUnit arbiter with hysteresis: upgrades do not drain the bank right before an affordable unit.
+- Secure (power node) requests: one at a time, a pause after two dropped ones; the budget log counts real spends only.
+
 ## 0.2.41 — 2026-11-10
 New AI 9 (store newai-9, experiment, off by default, Elite only) = newai-8 + reinforcement budget and spending gates in
 simulation/ai/strategy_unit_purchase.ai, main.ai (Conf_ReinforceVsSave), strategy_tech_purchase.ai (EliteAI_TechReserve) (eliteai f16a17d).

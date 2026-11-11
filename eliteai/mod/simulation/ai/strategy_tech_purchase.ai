@@ -33,6 +33,30 @@
 --    placed), "T2 research <t>" (the task is active), "T2 done <t> took N", "T2 wait <why> <t> ..." at most once per Tech_WaitLog
 --    (30 s) per reason: money (bank/cost), queue (HQ channel busy), eta, army, losing, base_attack, retreat, gen_task;
 --    "stats tier N t <t> T2 <state> conf <tech|army> rule R bank req/pow rate req/pow army N waits ..." every Tech_StatsSecs (60).
+--  * 11.11 (the scene polygon, power in excess): a third reason to want the next tier besides "time" and "early" - "float":
+--    the float state of strategy_unit_purchase.ai (EliteAI_EnergyFloat: power bank >= Energy_FloatPow and >= 1.5 x the req bank)
+--    with the power bank >= Tech_FloatK (2) x the research's power cost. The research is the best power sink (300 req take
+--    125-150 power) and opens the units that use power, so it does not wait for the schedule; the arbiter is relaxed for this
+--    reason: only a base under attack, an army below Tech_C_MinArmy, a lost fight (rule 1) or a running retreat (rule 2) keep
+--    the money with the army. Tech_Float=0 switches the reason off. Every request of this budget is noted in the purchase
+--    book of the energy block (EliteAI_EnergyNote "tech").
+--  * 11.11, after the verification of newai-10 (TECH_RU.md 10.10 / 11), version 0.2:
+--    - the promotion keeps a margin (Tech_PromoteMargin 100): with "+1" the units budget, which gets most of every frame's income
+--      (util/budget.ai add_resources by weight), was ahead again a frame later, so the purchase order - who locks whose money -
+--      changed from tick to tick (scene c2: the genestealer stalled first and locked 350/45, "T3 wait money avail 0/855" with 301
+--      req in the bank). The units budget and the budgets of the other run also take the reserve off themselves now
+--      (strategy_unit_purchase.ai: EliteAI_TechEval + EliteAI_TechReserve), so the order no longer decides.
+--    - decision "army": the tier research is not bought ahead of the unit the units pipeline is about to buy - one that has
+--      the money and waits for the HQ, or is within Tech_ArmyEta 10 s of it (EliteAI_UnitWant of strategy_unit_purchase.ai;
+--      scene a: "T3 start ... conf army" took the 300 req of the warrior the moment the HQ got free). A unit that is far from
+--      affordable does not hold the research back (as before: Elite's own demand buys it when the money is there - with a
+--      small army rule 2 says "army" for minutes); while the enemy stands at our base (Elite's threat value or the scan below)
+--      the research is not bought under "army" at all. Log "T3 wait army_first ...". Tech_ArmyFirst=0 = as before.
+--    - only the tier research locks money in the purchase order: another item of this budget (turrets: "T2 wait other
+--      ... ig_laser_turret" all through the research in scene c3) that is short of money locks nothing ("wait no_lock").
+--    - "enemy at the base" also by the director's own scan (EliteAI.mech.en: enemy squads within Tech_BaseR 60 m of our HQ
+--      worth Tech_BaseW 300+, scan not older than 10 s): cache.threat_at_base saw the two squads 45 m from the HQ of scene a
+--      only 20 s into the fight. Tech_BaseScan=0 = Elite's value alone.
 -- SAFETY: no engine object kept between ticks (the tier PBGs are Elite's own s_personality handles), no pcall around engine calls,
 -- deterministic (engine time and state only), every function below exists in Elite's scripts (file:line in reports/TECH_RU.md).
 
@@ -52,7 +76,7 @@ DEMAND_NeverBuild = -99999
 
 -------------------------------------------------------------------------------------------------
 -- EliteAI tech plan (state: numbers, strings and plain tables only)
-EliteAI_TECH_VERSION = "0.1"
+EliteAI_TECH_VERSION = "0.2"
 EliteAI_T = { st = {}, said = {}, conf = {}, waits = {}, last_stats = -1, eval_t = -1, cost_t = -1, level = 1 }
 
 local function t_on() return EliteAI ~= nil and EliteAI.on == true end
@@ -167,6 +191,11 @@ local function t_eval(now)
 		local ek = t_num("Tech_EarlyK", 1.3)
 		if bank_req >= T.cost_req * ek and bank_pow >= T.cost_pow * ek then reason = "early" end
 	end
+	-- 11.11 (energy): power in excess and req short - the research is the best place for the power, the schedule does not matter
+	if not reason and t_num("Tech_Float", 1) >= 1 and type(EliteAI_EnergyFloat) == "function" and now >= t_num("Tech_FloatMinTime", 0)
+		and bank_pow >= T.cost_pow * t_num("Tech_FloatK", 2) and EliteAI_EnergyFloat() then
+		reason = "float"
+	end
 	if not reason then return T end
 	T.want, T.want_reason = true, reason
 	local st = T.st[k]
@@ -180,12 +209,34 @@ local function t_eval(now)
 	local threat = (cache and cache.threat_at_base) or 0
 	local pct = (cache and cache.military_percent_value) or 0
 	local retreat = (EliteAI and EliteAI.mech and EliteAI.mech.retreat) and true or false
+	-- 0.2: enemy squads at our HQ by the director's scan of this or the last ticks (numbers only: EliteAI.mech.en = { x, z, w },
+	-- EliteAI.mech.home, EliteAI.mech.last_scan) - Elite's threat_at_base reacts late and only to a fight
+	local base_w = 0
+	local mech = EliteAI and EliteAI.mech
+	if t_num("Tech_BaseScan", 1) >= 1 and type(mech) == "table" and type(mech.en) == "table" and type(mech.home) == "table"
+		and now - (mech.last_scan or -1000) <= 10 then
+		local br = t_num("Tech_BaseR", 60)
+		for _, e in ipairs(mech.en) do
+			local dx, dz = (e.x or 0) - mech.home.x, (e.z or 0) - mech.home.z
+			if dx * dx + dz * dz <= br * br then base_w = base_w + (e.w or 0) end
+		end
+	end
+	T.emerg = (threat > t_num("Tech_MaxBaseThreat", 50)) or (base_w >= t_num("Tech_BaseW", 300))   -- the enemy is at our base right now
 	local r = t_rule()
 	local v, why = "tech", "clear"
 	if threat > t_num("Tech_MaxBaseThreat", 50) then
 		v, why = "army", "base_attack " .. math.floor(threat)
 	elseif T.late then
 		v, why = "tech", "late"
+	elseif base_w >= t_num("Tech_BaseW", 300) then
+		v, why = "army", "enemy_at_base " .. math.floor(base_w)
+	elseif reason == "float" then
+		-- 11.11: the power lies idle anyway - the research costs the army 300 req once; only a real emergency keeps it back
+		local fa = t_num("Tech_C_MinArmy", 2)
+		why = "float"
+		if army < fa then v, why = "army", "army " .. army .. "<" .. fa
+		elseif r == 1 and pct < t_num("Tech_LosingPct", -0.35) then v, why = "army", t_fmt("losing %.2f", pct)
+		elseif r == 2 and retreat then v, why = "army", "retreat" end
 	elseif r == 1 then
 		if army < min_army then v, why = "army", "army " .. army .. "<" .. min_army
 		elseif pct < t_num("Tech_LosingPct", -0.35) then v, why = "army", t_fmt("losing %.2f", pct) end
@@ -233,7 +284,7 @@ local function t_track(now, T)
 	local res = (cache and cache.resources) or {}
 	local rate = (cache and cache.resources_rate) or {}
 	local w = {}
-	for _, key in ipairs({ "money", "queue", "eta", "other", "restart", "base_attack", "gen_task" }) do
+	for _, key in ipairs({ "money", "queue", "eta", "other", "restart", "base_attack", "gen_task", "army_first", "no_lock" }) do
 		if T.waits[key] then table.insert(w, key .. "=" .. T.waits[key]) end
 	end
 	t_log("stats", "tier", T.level, "t", math.floor(now), T.tag or "-", state, "conf", T.decision or "-", "rule", t_rule(),
@@ -259,11 +310,20 @@ function EliteAI_TechPromote()
 	for name, b in pairs(ai_budget.budget_list) do
 		if name ~= "BUDGET_Tech" and b.currentTotal > mx then mx = b.currentTotal end
 	end
-	if tech.currentTotal <= mx then
+	-- 0.2: a margin, not "+1" - the other budgets get every frame's income by weight and were ahead again before the purchase
+	-- tick; topped up again only when the lead is half gone
+	local margin = t_num("Tech_PromoteMargin", 100)
+	if tech.currentTotal <= mx + margin * 0.5 then
 		local add = ResourceAmount_Zero()
-		add.requisition = mx - tech.currentTotal + 1
+		add.requisition = mx - tech.currentTotal + margin
 		ai_budget:add_resources( add, "BUDGET_Tech" )
 	end
+end
+-- 0.2: the plan of this tick for the other purchase scripts (the units budget may run before the tech budget in a tick and
+-- before the first promotion of a match): evaluates the plan now, returns nothing; EliteAI_TechReserve then tells the money
+function EliteAI_TechEval()
+	if not t_on() or cache == nil then return end
+	t_eval(World_GetGameTime())
 end
 -- step 15: the money the plan holds right now (the tier research promoted first - the same conditions as EliteAI_TechPromote, on
 -- the state of the last t_eval): req, pow; 0, 0 when nothing is held. The watchdog of strategy_unit_purchase.ai (over_lock) buys
@@ -643,6 +703,30 @@ function strategy_tech_purchase.do_purchase( availableResources )
 			unitCost = AIPlayer_GetProductionCost( s_self_modplayer, PITEM_Upgrade, pbg )
 		end
 
+		-- EliteAI 0.2: the arbiter gave the money to the army - the tier research is not bought ahead of the unit the units
+		-- pipeline is about to buy (its cost stays in the bank; nothing is locked: the units budget buys)
+		-- ... and not at all while the enemy stands at our base (T.emerg: Elite's own exit above needs an army that can defend)
+		if is_tier and T.decision == "army" and t_num("Tech_ArmyFirst", 1) >= 1 then
+			local kr, kp = 0, 0
+			if type(EliteAI_UnitWant) == "function" then kr, kp = EliteAI_UnitWant() end
+			kr, kp = kr or 0, kp or 0
+			local ar, ap = (availableResources.requisition or 0) - kr, (availableResources.power or 0) - kp
+			if T.emerg or (kr + kp > 0 and (ar < (unitCost.requisition or 0) or ap < (unitCost.power or 0))) then
+				t_wait(now, "army_first", "unit", math.floor(kr) .. "/" .. math.floor(kp),
+					"avail", math.floor(availableResources.requisition or 0) .. "/" .. math.floor(availableResources.power or 0),
+					"cost", math.floor(unitCost.requisition or 0) .. "/" .. math.floor(unitCost.power or 0), "why", T.conf_why or "-", T.emerg and "enemy at the base" or "")
+				aipoptrace()
+				return false
+			end
+		end
+		-- EliteAI 0.2: only the tier research locks money. Anything else this budget picks (c3: a laser turret all through the
+		-- T2 research - "T2 wait other ... ig_laser_turret") is bought when the money is there at this moment and locks nothing
+		-- when it is not: its cost was taken off the units budget whenever the tech budget ran first
+		if t_on() and not is_tier and t_num("Tech_NoLock", 1) >= 1 and not ResourceAmount_Has( availableResources, unitCost ) then
+			if EliteAI_T.k then t_wait(now, "no_lock", PBG_GetName( pbg ), math.floor(unitCost.requisition or 0) .. "/" .. math.floor(unitCost.power or 0)) end
+			aipoptrace()
+			return false
+		end
 		-- determine if this can purchase this item
 		if (not ResourceAmount_Has( availableResources, unitCost )) then
 			aitrace("Not enough moola - locking resources!")
@@ -673,7 +757,9 @@ function strategy_tech_purchase.do_purchase( availableResources )
 			Request_Construction( s_selfplayer, TGROUP_Tech, TPRIORITY_Tech, pbg, demandTbl.buildstyle )
 		elseif (demandTbl.demand_type == DEMAND_Upgrade) then
 			Request_Production( s_selfplayer, TGROUP_Tech, TPRIORITY_Tech, PITEM_Upgrade, pbg )
+			if t_on() and type(EliteAI_EnergyNote) == "function" then EliteAI_EnergyNote( "tech", unitCost ) end   -- the purchase book (energy)
 			if is_tier then
+
 				local st = EliteAI_T.st[T.k]
 				if st and not st.started then
 					st.started = now

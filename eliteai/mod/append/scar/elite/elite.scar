@@ -32,7 +32,8 @@ local function variant_show()
 	if not ok then _log("PCALLERR scar_variant", tostring(err)); EliteAI_VariantShows = 0 end
 end
 
--- mechanics.ai (combat mechanics of the director) orders: 4 = attack the squad with world id x; 5 = capture the strategic
+-- mechanics.ai (combat mechanics of the director) orders: 4 = attack the squad with world id x (0.3: its building when it
+-- sits in one); 5 = capture the strategic
 -- point at x,y,z (the entity is looked up near the position); 100+k = squad ability k at x,y,z; 200+k = squad ability k on
 -- the squad with world id x. k = index in EliteAI_MECH_ABILITIES - THE SAME NUMBERING as ABIL in mechanics.ai (keep in sync).
 -- Ability ids are resolved lazily (World_GetPropertyBagGroupID, as unitstats v3) - an unused race's abilities are never looked up.
@@ -49,6 +50,15 @@ EliteAI_MECH_ABILITIES = {
 	[10] = "ability/pvp/race_ork/stormboys/ork_jump_target_stormboy",
 	[11] = "ability/pvp/race_tyranid/ravener/tyr_jump_target_ravener",
 	[12] = "ability/pvp/race_eldar/autarch/eld_autarch_jump",
+	-- 13-19 (mechanics.ai 0.3, Garrison): grenades thrown at the position of a building with an enemy squad inside
+	-- (position-targeted like the jumps; some need a squad upgrade - without it the engine ignores the order)
+	[13] = "ability/pvp/race_marine/scout/sm_damage_aoe_grenade",
+	[14] = "ability/pvp/race_imperial_guard/devils/ig_grenade_launch_triple",
+	[15] = "ability/pvp/race_imperial_guard/kasrkin/ig_damage_aoe_grenade",
+	[16] = "ability/pvp/race_eldar/guardian/eld_damage_aoe_grenade",
+	[17] = "ability/pvp/race_ork/stikkbomma/ork_damage_aoe_stikkbomb",
+	[18] = "ability/pvp/race_chaos/cultist/csm_knockback_aoe_grenades",
+	[19] = "ability/pvp/race_grey_knights/storm_troopers/gk_storm_trooper_grenade",
 }
 EliteAI_MechAbilityIDs = {}
 local function mech_ability(k)
@@ -89,9 +99,20 @@ local function mech_order(sg, sq, m, x, y, z)
 		local tsq = Squad_IsValid and Squad_IsValid(tid) and Squad_FromWorldID(tid)
 		if not tsq or Squad_Count(tsq) == 0 then return end
 		if m == 4 then
-			local tg = SGroup_CreateIfNotFound("eliteai_mech_target")
-			SGroup_Clear(tg); SGroup_Add(tg, tsq)
-			Cmd_AttackSGroup(sg, tg)                                          -- command.scar:685
+			-- mechanics.ai 0.3 (Garrison): a squad inside a building is attacked through the building it holds
+			-- (Squad_IsInHoldEntity / Squad_GetHoldEntity: groups.scar:1891-1892, SGroup_GetGarrisonedBuildingEntity)
+			local hold = Squad_IsInHoldEntity and Squad_GetHoldEntity and Squad_IsInHoldEntity(tsq) and Squad_GetHoldEntity(tsq)
+			if hold then
+				local eg = EGroup_CreateIfNotFound("eliteai_mech_hold")
+				EGroup_Clear(eg); EGroup_Add(eg, hold)
+				Cmd_AttackEGroup(sg, eg)                                      -- command.scar:709
+				EliteAI_MechHoldAtt = (EliteAI_MechHoldAtt or 0) + 1
+				if EliteAI_MechHoldAtt <= 3 then _log("MECH attack building of squad", x, "x" .. EliteAI_MechHoldAtt) end
+			else
+				local tg = SGroup_CreateIfNotFound("eliteai_mech_target")
+				SGroup_Clear(tg); SGroup_Add(tg, tsq)
+				Cmd_AttackSGroup(sg, tg)                                      -- command.scar:685
+			end
 		else
 			local abid = mech_ability(m - 200)
 			if abid then Cmd_Ability(sg, abid, tsq, false) end              -- command.scar:1863 (squad target -> Cmd_SquadAbilitySquad)

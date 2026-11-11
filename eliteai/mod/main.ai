@@ -4,7 +4,7 @@
 -- (all | none | normal | <player ids, e.g. 1000>) so one match can pit the new logic against Elite's (A/B).
 -- Every tuning value can be overridden from EliteAI.ini [Lua] without rebuilding (EliteAI.num("Key", default)).
 
-EliteAI = { version = "0.9" }
+EliteAI = { version = "0.12" }
 
 -- 0.9 (10.11): THREE VARIANTS for testers to compare, chosen in the skirmish menu by the computer slot's difficulty:
 -- Easy = "NEW AI A", Normal = "NEW AI B", Hard = "NEW AI C" (EliteAI.dll relabels them); Expert = Elite's AI, untouched.
@@ -18,21 +18,29 @@ EliteAI = { version = "0.9" }
 -- while power piles up and req is short for the next tier / a power unit, a cheap squad is reinforced by rule 1 = only weak
 -- and out of a fight, 2 = weak (in a fight too), 3 = in a fight or below Reinf_FullHp; share of the req income 0.2 / 0.35 / 0.5.
 -- overridden in EliteAI.ini [Lua] (ini > variant > default in the code).
+-- 0.11 (11.11, the scene polygon): Conf_Garrison - an enemy squad in a building next to our point (mod/mechanics.ai 0.3):
+-- 1 = assault only with an anti-garrison tool, 2 = by strength, 3 = bypass unless a tool and a margin; Conf_AddonVsUnit -
+-- squad upgrades against the next unit (strategy_unit_purchase.ai "energy"): 1 = the unit first, 2 = balanced, 3 = as Elite.
+-- The director takes the goal of mechanics.ai (EliteAI.goal: the next point for an army that stood at its target, the
+-- building of a garrison, the hold spot) before Elite's best target. reports/newai_1110/TECH_RU.md section 10.
+-- 0.12 (11.11, the verification of newai-10, TECH_RU.md 10.10 / 11): the order book (EliteAI_OrderGate below) - every order of
+-- the director and of mechanics.ai passes one gate, so a squad is not given the same order again while it is on its way
+-- (the scene a: three carnifexes got an attack-move every 3 s for 20 s and moved a metre each time).
 --   RetreatHP 0.35 (squad goes home below this health share), RetreatSecs 40, AggrMin 0.75 (floor of Military_SetSquadAggression),
 --   AttackTargets 2, Inertia 4, TargetTicks 450, GatherR 30, KiteChance/KiteRatio x1 - identical in A, B, C
 EliteAI_VARIANTS = {
 	A = { name = "rules A", RetreatHP = 0.35, RetreatSecs = 40, AggrMin = 0.75, AttackTargets = 2, Inertia = 4, TargetTicks = 450,
 		GatherR = 30, KiteChance = 1, KiteRatio = 1,
-		Mech_Purchase = 1, Mech_FocusFire = 1, Mech_ArmyRetreat = 1, Mech_PunishTurn = 1, Mech_PreRetreat = 1, Mech_MeleeTie = 1, Mech_Repair = 1, Mech_RaceAbilities = 1, Mech_ArmyRoles = 1,
-		Conf_MeleeApproach = 1, Conf_FocusLeave = 1, Conf_Chase = 1, Conf_Split = 1, Conf_Decap = 1, Conf_HoldVP = 1, Conf_TieVsFocus = 1, Conf_RepairVsFight = 1, Conf_PreEngage = 1, Conf_RunnerFight = 1, Conf_AbilitySave = 1, Conf_TechVsArmy = 1, Conf_ReinforceVsSave = 1 },
+		Mech_Purchase = 1, Mech_FocusFire = 1, Mech_ArmyRetreat = 1, Mech_PunishTurn = 1, Mech_PreRetreat = 1, Mech_MeleeTie = 1, Mech_Repair = 1, Mech_RaceAbilities = 1, Mech_ArmyRoles = 1, Mech_Idle = 1, Mech_Garrison = 1,
+		Conf_MeleeApproach = 1, Conf_FocusLeave = 1, Conf_Chase = 1, Conf_Split = 1, Conf_Decap = 1, Conf_HoldVP = 1, Conf_TieVsFocus = 1, Conf_RepairVsFight = 1, Conf_PreEngage = 1, Conf_RunnerFight = 1, Conf_AbilitySave = 1, Conf_TechVsArmy = 1, Conf_ReinforceVsSave = 1, Conf_Garrison = 1, Conf_AddonVsUnit = 1 },
 	B = { name = "rules B", RetreatHP = 0.35, RetreatSecs = 40, AggrMin = 0.75, AttackTargets = 2, Inertia = 4, TargetTicks = 450,
 		GatherR = 30, KiteChance = 1, KiteRatio = 1,
-		Mech_Purchase = 1, Mech_FocusFire = 1, Mech_ArmyRetreat = 1, Mech_PunishTurn = 1, Mech_PreRetreat = 1, Mech_MeleeTie = 1, Mech_Repair = 1, Mech_RaceAbilities = 1, Mech_ArmyRoles = 1,
-		Conf_MeleeApproach = 2, Conf_FocusLeave = 2, Conf_Chase = 2, Conf_Split = 2, Conf_Decap = 2, Conf_HoldVP = 2, Conf_TieVsFocus = 2, Conf_RepairVsFight = 2, Conf_PreEngage = 2, Conf_RunnerFight = 2, Conf_AbilitySave = 2, Conf_TechVsArmy = 2, Conf_ReinforceVsSave = 2 },
+		Mech_Purchase = 1, Mech_FocusFire = 1, Mech_ArmyRetreat = 1, Mech_PunishTurn = 1, Mech_PreRetreat = 1, Mech_MeleeTie = 1, Mech_Repair = 1, Mech_RaceAbilities = 1, Mech_ArmyRoles = 1, Mech_Idle = 1, Mech_Garrison = 1,
+		Conf_MeleeApproach = 2, Conf_FocusLeave = 2, Conf_Chase = 2, Conf_Split = 2, Conf_Decap = 2, Conf_HoldVP = 2, Conf_TieVsFocus = 2, Conf_RepairVsFight = 2, Conf_PreEngage = 2, Conf_RunnerFight = 2, Conf_AbilitySave = 2, Conf_TechVsArmy = 2, Conf_ReinforceVsSave = 2, Conf_Garrison = 2, Conf_AddonVsUnit = 2 },
 	C = { name = "rules C", RetreatHP = 0.35, RetreatSecs = 40, AggrMin = 0.75, AttackTargets = 2, Inertia = 4, TargetTicks = 450,
 		GatherR = 30, KiteChance = 1, KiteRatio = 1,
-		Mech_Purchase = 1, Mech_FocusFire = 1, Mech_ArmyRetreat = 1, Mech_PunishTurn = 1, Mech_PreRetreat = 1, Mech_MeleeTie = 1, Mech_Repair = 1, Mech_RaceAbilities = 1, Mech_ArmyRoles = 1,
-		Conf_MeleeApproach = 3, Conf_FocusLeave = 3, Conf_Chase = 3, Conf_Split = 3, Conf_Decap = 3, Conf_HoldVP = 3, Conf_TieVsFocus = 3, Conf_RepairVsFight = 3, Conf_PreEngage = 3, Conf_RunnerFight = 3, Conf_AbilitySave = 3, Conf_TechVsArmy = 3, Conf_ReinforceVsSave = 3 },
+		Mech_Purchase = 1, Mech_FocusFire = 1, Mech_ArmyRetreat = 1, Mech_PunishTurn = 1, Mech_PreRetreat = 1, Mech_MeleeTie = 1, Mech_Repair = 1, Mech_RaceAbilities = 1, Mech_ArmyRoles = 1, Mech_Idle = 1, Mech_Garrison = 1,
+		Conf_MeleeApproach = 3, Conf_FocusLeave = 3, Conf_Chase = 3, Conf_Split = 3, Conf_Decap = 3, Conf_HoldVP = 3, Conf_TieVsFocus = 3, Conf_RepairVsFight = 3, Conf_PreEngage = 3, Conf_RunnerFight = 3, Conf_AbilitySave = 3, Conf_TechVsArmy = 3, Conf_ReinforceVsSave = 3, Conf_Garrison = 3, Conf_AddonVsUnit = 3 },
 }
 
 -- C functions from EliteAI.dll: global, or (AI scripts run in their own environment) via the shared string table
@@ -193,13 +201,93 @@ local ORD_MOVE, ORD_ATTACK, ORD_RETREAT = 1, 2, 3
 local _order = eliteai_order or (string and string.eliteai_order)
 EliteAI.retreating, EliteAI.orders, EliteAI.dir_squads = {}, 0, 0
 
-local function order(sq, pos, mode)
-	if not _order or not sq or not pos then return end
-	local ok, err = pcall(function() _order(Squad_GetGameID(sq), pos.x, pos.y, pos.z, mode) end)
-	if not ok then perr("order", err) end
-	if ok then EliteAI.orders = EliteAI.orders + 1 end
-end
 local function dist(a, b) return math.sqrt((a.x - b.x) ^ 2 + (a.z - b.z) ^ 2) end
+
+-- 0.12 THE ORDER BOOK: one gate for every order to a squad, whoever gives it (the director here, the mechanics of
+-- mechanics.ai through morder). Found by the polygon (scene a, newai-10): with a squad under fire somewhere the director's rule
+-- "a fight is on: everybody goes there" gave the whole army the same attack-move on every tick (3 s); the carnifexes, for a
+-- reason on the engine's side, dropped it within a second each time - 7 orders in 20 s, a metre of movement per order. And the
+-- Idle logic and the director sent one squad to two places in turn. The rules (numbers per squad id between ticks, nothing else):
+--  * "already on its way": the same order (attack-move / move to a spot within OrderSameR of the last one; attack on the same
+--    squad) is not repeated for OrderMoveSecs / OrderAttackSecs; a squad that stands within OrderArriveR of the spot needs none.
+--  * no effect: a squad that still stands quiet (the Idle clock of mechanics.ai: did not move, was not hit, did not fire) where
+--    it stood when its attack-moves began OrderStuckAfter (6) seconds ago gets a plain move instead ("MECH Order ... -> move":
+--    in the scene a plain move worked where the attack-move did not), and the attack-move again once it has moved OrderProgressD.
+--  * a ceiling: at most OrderBurst (3) marching orders (attack-moves; moves of the director and of the Idle logic) while the
+--    squad stays within OrderProgressD of where the series began, per OrderWindow seconds - whatever the targets (the
+--    polygon's order_loop is 4 of a kind in 30 s without 8 m of movement).
+--  * one owner: after an order of the Idle logic the director's march orders to that squad wait OrderOwnerHold seconds (a
+--    fight - rule 1 - and every order of the mechanics pass).
+-- Retreats, captures and abilities keep their own timers and pass. OrderGate=0 switches the gate off.
+EliteAI.ord, EliteAI.sqpos, EliteAI.idle_for = {}, {}, {}
+EliteAI.ord_st = { sent = 0, skip = 0, alt = 0, cap = 0, held = 0 }
+function EliteAI_OrderGate(id, mode, x, z, now, owner, urgent)
+	local st = EliteAI.ord_st
+	if id == nil or num("OrderGate", 1) < 1 then st.sent = st.sent + 1; return mode end
+	local r = EliteAI.ord[id]
+	if mode ~= 1 and mode ~= 2 and mode ~= 4 then                           -- retreat, capture, abilities: their own timers
+		if r then r.cls, r.tid, r.x, r.z, r.hold = nil, nil, nil, nil, nil end -- the next order to a spot is a new one (the ceiling still counts)
+		st.sent = st.sent + 1
+		return mode
+	end
+	if not r then r = { t = -1000, n = 0, at = now }; EliteAI.ord[id] = r end
+	if owner == "dir" and not urgent and r.hold and now < r.hold then st.held = st.held + 1; return nil end
+	local hold = (owner == "idle") and (now + num("OrderOwnerHold", 9)) or nil
+	if mode == 4 then                                                       -- attack the squad with id x
+		if r.cls == 4 and r.tid == x and now - r.t < num("OrderAttackSecs", 10) then st.skip = st.skip + 1; return nil end
+		r.cls, r.tid, r.x, r.z, r.t, r.hold = 4, x, nil, nil, now, hold
+		st.sent = st.sent + 1
+		return mode
+	end
+	if x == nil or z == nil then return nil end
+	local p = EliteAI.sqpos[id]                                             -- where the squad is this tick ({ x, z }; nil = unknown)
+	local pd = num("OrderProgressD", 8)
+	if p and math.sqrt((p.x - x) ^ 2 + (p.z - z) ^ 2) <= num("OrderArriveR", 6) then st.skip = st.skip + 1; return nil end   -- it is there
+	-- the series: where the squad stood when the orders to a spot began; it starts anew once the squad has moved or the window is over
+	local unstuck = false
+	if r.ax == nil or now - r.at > num("OrderWindow", 30) then
+		r.ax, r.az, r.at, r.n, r.alt = p and p.x, p and p.z, now, 0, nil
+	elseif p and math.sqrt((p.x - r.ax) ^ 2 + (p.z - r.az) ^ 2) > pd then
+		unstuck = (r.alt == true)
+		r.ax, r.az, r.at, r.n, r.alt = p.x, p.z, now, 0, nil
+	end
+	local same = (r.cls == mode and r.x ~= nil and math.sqrt((r.x - x) ^ 2 + (r.z - z) ^ 2) <= num("OrderSameR", 10))
+	-- no effect: the series began OrderStuckAfter seconds ago with an attack-move, and the squad stands quiet where it began
+	-- (whatever the spots were: the fight the army is called to may move)
+	local stuck = (p ~= nil and r.ax ~= nil and r.n >= 1 and r.cls == 2 and math.sqrt((p.x - r.ax) ^ 2 + (p.z - r.az) ^ 2) <= num("OrderStuckD", 4)
+		and (EliteAI.idle_for[id] or 0) >= num("OrderStuckSecs", 4) and now - r.at >= num("OrderStuckAfter", 6))
+	local alt = (mode == 2 and stuck and not r.alt)
+	if same and not alt and not unstuck and now - r.t < num("OrderMoveSecs", 12) then st.skip = st.skip + 1; return nil end
+	-- (the ceiling is for marches: a plain move of the mechanics - away from a melee squad, out from under a garrison's
+	-- windows - is never held back by it)
+	if r.n >= num("OrderBurst", 3) and (mode == 2 or owner == "dir" or owner == "idle") then
+		st.cap = st.cap + 1
+		if not r.said or now - r.said >= 30 then
+			r.said = now
+			log("MECH", "Order", id, "no effect:", r.n, "orders to a spot in", string.format("%.0f s", now - r.at), "without", pd, "m of movement - none until the window is over")
+		end
+		return nil
+	end
+	local send = mode
+	if alt then
+		send, r.alt = 1, true
+		st.alt = st.alt + 1
+		log("MECH", "Order", id, "attack-move had no effect (stands quiet", string.format("%.0f s", EliteAI.idle_for[id] or 0), "): -> move", string.format("to %.0f %.0f", x, z), "by", tostring(owner))
+	end
+	r.cls, r.tid, r.x, r.z, r.t, r.n, r.hold = mode, nil, x, z, now, r.n + 1, hold
+	r.sx, r.sz = p and p.x, p and p.z
+	st.sent = st.sent + 1
+	return send
+end
+-- the director's order: u = an entry of its army list ({ sq, id, pos }, valid this tick), through the order book.
+-- (0.12: no pcall and no engine call here - the id is read in the army scan, the DLL queue only stores five numbers)
+local function order(u, pos, mode, urgent)
+	if not _order or not u or not u.id or not pos then return end
+	local m = EliteAI_OrderGate(u.id, mode, pos.x, pos.z, EliteAI.now or 0, "dir", urgent)
+	if not m then return end
+	_order(u.id, pos.x, pos.y, pos.z, m)
+	EliteAI.orders = EliteAI.orders + 1
+end
 
 -- Elite's combat tasks would take the squads back: none for a directed AI (snipers, capture etc. stay Elite's)
 local Elite_MilitaryExecute = strategy_military.execute
@@ -233,6 +321,10 @@ function EliteAI_Director()
 		if not okq then perr("dir_sq", eq) end
 	end
 	EliteAI.dir_squads = table.getn(army)
+	-- 0.12: the order book reads the time and the positions of this tick (numbers only)
+	EliteAI.now, EliteAI.sqpos = now, {}
+	for _, u in ipairs(army) do EliteAI.sqpos[u.id] = { x = u.pos.x, z = u.pos.z } end
+	for id, r in pairs(EliteAI.ord) do if now - r.t > 120 then EliteAI.ord[id] = nil end end   -- squads that are gone (each entry on its own)
 	-- badly hurt squads go home (once; they come back to the army after RetreatSecs)
 	local active = {}
 	for _, u in ipairs(army) do
@@ -240,7 +332,7 @@ function EliteAI_Director()
 		if r and now - r < num("RetreatSecs", 40) then
 			-- still on the way / healing
 		elseif u.hp < num("RetreatHP", 0.35) then
-			EliteAI.retreating[u.id] = now; order(u.sq, u.pos, ORD_RETREAT)
+			EliteAI.retreating[u.id] = now; order(u, u.pos, ORD_RETREAT, true)
 		else
 			EliteAI.retreating[u.id] = nil; table.insert(active, u)
 		end
@@ -251,12 +343,19 @@ function EliteAI_Director()
 	-- 1) a fight is on: everybody goes there (help, don't trickle)
 	for _, u in ipairs(active) do
 		if u.hit then
-			for _, v in ipairs(active) do order(v.sq, u.pos, ORD_ATTACK) end
+			-- (0.12: the order book repeats it to a squad only when the fight has moved or after OrderMoveSecs)
+			for _, v in ipairs(active) do order(v, u.pos, ORD_ATTACK, true) end
 			EliteAI.phase = "fight"; return
 		end
 	end
 	-- 2) no fight: the target, as one army
-	local target = EliteAI.best_pos                              -- {x, y, z}: dist() and order() read only the fields
+	local target, tkey = EliteAI.best_pos, EliteAI.best_key      -- {x, y, z}: dist() and order() read only the fields
+	-- 0.11: the goal of mechanics.ai first while it is fresh (numbers only: { x, y, z, key, kind, t }) - the next point for an
+	-- army that stood at its target, the building of the Garrison pattern, the hold spot in front of it
+	local goal = EliteAI.goal
+	if goal and goal.x and goal.z and now - (goal.t or -1000) <= num("Mech_GoalSecs", 60) then
+		target, tkey = goal, "goal " .. tostring(goal.kind) .. " " .. tostring(goal.key)
+	end
 	if not target then return end
 	local cx, cz = 0, 0
 	for _, u in ipairs(active) do cx = cx + u.pos.x; cz = cz + u.pos.z end
@@ -268,11 +367,14 @@ function EliteAI_Director()
 	if spread > gr then                                          -- gather on the squad that is closest to the target
 		local lead = active[1]
 		for _, u in ipairs(active) do if dist(u.pos, target) < dist(lead.pos, target) then lead = u end end
-		for _, u in ipairs(active) do if u ~= lead and dist(u.pos, lead.pos) > gr * 0.6 then order(u.sq, lead.pos, ORD_MOVE) end end
+		for _, u in ipairs(active) do if u ~= lead and dist(u.pos, lead.pos) > gr * 0.6 then order(u, lead.pos, ORD_MOVE) end end
 		EliteAI.phase = "gather"
-	elseif EliteAI.phase ~= "attack" or now - (EliteAI.attack_t or 0) > 12 or EliteAI.attack_mp ~= EliteAI.best_key then
-		for _, u in ipairs(active) do order(u.sq, target, ORD_ATTACK) end
-		EliteAI.phase, EliteAI.attack_t, EliteAI.attack_mp = "attack", now, EliteAI.best_key
+	else
+		-- 0.12: every tick, per squad - the order book lets it through when the target is new for that squad or OrderMoveSecs
+		-- (12 s, the old period of the whole army) have passed since its last order there
+		for _, u in ipairs(active) do order(u, target, ORD_ATTACK) end
+		if EliteAI.phase ~= "attack" or EliteAI.attack_mp ~= tkey then EliteAI.attack_t = now end
+		EliteAI.phase, EliteAI.attack_mp = "attack", tkey
 	end
 end
 

@@ -1,0 +1,1 @@
+- New AI 10: idle squads rejoin the army, no order loops, reacts to enemies garrisoned on points (assault with grenades, hold or bypass), spends floating power on tech, upgrades no longer eat the money for the next unit.
