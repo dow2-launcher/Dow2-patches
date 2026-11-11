@@ -43,7 +43,15 @@
 --    then "the army" is at our HQ; a grenade squad farther than GarGrenR walks up to throw (b2: the devils stood 37 m off,
 --    no grenade in 120 s); a squad that is a tool against the garrison is no runner while the garrison is stormed or held.
 
-EliteAI_MECH_VERSION = "0.5"
+-- 0.6 (11.11, the verification of newai-12 and Orca's match against a human - TECH_RU.md 13.10 / 14):
+--  * RaceAbilities: a call-in (a global that brings squads for req) is a unit bought through another channel - it goes when it
+--    gives more than the plan's unit for the same money (a fight, a raid at our base, a bargain), the save state holds nothing
+--    by itself, no hold lasts for ever; a targeted ability without a target and the squad-targeted buffs are no candidates.
+--  * ArmyRoles: the runner is not sent to die - no runner for a small army (Conf_RunnerArmy), no hero after the opening, no
+--    target where the enemy is, just was or stands next to the way, a target a runner was lost at is closed, our lost points
+--    near the army first.
+
+EliteAI_MECH_VERSION = "0.6"
 
 -- every tunable (EliteAI.ini [Lua] Mech_<Key> overrides); metres and seconds of game time; "strength" = health points
 -- (a squad ~ 300-900, a tank ~ 1500+), vehicles weighted by VehW
@@ -113,9 +121,17 @@ local MP = {
 	RepairSecs = 30,     -- an assignment is re-made after this
 	-- RaceAbilities (player/global abilities through Elite's own player_abilities.ai)
 	AbilBudget = 60,     -- weight of BUDGET_PlayerAbility (Elite: 25 of ~265 -> ~9 % of the income)
-	AbilSaveHold = 1,    -- 1 = spawn abilities wait while the reinforcement budget saves req (EliteAI_R.save); 0 = cast as before
-	AbilUnitHold = 1,    -- 0.5: 1 = an ability that takes req / power waits for the unit the plan waits for (Conf_AbilityVsUnit); 0 = as before
-	AbilUnitEta = 40,    -- Conf_AbilityVsUnit rule 3: a unit farther than this (s, at the income) is "far"
+	AbilUnitHold = 1,    -- 0.5: 1 = an ability that takes req / power and the unit the plan waits for: Conf_AbilityVsUnit decides; 0 = nothing is held
+	AbilUnitEta = 40,    -- Conf_AbilityVsUnit rules 2 / 3: a unit farther than this (s, at the income) is "far" (a call-in that arrives at the HQ goes)
+	AbilHoldMax = 90,    -- 0.6: an ability held this long without a break while it could be cast goes all the same (nothing is held for ever) ...
+	AbilHoldGap = 15,    -- ... a hold that was interrupted for this long starts anew
+	AbilBargainK = 1.3,  -- 0.6: a call-in worth this many times its req (RA_WORTH) is the better unit - it goes
+	AbilFightLo = 0.6,   -- 0.6 Conf_AbilityVsUnit: a call-in goes into a fight where we weigh at least this share of the enemy in contact ...
+	AbilFightHi = 1.8,   -- ... and, rule 1, at most this (a fight that is won anyway: the req stays with the unit)
+	AbilRaidR = 45,      -- 0.6 "defend": enemy squads within this distance of our HQ ...
+	AbilRaidPointR = 25, -- ... or of a point of ours they are taking / of a power point of ours,
+	AbilRaidFriendR = 30,-- with no squad of ours within this distance,
+	AbilRaidMax = 2,     -- and at most this many of them (a raid; an army at our base is the army's business)
 	AbilDemand = 30,     -- demand of an ability we want now (Elite adds -5..5; > 1 is needed)
 	AbilSpawnDemand = 12,-- demand of spawn/reinforcement abilities out of a fight
 	AbilFightSecs = 8,   -- "in a fight": enemy contact within this many seconds
@@ -132,6 +148,14 @@ local MP = {
 	RunnerAvoidSecs = 45,
 	RunnerVpBonus = 30,  -- victory points count this many metres closer
 	RunnerReissue = 20,  -- the capture order is repeated after this (safety)
+	RunnerOpenSecs = 150,-- 0.6: the opening - until then a small army has its runner and a hero may be one (nobody stands in the field yet)
+	RunnerMinArmy = 4,   -- 0.6 Conf_RunnerArmy: an army of at most this many squads is small (rule 3: one more)
+	RunnerSeenSecs = 45, -- 0.6: an enemy point where an enemy stood within RunnerPointR during the last ... seconds is watched: no target
+	RunnerPathR = 35,    -- 0.6: no target whose way (a straight line) passes within this distance of an enemy force:
+	RunnerPathK = 1.0,   -- ... two squads or more, or one that weighs at least this many times the runner
+	RunnerDeadSecs = 150,-- 0.6: the target a runner was lost on its way to is nobody's target for this long
+	RunnerOwnR = 90,     -- 0.6: a point that was ours within this distance of the army comes first ...
+	RunnerOwnBonus = 60, -- ... it counts this many metres closer (the runner's choice and the army's next goal)
 	EliteCapturers = 1,  -- Elite's own capture tasks left (s_personality.max_num_capturers; Elite: 8)
 	SplitAfter = 6,      -- the core splits to the points this long after the last enemy contact ...
 	SplitWindow = 30,    -- ... but only within this time after a fight
@@ -212,6 +236,13 @@ local MELEE_HEROES = { "sm_force_commander", "ork_warboss", "csm_chaos_lord", "o
 local RUNNER_KEYS = { "sm_scout_marine", "ork_gretchin", "eld_ranger", "eld_guardian", "csm_cultist", "ig_guardsmen_squad",   -- cheap/fast capturers first
 	"tyr_hormagaunt", "tyr_termagaunt", "tau_pathfinders", "tau_kroot", "gk_strike_squad" }
 local SPAWN_KEYS = { "spawn", "without_number", "drop_pod", "respawn" }
+-- 0.6 RaceAbilities, the races' data: a global with one of SPAWN_KEYS that costs req is a call-in (it brings squads; all races:
+-- sm_spawn_drop_pod / terminators / dreadnought, ork_spawn_kommando_squad / gretchin, eld_spawn_autarch / warpspiders /
+-- seercouncil, csm_spawn_terminators / chosen_plaguemarines, ig_spawn_stormtroopers / banewolf / leman_russ, tyr_spawn_*,
+-- gk_spawn_crusaders / paladins / land_raider, tau_spawn_broadside / crisis_team / stealthsuits; the cost and whether it is
+-- targeted come from the engine). RA_WORTH = { key, req worth of what it brings } where that is known to be more than its
+-- price: "without number" drops a hormagaunt and a termagaunt brood (s12: squads 8 -> 10, pop +14) for 300 req
+local RA_WORTH = { { "tyr_spawn_without_number", 520 } }
 -- 0.3 Garrison: who is good against a squad in a building - reports/tactics_kb/kb.yaml threats.garrisoned_enemy.responses and
 -- the table of KB_RU.md section T2 (the enemy sits in a building): { end of the sbps name, kind, grenade ability or false, weight as a tool }.
 -- kind: "flame" = flamers / fire (bonus against a garrison, they simply attack the building), "gren" = a grenade thrown at
@@ -239,8 +270,9 @@ local ORD_AMOVE = 2                                                          -- 
 local M = { names = {}, cls = {}, own = {}, en = nil, en_prev = {}, pts = {}, pts_by_key = {}, hqs = {}, conf = {},
 	tie = {}, repair = {}, jumped = {}, runner = {}, bad_pt = {}, last_scan = -1, last_stats = 0, last_contact = nil, said = {},
 	cap = {}, idle = {}, norole = {}, gren = {}, gar_ord = {},                -- 0.3: can capture, idle clocks, role bans, grenade / assault order times
+	pt_seen = {}, pt_ours = {}, dead_pt = {}, exists = {},                    -- 0.6: the memory of the points, targets a runner was lost at, squads alive
 	nocap = {}, capfail = {},                                                 -- 0.3: squads that twice stood idle as runners without ever capturing
-	st = { focus = 0, focus_sw = 0, retreat = 0, pre = 0, punish = 0, tie = 0, jump = 0, repair = 0, kite = 0, abil = 0, abil_held = 0, abil_over = 0,
+	st = { focus = 0, focus_sw = 0, retreat = 0, pre = 0, punish = 0, tie = 0, jump = 0, repair = 0, kite = 0, abil = 0, abil_held = 0, abil_over = 0, abil_callin = 0, abil_notgt = 0,
 		conf = 0, runner = 0, split = 0, decap = 0, orders = 0, idle = 0, idle_role = 0, goal = 0, gar = 0, gar_assault = 0, gar_hold = 0, gar_bypass = 0, gren = 0 } }
 EliteAI.mech = M
 
@@ -439,11 +471,15 @@ end
 -- our squads through the AI side, every tick: sbps name once per squad id (AISquad -> PBG -> name: strategy_addon.ai:188,
 -- strategy_unit_purchase.ai:104) and the melee flags (tactics.ai:280, 327)
 local function scan_own(army)
-	local own = {}
+	local own, exists = {}, {}
 	local n = Military_SquadTotalCount(s_selfplayer)
 	for i = 0, n - 1 do
 		local aisq = Military_GetAISquadAtIndex(s_selfplayer, i)
-		local sq = aisq and not AISquad_InCaptureTask(aisq) and AISquad_ConvertToSimSquad(aisq)   -- as main.ai 0.8 (hang fix)
+		-- 0.6: every squad that is alive, also one in Elite's capture task (M.exists: "runner gone" = taken by that task, or dead?).
+		-- AISquad_ConvertToSimSquad on such a squad: strategy_unit_purchase.ai r_models does it every units tick (in game since s17)
+		local sq0 = aisq and AISquad_ConvertToSimSquad(aisq)                     -- nil for a squad that is not spawned
+		if sq0 and Squad_Count(sq0) > 0 then exists[Squad_GetGameID(sq0)] = true end
+		local sq = sq0 and not AISquad_InCaptureTask(aisq) and sq0                -- as main.ai 0.8 (hang fix)
 		if sq and Squad_Count(sq) > 0 then
 			local id = Squad_GetGameID(sq)
 			if M.names[id] == nil then
@@ -460,7 +496,7 @@ local function scan_own(army)
 
 	end
 	for _, u in ipairs(army) do if M.names[u.id] == nil then M.names[u.id] = "" end end
-	M.own = own
+	M.own, M.exists = own, exists
 	cap_check(army)
 end
 
@@ -504,7 +540,7 @@ local function scan_points()
 			return
 		end
 		if t ~= MPT_VictoryPoint and t ~= MPT_PowerPoint and t ~= MPT_RequisitionPoint then return end
-		local e = { x = p.x, y = p.y, z = p.z, vp = (t == MPT_VictoryPoint), owner = team,
+		local e = { x = p.x, y = p.y, z = p.z, vp = (t == MPT_VictoryPoint), pow = (t == MPT_PowerPoint), owner = team,
 			dbase = Military_GetMilitaryPointDistanceToBase(s_selfplayer, mp),
 			enemy_cap = Military_IsMilitaryPointBeingCapturedByEnemy(s_selfplayer, mp),
 			us_cap = Military_IsMilitaryPointBeingCapturedByUs(s_selfplayer, mp) }
@@ -532,6 +568,16 @@ local function scan_points()
 	end
 	M.pts, M.pts_by_key, M.hqs = pts, byk, hqs
 	return pts
+end
+-- 0.6 the memory of the points (numbers by point key): when an enemy squad last stood within RunnerPointR of it (pt_seen), when
+-- it was last ours (pt_ours: a point that is not ours now and has an entry here was taken from us)
+local function points_memory(en, now)
+	local r = prm("RunnerPointR")
+	for _, p in ipairs(M.pts) do
+		if p.ours then M.pt_ours[p.key] = now end
+		local _, n = enemy_weight_near(en, p.x, p.z, r)
+		if n > 0 then M.pt_seen[p.key] = now end
+	end
 end
 -- Conf_Decap: a point on the enemy half - neutralise only, or capture fully (victory points: always fully)
 local function decap_only(p, en, now)
@@ -938,52 +984,128 @@ end
 -- spawn abilities: moderate at any time) and when Elite finds no clump, the biggest enemy clump in contact with the
 -- army is the target. Conf_AbilitySave: 1 = in a fight (spawns any time); 2 = damage abilities only on a real clump;
 -- 3 = whenever castable
+--
+-- 0.6 (TECH_RU.md 14) THE ABILITIES ARE PART OF THE GAME. s17 (newai-12): the tyranids cast no call-in in 13 minutes. A
+-- call-in (a global that brings squads for req: SPAWN_KEYS and a req cost - every race has them, 300-650 req) can be cast
+-- only in the ticks the bank holds its price, and those are the ticks a unit of the plan has its money; the "save" state
+-- (on for 434 of 690 s) made every spawn ability "no candidate" before the arbiter below ever saw it. But a call-in IS a
+-- unit, bought through another channel: it needs no HQ, it lands where the fight is, and it is paid in part with the red
+-- resource that lies idle otherwise ("without number": two broods for 300 req - s12, squads 8 -> 10). Now:
+--  * the save state holds nothing by itself; what is decided is "this ability or the unit the plan waits for", in one
+--    place (Conf_AbilityVsUnit below), and no hold lasts for ever (AbilHoldMax);
+--  * an ability goes when it gives more than the unit for the same money: a call-in that brings more than its price
+--    ("bargain", RA_WORTH), a call-in on a raid at our base / at a point of ours they are taking / at our power point with
+--    no squad of ours there ("defend"), a call-in into the fight the army is in ("fight": the squad is there now, the unit
+--    of the plan in a minute and a half), a call-in that arrives at the HQ while the unit is far ("unit_far"); or when the
+--    bank pays both (nothing is held then, as before);
+--  * a call-in never lands on a clump far from the army (Elite's own target): only on the clump in contact or the raid;
+--  * a targeted ability with nowhere to go is no candidate (was: chosen, "no target", and its cost locked off the budgets
+--    after this one, util/budget.ai:345 - a spore without a target took 350 req off the units budget of that tick);
+--  * a squad-targeted ability (the buffs: gk_buff_target_*, ork_buff_target_*, eld / sm / tyr_buff_target_damage ...) is no
+--    candidate either: neither Elite's nor Relic's PlayerAbility_CastOnTarget has a branch for it, and the engine has no
+--    Request_PlayerAbility* / Command_Player*Ability for a squad target (names of DOW2.exe) - "no target" every tick was
+--    all it ever did (Orca's match: gk_buff_target_damage x8 every 30 s);
+--  * a call-in that was cast counts as the unit bought (EliteAI_UnitCallIn of strategy_unit_purchase.ai: line "callin",
+--    the save state ends as with a unit, the wait for the plan's unit starts anew).
 local function ra_on() return EliteAI.on and mech_on("RaceAbilities") end
 local function ra_name(pbg) return string.lower(PBG_GetName(pbg) or "") end  -- player_abilities.ai:60
-local function ra_clump(en, cx, cz, army)                                     -- the biggest clump of enemies in contact
+local function ra_cost(pbg)                                                   -- req, power (player_abilities.ai:259)
+	local c = AIAbility_GetCost(s_self_modplayer, pbg)
+	return (c and c.requisition) or 0, (c and c.power) or 0
+end
+local function ra_worth(name, cr)                                             -- the req worth of what a call-in brings (RA_WORTH; else its own price)
+	for _, w in ipairs(RA_WORTH) do if string.find(name, w[1], 1, true) then return w[2] end end
+	return cr
+end
+-- the fight in numbers, once per tick (nothing but numbers is kept): M.clump = the biggest clump of enemies in contact with
+-- no squad of ours on it (friendly fire: the target of the damage abilities); M.clump_any = the biggest clump in contact
+-- whoever stands on it (a call-in lands among its own melee squads too - an army of hormagaunts has no other clump);
+-- M.fight = { ew, n, ow } - the enemy in contact around the army and our weight there; M.raid = enemy squads (AbilRaidMax at
+-- most) at our HQ, at a point of ours they are taking or at our power point, with no squad of ours within AbilRaidFriendR -
+-- where a call-in defends
+local function ra_clump(en, cx, cz, army, h)
 	local best, bw, bn
-	local cr, fr = prm("AbilClumpR"), prm("AbilFriendR")
+	local any, aw, an
+	local cr, fr, ar = prm("AbilClumpR"), prm("AbilFriendR"), prm("AbilR")
+	local ew, ecnt = 0, 0
 	for _, e in ipairs(en) do
-		if e.contact and e.d <= prm("AbilR") then
+		if e.contact and e.d <= ar then
+			ew, ecnt = ew + e.w, ecnt + 1
 			local w, n = enemy_weight_near(en, e.x, e.z, cr)
 			local friend = false
 			for _, u in ipairs(army) do if d2(u.pos.x, u.pos.z, e.x, e.z) <= fr then friend = true; break end end
 			if not friend and (not best or w > bw or (w == bw and e.id < best.id)) then best, bw, bn = e, w, n end
+			if not e.held and (not any or w > aw or (w == aw and e.id < any.id)) then any, aw, an = e, w, n end
 		end
 	end
 	if best then M.clump = { x = best.x, y = best.y, z = best.z, n = bn, w = bw, id = best.id } else M.clump = nil end
+	if any then M.clump_any = { x = any.x, y = any.y, z = any.z, n = an, w = aw, id = any.id } else M.clump_any = nil end
+	local ow = 0
+	for _, u in ipairs(army) do if d2(u.pos.x, u.pos.z, cx, cz) <= ar then ow = ow + weight_of(u) end end
+	M.fight = { ew = ew, n = ecnt, ow = ow }
+	local raid, rw
+	local rr, pr, ffr, rmax = prm("AbilRaidR"), prm("AbilRaidPointR"), prm("AbilRaidFriendR"), prm("AbilRaidMax")
+	for _, e in ipairs(en) do
+		if not e.held then
+			local kind = nil
+			if h and d2(e.x, e.z, h.x, h.z) <= rr then kind = "base"
+			else
+				for _, p in ipairs(M.pts or {}) do
+					if p.ours and (p.enemy_cap or p.pow) and d2(e.x, e.z, p.x, p.z) <= pr then kind = (p.enemy_cap and "point " or "power ") .. p.key; break end
+				end
+			end
+			if kind then
+				local friend = false
+				for _, u in ipairs(army) do if d2(u.pos.x, u.pos.z, e.x, e.z) <= ffr then friend = true; break end end
+				if not friend then
+					local w, n = enemy_weight_near(en, e.x, e.z, cr)
+					if n <= rmax and (not raid or w > rw or (w == rw and e.id < raid.id)) then
+						raid, rw = { x = e.x, y = e.y, z = e.z, n = n, w = w, id = e.id, kind = kind }, w
+					end
+				end
+			end
+		end
+	end
+	M.raid = raid
+end
+-- has Elite a clump it sees (the question of its own AITacticDemand_Artillery / PositionTargetFilter_EnemyClumpPosition,
+-- player-tactics.ai:131-160)? Asked at most once per tick; only the answer is kept
+local function ra_elite_target(now)
+	if M.ra_et ~= now then
+		M.ra_et, M.ra_ep = now, false
+		if type(AIPlayer_GetBestArtilleryPosition) == "function" then
+			M.ra_ep = (AIPlayer_GetBestArtilleryPosition(s_selfplayer, { threat_weighting = 1.0, importance_weighting = 0.5, must_be_seen = true, min_threat = 2 }) ~= nil)
+		end
+	end
+	return M.ra_ep
 end
 local function ra_demand(pbg, d)
 	local name, now = ra_name(pbg), World_GetGameTime()
+	local targeted = AIAbility_IsTargeted(pbg)
 	-- verify 10.11: a squad-targeted ability (buff on a squad) is never cast by Elite (PlayerAbility_CastOnTarget does
 	-- positions only) - a raised demand made it the top ability forever and held the money of ALL abilities (stand: ork camo,
-	-- eldar damage buff "no target" every few s). Such abilities keep Elite's own demand (player_abilities.ai:179, 196)
-	if AIAbility_IsTargeted(pbg) and not AIAbility_DoesTargetPosition(pbg) then return d end
+	-- eldar damage buff "no target" every few s). 0.6: no candidate at all (was: Elite's own demand, 5 +- 5 - chosen whenever
+	-- nothing else was, "no target" x9 every 30 s for the whole match)
+	if targeted and not AIAbility_DoesTargetPosition(pbg) then return 1 end
 	local fight = M.last_contact and now - M.last_contact <= prm("AbilFightSecs")
 	local spawn = has_key(name, SPAWN_KEYS)
+	local callin = spawn and (ra_cost(pbg)) > 0                                -- brings squads for req: a unit by another channel
+	if targeted then
+		-- 0.6: nowhere to go = no candidate (nothing is chosen, nothing is locked). A call-in goes to our fight or to a raid only
+		if not (M.clump ~= nil or (callin and (M.raid ~= nil or M.clump_any ~= nil)) or (not callin and ra_elite_target(now))) then
+			M.st.abil_notgt = (M.st.abil_notgt or 0) + 1
+			return 1
+		end
+		if callin and M.retreat and not M.raid then return 1 end               -- nothing is dropped into a fight the army is leaving
+	end
 	local r, dem = rule("AbilitySave"), 1
 	if r == 3 then dem = prm("AbilDemand")
+	elseif callin and targeted and M.raid then dem = prm("AbilDemand")        -- the raid at our base is the fight
 	elseif fight then
 		if r == 2 and not spawn and not has_key(name, { "buff" }) then
 			dem = (M.clump and M.clump.n >= prm("AbilMinClump")) and prm("AbilDemand") or 1
 		else dem = prm("AbilDemand") end
 	elseif spawn then dem = prm("AbilSpawnDemand") end
-	-- verify 10.11 s13: while the reinforcement budget saves req for a power unit / the next tier (strategy_unit_purchase.ai
-	-- EliteAI_R.save), a spawn ability (cheap bodies for req, as the damped refills) keeps Elite's demand: at t 1005 the bank
-	-- reached 440 req for a genestealer (350) and tyr_spawn_without_number took ~250 of it. Damage abilities are not held.
-	if dem > 1 and spawn and prm("AbilSaveHold") >= 1 and type(EliteAI_R) == "table" and EliteAI_R.save == true then
-		M.ra_said = M.ra_said or {}
-		local k = name .. "|hold"
-		if not M.ra_said[k] or now - M.ra_said[k] > 30 then
-			local need, what = EliteAI_R.need or 0, EliteAI_R.need_what or "-"
-			if type(EliteAI_ReinforceNeed) == "function" then need, what = EliteAI_ReinforceNeed() end
-			M.ra_said[k] = now; mlog("RaceAbilities", "hold", name, "save need", math.floor(need or 0), what or "-")
-		end
-		-- 0.5: no candidate at all (was: Elite's own demand, 5 +- 5 - above the 1 that is needed, so the "held" ability was cast
-		-- all the same: s16, 13:20 - "hold tyr_spawn_without_number save need 350 tyr_genestealer" and "cast" in the same tick)
-		M.st.abil_held = (M.st.abil_held or 0) + 1
-		return 1
-	end
 	if dem > 1 then
 		M.ra_said = M.ra_said or {}
 		if not M.ra_said[name] or now - M.ra_said[name] > 30 then M.ra_said[name] = now; mlog("RaceAbilities", "demand", name, dem, fight and "fight" or "quiet") end
@@ -998,47 +1120,93 @@ end
 -- its entry in Elite's demand table is dropped after CalcPlayerAbilityDemand, whatever demand function rated it, so it is not
 -- chosen and locks nothing (a failed cast would hold its cost off the budgets after it, util/budget.ai:345). With a bank that
 -- pays both nothing is held; an ability that costs neither req nor power (the red resource only) is never held.
--- Where the outcome is not clear the arbiter decides (A / B / C = 1 / 2 / 3):
---   1 - the unit first, always;
---   2 - an ability with a target goes: a damage (not spawn) ability while the army fights and the enemy clump in contact has
---       at least AbilMinClump squads - the answer to what stands in front of us now; spawn abilities wait;
---   3 - as 2, and a spawn ability goes in a fight when the unit is far: short of money by more than AbilUnitEta (40 s) of income.
--- Lines: "RaceAbilities hold <ability> unit <sbps> R/P <why> eta N cost R/P free R/P rule K" and "... over unit <ability> target|unit_far ..."
--- (once per 30 s per ability); stats: abil_held, abil_over. Mech_AbilUnitHold=0 = off.
+-- 0.6 (TECH_RU.md 14): the same for the tech plan's reserve (EliteAI_TechReserve: the ability budget was the only one that could
+-- still take the req of a research the plan had promoted) and for the save state that saves without a claim; and the unit is
+-- no longer first whatever happens - an ability passes when it gives more than the unit for the same money:
+--   bargain  - a call-in worth at least AbilBargainK (1.3) times its req (RA_WORTH) with somewhere to go: it is the better unit;
+--   defend   - a targeted call-in and a raid at our base / point / power point (M.raid): it lands there now (also over the
+--              tech plan's reserve - the plan itself gives way to the army while the enemy is at the base);
+--   fight    - a targeted call-in, the army in a fight with a clump to land on, not retreating. Where the outcome is not
+--              clear the arbiter decides (A / B / C = 1 / 2 / 3): 1 - only an open fight, ours / theirs in contact between
+--              AbilFightLo (0.6) and AbilFightHi (1.8): a fight that is won anyway leaves the req with the unit, a lost one
+--              is not fed; 2 - any fight we do not lose (>= AbilFightLo: the finishing blow counts); 3 - any fight;
+--   unit_far - a call-in that arrives at the HQ as the unit would: rules 2 / 3 when the unit waits for the HQ or is more than
+--              AbilUnitEta (40 s) of income away (a squad now against the unit later); rule 1 - the unit of the plan first;
+--   target   - rules 2 / 3: an ability that is no call-in and costs req (ork_waaagh) with a clump of AbilMinClump squads;
+--   held     - whatever was held for AbilHoldMax (90 s) without a break while it could be cast (the bank held its price all
+--              that time and the unit still was not bought) goes: nothing is held for ever.
+-- Lines: "RaceAbilities hold <ability> unit <sbps> R/P <why> eta N cost R/P free R/P rule K held S" and "... over unit <ability>
+-- <reason> unit <sbps> ..." (once per 30 s per ability); stats: abil_held, abil_over, abil_callin, abil_notgt.
+-- Mech_AbilUnitHold=0 = off (nothing is held).
 local function ra_unit_hold()
-	if not ra_on() or prm("AbilUnitHold") < 1 or type(s_player_ability_demand) ~= "table" or type(EliteAI_UnitClaim) ~= "function" then return end
-	local ur, up, eta, uname, why = EliteAI_UnitClaim()                      -- numbers and strings (nil = no unit is waited for)
+	if not ra_on() or prm("AbilUnitHold") < 1 or type(s_player_ability_demand) ~= "table" then return end
 	local bank = cache and cache.resources
-	if ur == nil or bank == nil then return end
+	if bank == nil then return end
+	local now = World_GetGameTime()
+	local ur, up, eta, uname, why
+	if type(EliteAI_UnitClaim) == "function" then ur, up, eta, uname, why = EliteAI_UnitClaim() end   -- numbers and strings (nil = no unit is waited for)
 	local tasks = Task_CountCost(s_selfplayer, false)                       -- util/budget.ai:271: what the requests placed already hold
-	local fr = (bank.requisition or 0) - ((tasks and tasks.requisition) or 0)
-	local fp = (bank.power or 0) - ((tasks and tasks.power) or 0)
-	local r, now = rule("AbilityVsUnit"), World_GetGameTime()
+	local rr, rp = 0, 0
+	if type(EliteAI_TechReserve) == "function" then rr, rp = EliteAI_TechReserve() end   -- strategy_tech_purchase.ai: numbers
+	rr, rp = rr or 0, rp or 0
+	local fr = (bank.requisition or 0) - ((tasks and tasks.requisition) or 0) - rr
+	local fp = (bank.power or 0) - ((tasks and tasks.power) or 0) - rp
+	if ur == nil and type(EliteAI_R) == "table" and EliteAI_R.save == true and type(EliteAI_ReinforceNeed) == "function" then
+		local need, what = EliteAI_ReinforceNeed()                             -- saving without a claim: what it saves for reads as a unit short of money
+		local rate = (cache.resources_rate and cache.resources_rate.requisition) or 0
+		if (need or 0) > 0 then
+			ur, up, uname, why = need, 0, what or "-", "save"
+			eta = (need > fr) and ((rate > 0) and (60 * (need - fr) / rate) or 11111) or 0
+		end
+	end
+	if ur == nil and rr + rp <= 0 then return end
+	if ur == nil then ur, up, eta, uname, why = 0, 0, 0, "tech", "reserve" end
+	local r = rule("AbilityVsUnit")
 	local fight = M.last_contact and now - M.last_contact <= prm("AbilFightSecs")
-	local far = (why == "money" and eta > prm("AbilUnitEta"))
-	M.ra_said = M.ra_said or {}
+	local F = M.fight
+	local ratio = (F and F.ew > 0) and (F.ow / F.ew) or nil
+	M.ra_said, M.ra_hold, M.ra_pass = M.ra_said or {}, M.ra_hold or {}, M.ra_pass or {}
 	for pbg, dem in pairs(s_player_ability_demand) do                       -- each entry on its own: the order of pairs() does not matter
 		if pbg and dem ~= false then
-			local cost = AIAbility_GetCost(s_self_modplayer, pbg)                -- player_abilities.ai:259
-			local cr, cp = (cost and cost.requisition) or 0, (cost and cost.power) or 0
+			local cr, cp = ra_cost(pbg)
 			if (cr > 0 and fr - cr < ur) or (cp > 0 and fp - cp < up) then    -- the bank does not pay both
 				local name = ra_name(pbg)
-				local spawn = has_key(name, SPAWN_KEYS)
+				local callin = has_key(name, SPAWN_KEYS) and cr > 0
+				local targeted = AIAbility_IsTargeted(pbg)
+				local reserve = (rr + rp > 0) and ((cr > 0 and fr - cr < 0) or (cp > 0 and fp - cp < 0))   -- it would take the research's money itself
 				local pass = nil
-				if r >= 2 and not spawn and fight and M.clump and M.clump.n >= prm("AbilMinClump") then pass = "target"
-				elseif r >= 3 and spawn and fight and far then pass = "unit_far" end
+				if callin and targeted then
+					if M.raid then pass = "defend"
+					elseif fight and (M.clump or M.clump_any) and not M.retreat then
+						if ra_worth(name, cr) >= cr * prm("AbilBargainK") then pass = "bargain"
+						elseif r >= 3 then pass = "fight"
+						elseif ratio and ratio >= prm("AbilFightLo") and (r >= 2 or ratio <= prm("AbilFightHi")) then pass = "fight" end
+					end
+				elseif callin then
+					if ra_worth(name, cr) >= cr * prm("AbilBargainK") then pass = "bargain"
+					elseif r >= 2 and (why == "channel" or ((why == "money" or why == "save") and eta > prm("AbilUnitEta"))) then pass = "unit_far" end
+				elseif r >= 2 and fight and M.clump and M.clump.n >= prm("AbilMinClump") then pass = "target" end
+				if reserve and pass ~= "defend" then pass = nil end
+				local h = M.ra_hold[name]
+				if h == nil or now - h.last > prm("AbilHoldGap") then h = { t0 = now, last = now }; M.ra_hold[name] = h end
+				h.last = now
+				if not pass and not reserve and now - h.t0 >= prm("AbilHoldMax") then pass = "held" end
 				local k = name .. (pass and "|over" or "|unit")
 				local say = (not M.ra_said[k] or now - M.ra_said[k] > 30)
 				if say then M.ra_said[k] = now end
 				if pass then
 					M.st.abil_over = (M.st.abil_over or 0) + 1
-					if say then mlog("RaceAbilities", "over unit", name, pass, "unit", uname, ur .. "/" .. up, why, "eta", math.floor(eta), "cost", cr .. "/" .. cp, "rule", r) end
+					M.ra_pass[name] = { t = now, why = pass }
+					if say then
+						mlog("RaceAbilities", "over unit", name, pass, "unit", uname, ur .. "/" .. up, why, "eta", math.floor(eta), "cost", cr .. "/" .. cp,
+							"ratio", ratio and fmt("%.2f", ratio) or "-", "rule", r, "held", math.floor(now - h.t0))
+					end
 				else
 					s_player_ability_demand[pbg] = false                       -- HighestPlayerAbilityDemand skips it (player_abilities.ai:297)
 					M.st.abil_held = (M.st.abil_held or 0) + 1
 					if say then
 						mlog("RaceAbilities", "hold", name, "unit", uname, ur .. "/" .. up, why, "eta", math.floor(eta), "cost", cr .. "/" .. cp,
-							"free", math.floor(fr) .. "/" .. math.floor(fp), "rule", r)
+							"free", math.floor(fr) .. "/" .. math.floor(fp), "rule", r, "held", math.floor(now - h.t0))
 					end
 				end
 			end
@@ -1046,45 +1214,79 @@ local function ra_unit_hold()
 	end
 end
 EliteAI_MechAbilityUnitHold = ra_unit_hold                                    -- the stub run
+EliteAI_MechAbilityScan = ra_clump                                            -- the stub run
 if type(CalcPlayerAbilityDemand) == "function" and type(PlayerAbility_Cast) == "function" and not EliteAI_MechRA_Wrapped then
 	EliteAI_MechRA_Wrapped = true
 	local E_Calc, E_Demand, E_Cast, E_Pos = CalcPlayerAbilityDemand, AITacticDemand_Default, PlayerAbility_Cast, PositionTargetFilter_EnemyClumpPosition
-	CalcPlayerAbilityDemand = function() M.in_pa = true; E_Calc(); M.in_pa = nil; ra_unit_hold() end   -- 0.5: the unit first
+	CalcPlayerAbilityDemand = function() EliteAI.mech.in_pa = true; E_Calc(); EliteAI.mech.in_pa = nil; EliteAI_MechAbilityUnitHold() end   -- 0.5: the unit first
 	AITacticDemand_Default = function(pbg)                                    -- also the demand of squad tactics: only inside CalcPlayerAbilityDemand
 		local d = E_Demand(pbg)
-		if M.in_pa and ra_on() then return ra_demand(pbg, d) end
+		if EliteAI.mech.in_pa and EliteAI.on and EliteAI_MechAbilityDemand then return EliteAI_MechAbilityDemand(pbg, d) end
 		return d
 	end
 	PlayerAbility_Cast = function(pbg)
-		if not ra_on() then return E_Cast(pbg) end
-		M.in_cast = true
-		local ok = E_Cast(pbg)
-		M.in_cast = nil
-		if ok then
-			M.st.abil = M.st.abil + 1
-			-- 0.3: the purchase book of strategy_unit_purchase.ai (energy): what the ability cost (player_abilities.ai:259)
-			if type(EliteAI_EnergyNote) == "function" then EliteAI_EnergyNote("abil", AIAbility_GetCost(s_self_modplayer, pbg)) end
-			-- 0.5: the models a spawn ability brings are paid with it - not booked as reinforcements (strategy_unit_purchase.ai r_models)
-			if type(EliteAI_ReinforceFree) == "function" and has_key(ra_name(pbg), SPAWN_KEYS) then EliteAI_ReinforceFree() end
-		end
-		local nm, t = ra_name(pbg), World_GetGameTime()
-		M.ra_nt = M.ra_nt or {}
-		if ok then mlog("RaceAbilities", "cast", nm)
-		else                                                                  -- "no target": once per 30 s per ability, with a count
-			local r = M.ra_nt[nm] or { t = -1000, n = 0 }
-			r.n = r.n + 1; M.ra_nt[nm] = r
-			if t - r.t >= 30 then mlog("RaceAbilities", "no target", nm, "x" .. r.n); r.t, r.n = t, 0 end
-		end
-		return ok
+		if not (EliteAI.on and EliteAI_MechAbilityCast) then return E_Cast(pbg) end
+		return EliteAI_MechAbilityCast(pbg, E_Cast)
 	end
 	PositionTargetFilter_EnemyClumpPosition = function(a1, a2)             -- also a squad tactic filter: only inside PlayerAbility_Cast
 		local p = E_Pos(a1, a2)
-		if M.in_cast and ra_on() and M.clump and (not p or p.x == COORD_INVALID) then
-			mlog("RaceAbilities", "pos", fmt("clump %d squads %.0f at %.0f %.0f", M.clump.n, M.clump.w, M.clump.x, M.clump.z))
-			return World_Pos(M.clump.x, M.clump.y, M.clump.z)                -- player-tactics.ai:188
+		if EliteAI.mech.in_cast and EliteAI.on and EliteAI_MechAbilityPos then return EliteAI_MechAbilityPos(p) end
+		return p
+	end
+end
+-- the three bodies of the wrappers above. The wrappers are installed once per Lua state and call these by name, so a chunk
+-- that is loaded again (the stub run loads it per scenario) brings its own state M with it
+function EliteAI_MechAbilityDemand(pbg, d)
+	if not ra_on() then return d end
+	return ra_demand(pbg, d)
+end
+function EliteAI_MechAbilityCast(pbg, E_Cast)
+	if not ra_on() then return E_Cast(pbg) end
+	local nm, t = ra_name(pbg), World_GetGameTime()
+	local cr, cp = ra_cost(pbg)
+	local callin = has_key(nm, SPAWN_KEYS) and cr > 0
+	M.in_cast, M.cast_callin = true, callin
+	local ok = E_Cast(pbg)
+	M.in_cast, M.cast_callin = nil, nil
+	M.ra_nt = M.ra_nt or {}
+	if ok then
+		M.st.abil = M.st.abil + 1
+		local cost = { requisition = cr, power = cp }
+		-- 0.3: the purchase book of strategy_unit_purchase.ai (energy): what the ability cost
+		if type(EliteAI_EnergyNote) == "function" then EliteAI_EnergyNote("abil", cost) end
+		-- 0.5: the models a spawn ability brings are paid with it - not booked as reinforcements (strategy_unit_purchase.ai r_models)
+		if type(EliteAI_ReinforceFree) == "function" and has_key(nm, SPAWN_KEYS) then EliteAI_ReinforceFree() end
+		-- 0.6: a call-in is a unit bought (the line "callin", the save state, the wait of the plan's unit)
+		if callin then
+			M.st.abil_callin = (M.st.abil_callin or 0) + 1
+			if type(EliteAI_UnitCallIn) == "function" then EliteAI_UnitCallIn(nm, cost) end
+		end
+		local ps = M.ra_pass and M.ra_pass[nm]
+		mlog("RaceAbilities", "cast", nm, "cost", cr .. "/" .. cp, "why", (ps and ps.t == t) and ps.why or "free")
+		if M.ra_hold then M.ra_hold[nm] = nil end
+	else                                                                      -- "no target": once per 30 s per ability, with a count
+		local r = M.ra_nt[nm] or { t = -1000, n = 0 }
+		r.n = r.n + 1; M.ra_nt[nm] = r
+		if t - r.t >= 30 then mlog("RaceAbilities", "no target", nm, "x" .. r.n); r.t, r.n = t, 0 end
+	end
+	return ok
+end
+function EliteAI_MechAbilityPos(p)
+	if not ra_on() then return p end
+	if M.cast_callin then
+		-- 0.6: a call-in lands on the raid at our base or on the clump our army fights - never on a clump Elite sees elsewhere
+		local tg = M.raid or M.clump or M.clump_any
+		if tg then
+			mlog("RaceAbilities", "pos", M.raid and ("raid " .. tg.kind) or "clump", fmt("%d squads %.0f at %.0f %.0f", tg.n, tg.w, tg.x, tg.z))
+			return World_Pos(tg.x, tg.y, tg.z)                                 -- player-tactics.ai:188
 		end
 		return p
 	end
+	if M.clump and (not p or p.x == COORD_INVALID) then
+		mlog("RaceAbilities", "pos", fmt("clump %d squads %.0f at %.0f %.0f", M.clump.n, M.clump.w, M.clump.x, M.clump.z))
+		return World_Pos(M.clump.x, M.clump.y, M.clump.z)                    -- player-tactics.ai:188
+	end
+	return p
 end
 local function run_race_abilities()
 	s_playerabilities_enabled = true
@@ -1101,9 +1303,51 @@ end
 -- weaker squad (Conf_RunnerFight), leave for the other flank when they meet an army. Points on the enemy half are only
 -- neutralised (Conf_Decap, DecapOnly_EnemyHalf), victory points always captured fully. Elite's own capture tasks are
 -- capped at EliteCapturers.
-local function pick_runners(state, taken)
+-- 0.6 (TECH_RU.md 14, Orca's match against a human: GK, 3-6 squads) THE RUNNER IS NOT SENT TO DIE. One squad after another was
+-- sent alone to the enemy's points far from the army ("-> -91/95 enemy capture" five times, four squads lost, the hero the
+-- first of them), while our own points went from 7 to 0. Now:
+--  * a small army keeps its squads (Conf_RunnerArmy; the opening - RunnerOpenSecs - aside): 1 = an army of RunnerMinArmy (4)
+--    squads or fewer has no runner; 2 = it has one, for the points on our half or within RunnerOwnR of the army only;
+--    3 = no runner up to RunnerMinArmy + 1 squads. The army takes the points it stands at (the split, the goals);
+--  * a hero is a runner in the opening only;
+--  * no target where the enemy is or just was: an enemy within RunnerPointR of the point now (as before), an enemy point
+--    with an enemy there during the last RunnerSeenSecs, a way that passes an enemy force (way_blocked) - also checked every
+--    tick on the way ("runner <id> drops <point>");
+--  * the target a runner was lost on its way to is nobody's for RunnerDeadSecs ("runner lost <id> at <point>");
+--  * a point that was ours and lies near the army comes first (RunnerOwnBonus).
+local function seg_dist(px, pz, ax, az, bx, bz)                               -- the distance of a point to the stretch a-b
+	local vx, vz = bx - ax, bz - az
+	local l2, t = vx * vx + vz * vz, 0
+	if l2 > 0 then
+		t = ((px - ax) * vx + (pz - az) * vz) / l2
+		if t < 0 then t = 0 elseif t > 1 then t = 1 end
+	end
+	return d2(px, pz, ax + vx * t, az + vz * t)
+end
+local function way_blocked(u, p, en)                                          -- an enemy force next to the straight way from the squad to the point
+	local r, n, w = prm("RunnerPathR"), 0, 0
+	for _, e in ipairs(en) do
+		if seg_dist(e.x, e.z, u.pos.x, u.pos.z, p.x, p.z) <= r then n, w = n + 1, w + e.w end
+	end
+	return n >= 2 or (n == 1 and w >= weight_of(u) * prm("RunnerPathK"))
+end
+local function is_hero(id) return string.find(M.names[id] or "", "/heroes/", 1, true) ~= nil end
+-- how many runners the army has now and where they may go ("all" / "near" / "none")
+local function runner_plan(state)
+	local n, now = table.getn(state.army), state.now
 	local want = prm("Runners")
-	if table.getn(state.army) >= prm("Runners2At") then want = want + 1 end
+	if n >= prm("Runners2At") then want = want + 1 end
+	local r, mode = rule("RunnerArmy"), "all"
+	local small = prm("RunnerMinArmy") + ((r == 3) and 1 or 0)
+	if n <= small and now >= prm("RunnerOpenSecs") then mode = (r == 2) and "near" or "none" end
+	mode = decide("RunnerArmy", "army", mode, fmt("squads %d small %d", n, small), now, 16)
+	if mode == "none" then want = 0 end
+	if M.runner_mode == nil then mlog("ArmyRoles", "runners", mode, "army", n, "small", small, "rule", r) end   -- (the switches: "Conf_RunnerArmy army X->Y")
+	M.runner_mode = mode
+	return want
+end
+local function pick_runners(state, taken)
+	local want = runner_plan(state)
 	local alive, have, ids = {}, 0, {}
 	for _, u in ipairs(state.army) do alive[u.id] = u end
 	for id in pairs(M.runner) do table.insert(ids, id) end
@@ -1113,12 +1357,23 @@ local function pick_runners(state, taken)
 	local G = M.gar
 	local gtool = (G ~= nil and (G.v == "assault" or G.v == "hold"))
 	local function is_tool(u) local c = ucls(u); return c.gar ~= nil and (c.gar_w or 1) >= 1 end
+	local opening = (state.now < prm("RunnerOpenSecs"))
 	for _, id in ipairs(ids) do
-		if not alive[id] then M.runner[id] = nil; mlog("ArmyRoles", "runner gone", id)
-		elseif have >= want then M.runner[id] = nil; mlog("ArmyRoles", "runner released", id)
+		if not alive[id] then
+			-- 0.6: lost (it is not among our squads any more), not just taken by Elite's capture task: where it went is closed
+			local R = M.runner[id]
+			if not M.exists[id] and R.tgt then
+				M.dead_pt[R.tgt] = state.now
+				M.st.runner_lost = (M.st.runner_lost or 0) + 1
+				mlog("ArmyRoles", "runner lost", id, "at", R.tgt, "no runner there for", prm("RunnerDeadSecs"), "s")
+			end
+			M.runner[id] = nil; mlog("ArmyRoles", "runner gone", id)
+		elseif have >= want then M.runner[id] = nil; mlog("ArmyRoles", "runner released", id, (want == 0) and "small army" or "")
 		elseif gtool and is_tool(alive[id]) then
 			M.runner[id] = nil
 			mlog("ArmyRoles", "runner released", id, M.names[id] or "?", "a tool against the garrison", G.id, G.v)
+		elseif not opening and is_hero(id) then
+			M.runner[id] = nil; mlog("ArmyRoles", "runner released", id, "a hero stays with the army")
 		else have = have + 1 end
 	end
 	while have < want do
@@ -1128,6 +1383,7 @@ local function pick_runners(state, taken)
 			-- and not one the Idle logic just took out of a capture role
 			if not M.runner[u.id] and not taken[u.id] and can_cap(u.id) and not (gtool and is_tool(u))
 				and not (M.split and M.split.assign[u.id])                        -- 0.4: one capture role per squad (it got two moves in a tick)
+				and (opening or not is_hero(u.id))                                -- 0.6
 				and not (M.norole[u.id] and state.now - M.norole[u.id] < prm("IdleRoleBan")) then
 				weight_of(u)
 				local c = ucls(u)
@@ -1144,14 +1400,24 @@ local function pick_runners(state, taken)
 		mlog("ArmyRoles", "runner", best.id, M.names[best.id] or "?")
 	end
 end
-local function pick_runner_point(u, en, now, R)
+-- may a runner go for this point now (0.6)? false, why
+local function runner_safe(u, p, en, now, cx, cz)
+	local _, en_n = enemy_weight_near(en, p.x, p.z, prm("RunnerPointR"))
+	if en_n > 0 then return false, "enemy at the point" end
+	if p.enemy and M.pt_seen[p.key] and now - M.pt_seen[p.key] < prm("RunnerSeenSecs") then return false, "enemy seen there" end
+	if M.runner_mode == "near" and p.enemy_half and d2(cx, cz, p.x, p.z) > prm("RunnerOwnR") then return false, "far for a small army" end
+	if way_blocked(u, p, en) then return false, "enemy force on the way" end
+	return true
+end
+local function pick_runner_point(u, en, now, R, cx, cz)
 	local best, bs
 	local ar, av = prm("RunnerAvoidR"), (R.avoid_t and now - R.avoid_t <= prm("RunnerAvoidSecs"))
 	for _, p in ipairs(M.pts) do
-		if not p.ours and not point_done(p, en, now) and not (M.bad_pt[p.key] and now - M.bad_pt[p.key] < 40) then   -- verify 10.11: a neutralised point on the enemy half is done (was: endless "-> x neutral decap / neutralised" loop)
-			local ew, en_n = enemy_weight_near(en, p.x, p.z, prm("RunnerPointR"))
-			if en_n == 0 then
+		if not p.ours and not point_done(p, en, now) and not (M.bad_pt[p.key] and now - M.bad_pt[p.key] < 40)   -- verify 10.11: a neutralised point on the enemy half is done (was: endless "-> x neutral decap / neutralised" loop)
+			and not (M.dead_pt[p.key] and now - M.dead_pt[p.key] < prm("RunnerDeadSecs")) then
+			if runner_safe(u, p, en, now, cx, cz) then
 				local s = d2(u.pos.x, u.pos.z, p.x, p.z) - (p.vp and prm("RunnerVpBonus") or 0)
+				if M.pt_ours[p.key] and d2(cx, cz, p.x, p.z) <= prm("RunnerOwnR") then s = s - prm("RunnerOwnBonus") end   -- 0.6: it was ours
 				if av then s = s + math.max(0, ar - d2(p.x, p.z, R.avoid_x, R.avoid_z)) * 2 end
 				if not best or s < bs or (s == bs and p.key < best.key) then best, bs = p, s end
 			end
@@ -1177,6 +1443,17 @@ local function run_runners(state, en, taken, cx, cz)
 				if d <= prm("RunnerFleeR") then nn = nn + 1; nw = nw + e.w; if not near or d < near.du then e.du = d; near = e end end
 			end
 			local fought = false
+			-- 0.6: the target on the way - an enemy came to the point, or an enemy force stands next to the way: it is dropped
+			local p0 = (nn == 0) and R.tgt and M.pts_by_key[R.tgt]
+			if p0 then
+				local okp, whyp = runner_safe(u, p0, en, now, cx, cz)
+				if not okp then
+					M.st.runner_drop = (M.st.runner_drop or 0) + 1
+					mlog("ArmyRoles", "runner", id, "drops", p0.key, whyp)
+					M.bad_pt[R.tgt] = now; R.tgt = nil
+					morder(id, cx, u.pos.y, cz, ORD_MOVE)                       -- back towards the army (a move cancels the capture)
+				end
+			end
 			if nn > 0 then
 				local uw, v = weight_of(u), "flee"
 				if nn == 1 and not near.veh and not near.held then                -- 0.3: never a squad inside a building
@@ -1204,7 +1481,7 @@ local function run_runners(state, en, taken, cx, cz)
 					end
 				end
 				if not p then
-					p = pick_runner_point(u, en, now, R)
+					p = pick_runner_point(u, en, now, R, cx, cz)
 					if p then
 						R.tgt, R.last = p.key, -1000
 						mlog("ArmyRoles", "runner", id, "->", p.key, p.vp and "VP" or (p.enemy and "enemy" or "neutral"), decap_only(p, en, now) and "decap" or "capture")
@@ -1377,6 +1654,7 @@ local function next_goal(state, en, cx, cz)
 			local _, n = enemy_weight_near(en, p.x, p.z, prm("RunnerPointR"))
 			if n == 0 then
 				local s = d2(cx, cz, p.x, p.z) - (p.vp and prm("RunnerVpBonus") or 0)
+				if M.pt_ours[p.key] and s <= prm("RunnerOwnR") then s = s - prm("RunnerOwnBonus") end   -- 0.6: a point that was ours, near the army, first
 				if not best or s < bs or (s == bs and p.key < best.key) then best, bs = p, s end
 			end
 		end
@@ -1917,7 +2195,8 @@ local function stats(state)
 	if TASK_PlayerAbility ~= nil then tasks = Task_CountActive(s_selfplayer, TASK_PlayerAbility, false) end   -- player_abilities.ai:242
 	mlog("stats", "t", math.floor(state.now), "focus", s.focus, "switch", s.focus_sw, "retreat", s.retreat, "pre", s.pre, "punish", s.punish,
 		"tie", s.tie, "jump", s.jump, "kite", s.kite, "repair", s.repair, "abil", s.abil, "abil_tasks", tasks, "abil_held", s.abil_held or 0, "abil_over", s.abil_over or 0,
-		"runner", s.runner, "split", s.split,
+		"abil_callin", s.abil_callin or 0, "abil_notgt", s.abil_notgt or 0,
+		"runner", s.runner, "runner_lost", s.runner_lost or 0, "runner_drop", s.runner_drop or 0, "split", s.split,
 		"decap", s.decap, "conf_sw", s.conf, "orders", s.orders, "enemies", table.getn(M.en or {}), "points", table.getn(M.pts or {}), "phase", EliteAI.phase or "-")
 	local g, G = EliteAI.goal, M.gar
 	mlog("stats2", "t", math.floor(state.now), "idle", s.idle, "idle_role", s.idle_role, "goals", s.goal, "goal", g and (g.kind .. " " .. tostring(g.key)) or "-",
@@ -1945,7 +2224,7 @@ function EliteAI_Mechanics(state)
 		mlog("rules", "MeleeApproach", rule("MeleeApproach"), "FocusLeave", rule("FocusLeave"), "Chase", rule("Chase"), "Split", rule("Split"),
 			"Decap", rule("Decap"), "HoldVP", rule("HoldVP"), "TieVsFocus", rule("TieVsFocus"), "RepairVsFight", rule("RepairVsFight"),
 			"PreEngage", rule("PreEngage"), "RunnerFight", rule("RunnerFight"), "AbilitySave", rule("AbilitySave"), "Garrison", rule("Garrison"),
-			"AbilityVsUnit", rule("AbilityVsUnit"))
+			"AbilityVsUnit", rule("AbilityVsUnit"), "RunnerArmy", rule("RunnerArmy"))
 		api()
 	end
 	if not (on.FocusFire or on.Repair or on.ArmyRetreat or on.PreRetreat or on.PunishTurn or on.MeleeTie or on.RaceAbilities or on.ArmyRoles
@@ -1966,9 +2245,12 @@ function EliteAI_Mechanics(state)
 	end
 	if an > 0 then ax, az = ax / an, az / an else ax, az = cx, cz end
 	local en = scan_enemies(now, cx, cz, state.army, on.MeleeTie or on.FocusFire)
+	-- 0.6: when the army itself last had an enemy in contact within AbilR (main.ai's quiet refill trip reads it; M.last_contact
+	-- also counts an enemy our ally fights at the other end of the map)
+	for _, e in ipairs(en) do if e.contact and e.d <= prm("AbilR") then M.army_contact = now; break end end
 	scan_own(state.army)
-	if on.ArmyRoles or on.Idle or on.Garrison or rule("HoldVP") >= 2 then scan_points() end
-	if on.RaceAbilities then ra_clump(en, cx, cz, state.army); run_race_abilities() end
+	if on.ArmyRoles or on.Idle or on.Garrison or rule("HoldVP") >= 2 then scan_points(); points_memory(en, now) end
+	if on.RaceAbilities then ra_clump(en, cx, cz, state.army, h); run_race_abilities() end
 	stats(state)
 	if on.Idle then idle_clock(state) end                                      -- 0.3: before any return, the clocks run every tick
 	-- 1) the whole army: retreats
