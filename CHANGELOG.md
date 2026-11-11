@@ -4,6 +4,19 @@ Every version gets an entry here before it reaches `main`. CI then tags `vX.Y.Z`
 version (`X.Y.0`) it also publishes a GitHub Release with the DLLs and the entries since the previous `X.Y.0`.
 The version of the set lives only in `VERSION`; each DLL still writes its own version to its log.
 
+## 0.2.57 — 2026-11-11
+New AI 20 (store newai-20, experiment, off by default, Elite only) = newai-19 + EliteAI.dll 0.11; the AI scripts are newai-19's, unchanged.
+- The replay of a match with the new AI goes to the replay site by itself (MMFind sends only matches with other people): back in
+  the menu after a single-player match in which a new AI played, Playback\temp.rec goes to `/replay/api/upload` as
+  `newai_<race>-<variant>[_...]_<date>.rec`, `X-Lobby: newai`. Not for replays (also not a replay taken over with ReplayTakeover).
+- The mirrors (rts, dow2, dow2ru) are checked first, all at once, 2.5 s at most (`GET /replay/api/by_lobby/<x>`, the site's `{}`);
+  the upload goes to the first that answered, then the next that answered; its own thread, nothing waits for it, 4 minutes at most.
+- The game closed on the score screen or during the upload: `Elite_DLLs\EliteAI.replay` keeps the match, the next start sends it.
+- temp.rec missing or older than the match: EliteAI.log gets the Documents path the game itself gets (SHGetFolderPathW), whether
+  Playback is there, temp.rec size/time, the newest .rec there, and %USERPROFILE%\Documents / OneDrive\Documents when they differ
+  (the start of the game logs the first part too).
+- `EliteAI.ini [Replays] Upload=0` turns it off, `Server=host;host` sets the mirrors; -dev runs (our stands' AI series) send only with `Upload=2`.
+
 ## 0.2.56 — 2026-11-11
 New AI 19 (store newai-19, experiment, off by default, Elite only) = newai-18 + map defence, tyranid play, economy and purchase
 (main.ai, mechanics.ai, simulation/ai/strategy_unit_purchase.ai, strategy_tech_purchase.ai, append/scar/elite/elite.scar from eliteai 22ef1c2).

@@ -287,6 +287,8 @@ frameprobe/ - FrameProbe.dll (off), eliteai/ - EliteAI.dll (store id newai since
     FrameProbe: the diagnostics DLL that found the observer lag (frame times, sim ticks, a stack sampler, a probe on Continue).
     EliteAI: the new AI for skirmishes - Elite's default.ai gets eliteai/mod/main.ai; only in single-player games (online it
     would desync everyone). Both are in the store only as "off" entries.
+    EliteAI 0.11 (newai-20): back in the menu after a single-player match with the new AI, sends Playback\temp.rec to the replay
+    site (mirrors checked first, 2.5 s; EliteAI.ini [Replays] Upload=0 off, Server=host;host); MMFind sends only matches with people.
 
 ## Building
 
