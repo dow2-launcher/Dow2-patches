@@ -99,7 +99,7 @@ DEMAND_NeverBuild = -99999
 
 -------------------------------------------------------------------------------------------------
 -- EliteAI tech plan (state: numbers, strings and plain tables only)
-EliteAI_TECH_VERSION = "0.4"
+EliteAI_TECH_VERSION = "0.5"
 EliteAI_T = { st = {}, said = {}, conf = {}, waits = {}, last_stats = -1, eval_t = -1, cost_t = -1, level = 1 }
 
 local function t_on() return EliteAI ~= nil and EliteAI.on == true end
@@ -131,7 +131,11 @@ local function t_decide(subject, v, why, now)
 	end
 	if c.v == v then return v end
 	if now - c.t < t_num("Tech_ConfHold", 10) then return c.v end
+	-- 0.5 (TECH_RU.md 15.3; s18: tech->army 11:03, army->tech 11:13, tech->army 11:23 - three in 30 s): the switch before the
+	-- last one must be Tech_ConfWindow (30 s) old - two switches in 30 s at most, whatever the reasons
+	if c.sw1 ~= nil and now - c.sw1 < t_num("Tech_ConfWindow", 30) then return c.v end
 	t_log("Conf_TechVsArmy", subject, c.v .. "->" .. v, why, "rule", t_rule())
+	c.sw1, c.sw2 = c.sw2, now
 	c.v, c.t = v, now
 	T.switches = (T.switches or 0) + 1
 	return v
@@ -155,6 +159,66 @@ local function t_tiers()
 	local ups = s_tech_tier_upgrades or (s_personality and s_personality.tech_tier_upgrades)
 	if type(ups) ~= "table" then return 0 end
 	return table.getn(ups)
+end
+
+-- 0.5 (TECH_RU.md 15.4) WHAT ELSE THIS BUDGET BUYS: a building (MilitaryStructureDemand) or an upgrade that is not the tier research.
+-- s18 (IG): no unit from 7:46 to 12:58 with up to 505 req in the bank - "SPEND stall ... bank 404/216 tasks 400/55", "SPEND idle
+-- ... none locked ... free 22/165". The tasks were this budget's: ig_super_turret (300/40), its choice at every tick since the
+-- first minute ("wait no_lock ... ig_super_turret" 170 times). Tech_NoLock buys such an item "when the money is there at this
+-- moment": at 10:21 the bank held 302 req for the first time (a unit of 400 was waited for) and the turret was requested. A
+-- construction request needs a squad to build it; the squads are the director's, nobody came, the request was killed as
+-- inactive at the next tick (default.ai:249) and placed again - 300/40 off every budget for as long as the bank held 300, and
+-- the bank could not reach the unit's 400 + 300. In s16 / s17 the bank never held 300 at this budget's turn. Two rules:
+--  * the unit first: such an item is requested only when the bank pays it AND the unit the plan waits for (EliteAI_UnitClaim:
+--    short of money or waiting for the HQ) - "wait unit_first <item> R/P unit <sbps> R/P"; nothing is locked;
+--  * a request that died is not repeated for ever: a building that is offered again within Tech_BldDeadSecs (15 s) of its
+--    request has neither a task nor a structure (MilitaryStructureDemand offers it only then: UtilPBG_CountTotal <= 0) - the
+--    request died; Tech_BldTries (2) in a row = none for Tech_BldMute (120 s, doubled each time up to Tech_BldMuteMax 600):
+--    "TECH build hold dead <building> ...", as the secure / generator gates of strategy_unit_purchase.ai.
+-- Lines "TECH build request <building> R/P bank R/P n N". Returns why the item is not requested this tick, or nil.
+-- Tech_OtherUnitFirst=0 / Tech_BldGate=0 = as 0.4. (main.ai 0.16 leaves a squad that builds to its task: the request may live.)
+local function t_other_gate(now, pbg, demand_type, cost, avail)
+	local T = EliteAI_T
+	local name = string.lower(PBG_GetName( pbg ) or "")
+	local cr, cp = (cost and cost.requisition) or 0, (cost and cost.power) or 0
+	if demand_type == DEMAND_Building and t_num("Tech_BldGate", 1) >= 1 then
+		T.bld = T.bld or {}
+		local b = T.bld[name]
+		if b ~= nil then
+			if b.t ~= nil and now > b.t then
+				if now - b.t <= t_num("Tech_BldDeadSecs", 15) then b.dead, b.n_dead = b.dead + 1, b.n_dead + 1 else b.dead = 0 end
+				b.t = nil
+			end
+			local tries = t_num("Tech_BldTries", 2)
+			if b.dead >= tries then
+				b.dead, b.mutes = 0, b.mutes + 1
+				local secs = math.min(t_num("Tech_BldMute", 120) * 2 ^ (b.mutes - 1), t_num("Tech_BldMuteMax", 600))
+				b.mute = now + secs
+				t_log("build", "hold", "dead", name, "the last", tries, "requests died (nobody builds it): none for", secs, "s", "requests", b.n_req, "dead", b.n_dead)
+			end
+			if now < b.mute then t_wait(now, "bld_dead", name); return "dead" end
+		end
+	end
+	if t_num("Tech_OtherUnitFirst", 1) >= 1 and type(EliteAI_UnitClaim) == "function" and avail ~= nil then
+		local ur, up, _, uname = EliteAI_UnitClaim()
+		if ur ~= nil and ((cr > 0 and (avail.requisition or 0) - ur < cr) or (cp > 0 and (avail.power or 0) - (up or 0) < cp)) then
+			t_wait(now, "unit_first", name, math.floor(cr) .. "/" .. math.floor(cp), "unit", tostring(uname), math.floor(ur) .. "/" .. math.floor(up or 0),
+				"avail", math.floor(avail.requisition or 0) .. "/" .. math.floor(avail.power or 0))
+			return "unit"
+		end
+	end
+	return nil
+end
+local function t_bld_note(now, pbg, cost)                                    -- a construction request was placed
+	local T = EliteAI_T
+	local name = string.lower(PBG_GetName( pbg ) or "")
+	T.bld = T.bld or {}
+	local b = T.bld[name]
+	if b == nil then b = { dead = 0, n_dead = 0, n_req = 0, mutes = 0, mute = -1 }; T.bld[name] = b end
+	b.t, b.n_req = now, b.n_req + 1
+	T.n_bld = (T.n_bld or 0) + 1
+	t_log("build", "request", name, math.floor((cost and cost.requisition) or 0) .. "/" .. math.floor((cost and cost.power) or 0),
+		"bank", math.floor(cache.resources.requisition or 0) .. "/" .. math.floor(cache.resources.power or 0), "n", b.n_req)
 end
 
 -- the level for the new logic: a tier whose research is queued or running still counts as not reached (Elite: 3 while researching)
@@ -192,7 +256,7 @@ local function t_eval(now)
 	local was_want, was_k = T.was_want, T.was_k                             -- 0.4: since when this research is wanted without a break (T.wsince)
 	T.was_want = false
 	T.k, T.want, T.decision, T.late = nil, false, nil, false
-	T.unit_req, T.unit_pow = 0, 0
+	T.unit_req, T.unit_pow, T.unit_first = 0, 0, false
 	if n == 0 or lvl < 1 or lvl > n then T.tag = "T" .. tostring(lvl); return T end   -- all tiers done (or none defined)
 	local k = lvl
 	local pbg = t_tier_pbg(k)
@@ -266,16 +330,48 @@ local function t_eval(now)
 		if army < fa then v, why = "army", "army " .. army .. "<" .. fa
 		elseif r == 1 and pct < t_num("Tech_LosingPct", -0.35) then v, why = "army", t_fmt("losing %.2f", pct)
 		elseif r == 2 and retreat then v, why = "army", "retreat"
-		elseif t_num("Tech_FloatUnit", 1) >= 1 and type(EliteAI_UnitAhead) == "function" and now - (T.wsince or now) <= t_num("Tech_FloatUnitMax", 120) then
+		elseif t_num("Tech_FloatUnit", 1) >= 1 and type(EliteAI_UnitAhead) == "function" then
 			-- 0.4 (TECH_RU.md 14; s17: the zoanthrope had waited 115 s and was 57 s away when the float asked for T3 - the
 			-- reserve took its req, the 7th unit came 110 s later): the unit that was waited for before the research was
 			-- wanted and is within Tech_FloatUnitEta of the income goes first - its cost stays in the bank (T.unit_req / pow,
-			-- the purchase function below); the next unit's wait begins after the want, so the research is next. Never for
-			-- longer than Tech_FloatUnitMax (120 s) after the want: a unit that is not bought by then does not hold the research
-			local un, ueta, ureq, upow = EliteAI_UnitAhead( T.wsince or now )
-			if un ~= nil then
-				v, why = "army", "unit_first " .. tostring(un) .. " eta " .. math.floor(ueta or 0)
-				T.unit_req, T.unit_pow = ureq or 0, upow or 0
+			-- the purchase function below); the next unit's wait begins after the want, so the research is next.
+			-- 0.5 (TECH_RU.md 15.3; s18: "tech->army unit_first ...venom_cannon eta 63" 11:03, "army->tech" 11:13, "tech->army
+			-- unit_first tyr_warrior eta 72" 11:23 ... - neither the unit nor T3 for 96 s). The question "is the unit still
+			-- within 75 s" was asked again at every tick: the plan's unit changes between ticks (the warrior 300, the tyrant guard
+			-- 400 = 100 s away), the req left to the unit went into models and upgrades, and every time the answer was "no" the
+			-- reserve took the bank back for 10 s. Now the answer is given ONCE per tier and holds (T.uf[k], numbers): from the
+			-- tick a unit is found ahead until the next unit is bought (EliteAI_UnitBuys: a spawn request or a call-in) or
+			-- Tech_FloatUnitWait (90 s = its 75 s and a margin) have passed - then the research, and no second unit for this
+			-- tier. While it holds the decision is "army", the reserve is off (EliteAI_TechReserve), the research locks nothing
+			-- (the purchase function: the unit's cost stays in the bank whatever the order of the budgets), and the unit is
+			-- "within reach" for the reinforcements and the upgrades (EliteAI_TechUnitFirst, strategy_unit_purchase.ai).
+			-- Lines "T3 unit_first start <unit> eta N cost R/P", "T3 unit_first end <why> after N s".
+			T.uf = T.uf or {}
+			local L = T.uf[k]
+			local buys = (type(EliteAI_UnitBuys) == "function") and EliteAI_UnitBuys() or 0
+			if L == nil and now - (T.wsince or now) <= t_num("Tech_FloatUnitMax", 120) then
+				local un, ueta, ureq, upow = EliteAI_UnitAhead( T.wsince or now )
+				if un ~= nil then
+					L = { t0 = now, name = tostring(un), eta = ueta or 0, req = ureq or 0, pow = upow or 0, buys = buys }
+					T.uf[k] = L
+					t_log(T.tag, "unit_first", "start", L.name, "eta", math.floor(L.eta), "cost", math.floor(L.req) .. "/" .. math.floor(L.pow),
+						"bank", math.floor(bank_req) .. "/" .. math.floor(bank_pow), "units", buys)
+				end
+			end
+			if L ~= nil and L.done == nil then
+				if buys > L.buys then L.done = "unit bought"
+				elseif now - L.t0 >= t_num("Tech_FloatUnitWait", 90) then L.done = "no unit" end
+				if L.done ~= nil then
+					t_log(T.tag, "unit_first", "end", L.done, "after", math.floor(now - L.t0), "s", "bank", math.floor(bank_req) .. "/" .. math.floor(bank_pow))
+				else
+					-- the unit the plan waits for now (its choice may change between ticks: the cost that is kept follows it)
+					if type(EliteAI_UnitClaim) == "function" then
+						local cr, cp = EliteAI_UnitClaim()
+						if cr ~= nil then L.req, L.pow = cr or 0, cp or 0 end
+					end
+					v, why = "army", "unit_first " .. L.name .. " eta " .. math.floor(L.eta)
+					T.unit_req, T.unit_pow, T.unit_first = L.req, L.pow, true
+				end
 			end
 		end
 	elseif r == 1 then
@@ -290,6 +386,9 @@ local function t_eval(now)
 		if army < t_num("Tech_C_MinArmy", 2) then v, why = "army", "army " .. army .. "<2" end
 	end
 	T.decision = t_decide(T.tag, v, why, now)
+	-- 0.5: while the "unit first" holds the money is the unit's whatever the arbiter's memory still says (a switch to "army"
+	-- that the hysteresis keeps back for some seconds must not leave the reserve on meanwhile)
+	if T.unit_first then T.decision = "army" end
 	T.conf_why = why
 	return T
 end
@@ -373,9 +472,16 @@ end
 function EliteAI_TechReserve()
 	local T = EliteAI_T
 	if not t_on() or type(T) ~= "table" or not T.want or T.decision ~= "tech" or not T.k then return 0, 0 end
+	if T.emerg then return 0, 0 end                                         -- 0.5: the enemy is at our base - nothing is held back from the army, whatever the arbiter's memory says
 	local pbg = t_tier_pbg(T.k)
 	if pbg and Task_CountActivePBG( s_selfplayer, pbg, true ) > 0 then return 0, 0 end   -- the research is running: paid already
 	return T.cost_req or 0, T.cost_pow or 0
+end
+-- 0.5 (TECH_RU.md 15.3): true while the float research has stepped back for the unit that was waited for (t_eval, T.uf) - the
+-- state of the last t_eval; strategy_unit_purchase.ai keeps that unit's req from the reinforcements and the upgrades
+function EliteAI_TechUnitFirst()
+	local T = EliteAI_T
+	return t_on() and type(T) == "table" and T.unit_first == true
 end
 -- 0.3: the power an upgrade has to leave in the bank for the T2 research (the state of the last t_eval; 0 = nothing): what the
 -- power income cannot bring back by Tech_T2Time - the whole cost from then on, until the research is placed
@@ -793,7 +899,7 @@ function strategy_tech_purchase.do_purchase( availableResources )
 		-- EliteAI 0.2: the arbiter gave the money to the army - the tier research is not bought ahead of the unit the units
 		-- pipeline is about to buy (its cost stays in the bank; nothing is locked: the units budget buys)
 		-- ... and not at all while the enemy stands at our base (T.emerg: Elite's own exit above needs an army that can defend)
-		if is_tier and T.decision == "army" and t_num("Tech_ArmyFirst", 1) >= 1 then
+		if is_tier and (T.decision == "army" or T.emerg) and t_num("Tech_ArmyFirst", 1) >= 1 then
 			local kr, kp = 0, 0
 			if type(EliteAI_UnitWant) == "function" then kr, kp = EliteAI_UnitWant() end
 			kr, kp = kr or 0, kp or 0
@@ -805,6 +911,14 @@ function strategy_tech_purchase.do_purchase( availableResources )
 				t_wait(now, "army_first", "unit", math.floor(kr) .. "/" .. math.floor(kp),
 					"avail", math.floor(availableResources.requisition or 0) .. "/" .. math.floor(availableResources.power or 0),
 					"cost", math.floor(unitCost.requisition or 0) .. "/" .. math.floor(unitCost.power or 0), "why", T.conf_why or "-", T.emerg and "enemy at the base" or "")
+				aipoptrace()
+				return false
+			end
+		end
+		-- EliteAI 0.5 (TECH_RU.md 15.4): what is not the tier research - never under the unit the plan waits for, and a building
+		-- whose requests die (nobody builds it) is left alone for a while (s18: ig_super_turret, 300/40 off every budget)
+		if t_on() and not is_tier then
+			if t_other_gate(now, pbg, demandTbl.demand_type, unitCost, availableResources) ~= nil then
 				aipoptrace()
 				return false
 			end
@@ -845,6 +959,7 @@ function strategy_tech_purchase.do_purchase( availableResources )
 		-- request
 		if (demandTbl.demand_type == DEMAND_Building) then
 			Request_Construction( s_selfplayer, TGROUP_Tech, TPRIORITY_Tech, pbg, demandTbl.buildstyle )
+			if t_on() then t_bld_note(now, pbg, unitCost) end                    -- 0.5: is it alive at the next tick?
 		elseif (demandTbl.demand_type == DEMAND_Upgrade) then
 			Request_Production( s_selfplayer, TGROUP_Tech, TPRIORITY_Tech, PITEM_Upgrade, pbg )
 			if t_on() and type(EliteAI_EnergyNote) == "function" then EliteAI_EnergyNote( "tech", unitCost ) end   -- the purchase book (energy)
