@@ -1,0 +1,1 @@
+- New AI 15: steps out of thrown grenades with a human-like delay, gets out from under turrets at once.
