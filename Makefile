@@ -25,6 +25,7 @@ all: $(OUT)/CursorScale.dll
 all: $(OUT)/DXVK.dll $(OUT)/FpsUnlock.dll
 all: $(OUT)/UIFilter.dll
 all: $(OUT)/EliteMaps.dll
+all: $(OUT)/OverwatchOnce.dll
 
 $(OUT):
 	mkdir -p $(OUT)
@@ -147,6 +148,10 @@ $(OUT)/ChatHide.dll: chathide/chathide.c common/gfxui.h | $(OUT)
 
 # 03.11.2026: the game's own Continue after a custom game (host -> everyone back in the same room)
 $(OUT)/Continue.dll: continue/continue.c | $(OUT)
+	$(CC) $(CFLAGS) -shared -o $@ $< -static-libgcc
+
+# 11.11.2026: an overwatch order (right-click on a unit button) builds one squad, then the HUD's overwatch entry is erased
+$(OUT)/OverwatchOnce.dll: overwatchonce/overwatchonce.c | $(OUT)
 	$(CC) $(CFLAGS) -shared -o $@ $< -static-libgcc
 
 # 03.11.2026: a jump order lost on an obstacle hop (Autarch) is sent again - client side, the game's own order

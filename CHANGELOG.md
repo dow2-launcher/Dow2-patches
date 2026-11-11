@@ -4,6 +4,18 @@ Every version gets an entry here before it reaches `main`. CI then tags `vX.Y.Z`
 version (`X.Y.0`) it also publishes a GitHub Release with the DLLs and the entries since the previous `X.Y.0`.
 The version of the set lives only in `VERSION`; each DLL still writes its own version to its log.
 
+## 0.2.52 — 2026-11-11
+Overwatch once (store overwatchonce-1, experiment, order 1020, off by default, Elite and vanilla): OverwatchOnce.dll (overwatchonce/).
+- Owner's request: a right-click (overwatch) on a unit button kept building that unit forever (players got a second batch of
+  tankbustas/dreads by accident). Now it orders one squad: built when affordable, then the overwatch entry goes away.
+- Overwatch is the HUD's only (no command, nothing in the simulation): map { building id -> squad blueprint } in the HUD overwatch
+  object (*(*(0x01335720)+8)+0xCC, +0x0C); its tick 0x00B26890 (called from 0x00ACBFB6) sends the plain CMD_BuildSquad
+  (CommandProxy +0x0C 0x00AF4380) when the building can build it. The DLL wraps the call, notes the tick's build order (return
+  0x00B26AD8) and, once the production queue (EntityController::QI(7)) has the squad, erases the entry with the game's own erase
+  0x00B26BD0 (the second right-click's) and redraws the tech tree (BindingBuildTech +0x18, +0x1ED). Bytes/slots checked first.
+- Stand 1 (vanilla and Elite, SM vs AI, overwatch on tactical marines, 600 req given 4 times): without the DLL 4 squads, with it 1,
+  erased 100 ms after the order; replays of the matches with and without the DLL give the same SCAR state every 5 s (both players'
+  squads, positions, health, resources) as the live game.
 ## 0.2.51 — 2026-11-11
 Elite maps (store elitemaps-1, NEW, experiment, off by default, VANILLA only - `games: ["vanilla"]`): EliteMaps.dll.
 - Vanilla Retribution gets Elite's maps: DOW2.exe's import of ConfigFile::GetString answers the missing archive.NN keys of the

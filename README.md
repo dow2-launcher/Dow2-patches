@@ -45,6 +45,7 @@ are client-side, and the other players in the match don't need them.
 | **Don't drop out of the match when Steam goes away** | A match is played to the end when Steam loses its connection, however long it is away. | `steamkeep` → `steamkeep-2` | `steamkeep/` | no |
 | **Cursor Scale** (new, staging, experiment) | A bigger mouse cursor: Auto by the game's own resolution (height / 1080, so 1440p ×1.33, 4K ×2) or a chosen ×1.25 / ×1.5 / ×2 / ×2.5 / ×3 (launcher dropdown); the UI scale stays. Every cursor state, fullscreen and windowed, Elite and vanilla. | `cursorscale` → `cursorscale-1` (staging) | `cursorscale/` | no |
 | **Elite maps** (new, staging, experiment, vanilla only) | Vanilla Retribution: Elite's 1v1-3v3 maps (60 of its 62; the 2 FFA maps are not offered by vanilla) in the map list of skirmish and custom games, read from the player's own Elite installation in the same game folder. A new map only for a lobby where everyone has it on (vanilla has no map download); vanilla maps, the data checksum and the automatch stay vanilla's. | `elitemaps` → `elitemaps-1` (staging) | `elitemaps/` | maps only (no game data) |
+| **Overwatch once** (new, staging, experiment) | Right-click (overwatch) on a unit's build button orders one squad: it is built as soon as it is affordable, then the overwatch mark goes off by itself (no surprise second squad). Elite and vanilla. | `overwatchonce` → `overwatchonce-1` (staging) | `overwatchonce/` | no (overwatch lives in the HUD only; at most one build order less) |
 | **Observer lag fix (experimental)** | Spectating a live game no longer stutters. | `obsfix_r2` → `obsfix-1` | `obsfix/` | no |
 | **Join a lobby from the launcher (test)** | Experiment by siritos: a Join button on the launcher's Lobbies tab (and elite:// links of the ladder site); the game starts and walks into the room by itself. | `roomjoin` → `roomjoin-4` (staging; live: `roomjoin-3`) | `roomjoin/` | no |
 | **Fix: the game closes when a match starts** (new, not released yet) | Repairs Elite's ShellPatch.dll (the race meter) when it could not hook in at the game's start - then every match crashed a second in. Otherwise does nothing. | `shellfix` → `shellfix-1` (staging) | `shellfix/` | no |
@@ -203,6 +204,15 @@ cursorscale/ - **CursorScale.dll** (CursorScale 1)
     before the real call; cursors made before it was loaded (Elite's Profiler loads add-ons at the front end) are rebuilt in the
     input object's vector. No drawing of our own, no Direct3D. CursorScale.ini: Scale=auto|1.0-4.0 (auto = the game window's client
     height / 1080, i.e. the game's own resolution, not the desktop's), Filter=smooth|sharp.
+
+overwatchonce/ - **OverwatchOnce.dll** (OverwatchOnce 1)
+    Overwatch is the HUD's, not the simulation's: a right-click on a unit button toggles { building id -> squad blueprint } in the
+    HUD overwatch object (*(*(0x01335720)+8)+0xCC, map at +0x0C); every HUD update 0x00ACBFB6 calls its tick 0x00B26890, which
+    sends the plain build order (CommandProxy +0x0C, CMD_BuildSquad 3) whenever the building can build it, and keeps the entry.
+    OverwatchOnce wraps that call: a build order sent by the tick (return address 0x00B26AD8) is remembered; once the building's
+    production queue (EntityController::QI(7) +0x54, item vftable +8 = blueprint, +0x60 added counter) has it, the entry is erased
+    with the game's own erase 0x00B26BD0 (the second right-click's) and the tech tree is redrawn (BindingBuildTech +0x1ED). Nothing
+    in the simulation is touched and no command is added. Bytes/slots checked before hooking. OverwatchOnce.ini: Enabled, Verbose.
 
 obsfix/ - **ObsFix.dll** (ObsFix v1)
     When you spectate a live game the client asks "which slot am I in" dozens of times per frame and rebuilds the whole match

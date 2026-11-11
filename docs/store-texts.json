@@ -633,5 +633,23 @@
       "fr": "Retribution vanilla uniquement : les cartes 1v1-3v3 d'Elite dans la liste, depuis votre Elite installé. Jouez une nouvelle carte seulement avec ceux qui l'ont aussi activé.",
       "de": "Nur Vanilla Retribution: Elites 1v1-3v3-Karten in der Kartenliste, aus deiner Elite-Installation. Neue Karten nur mit Spielern, die das auch aktiviert haben."
     }
+  },
+  "overwatchonce": {
+    "category": "experiment",
+    "order": 1020,
+    "name": {
+      "en": "Overwatch once",
+      "ru": "Overwatch once",
+      "es": "Overwatch once",
+      "fr": "Overwatch once",
+      "de": "Overwatch once"
+    },
+    "description": {
+      "en": "Right-click (overwatch) on a unit's build button orders one squad: it is built as soon as you can afford it, then overwatch switches itself off - no surprise second squad.",
+      "ru": "Автозаказ правой кнопкой (overwatch) строит один отряд: как только хватит ресурсов, отряд встаёт в очередь, и автозаказ снимается сам — без случайной второй пачки.",
+      "es": "El clic derecho (overwatch) en el botón de una unidad encarga una sola escuadra: se construye en cuanto puedas pagarla y el overwatch se desactiva solo.",
+      "fr": "Le clic droit (overwatch) sur le bouton d'une unité commande une seule escouade : elle est produite dès que vous pouvez la payer, puis l'overwatch se coupe tout seul.",
+      "de": "Rechtsklick (Overwatch) auf den Bau-Knopf einer Einheit bestellt einen Trupp: Er wird gebaut, sobald du ihn bezahlen kannst, danach schaltet sich Overwatch selbst ab."
+    }
   }
 }
