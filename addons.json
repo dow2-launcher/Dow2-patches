@@ -1161,5 +1161,29 @@
       "fr": "IA d'escarmouche en test, trois variantes : Easy = \"NEW AI A\", Normal = \"NEW AI B\", Hard = \"NEW AI C\" (Insane reste l'IA d'Elite). A, B et C sont la même IA avec les mêmes mécaniques de combat (tir concentré, repli de toute l'armée, punition des fuyards, corps à corps contre les tireurs, réparation, capacités globales, coureurs sur les points ; armée plus variée, super-unités comme le Baneblade pas avant la 18e minute ; montée progressive des tiers : T2 ~7-12 min, T3 ~15-22 min ; n'accumule pas l'argent : dépense l'énergie en trop en unités et ne le garde pas pour les capacités et renforts, construit une armée de tiers supérieurs) ; seules changent les règles dans les cas litigieux. Dites-nous laquelle joue le mieux. Escarmouche solo uniquement ; décochez-la en ligne.",
       "de": "Gefechts-KI im Test, drei Varianten: Easy = \"NEW AI A\", Normal = \"NEW AI B\", Hard = \"NEW AI C\" (Insane bleibt die Elite-KI). A, B und C sind dieselbe KI mit denselben Kampfmechaniken (Fokusfeuer, Rückzug der ganzen Armee, Bestrafen von Fliehenden, Nahkampf gegen Schützen, Reparatur, globale Fähigkeiten, Läufer für die Punkte; abwechslungsreichere Armee, Supereinheiten wie der Baneblade nicht vor Minute 18; schrittweiser Tech-Aufstieg: T2 ~7-12 Min., T3 ~15-22 Min.; hortet kein Geld: überschüssige Energie geht in Einheiten, kein Zurückhalten für Fähigkeiten und Verstärkungen, baut eine Armee höherer Tiers); nur die Regeln in strittigen Momenten unterscheiden sich. Sagt uns, welche besser spielt. Nur Einzelspieler-Gefecht; online ausschalten."
     }
+  },
+  "elitemaps": {
+    "version": "1",
+    "dll": "EliteMaps.dll",
+    "default": false,
+    "games": [
+      "vanilla"
+    ],
+    "category": "experiment",
+    "order": 1010,
+    "name": {
+      "en": "Elite maps",
+      "ru": "Elite maps",
+      "es": "Elite maps",
+      "fr": "Elite maps",
+      "de": "Elite maps"
+    },
+    "description": {
+      "en": "Vanilla Retribution only: Elite's 1v1-3v3 maps in the game's map list, taken from your Elite install. Play a new map only with players who have this on too.",
+      "ru": "Только ваниль Retribution: карты Elite 1×1–3×3 в списке карт игры, из вашей установки Elite. Новую карту играйте только с теми, у кого это тоже включено.",
+      "es": "Solo Retribution vanilla: los mapas 1v1-3v3 de Elite en la lista de mapas, desde tu Elite instalado. Juega un mapa nuevo solo con quien también lo tenga activado.",
+      "fr": "Retribution vanilla uniquement : les cartes 1v1-3v3 d'Elite dans la liste, depuis votre Elite installé. Jouez une nouvelle carte seulement avec ceux qui l'ont aussi activé.",
+      "de": "Nur Vanilla Retribution: Elites 1v1-3v3-Karten in der Kartenliste, aus deiner Elite-Installation. Neue Karten nur mit Spielern, die das auch aktiviert haben."
+    }
   }
 }

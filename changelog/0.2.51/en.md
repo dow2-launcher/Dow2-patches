@@ -1,0 +1,1 @@
+- New, test: Elite maps (vanilla Retribution only): Elite's 1v1-3v3 maps in the map list of skirmish and custom games, from your Elite install. Play a new map only with players who have it on too.

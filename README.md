@@ -44,6 +44,7 @@ are client-side, and the other players in the match don't need them.
 | **Reverse (test)** | Ctrl + right-click behind your vehicles: they back off driving backwards, front armour to the enemy. | `reverse_r2` → `reverse-4` | `reverse/` | no (the game's own orders) |
 | **Don't drop out of the match when Steam goes away** | A match is played to the end when Steam loses its connection, however long it is away. | `steamkeep` → `steamkeep-2` | `steamkeep/` | no |
 | **Cursor Scale** (new, staging, experiment) | A bigger mouse cursor: Auto by the game's own resolution (height / 1080, so 1440p ×1.33, 4K ×2) or a chosen ×1.25 / ×1.5 / ×2 / ×2.5 / ×3 (launcher dropdown); the UI scale stays. Every cursor state, fullscreen and windowed, Elite and vanilla. | `cursorscale` → `cursorscale-1` (staging) | `cursorscale/` | no |
+| **Elite maps** (new, staging, experiment, vanilla only) | Vanilla Retribution: Elite's 1v1-3v3 maps (60 of its 62; the 2 FFA maps are not offered by vanilla) in the map list of skirmish and custom games, read from the player's own Elite installation in the same game folder. A new map only for a lobby where everyone has it on (vanilla has no map download); vanilla maps, the data checksum and the automatch stay vanilla's. | `elitemaps` → `elitemaps-1` (staging) | `elitemaps/` | maps only (no game data) |
 | **Observer lag fix (experimental)** | Spectating a live game no longer stutters. | `obsfix_r2` → `obsfix-1` | `obsfix/` | no |
 | **Join a lobby from the launcher (test)** | Experiment by siritos: a Join button on the launcher's Lobbies tab (and elite:// links of the ladder site); the game starts and walks into the room by itself. | `roomjoin` → `roomjoin-4` (staging; live: `roomjoin-3`) | `roomjoin/` | no |
 | **Fix: the game closes when a match starts** (new, not released yet) | Repairs Elite's ShellPatch.dll (the race meter) when it could not hook in at the game's start - then every match crashed a second in. Otherwise does nothing. | `shellfix` → `shellfix-1` (staging) | `shellfix/` | no |
@@ -183,6 +184,17 @@ soundbugtest/ - **SoundBugTest.dll** (SoundBugTest 1, TEST)
 steamkeep/ - **SteamKeep.dll** (SteamKeep 2)
     A Steam drop during a match is not turned into an end reason, and Steam's close request (a bare WM_CLOSE) is ignored for the
     rest of the match. Alt+F4, menu Quit, the close button and Windows shutdown still work. Not in menus or replays.
+
+elitemaps/ - **EliteMaps.dll** (EliteMaps 1, vanilla only)
+    The game reads its .module (vanilla: DOW2.module or DOW2Multiplayer.module, by DLC ownership, 0x00415CE0) with Util.dll's
+    ConfigFile: 0x008019A0 -> 0x008BA240 per section -> 0x008B9EB0 asks archive.01, archive.02 ... of [data:common] through
+    ConfigFile::GetString until one is missing. EliteMaps points DOW2.exe's import of GetString at its own function: a missing
+    archive.NN of [data:common] (ConfigFile::GetSection) is answered with the next of Elite\Archives\Elite_Data_21_Maps_01.sga,
+    Elite_Data_22_Maps_02.sga, Elite_Data_20_UI_Maps.sga (the ones that exist), after the game's own = the lowest priority (no
+    vanilla file replaced; Elite's map names are all new). Nothing written to the game's files. The data checksum (0x007A0A30 =
+    the CRC blocks + data:maps\pvp\_cameras\*.*) does not see maps\pvp\<map>: it stays vanilla's 371005917. Has to be in
+    before the mount (~170 ms after the start under Wine, after SteamAPI_Init); the vanilla loader loads it at ~50 ms. -modname
+    (Elite): nothing. EliteMaps.ini Enabled=0: off. EliteMaps.log: the archives found and the archive.NN answered.
 
 cursorscale/ - **CursorScale.dll** (CursorScale 1)
     The game's cursor is an ordinary Windows cursor: 45 48x48 TGAs of UI/cursor/cursorlist.lua -> Plat::Input::CreateCursor ->
