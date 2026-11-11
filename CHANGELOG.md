@@ -4,6 +4,17 @@ Every version gets an entry here before it reaches `main`. CI then tags `vX.Y.Z`
 version (`X.Y.0`) it also publishes a GitHub Release with the DLLs and the entries since the previous `X.Y.0`.
 The version of the set lives only in `VERSION`; each DLL still writes its own version to its log.
 
+## 0.2.61 — 2026-11-12
+New AI 21 (store newai-21, experiment, off by default, Elite only) = newai-20 + army tempo and trading, real purchases
+(main.ai, mechanics.ai, simulation/ai/strategy_unit_purchase.ai, strategy_tech_purchase.ai, append/scar/elite/elite.scar from eliteai e141310; EliteAI.dll unchanged).
+- Tempo: a population target (30 + 5 per minute up to 80 % of the cap); below it the next unit goes first in every variant.
+- Trading: a march is judged before it starts (strength at the goal and on the way, allies counted; Conf_Engage A/B/C), a fight on the spot
+  (leave at 1.4 against us), the army gathers before a fight; no walking back into the same force after a retreat.
+- Extra generators and nodes only when power is short; not rebuilt on a timer after the enemy razes them; T2 from 250 s, T3 from 13:00.
+- A spawn request is not a purchase: confirmed by the bank or the task, unconfirmed ones paused (no repeated orders the engine refuses);
+  the price of a node on its way is reserved; the answer to the enemy army is picked first among the variants.
+- Map: a free point within 40 m of the army is taken by one squad; a second runner at 6 squads on a quiet map; hard per-type cap in every path.
+
 ## 0.2.60 — 2026-11-12
 Speech streak fix (store speechstreakfix-1, new, experiment order 1040, off by default, games elite + vanilla) - TvangeS's crash of 11.11.2026
 (Access Violation DOW2.exe 0x00B8FC24, read 0x84B23004, 3v3 automatch at 1:34; report reports/crash_tvanges_1111).
