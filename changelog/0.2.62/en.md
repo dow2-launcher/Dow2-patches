@@ -1,0 +1,1 @@
+- Ctrl attack ground 2: attack ground is now Ctrl + LEFT click on the ground (Ctrl + right click stays Reverse's backing off); Ctrl + left click on a unit keeps the game's own meaning; Shift queues it.
