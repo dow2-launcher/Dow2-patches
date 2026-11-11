@@ -4,6 +4,17 @@ Every version gets an entry here before it reaches `main`. CI then tags `vX.Y.Z`
 version (`X.Y.0`) it also publishes a GitHub Release with the DLLs and the entries since the previous `X.Y.0`.
 The version of the set lives only in `VERSION`; each DLL still writes its own version to its log.
 
+## 0.2.48 — 2026-11-11
+New AI 16 (store newai-16, experiment, off by default, Elite only) = newai-15 + answer to the enemy army, spending fixes
+(main.ai, mechanics.ai, simulation/ai/strategy_unit_purchase.ai, strategy_tech_purchase.ai, append/scar/elite/elite.scar from eliteai ad510cb).
+- Counter layer: seen enemy squads (fog of war honest, AIPlayer_CanSeeSquad) are classed by blueprint name (light infantry, swarm,
+  heavy, vehicles, melee heroes, jump, set-up teams, turrets) and remembered 120 s; answers of the own race and anti-vehicle upgrades
+  get more demand (Conf_CounterVsPlan A/B/C); detectors and set-up teams are focus targets; melee heroes are stunned/slowed early.
+- Turret siege: the decision is held, units that outrange a turret fire from outside its range (manticore loop fixed).
+- Set-up teams: a grenade/stun squad walks into throw range of any seen set-up team; damaged light vehicles pull back by damage rate.
+- Spending: upgrades no longer bypass the drought (variant C), one wargear item per slot, a unit within 15 s goes first,
+  director reinforcements obey the drought; grenade dodge ignores shells seen too late.
+
 ## 0.2.47 — 2026-11-11
 New AI 15 (store newai-15, experiment, off by default, Elite only) = newai-14 + grenade dodge
 (main.ai, mechanics.ai, simulation/ai/strategy_unit_purchase.ai, strategy_tech_purchase.ai, append/scar/elite/elite.scar from eliteai 6592623).

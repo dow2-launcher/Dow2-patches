@@ -99,7 +99,7 @@ DEMAND_NeverBuild = -99999
 
 -------------------------------------------------------------------------------------------------
 -- EliteAI tech plan (state: numbers, strings and plain tables only)
-EliteAI_TECH_VERSION = "0.5"
+EliteAI_TECH_VERSION = "0.6"
 EliteAI_T = { st = {}, said = {}, conf = {}, waits = {}, last_stats = -1, eval_t = -1, cost_t = -1, level = 1 }
 
 local function t_on() return EliteAI ~= nil and EliteAI.on == true end
@@ -269,6 +269,12 @@ local function t_eval(now)
 	local tt = (k == 1) and t_num("Tech_T2Time", 270) or t_num("Tech_T3Time", 900)       -- 0.3: T2 270 / 210 / 450 (was 420 / 240 / 720)
 	local early = (k == 1) and t_num("Tech_T2Early", 210) or t_num("Tech_T3Early", 660)
 	local late = (k == 1) and t_num("Tech_T2Late", 450) or t_num("Tech_T3Late", 1320)
+	-- 0.6 (TECH_RU.md 17.4): the enemy holds a line of set-up teams and we have a tool against them - the tier comes earlier
+	-- (mod/mechanics.ai EliteAI_MechCounterTech: the Counter layer, its arbiter Conf_CounterVsPlan; 0 = as planned)
+	if type(EliteAI_MechCounterTech) == "function" then
+		local cs = EliteAI_MechCounterTech( k ) or 0
+		if cs > 0 then tt, early = tt - cs, early - cs end
+	end
 	T.plan_tt, T.plan_early = tt, early
 	local min_army = (k == 1) and t_num("Tech_MinArmy", 4) or t_num("Tech_MinArmyT3", 6)
 	local army = (cache and cache.military_count) or 0
