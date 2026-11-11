@@ -4,6 +4,20 @@ Every version gets an entry here before it reaches `main`. CI then tags `vX.Y.Z`
 version (`X.Y.0`) it also publishes a GitHub Release with the DLLs and the entries since the previous `X.Y.0`.
 The version of the set lives only in `VERSION`; each DLL still writes its own version to its log.
 
+## 0.2.58 — 2026-11-11
+Ctrl attack ground (store ctrlattack-1, NEW, experiment, order 1030, off by default, Elite and vanilla): CtrlAttack.dll (ctrlattack/).
+- Owner's request: Ctrl + click = attack the ground at a point (wraithguard and many other squads can), only while Ctrl is held.
+- The game has it: the core action Attack ground (BindingAttackGround, hotkey G) sends WorldDoCommandSquads(SCMD_Attack = 48) with a
+  position to the selected squads passing 0x00B70240 (a weapon with attack_ground = true) and the min-range check 0x00B70290. The DLL
+  hooks CommandProxy::DefaultAction (vftable slot +0x74 of 0x0110E514 and 0x01117704): Ctrl held + right-click on the ground -> the
+  capable squads get that same order (Shift = queued), the others the plain right-click through 0x00AF62E0 - Reverse.dll's hook there
+  still backs them off; vehicles stay with Reverse when it is on with the same key. Nothing in replays; no simulation state touched.
+- Stand 1 (vanilla and Elite, Eldar): Ctrl+RMB -> wraithguard holds SCMD_Attack and fires the wraithcannon at the bare ground
+  (screenshots: lightning and crater every ~5 s), without Ctrl it walks there; Shift+RMB move then Ctrl+Shift+RMB -> moves, then
+  attacks; fire prism alone -> Reverse backs it off (heading kept); mixed selection -> each its own. Replays of the matches (without
+  the DLLs) give the same SCAR log (squads, commands, positions, health every 0.5-5 s) as the live games, vanilla and Elite.
+- Survey of the game's own check on every pvp squad but heroes (default loadout, stand): vanilla 19 of 83 squads can, Elite 47 of 220;
+  more get it with a weapon upgrade (missile launchers, flamers, autocannons...) - the check is live.
 ## 0.2.57 — 2026-11-11
 New AI 20 (store newai-20, experiment, off by default, Elite only) = newai-19 + EliteAI.dll 0.11; the AI scripts are newai-19's, unchanged.
 - The replay of a match with the new AI goes to the replay site by itself (MMFind sends only matches with other people): back in

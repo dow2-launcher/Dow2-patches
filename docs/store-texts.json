@@ -651,5 +651,23 @@
       "fr": "Le clic droit (overwatch) sur le bouton d'une unité commande une seule escouade : elle est produite dès que vous pouvez la payer, puis l'overwatch se coupe tout seul.",
       "de": "Rechtsklick (Overwatch) auf den Bau-Knopf einer Einheit bestellt einen Trupp: Er wird gebaut, sobald du ihn bezahlen kannst, danach schaltet sich Overwatch selbst ab."
     }
+  },
+  "ctrlattack": {
+    "category": "experiment",
+    "order": 1030,
+    "name": {
+      "en": "Ctrl attack ground",
+      "ru": "Ctrl attack ground",
+      "es": "Ctrl attack ground",
+      "fr": "Ctrl attack ground",
+      "de": "Ctrl attack ground"
+    },
+    "description": {
+      "en": "Hold Ctrl and right-click the ground: selected squads that can attack the ground (wraithguard, D-cannon, predators, tankbustas...) fire at that point - the game's own Attack ground (G), without pressing G. Shift queues it. Other squads move as usual; with Reverse on, vehicles back up.",
+      "ru": "Зажми Ctrl и кликни правой по земле: выделенные отряды, умеющие атаку по земле (искроебы, D-пушка, предаторы, танкбасты...), стреляют в эту точку — штатная атака по земле (G) игры, без нажатия G. Shift — в очередь. Остальные отряды идут как обычно, с Reverse техника отъезжает задом.",
+      "es": "Mantén Ctrl y haz clic derecho en el suelo: las escuadras seleccionadas que pueden atacar el suelo (wraithguard, cañón D, predators, tankbustas...) disparan a ese punto: el Atacar suelo (G) del propio juego, sin pulsar G. Shift lo pone en cola. Las demás se mueven como siempre; con Reverse, los vehículos retroceden.",
+      "fr": "Maintenez Ctrl et faites un clic droit au sol : les escouades sélectionnées capables d'attaquer le sol (wraithguard, canon D, predators, tankbustas...) tirent sur ce point : l'Attaque au sol (G) du jeu, sans appuyer sur G. Maj la met en file. Les autres se déplacent normalement ; avec Reverse, les véhicules reculent.",
+      "de": "Strg gedrückt halten und auf den Boden rechtsklicken: ausgewählte Trupps, die den Boden angreifen können (Phantomwachen, D-Kanone, Predatoren, Panzaknakkaz...), feuern auf diesen Punkt - der Bodenangriff (G) des Spiels, ohne G zu drücken. Shift reiht ihn ein. Andere Trupps laufen wie gewohnt; mit Reverse fahren Fahrzeuge rückwärts."
+    }
   }
 }

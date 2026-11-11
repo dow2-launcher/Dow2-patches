@@ -1,0 +1,1 @@
+- New: Ctrl attack ground (experiment, off by default, Elite and vanilla): hold Ctrl and right-click the ground - the selected squads that can attack the ground (wraithguard, D-cannon, predators, tankbustas...) fire at that point, as the game's own Attack ground (G) does; Shift queues it. Other squads move as usual; with Reverse on, vehicles back up.
