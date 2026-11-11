@@ -24,8 +24,26 @@
 -- {x,y,z} only); every engine call on a squad is preceded by "squad exists and has models"; no pcall around engine calls
 -- (an error inside leaks the Lua mutex -> hang); deterministic decisions only (engine time/data, no os.time/math.random);
 -- the enemy and the points are scanned once per director tick (3 s), names of own squads are fetched once per squad id.
+--
+-- 0.3 (11.11, the scene polygon - reports/polygon_1111, TECH_RU.md section 10):
+--  * Idle: a squad that stands without an order out of a fight (did not move, was not hit, did not fire for Mech_IdleSecs)
+--    goes back to the army / to the director's target; a runner or split squad found idle loses the role (a carnifex was
+--    made a runner and stood with a capture order it cannot execute); only squads that can capture (PBG_CanCapture) get
+--    capture roles; an army standing at its target gets the next goal (EliteAI.goal, read by the director in main.ai).
+--  * Garrison: an enemy squad inside a building (Squad_IsInHoldEntity) next to our point / target / base is a pattern of
+--    its own: the arbiter Conf_Garrison (A/B/C) says assault (the army concentrates on the building: grenades, flamers and
+--    vehicles on it, melee squads wait at the exit), hold (stay out of its range between it and our base for a short
+--    while) or bypass (go on with other targets); EliteAI.gar tells the purchase scripts to raise the demand of the
+--    counter units of reports/tactics_kb/kb.yaml (threats.garrisoned_enemy) while it lasts.
 
-EliteAI_MECH_VERSION = "0.2"
+-- 0.4 (11.11, the verification of newai-10 - TECH_RU.md 10.10 / 11):
+--  * every order goes through the order book of main.ai (EliteAI_OrderGate): no repeat while the squad is on its way, a plain
+--    move when an attack-move had no effect, a ceiling per squad, and the director waits after an order of the Idle logic.
+--  * Garrison: found also while the director has no squad of its own (every squad in a capture task: scene b3, 44 s late) -
+--    then "the army" is at our HQ; a grenade squad farther than GarGrenR walks up to throw (b2: the devils stood 37 m off,
+--    no grenade in 120 s); a squad that is a tool against the garrison is no runner while the garrison is stormed or held.
+
+EliteAI_MECH_VERSION = "0.4"
 
 -- every tunable (EliteAI.ini [Lua] Mech_<Key> overrides); metres and seconds of game time; "strength" = health points
 -- (a squad ~ 300-900, a tank ~ 1500+), vehicles weighted by VehW
@@ -95,6 +113,7 @@ local MP = {
 	RepairSecs = 30,     -- an assignment is re-made after this
 	-- RaceAbilities (player/global abilities through Elite's own player_abilities.ai)
 	AbilBudget = 60,     -- weight of BUDGET_PlayerAbility (Elite: 25 of ~265 -> ~9 % of the income)
+	AbilSaveHold = 1,    -- 1 = spawn abilities wait while the reinforcement budget saves req (EliteAI_R.save); 0 = cast as before
 	AbilDemand = 30,     -- demand of an ability we want now (Elite adds -5..5; > 1 is needed)
 	AbilSpawnDemand = 12,-- demand of spawn/reinforcement abilities out of a fight
 	AbilFightSecs = 8,   -- "in a fight": enemy contact within this many seconds
@@ -122,11 +141,55 @@ local MP = {
 	SplitMinHp = 0.5,    -- a squad below this health share does not go
 	EnemyHalfK = 1.0,    -- "enemy half": the point is closer to an enemy HQ than EnemyHalfK * its distance to our base
 	DecapEnemyR = 50,    -- Conf_Decap rule 2/3: enemies within this distance of the point -> neutralise only
+	SplitStay = 18,      -- the rest of the army covers the splitting squads this long, then the director leads it on
+	-- Idle (0.3): a squad left without an order out of a fight
+	IdleSecs = 12,       -- idle = did not move, was not hit, did not fire, is not busy (repair, capture) for this long
+	IdleMoveD = 3,       -- "did not move": within this distance of the spot where the clock started
+	IdleFireTicks = 50,  -- "did not fire": AISquad_HasFiredWeapon over this many ticks (0.1 s)
+	IdleNearSecs = 4,    -- ... with an enemy within IdleEnemyR it is sent at that enemy already after this long (the polygon's idle_near_enemy is 10 s; a tick is 3 s)
+	IdleEnemyR = 35,
+	IdleReissue = 9,     -- at most one idle order per squad per this long
+	IdleTries = 3,       -- after this many idle orders without moving the squad is left alone for IdleMute s (it cannot move)
+	IdleMute = 60,
+	IdleRoleBan = 120,   -- a runner / split squad found idle is not given a capture role again for this long
+	IdleCapR = 14,       -- a squad this close to a point we are capturing is busy capturing, not idle
+	IdleTargetR = 18,    -- "at the target": within this distance of the director's target / the goal
+	IdleArmySecs = 12,   -- the army standing at its target for this long gets the next goal
+	GoalSecs = 60,       -- a goal lives at most this long
+	GoalCapReissue = 20, -- the capture order of the squad that takes the goal point is repeated after this
+	GoalWait = 12,       -- the army waits this long for that squad, then it gets the next goal (the squad finishes and follows)
+	GoalStaleSecs = 180, -- the director's target where the army stood idle counts as used up this long (while Elite keeps it on top)
+	GoalBaseR = 60,      -- an enemy squad this close to an enemy HQ is not a goal (base defences)
+	-- Garrison (0.3): an enemy squad inside a building next to our point / target / base
+	GarApi = 1,          -- 1 = ask the engine (Squad_IsInHoldEntity); 0 = the pattern is off
+	GarPointR = 30,      -- "next to": within this distance of a point of ours / on our half, of the target, of the army ...
+	GarHomeR = 70,       -- ... or this close to our HQ
+	GarBldR = 8,         -- squads within this distance of the garrison squad are in the same building
+	GarSupportR = 35,    -- enemy squads outside the building within this distance of it fight for it
+	GarCoverK = 2.0,     -- a garrison counts this many times its strength for an army without an anti-garrison tool ...
+	GarToolK = 1.0,      -- ... and this many with one (grenades, flamers: reports/tactics_kb/kb.yaml garrisoned_enemy)
+	GarRatio = 1.5,      -- Conf_Garrison rule 2: assault when ours / (garrison * cover + support) >= this (no tool) ...
+	GarToolRatio = 1.0,  -- ... or this with a tool (rule 1: a tool is required; rule 3: tool and 1.2x this)
+	GarBruteRatio = 3.0, -- rules 1 and 3: without a tool only at this ratio
+	GarEngageR = 55,     -- the army farther than this from the building walks there as one fist (the director's goal) ...
+	GarReissue = 9,      -- ... closer: every squad gets its own order, repeated after this
+	GarGrenR = 28,       -- a grenade squad throws from at most this far (else it comes closer) ...
+	GarGrenCd = 20,      -- ... once per this long
+	GarMeleeR = 14,      -- melee squads wait this far from the building (a building is not fought in melee; they take the exit)
+	GarHoldR = 45,       -- "hold": the spot this far from the building towards our HQ
+	GarHoldSecs = 24,    -- "hold" lasts this long (once; at our HQ: again after GarBypassSecs of "bypass", and so on)
+	GarHoldNearR = 110,  -- ... and only an army within this distance of the building holds (a far one does not walk back to stand)
+	GarBypassSecs = 60,
+	GarDangerR = 40,     -- hold / bypass: a squad under fire this close to the building pulls back to the hold spot
+	GarLogSecs = 30,     -- period of the "Garrison ... state" line
+	GarConfHold = 16,    -- a Conf_Garrison decision holds at least this long (two switches in 30 s at most)
+	GarKeepK = 0.7,      -- an assault under way goes on down to this share of the ratio that starts one (and with half a tool)
 }
 
 -- squad abilities cast through elite.scar (EliteAI_MECH_ABILITIES there: THE SAME NUMBERING, keep both in sync)
 local ABIL_REPAIR_SM, ABIL_REPAIR_IG, ABIL_REPAIR_ORK, ABIL_REPAIR_GROT, ABIL_REPAIR_ELD, ABIL_REPAIR_CSM, ABIL_REPAIR_TAU = 1, 2, 3, 4, 5, 6, 7
 local ABIL_JUMP_SM, ABIL_JUMP_CSM, ABIL_JUMP_ORK, ABIL_JUMP_TYR, ABIL_JUMP_ELD = 8, 9, 10, 11, 12
+local ABIL_GREN_SM, ABIL_GREN_IG_DEVILS, ABIL_GREN_IG_KASRKIN, ABIL_GREN_ELD, ABIL_GREN_ORK, ABIL_GREN_CSM, ABIL_GREN_GK = 13, 14, 15, 16, 17, 18, 19
 -- our squads by sbps name (PBG_GetName -> "sbps\pvp\race_marine\troops\sm_assault_marine", lower case, '\' -> '/'), substrings
 local REPAIRERS = {                                                  -- who repairs (ebps with the ability, Elite attrib)
 	{ "heroes/sm_techmarine", ABIL_REPAIR_SM }, { "sm_scout_marine", ABIL_REPAIR_SM },
@@ -147,15 +210,36 @@ local MELEE_HEROES = { "sm_force_commander", "ork_warboss", "csm_chaos_lord", "o
 local RUNNER_KEYS = { "sm_scout_marine", "ork_gretchin", "eld_ranger", "eld_guardian", "csm_cultist", "ig_guardsmen_squad",   -- cheap/fast capturers first
 	"tyr_hormagaunt", "tyr_termagaunt", "tau_pathfinders", "tau_kroot", "gk_strike_squad" }
 local SPAWN_KEYS = { "spawn", "without_number", "drop_pod", "respawn" }
+-- 0.3 Garrison: who is good against a squad in a building - reports/tactics_kb/kb.yaml threats.garrisoned_enemy.responses and
+-- the table of KB_RU.md section T2 (the enemy sits in a building): { end of the sbps name, kind, grenade ability or false, weight as a tool }.
+-- kind: "flame" = flamers / fire (bonus against a garrison, they simply attack the building), "gren" = a grenade thrown at
+-- the building (position-targeted ability of elite.scar), "jump" = the Autarch (jumps onto the building, KB: the Autarch on
+-- a building), "aoe" = area weapons. Weight 0.5 = the grenade needs a squad upgrade we cannot see from here (guardians:
+-- battle_equipment, heretics: grenade launchers, scouts: the sergeant). Vehicles and monsters count 0.5 each ("siege":
+-- small arms from the windows do nothing to them) - see gar_tool.
+local GAR_TOOLS = {
+	{ "ig_devils", "flame", ABIL_GREN_IG_DEVILS, 1 }, { "ig_kasrkin_squad", "gren", ABIL_GREN_IG_KASRKIN, 1 }, { "ig_banewolf", "flame", false, 1 },
+	{ "sm_scout_marine", "gren", ABIL_GREN_SM, 0.5 },
+	{ "eld_fire_dragon", "flame", false, 1 }, { "eld_guardian", "gren", ABIL_GREN_ELD, 0.5 }, { "eld_autarch", "jump", false, 1 },
+	{ "ork_stikkbommas", "gren", ABIL_GREN_ORK, 1 },
+	{ "csm_cultist", "gren", ABIL_GREN_CSM, 0.5 }, { "csm_noise_marines", "aoe", false, 0.5 },
+	{ "gk_purgation_squad", "flame", false, 1 }, { "gk_storm_troopers", "gren", ABIL_GREN_GK, 0.5 },
+	{ "tau_vespid_squad", "flame", false, 1 },
+	{ "tyr_spore_mines", "aoe", false, 1 },
+}
+local GAR_SIEGE = { "tyr_carnifex", "tyr_swarmlord", "eld_lesser_avatar", "csm_great_unclean_one", "tau_knarloc", "tau_krootox" }   -- monsters that are not vehicles for the engine
 
 -- modes of the DLL order queue (elite.scar): 1-3 = the director's, the rest are ours
 local ORD_MOVE, ORD_RETREAT, ORD_ATTACK_SQUAD, ORD_CAPTURE, ORD_ABILITY_POS, ORD_ABILITY_SQUAD = 1, 3, 4, 5, 100, 200
+local ORD_AMOVE = 2                                                          -- attack-move (the director's ORD_ATTACK of main.ai)
 
 -- state between ticks: numbers and plain tables only
 local M = { names = {}, cls = {}, own = {}, en = nil, en_prev = {}, pts = {}, pts_by_key = {}, hqs = {}, conf = {},
 	tie = {}, repair = {}, jumped = {}, runner = {}, bad_pt = {}, last_scan = -1, last_stats = 0, last_contact = nil, said = {},
+	cap = {}, idle = {}, norole = {}, gren = {}, gar_ord = {},                -- 0.3: can capture, idle clocks, role bans, grenade / assault order times
+	nocap = {}, capfail = {},                                                 -- 0.3: squads that twice stood idle as runners without ever capturing
 	st = { focus = 0, focus_sw = 0, retreat = 0, pre = 0, punish = 0, tie = 0, jump = 0, repair = 0, kite = 0, abil = 0,
-		conf = 0, runner = 0, split = 0, decap = 0, orders = 0 } }
+		conf = 0, runner = 0, split = 0, decap = 0, orders = 0, idle = 0, idle_role = 0, goal = 0, gar = 0, gar_assault = 0, gar_hold = 0, gar_bypass = 0, gren = 0 } }
 EliteAI.mech = M
 
 local function mlog(...) if EliteAI.log then EliteAI.log("MECH", ...) end end
@@ -173,12 +257,12 @@ local function rule(name)                                                     --
 	return r
 end
 -- the conflict arbiter's memory: a decision holds ConfHold seconds (hysteresis), every switch is logged
-local function decide(name, subject, v, reason, now)
+local function decide(name, subject, v, reason, now, hold)
 	local key = name .. ":" .. tostring(subject)
 	local c = M.conf[key]
 	if not c then M.conf[key] = { v = v, t = now }; return v end
 	if c.v == v then return v end
-	if now - c.t < prm("ConfHold") then return c.v end
+	if now - c.t < (hold or prm("ConfHold")) then return c.v end
 	mlog("Conf_" .. name, subject, c.v .. "->" .. v, reason or "")
 	c.v, c.t = v, now
 	M.st.conf = M.st.conf + 1
@@ -186,11 +270,22 @@ local function decide(name, subject, v, reason, now)
 end
 
 local _morder = eliteai_order or (string and string.eliteai_order)
-local function morder(id, x, y, z, mode)                                      -- the DLL only stores five numbers: cannot raise
-	if not _morder or not id then return end
-	_morder(id, x or 0, y or 0, z or 0, mode)
+-- 0.4: through the order book of main.ai (EliteAI_OrderGate: the same order is not repeated to a squad on its way; it may turn
+-- an attack-move that had no effect into a plain move). owner "idle" = the Idle logic (the director then waits); returns
+-- true when the order went out
+local function morder(id, x, y, z, mode, owner)                               -- the DLL only stores five numbers: cannot raise
+	if not _morder or not id then return false end
+	local send = mode
+	if EliteAI_OrderGate then
+		send = EliteAI_OrderGate(id, mode, x, z, M.now or 0, owner or "mech", true)
+		if not send then return false end
+	end
+	_morder(id, x or 0, y or 0, z or 0, send)
 	M.st.orders = M.st.orders + 1
 	if EliteAI.orders then EliteAI.orders = EliteAI.orders + 1 end
+	local r = M.idle[id]                                                       -- 0.3 Idle: a squad that just got an order is not idle yet
+	if r and M.now then r.t0 = M.now end
+	return true
 end
 
 local function d2(ax, az, bx, bz) local dx, dz = ax - bx, az - bz; return math.sqrt(dx * dx + dz * dz) end
@@ -229,6 +324,26 @@ local function has_key(name, keys)
 	for _, k in ipairs(keys) do if string.find(name, k, 1, true) then return true end end
 	return false
 end
+local function ends_with(name, key)                                           -- ".../troops/eld_guardian" but not ".../eld_guardian_shuriken_cannon"
+	local n, k = string.len(name), string.len(key)
+	return n >= k and string.sub(name, n - k + 1) == key
+end
+-- 0.3: engine functions outside Elite's own AI scripts, looked up once (a missing one switches its mechanic off, never a call
+-- of nil): Squad_IsInHoldEntity(squad) - the game's SCAR library groups.scar:1891/2556/2736, defendai.scar:195 (on an enemy
+-- squad); bound by the same binder of DOW2.exe (0x8c2140) as Squad_GetHealthMax / Squad_IsUnderAttack /
+-- Squad_FindCoverCompareCurrent which Elite's AI scripts call (tactics.ai:277, player-tactics.ai:51, tactics.ai:518)
+local function api()
+	if M.api then return M.api end
+	M.api = {
+		hold = (type(Squad_IsInHoldEntity) == "function") and EliteAI.num("Mech_GarApi", MP.GarApi) >= 1,
+		fired = (type(AISquad_HasFiredWeapon) == "function"),                 -- tactics.ai:292
+		cancap = (type(PBG_CanCapture) == "function"),                        -- strategy_unit_purchase.ai:170
+	}
+	mlog("api", "Squad_IsInHoldEntity", type(Squad_IsInHoldEntity), "use", M.api.hold and 1 or 0, "AISquad_HasFiredWeapon", type(AISquad_HasFiredWeapon),
+		"PBG_CanCapture", type(PBG_CanCapture))
+	return M.api
+end
+
 
 -- how much the enemy squad moved towards a point since the last scan (negative = away); nil without a last scan
 local function approach(e, x, z)
@@ -248,6 +363,7 @@ local function scan_enemies(now, cx, cz, army, want_tdist)
 		return M.en
 	end
 	local list, prev, seen, vw = {}, M.en_prev, {}, prm("VehW")
+	local hold_api = api().hold                                               -- 0.3: is the squad inside a building (Garrison)
 	local n_pl = World_GetPlayerCount()                                       -- cache.ai:62-64
 	for i = 1, n_pl do
 		local p = World_GetPlayerAt(i)
@@ -262,6 +378,7 @@ local function scan_enemies(now, cx, cz, army, want_tdist)
 					local hp, veh = Squad_GetHealth(sq) / math.max(hmax, 1), SquadQuery_IsVehicle(sq)
 					local e = { id = id, x = pos.x, y = pos.y, z = pos.z, hp = hp, hmax = hmax, n = n, veh = veh,
 						hit = Squad_IsUnderAttack(sq, 3), w = hmax * hp * (veh and vw or 1) }
+					if hold_api then e.held = (Squad_IsInHoldEntity(sq) == true) end   -- groups.scar:1891 (sq exists, has models)
 					e.d = d2(e.x, e.z, cx, cz)
 					local pr = prev[id]
 					if pr then e.px, e.pz, e.php = pr.x, pr.z, pr.hp end
@@ -300,6 +417,23 @@ local function enemy_weight_near(en, x, z, r)
 	return w, n
 end
 
+-- 0.3: may this squad get a capture role (runner, split, the goal's capturing squad)? PBG_CanCapture, asked once per squad in
+-- scan_own. Safety net: when the engine says "no" for every squad of an army of three or more, the answer is not what we
+-- think it is - the check is dropped for the match (logged once) and the Idle logic alone weeds out squads that stand
+-- with a capture order. Mech_CapCheck=0 drops it from the start.
+local function can_cap(id) return not M.nocap[id] and (M.cap_off == true or M.cap[id] == true) end
+local function cap_check(army)
+	if M.cap_off ~= nil then return end
+	if not api().cancap or EliteAI.num("Mech_CapCheck", 1) < 1 then
+		M.cap_off = true; mlog("api", "capture check off:", api().cancap and "Mech_CapCheck=0" or "no PBG_CanCapture"); return
+	end
+	local n, yes = 0, 0
+	for _, u in ipairs(army) do
+		if M.cap[u.id] ~= nil then n = n + 1; if M.cap[u.id] then yes = yes + 1 end end
+	end
+	if yes > 0 then M.cap_off = false
+	elseif n >= 3 then M.cap_off = true; mlog("api", "PBG_CanCapture says none of", n, "squads can capture: the check is dropped for this match") end
+end
 -- our squads through the AI side, every tick: sbps name once per squad id (AISquad -> PBG -> name: strategy_addon.ai:188,
 -- strategy_unit_purchase.ai:104) and the melee flags (tactics.ai:280, 327)
 local function scan_own(army)
@@ -314,19 +448,28 @@ local function scan_own(army)
 				local pbg = AISquad_ConvertToPBG(aisq)
 				local nm = pbg and PBG_GetName(pbg) or ""
 				M.names[id] = string.gsub(string.lower(nm or ""), "\\", "/")
+				-- 0.3: can this squad capture a point (strategy_unit_purchase.ai:170)? Asked once per squad; a squad that
+				-- cannot is never a runner / split squad (a carnifex stood with a capture order it could not execute)
+				M.cap[id] = (pbg ~= nil and api().cancap and PBG_CanCapture(s_selfplayer, pbg)) and true or false
 			end
 			own[id] = { meleed = AISquad_IsUnderMeleeAttack(aisq), mstance = AISquad_IsInMeleeStance(aisq) }
+			if api().fired then own[id].fired = AISquad_HasFiredWeapon(aisq, prm("IdleFireTicks")) and true or false end   -- tactics.ai:292
 		end
+
 	end
 	for _, u in ipairs(army) do if M.names[u.id] == nil then M.names[u.id] = "" end end
 	M.own = own
+	cap_check(army)
 end
+
 local function cls_of(name)                                                   -- melee / jump ability / repair ability / runner
 	local c = M.cls[name]
 	if c then return c end
 	c = { melee = has_key(name, MELEE) or (prm("TieHeroes") >= 1 and has_key(name, MELEE_HEROES)), runner = has_key(name, RUNNER_KEYS) }
 	for _, r in ipairs(REPAIRERS) do if string.find(name, r[1], 1, true) then c.repair = r[2]; break end end
 	for _, j in ipairs(JUMPERS) do if string.find(name, j[1], 1, true) then c.jump = j[2]; break end end
+	for _, g in ipairs(GAR_TOOLS) do if ends_with(name, g[1]) then c.gar, c.gar_abil, c.gar_w = g[2], g[3], g[4]; break end end   -- 0.3 Garrison
+	if not c.gar and has_key(name, GAR_SIEGE) then c.siege = true end
 	M.cls[name] = c
 	return c
 end
@@ -355,7 +498,7 @@ local function scan_points()
 		local p = Military_GetMilitaryPointPosition(mp)
 		if not p then return end
 		if t == MPT_HQ then
-			if team ~= s_self_team then table.insert(hqs, { x = p.x, z = p.z }) end
+			if team ~= s_self_team then table.insert(hqs, { x = p.x, y = p.y, z = p.z }) end
 			return
 		end
 		if t ~= MPT_VictoryPoint and t ~= MPT_PowerPoint and t ~= MPT_RequisitionPoint then return end
@@ -584,7 +727,7 @@ local function run_focus(state, en, cx, cz, taken)
 	for _, u in ipairs(state.active) do if u.hit then table.insert(hits, u) end end
 	local best, bests, cur, curs
 	for _, e in ipairs(en) do
-		if e.contact then
+		if e.contact and not e.gar then                                        -- 0.3: a garrison is the Garrison pattern's (storm or leave), not a focus target
 			local near = e.d <= fr
 			if not near then for _, u in ipairs(hits) do if d2(e.x, e.z, u.pos.x, u.pos.z) <= fn then near = true; break end end end
 			if near then
@@ -688,7 +831,7 @@ local function run_tie(state, en, taken, jumpers_only)
 			if not e then
 				local best, bd
 				for _, f in ipairs(en) do
-					if f.contact and not f.veh and f.tdist and f.tdist >= rmin then
+					if f.contact and not f.veh and not f.held and f.tdist and f.tdist >= rmin then   -- 0.3: nobody ties up a squad inside a building
 						local d = d2(u.pos.x, u.pos.z, f.x, f.z)
 						if d <= tr then
 							local s = d / tr + f.hp                                -- close and hurt first
@@ -823,6 +966,17 @@ local function ra_demand(pbg, d)
 			dem = (M.clump and M.clump.n >= prm("AbilMinClump")) and prm("AbilDemand") or 1
 		else dem = prm("AbilDemand") end
 	elseif spawn then dem = prm("AbilSpawnDemand") end
+	-- verify 10.11 s13: while the reinforcement budget saves req for a power unit / the next tier (strategy_unit_purchase.ai
+	-- EliteAI_R.save), a spawn ability (cheap bodies for req, as the damped refills) keeps Elite's demand: at t 1005 the bank
+	-- reached 440 req for a genestealer (350) and tyr_spawn_without_number took ~250 of it. Damage abilities are not held.
+	if dem > 1 and spawn and prm("AbilSaveHold") >= 1 and type(EliteAI_R) == "table" and EliteAI_R.save == true then
+		M.ra_said = M.ra_said or {}
+		local k = name .. "|hold"
+		if not M.ra_said[k] or now - M.ra_said[k] > 30 then
+			M.ra_said[k] = now; mlog("RaceAbilities", "hold", name, "save need", math.floor(EliteAI_R.need or 0), EliteAI_R.need_what or "-")
+		end
+		return d
+	end
 	if dem > 1 then
 		M.ra_said = M.ra_said or {}
 		if not M.ra_said[name] or now - M.ra_said[name] > 30 then M.ra_said[name] = now; mlog("RaceAbilities", "demand", name, dem, fight and "fight" or "quiet") end
@@ -843,7 +997,11 @@ if type(CalcPlayerAbilityDemand) == "function" and type(PlayerAbility_Cast) == "
 		M.in_cast = true
 		local ok = E_Cast(pbg)
 		M.in_cast = nil
-		if ok then M.st.abil = M.st.abil + 1 end
+		if ok then
+			M.st.abil = M.st.abil + 1
+			-- 0.3: the purchase book of strategy_unit_purchase.ai (energy): what the ability cost (player_abilities.ai:259)
+			if type(EliteAI_EnergyNote) == "function" then EliteAI_EnergyNote("abil", AIAbility_GetCost(s_self_modplayer, pbg)) end
+		end
 		local nm, t = ra_name(pbg), World_GetGameTime()
 		M.ra_nt = M.ra_nt or {}
 		if ok then mlog("RaceAbilities", "cast", nm)
@@ -885,15 +1043,27 @@ local function pick_runners(state, taken)
 	for _, u in ipairs(state.army) do alive[u.id] = u end
 	for id in pairs(M.runner) do table.insert(ids, id) end
 	table.sort(ids)
+	-- 0.4: a squad that is a sure tool against a garrison (flamers, grenades: weight 1 in GAR_TOOLS) is no runner while the
+	-- garrison is stormed or held (b2: one of the two devils squads captured points all through the assault)
+	local G = M.gar
+	local gtool = (G ~= nil and (G.v == "assault" or G.v == "hold"))
+	local function is_tool(u) local c = ucls(u); return c.gar ~= nil and (c.gar_w or 1) >= 1 end
 	for _, id in ipairs(ids) do
 		if not alive[id] then M.runner[id] = nil; mlog("ArmyRoles", "runner gone", id)
 		elseif have >= want then M.runner[id] = nil; mlog("ArmyRoles", "runner released", id)
+		elseif gtool and is_tool(alive[id]) then
+			M.runner[id] = nil
+			mlog("ArmyRoles", "runner released", id, M.names[id] or "?", "a tool against the garrison", G.id, G.v)
 		else have = have + 1 end
 	end
 	while have < want do
 		local best, bs
 		for _, u in ipairs(state.active) do
-			if not M.runner[u.id] and not taken[u.id] then
+			-- 0.3: only a squad that can capture (a carnifex became a runner and stood with an order it could not execute),
+			-- and not one the Idle logic just took out of a capture role
+			if not M.runner[u.id] and not taken[u.id] and can_cap(u.id) and not (gtool and is_tool(u))
+				and not (M.split and M.split.assign[u.id])                        -- 0.4: one capture role per squad (it got two moves in a tick)
+				and not (M.norole[u.id] and state.now - M.norole[u.id] < prm("IdleRoleBan")) then
 				weight_of(u)
 				local c = ucls(u)
 				if not u.veh then
@@ -944,7 +1114,7 @@ local function run_runners(state, en, taken, cx, cz)
 			local fought = false
 			if nn > 0 then
 				local uw, v = weight_of(u), "flee"
-				if nn == 1 and not near.veh then
+				if nn == 1 and not near.veh and not near.held then                -- 0.3: never a squad inside a building
 					local r = rule("RunnerFight")
 					if r == 1 then v = (near.w <= uw) and "fight" or "flee"
 					elseif r == 2 then v = (near.w <= uw and near.hp < 0.7) and "fight" or "flee" end
@@ -1022,21 +1192,40 @@ local function run_split(state, en, cx, cz, taken)
 		if left == 0 and not why then why = "points taken" end
 		if why then
 			mlog("ArmyRoles", "split end", why, fmt("after %.0f s", now - sp.t0))
-			decide("Split", "army", "keep", why, now)
+			decide("Split", "army", "keep", why, now, 16)
 			M.split, M.split_end = nil, now
 			return false
 		end
+		-- 0.3: the rest of the army does not just stand (it stood up to SplitSecs without an order): it covers the capturing
+		-- squads - attack-move to the centre of their points, repeated after SplitReissue - for SplitStay s, then the
+		-- director leads it on (the squads at the points stay taken until their points are done)
+		if now - sp.t0 > prm("SplitStay") then return false end
+		if now - (sp.cover or -1000) >= prm("SplitReissue") then
+			sp.cover = now
+			local sx, sz, sn = 0, 0, 0
+			for _, id in ipairs(ids) do
+				local a = sp.assign[id]
+				local p = a and M.pts_by_key[a.key]
+				if p then sx, sz, sn = sx + p.x, sz + p.z, sn + 1 end
+			end
+			if sn > 0 then
+				sx, sz = sx / sn, sz / sn
+				for _, u in ipairs(state.active) do
+					if not taken[u.id] and d2(u.pos.x, u.pos.z, sx, sz) > 12 then morder(u.id, sx, u.pos.y, sz, ORD_AMOVE) end
+				end
+			end
+		end
 		EliteAI.phase = "m_split"
-		return true                                                           -- the rest of the army stays where it is
+		return true
 	end
 	if contact or not M.last_contact then return false end
 	local since = now - M.last_contact
 	if since < prm("SplitAfter") or since > prm("SplitWindow") then return false end
 	if M.split_end and now - M.split_end < prm("SplitCooldown") then return false end
 	local free = {}
-	for _, u in ipairs(state.active) do if not taken[u.id] then table.insert(free, u) end end
+	for _, u in ipairs(state.active) do if not taken[u.id] and not M.runner[u.id] then table.insert(free, u) end end   -- 0.4: a runner without a point is still a runner
 	local maxs = split_max(table.getn(free))
-	local v = decide("Split", "army", (maxs > 0) and "split" or "keep", fmt("squads %d after fight %.0f s", table.getn(free), since), now)
+	local v = decide("Split", "army", (maxs > 0) and "split" or "keep", fmt("squads %d after fight %.0f s", table.getn(free), since), now, 16)   -- 0.3: 16 s (the number of free squads changes from tick to tick; two switches in 30 s at most)
 	if v ~= "split" or maxs <= 0 then return false end
 	-- points around the army, free of enemies, the nearest free squad for each
 	local cands = {}
@@ -1052,9 +1241,11 @@ local function run_split(state, en, cx, cz, taken)
 		if cnt >= maxs then break end
 		local best, bd
 		for _, u in ipairs(free) do
-			if not used[u.id] and u.hp >= prm("SplitMinHp") then
+			if not used[u.id] and u.hp >= prm("SplitMinHp") and can_cap(u.id)                            -- 0.3: can capture, not banned by Idle
+				and not (M.norole[u.id] and now - M.norole[u.id] < prm("IdleRoleBan")) then
 				weight_of(u)
 				if not u.veh then
+
 					local d = d2(u.pos.x, u.pos.z, p.x, p.z)
 					if not best or d < bd or (d == bd and u.id < best.id) then best, bd = u, d end
 				end
@@ -1088,12 +1279,569 @@ local function run_army_roles(state, en, cx, cz, taken)
 end
 
 --------------------------------------------------------------------------------------------------
+-- 0.3 Goal: where the director takes the army when its own target is used up (Idle) or the Garrison pattern wants the army
+-- somewhere. EliteAI.goal = { x, y, z, key, kind, t, pt } - numbers and strings only; EliteAI_Director (main.ai) uses it
+-- instead of EliteAI.best_pos while it is fresh (t within Mech_GoalSecs). kind: "point" (the next point to take), "enemy"
+-- (the nearest enemy squad in the field), "gar" (the building of a garrison we storm), "gar_hold" (the hold spot), "bypass"
+-- (another place instead of the garrisoned one), "detour" (round the building of a garrison we leave alone).
+
+local function set_goal(kind, key, x, y, z, now, why, is_point)
+	local g = EliteAI.goal
+	if g and g.kind == kind and g.key == key then g.t = now; g.x, g.y, g.z = x, y, z; return end   -- the same goal: keep it alive
+	EliteAI.goal = { x = x, y = y, z = z, key = key, kind = kind, t = now, t0 = now, pt = is_point and true or false }
+	M.st.goal = M.st.goal + 1
+	mlog("Goal", kind, key, fmt("at %.0f %.0f", x, z), why or "")
+end
+local function clear_goal(why, kinds)
+	local g = EliteAI.goal
+	if not g or (kinds and not kinds[g.kind]) then return end
+	mlog("Goal", "end", g.kind, g.key, why or "", fmt("after %.0f s", (M.now or g.t0) - g.t0))
+	EliteAI.goal = nil
+end
+local GAR_GOALS = { gar = true, gar_hold = true, bypass = true, detour = true }
+
+-- the next place for an army with nothing to do: the nearest point that is not ours, not done (Conf_Decap) and free of
+-- enemies (a garrisoned point is not: its squad is an enemy within RunnerPointR), victory points first; else the nearest
+-- enemy squad in the field (not in a building, not within GoalBaseR of an enemy HQ: base defences are not squads, the
+-- army's strength check does not see them); else nothing - the army stays where it is
+local function next_goal(state, en, cx, cz)
+	local now = state.now
+	local best, bs
+	for _, p in ipairs(M.pts) do
+		if not p.ours and not p.us_cap and not point_done(p, en, now) and not (M.bad_pt[p.key] and now - M.bad_pt[p.key] < 60) then
+			local _, n = enemy_weight_near(en, p.x, p.z, prm("RunnerPointR"))
+			if n == 0 then
+				local s = d2(cx, cz, p.x, p.z) - (p.vp and prm("RunnerVpBonus") or 0)
+				if not best or s < bs or (s == bs and p.key < best.key) then best, bs = p, s end
+			end
+		end
+	end
+	if best then return "point", best.key, best.x, best.y, best.z end
+	local be, bd
+	for _, e in ipairs(en) do
+		if not e.held then
+			local inbase = false
+			for _, q in ipairs(M.hqs) do if d2(e.x, e.z, q.x, q.z) <= prm("GoalBaseR") then inbase = true; break end end
+			if not inbase then
+				local d = d2(cx, cz, e.x, e.z)
+				if not be or d < bd or (d == bd and e.id < be.id) then be, bd = e, d end
+			end
+		end
+	end
+	if be and bd > prm("IdleTargetR") then return "enemy", tostring(be.id), be.x, be.y, be.z end
+	return nil
+end
+-- the director's own target is used up: the army stood idle at it (M.stale = { key, t }) and Elite still has it on top.
+-- Then the army goes from goal to goal and is not sent back to that target in between.
+local function stale_target(now)
+	local s = M.stale
+	return s ~= nil and EliteAI.best_key == s.key and now - s.t < prm("GoalStaleSecs")
+end
+-- every tick: the goal's life (it ends when its point is done, or after GoalSecs without getting closer) and the one squad
+-- that captures the goal point once the army stands on it (M.capper = { id, key, t0, last }; it stays taken while it captures)
+local function goal_tick(state, en, cx, cz, taken)
+	local now = state.now
+	local c = M.capper
+	if c then
+		local p, u = M.pts_by_key[c.key], nil
+		for _, v in ipairs(state.active) do if v.id == c.id then u = v; break end end
+		local done = true
+		if p and u then done = point_done(p, en, now) end
+		if done or now - c.t0 > 75 or (u and d2(u.pos.x, u.pos.z, p.x, p.z) > prm("SplitR")) then
+			M.capper = nil
+		else
+			if not p.us_cap and now - c.last >= prm("GoalCapReissue") then morder(c.id, p.x, p.y, p.z, ORD_CAPTURE); c.last = now end
+			taken[c.id] = true
+		end
+	end
+	local g = EliteAI.goal
+	if not g then return end
+	local d = d2(cx, cz, g.x, g.z)
+	if not g.dmin or d < g.dmin - 3 then g.dmin = d; if not GAR_GOALS[g.kind] or g.kind == "bypass" then g.t = now end end   -- getting closer: alive
+	if now - g.t > prm("GoalSecs") then clear_goal("timeout"); return end
+	if not g.pt then return end
+	local p = M.pts_by_key[g.key]
+	if not p then clear_goal("point gone"); return end
+	local done, why = point_done(p, en, now)
+	if done then
+		local chain = (g.kind == "point") and stale_target(now)
+		clear_goal("point " .. tostring(why))
+		if chain then                                                         -- on to the next one, not back to the used-up target
+			local kind, key, x, y, z = next_goal(state, en, cx, cz)
+			if kind then set_goal(kind, key, x, y, z, now, "next after " .. p.key, kind == "point") end
+		end
+		return
+	end
+	if d <= prm("IdleTargetR") and not p.us_cap and not M.capper then
+		local best, bd
+		for _, u in ipairs(state.active) do
+			if not taken[u.id] and not M.runner[u.id] and can_cap(u.id) and not (M.norole[u.id] and now - M.norole[u.id] < prm("IdleRoleBan")) then
+				local du = d2(u.pos.x, u.pos.z, p.x, p.z)
+				if not best or du < bd or (du == bd and u.id < best.id) then best, bd = u, du end
+			end
+		end
+		if best then
+			M.capper = { id = best.id, key = p.key, t0 = now, last = now }
+			morder(best.id, p.x, p.y, p.z, ORD_CAPTURE)
+			taken[best.id] = true
+			mlog("Goal", "capture", best.id, M.names[best.id] or "?", "point", p.key)
+		else
+			M.bad_pt[p.key] = now                                              -- nobody here can capture: not this point again for a while
+			clear_goal("no squad that can capture")
+		end
+	end
+end
+
+--------------------------------------------------------------------------------------------------
+-- 0.3 Idle: a squad that stands without an order out of a fight (the polygon: a carnifex stood 30-70 s after the fight
+-- while the others went on; the army stood on a taken target). Per squad id: M.idle = { x, z, t0, last, n, mute } - the spot
+-- and the time since the squad neither moved (IdleMoveD) nor fought (hit, fired, in melee) nor was busy (sent home, repair).
+-- Idle for IdleSecs: a runner / split squad that is not capturing loses the role (and is not given one for IdleRoleBan);
+-- the squad goes (attack-move) to the others when they are elsewhere, else to the director's target / goal; with an enemy
+-- within IdleEnemyR it attacks that enemy after IdleNearSecs. When the army as a whole stands at its target, the next
+-- goal is chosen (next_goal) and the director leads the army there. Every order is logged: "MECH Idle <id> <sbps> still
+-- N s role R -> army|target|enemy|pull_back ...". Numbers only between ticks; orders through the same DLL queue.
+local function idle_clock(state)
+	local now, mv = state.now, prm("IdleMoveD")
+	local act, rep = {}, {}
+	for _, u in ipairs(state.active) do act[u.id] = true end
+	for rid, a in pairs(M.repair) do rep[rid] = true; rep[a.vid] = true end    -- a set: the order of pairs() does not matter
+	for _, u in ipairs(state.army) do
+		local r, o = M.idle[u.id], M.own[u.id]
+		local quiet = act[u.id] and not u.hit and not rep[u.id] and not (o and (o.fired or o.meleed))
+		if not r then
+			M.idle[u.id] = { x = u.pos.x, z = u.pos.z, t0 = now, last = -1000, n = 0, mute = -1 }
+		elseif d2(u.pos.x, u.pos.z, r.x, r.z) > mv then
+			r.x, r.z, r.t0, r.n = u.pos.x, u.pos.z, now, 0
+		elseif not quiet then
+			r.t0 = now
+		end
+	end
+	-- 0.4: how long every squad has stood quiet, for the order book of main.ai (numbers; the table is rebuilt every tick)
+	local f = {}
+	for _, u in ipairs(state.army) do local r = M.idle[u.id]; if r then f[u.id] = now - r.t0 end end
+	EliteAI.idle_for = f
+end
+local function idle_capturing(u)                                               -- at a point we are capturing: busy, not idle
+	local cr = prm("IdleCapR")
+	for _, p in ipairs(M.pts) do
+		if p.us_cap and d2(u.pos.x, u.pos.z, p.x, p.z) <= cr then return true end
+	end
+	return false
+end
+-- where an idle squad goes: to the others when most of them are elsewhere (fewer than half of the army's squads within
+-- GatherR of it: a squad that stands with the main body does not walk back for a straggler), else to the target / goal
+local function idle_dest(state, u)
+	local ox, oz, on, near = 0, 0, 0, 0
+	local gr = EliteAI.num("GatherR", 30)
+	for _, v in ipairs(state.active) do
+		if v.id ~= u.id and not M.runner[v.id] then
+			ox, oz, on = ox + v.pos.x, oz + v.pos.z, on + 1
+			if d2(u.pos.x, u.pos.z, v.pos.x, v.pos.z) <= gr then near = near + 1 end
+		end
+	end
+	if on > 0 and near * 2 < on then
+		ox, oz = ox / on, oz / on
+		if d2(u.pos.x, u.pos.z, ox, oz) > gr * 0.6 then return "army", ox, u.pos.y, oz end
+	end
+	local g = EliteAI.goal or ((not stale_target(state.now)) and EliteAI.best_pos) or nil
+	if g and g.x and d2(u.pos.x, u.pos.z, g.x, g.z) > prm("IdleTargetR") then return "target", g.x, g.y or u.pos.y, g.z end
+	return nil
+end
+local function run_idle(state, en, cx, cz, taken, covering)
+	local now, n = state.now, 0
+	local secs, near_secs, er, reissue = prm("IdleSecs"), prm("IdleNearSecs"), prm("IdleEnemyR"), prm("IdleReissue")
+	local army_n, idle_n = 0, 0
+	for _, u in ipairs(state.active) do
+		local r = M.idle[u.id]
+		if r then
+			local still = now - r.t0
+			local role = "army"
+			if M.runner[u.id] then role = "runner"
+			elseif M.split and M.split.assign[u.id] then role = "split"
+			elseif M.capper and M.capper.id == u.id then role = "capper" end
+			local rec = nil                                                        -- the role's record: it remembers that the squad did capture
+			if role == "runner" then rec = M.runner[u.id] elseif role == "split" then rec = M.split.assign[u.id] elseif role == "capper" then rec = M.capper end
+			if rec and still >= near_secs and idle_capturing(u) then
+				r.t0 = now; still = 0
+				rec.capd = true
+			end
+			if role == "army" then
+				army_n = army_n + 1
+				if still >= prm("IdleArmySecs") and not taken[u.id] then idle_n = idle_n + 1 end
+			end
+			local mine = (role ~= "army") or (not taken[u.id] and not covering)   -- an army squad ordered this tick / covering a split is not ours
+			if mine and still >= near_secs and now >= r.mute and now - r.last >= reissue then
+				local ne, nd
+				for _, e in ipairs(en) do
+					local d = d2(e.x, e.z, u.pos.x, u.pos.z)
+					if d <= er and (not ne or d < nd or (d == nd and e.id < ne.id)) then ne, nd = e, d end
+				end
+				local what, x, y, z
+				if ne then
+					if not ne.gar_skip then what = "enemy"
+					elseif M.gar and M.gar.hold and nd <= prm("GarDangerR") then
+						what, x, y, z = "pull_back", M.gar.hold.x, u.pos.y, M.gar.hold.z   -- a garrison we do not storm: not under its windows
+					end
+				elseif still >= secs then
+					what, x, y, z = idle_dest(state, u)
+				end
+				local release = (role ~= "army") and (what ~= nil or (still >= secs and not ne))
+				if release then
+					-- a squad that stood idle in a capture role without ever capturing, twice: whatever PBG_CanCapture says, it
+					-- gets no capture role again
+					if rec and not rec.capd then
+						M.capfail[u.id] = (M.capfail[u.id] or 0) + 1
+						if M.capfail[u.id] >= 2 and not M.nocap[u.id] then
+							M.nocap[u.id] = true
+							mlog("Idle", u.id, M.names[u.id] or "?", "twice idle in a capture role without capturing: no capture role any more")
+						end
+					end
+					if role == "runner" then M.runner[u.id] = nil
+					elseif role == "split" then M.split.assign[u.id] = nil
+					else M.capper = nil end
+
+
+					M.norole[u.id] = now
+					M.st.idle_role = M.st.idle_role + 1
+					if not what then mlog("Idle", u.id, M.names[u.id] or "?", fmt("still %.0f s", still), "role", role, "-> released") end
+				end
+				if what then
+					-- 0.4: owner "idle" - the director's march orders to this squad wait OrderOwnerHold (it sent the squad one
+					-- way and the director's gathering the other); an order the order book holds back is not counted or logged
+					local sent
+					if what == "enemy" then sent = morder(u.id, ne.id, 0, 0, ORD_ATTACK_SQUAD, "idle")
+					elseif what == "pull_back" then sent = morder(u.id, x, y, z, ORD_MOVE, "idle")
+					else sent = morder(u.id, x, y, z, ORD_AMOVE, "idle") end
+					r.last = now
+					if sent then
+						r.t0, r.n = now, r.n + 1
+						taken[u.id] = true
+						n = n + 1
+						M.st.idle = M.st.idle + 1
+						mlog("Idle", u.id, M.names[u.id] or "?", fmt("still %.0f s", still), "role", role, "->", what,
+							ne and fmt("enemy %d d %.0f", ne.id, nd) or fmt("at %.0f %.0f", x, z), "try", r.n, "phase", EliteAI.phase or "-")
+						if r.n >= prm("IdleTries") then
+							r.mute, r.n = now + prm("IdleMute"), 0
+							mlog("Idle", u.id, "does not move after", prm("IdleTries"), "orders: left alone for", prm("IdleMute"), "s")
+						end
+					end
+				end
+			end
+		end
+	end
+	-- the army as a whole (half of it or more) stands at its target with nothing to do: the next goal, the director leads
+	-- (not while it holds in front of a garrison or covers a split - those waits are short and meant)
+	if army_n > 0 and idle_n * 2 >= army_n and not covering and not (M.gar and M.gar.v == "hold") then
+		local g = EliteAI.goal or ((not stale_target(now)) and EliteAI.best_pos) or nil
+		local at = (g == nil) or (g.x ~= nil and d2(cx, cz, g.x, g.z) <= prm("IdleTargetR") * 1.5)
+		if at and not (EliteAI.goal and EliteAI.goal.pt and M.capper and now - M.capper.t0 < prm("GoalWait")) then   -- a squad is taking the goal point: wait a little
+
+			local kind, key, x, y, z = next_goal(state, en, cx, cz)
+			if kind then
+				if not EliteAI.goal and EliteAI.best_key then M.stale = { key = EliteAI.best_key, t = now } end   -- it stood at the director's target
+				set_goal(kind, key, x, y, z, now, fmt("the army (%d of %d squads) stood at its target", idle_n, army_n), kind == "point")   -- the same goal again: refreshed
+			elseif not M.said.nogoal or now - M.said.nogoal >= 60 then
+				M.said.nogoal = now
+				mlog("Idle", "army", fmt("%d of %d squads stand", idle_n, army_n), "no goal: every point is ours or held by the enemy, no enemy squad in the field")
+			end
+
+		end
+	end
+	return n
+end
+
+--------------------------------------------------------------------------------------------------
+-- 0.3 Garrison: an enemy squad inside a building (the polygon: a squad in a building at our nearest point - no squad of ours
+-- came within 35 m in 100 s, the point dropped out of every target list: runners and the split skip points with enemies,
+-- the director's target was elsewhere). Detector: Squad_IsInHoldEntity on the enemy squads of the scan, the building next
+-- to our HQ / a point of ours or on our half / the director's target / the army. The answer follows the tactics base
+-- (reports/tactics_kb KB_RU.md section T2, kb.yaml threats.garrisoned_enemy): flamers, grenades and area
+-- weapons beat a garrison, plain shooting hardly hurts it, melee on the building is bad, the squad that leaves is caught at
+-- the exit. The arbiter Conf_Garrison (A/B/C = 1/2/3, hysteresis ConfHold, every switch logged):
+--   1 = tools first: assault only with an anti-garrison tool in the army (and ours >= garrison x GarToolRatio), or when we
+--       outweigh it GarBruteRatio times with the cover factor; otherwise wait;
+--   2 = by strength: assault when ours >= (garrison x cover + support) x GarRatio, with a tool x GarToolRatio; otherwise wait;
+--   3 = bypass: assault only with a tool and a margin (x1.2) or by brute force; otherwise bypass at once.
+-- "wait" next to something of ours (rules 1, 2; rule 3 only at our HQ) = "hold" for GarHoldSecs (the army stands GarHoldR
+-- from the building towards our HQ: out of its range, between it and the base, while the counter units are asked for),
+-- then "bypass": the director goes on - when its target is the garrisoned place, another place is the goal ("bypass"), when
+-- its way passes the building, a point GarDangerR + 10 from it on the side of the way comes first ("detour"). A garrison at
+-- our HQ is held again after GarBypassSecs. The decision is taken anew every tick: tools bought meanwhile turn it into an
+-- assault wherever the army is. In hold / bypass the garrison's fire does not call the army in (the director's rule 1):
+-- a squad it hits goes back to the hold spot (hold) or runs on past it with a plain move (bypass). The garrison is never a
+-- FocusFire / MeleeTie / RunnerFight target - storming it is this pattern's decision.
+
+-- "assault": the army walks to the building as one fist (goal "gar"), then every squad gets its order: grenade squads
+-- throw (ability at the building's position, once per GarGrenCd), the Autarch jumps on it, flamers / vehicles / shooters
+-- attack the building (elite.scar: an attack order on a squad inside a building becomes an attack on the building), melee
+-- squads wait GarMeleeR away for the squad that comes out (they join the attack after 20 s).
+-- EliteAI.gar = { id, t0, v, tools, x, z } tells the purchase scripts (strategy_unit_purchase.ai "GAR"): counter units and
+-- flamer / grenade upgrades get a higher demand once the garrison has held for Gar_BuySecs.
+local function gar_tool(u)                                                     -- weight as an anti-garrison tool, kind
+	local c = ucls(u)
+	if c.gar then return c.gar_w or 1, c.gar end
+	weight_of(u)
+	if u.veh or c.siege then return 0.5, "siege" end
+	return 0, nil
+end
+local function gar_find(en, h)                                                 -- the garrison closest to our HQ among those next to something of ours
+	local pr = prm("GarPointR")
+	local best, bwhy, bd
+	for _, e in ipairs(en) do
+		if e.held then
+			local why
+			if h and d2(e.x, e.z, h.x, h.z) <= prm("GarHomeR") then why = "home" end
+			if not why then
+				for _, p in ipairs(M.pts) do
+					if (p.ours or p.us_cap or not p.enemy_half) and d2(e.x, e.z, p.x, p.z) <= pr then why = "point " .. p.key; break end
+				end
+			end
+			if not why and EliteAI.best_pos and d2(e.x, e.z, EliteAI.best_pos.x, EliteAI.best_pos.z) <= pr then why = "target" end
+			if not why and e.d <= prm("ZoneR") then why = "army" end
+			if why then
+				local d = h and d2(e.x, e.z, h.x, h.z) or e.d
+				if not best or d < bd or (d == bd and e.id < best.id) then best, bwhy, bd = e, why, d end
+			end
+		end
+	end
+	return best, bwhy
+end
+-- hold / bypass: nobody stands under the windows. A squad the garrison shoots at (no other enemy around it) is not "a fight
+-- the army runs to" (the director's rule 1: u.hit is cleared) and gets a plain move, no attack-move that would stop to shoot
+-- the building: "hold" - back to the hold spot (which moves 10 m further when squads are hit on it); "bypass" - on to
+-- where the army is going (tx, tz: the goal / the director's target), it runs past instead of turning round under fire
+local function gar_pull_back(state, en, G, taken, tx, tz)
+	local now, dr, sr = state.now, prm("GarDangerR") * 1.4, prm("SightR")
+	for _, u in ipairs(state.active) do
+		local d = d2(u.pos.x, u.pos.z, G.x, G.z)
+		if u.hit and d <= dr then
+			local other = false
+			for _, x in ipairs(en) do
+				if not x.gar and d2(x.x, x.z, u.pos.x, u.pos.z) <= sr then other = true; break end
+			end
+			if not other then
+				u.hit = false
+				if not M.gar_ord[u.id] or now - M.gar_ord[u.id] >= prm("GarReissue") then
+					M.gar_ord[u.id] = now
+					if tx then
+						morder(u.id, tx, u.pos.y, tz, ORD_MOVE)
+						mlog("Garrison", "run past", u.id, M.names[u.id] or "?", fmt("d %.0f to %.0f %.0f", d, tx, tz))
+					else
+						if d2(u.pos.x, u.pos.z, G.hold.x, G.hold.z) <= 8 and (G.hr or 0) < 80 then G.hr = (G.hr or prm("GarHoldR")) + 10 end   -- hit on the spot: it is in range
+						morder(u.id, G.hold.x, u.pos.y, G.hold.z, ORD_MOVE)
+						mlog("Garrison", "pull back", u.id, M.names[u.id] or "?", fmt("d %.0f hold %.0f m", d, G.hr or prm("GarHoldR")))
+					end
+				end
+				taken[u.id] = true
+			end
+		end
+	end
+end
+-- bypass: the straight way from the army (ax, az) to where it goes (tx, tz) passes within r of the building (bx, bz) -> the
+-- point r + 10 from the building on the side the way passes (nil when the way is clear or the building is behind / beyond)
+local function gar_detour(ax, az, tx, tz, bx, bz, r)
+	local sx, sz = tx - ax, tz - az
+	local sl2 = sx * sx + sz * sz
+	if sl2 < 1 then return nil end
+	local k = ((bx - ax) * sx + (bz - az) * sz) / sl2                          -- the building's projection on the way, 0..1
+	if k <= 0 or k >= 1 then return nil end
+	local px, pz = ax + sx * k, az + sz * k
+	local nx, nz = px - bx, pz - bz
+	local nl = math.sqrt(nx * nx + nz * nz)
+	if nl >= r then return nil end
+	if nl < 1 then local sl = math.sqrt(sl2); nx, nz, nl = -sz / sl, sx / sl, 1 end   -- the building right on the way: to the left of it
+	return bx + nx / nl * (r + 10), bz + nz / nl * (r + 10)
+end
+local function run_garrison(state, en, cx, cz, h, taken)
+	local now = state.now
+	local G = M.gar
+	local e, why
+	if G then                                                                   -- the one we know, while its squad is still inside
+		for _, x in ipairs(en) do if x.id == G.id then e = x; break end end
+		if e and e.held then why = G.why else e = nil end
+	end
+	if not e then e, why = gar_find(en, h) end
+	if not e then
+		if G then
+			mlog("Garrison", "end", G.id, "the squad left the building or is gone", fmt("after %.0f s", now - G.t0), "last", G.v or "-")
+			M.gar, EliteAI.gar = nil, nil
+			clear_goal("garrison over", GAR_GOALS)
+		end
+		return false
+	end
+	if not G or G.id ~= e.id then
+		if G then mlog("Garrison", "end", G.id, "replaced by", e.id); clear_goal("another garrison", GAR_GOALS) end
+		G = { id = e.id, t0 = now, why = why, last_log = now }
+		M.gar = G
+		M.st.gar = M.st.gar + 1
+		mlog("Garrison", "found", e.id, fmt("at %.0f %.0f", e.x, e.z), "near", why, fmt("hp %.2f n %d w %.0f", e.hp, e.n, e.w))
+	end
+	G.x, G.y, G.z = e.x, e.y, e.z
+	-- strengths: the squads in the building, the enemy around it, ours and our tools (runners are not the army)
+	local gw, sup = 0, 0
+	for _, x in ipairs(en) do
+		local d = d2(x.x, x.z, e.x, e.z)
+		if x.held and d <= prm("GarBldR") then gw = gw + x.w; x.gar = true
+		elseif d <= prm("GarSupportR") then sup = sup + x.w end
+	end
+	local ours, tools = 0, 0
+	for _, u in ipairs(state.active) do
+		if not M.runner[u.id] then
+			ours = ours + weight_of(u)
+			tools = tools + gar_tool(u)
+		end
+	end
+	-- an assault under way is not called off by a small change (a squad sent home, one model lost): the thresholds are lower
+	local keep = (G.v == "assault")
+	local kk, tneed = keep and prm("GarKeepK") or 1, keep and 0.5 or 1
+	local has_tool = (tools >= tneed)
+	local coverk = has_tool and prm("GarToolK") or prm("GarCoverK")
+	local ratio = ours / math.max(gw * coverk + sup, 1)
+	local r = rule("Garrison")
+	local v = "wait"
+	if r == 1 then
+		if (has_tool and ratio >= prm("GarToolRatio") * kk) or ratio >= prm("GarBruteRatio") * kk then v = "assault" end
+	elseif r == 2 then
+		if ratio >= (has_tool and prm("GarToolRatio") or prm("GarRatio")) * kk then v = "assault" end
+	else
+		if (has_tool and ratio >= prm("GarToolRatio") * 1.2 * kk) or ratio >= prm("GarBruteRatio") * kk then v = "assault" end
+	end
+	if v == "wait" then
+		-- hold first (GarHoldSecs: the army between the building and our base while the counters are asked for), then bypass;
+		-- only a garrison at our HQ is held again and again (hold, GarBypassSecs of bypass, hold ...)
+		G.wait0 = G.wait0 or now
+		local ours_near = (why == "home") or (r ~= 3 and why ~= "target" and why ~= "army" and d2(cx, cz, e.x, e.z) <= prm("GarHoldNearR"))
+		v = "bypass"
+		if ours_near then
+			local w, hs = now - G.wait0, prm("GarHoldSecs")
+			if why == "home" then
+				local cyc = hs + prm("GarBypassSecs")
+				w = w - math.floor(w / cyc) * cyc
+			end
+			if w < hs then v = "hold" end
+		end
+	else
+		G.wait0 = nil
+	end
+	local reason = fmt("ours %.0f garrison %.0f support %.0f tools %.1f ratio %.2f near %s", ours, gw, sup, tools, ratio, why)
+	local first = (M.conf["Garrison:" .. tostring(G.id)] == nil)
+	v = decide("Garrison", G.id, v, reason, now, prm("GarConfHold"))
+	if first then mlog("Garrison", G.id, "->", v, reason, "rule", r) end
+
+	if G.v ~= v then M.st["gar_" .. v] = (M.st["gar_" .. v] or 0) + 1 end
+	G.v, G.tools, G.ratio = v, tools, ratio
+	if now - G.last_log >= prm("GarLogSecs") then
+		G.last_log = now
+		mlog("Garrison", "state", G.id, v, reason, fmt("for %.0f s", now - G.t0))
+	end
+	-- the hold spot: GarHoldR from the building towards our HQ (not beyond it)
+	local hx, hz = cx - e.x, cz - e.z
+	if h then hx, hz = h.x - e.x, h.z - e.z end
+	local hl = math.sqrt(hx * hx + hz * hz)
+	if hl < 1 then hx, hz, hl = 1, 0, 1 end
+	local hr = math.min(G.hr or prm("GarHoldR"), hl)
+	G.hold = { x = e.x + hx / hl * hr, z = e.z + hz / hl * hr }
+	EliteAI.gar = { id = G.id, t0 = G.t0, v = v, tools = tools, x = G.x, z = G.z }
+	for _, x in ipairs(en) do if x.gar then x.gar_skip = (v ~= "assault") end end
+	if v == "hold" then
+		set_goal("gar_hold", tostring(G.id), G.hold.x, e.y, G.hold.z, now, "hold: out of the garrison's range, between it and our base")
+		gar_pull_back(state, en, G, taken)
+		return false                                                          -- (EliteAI.phase stays the director's: a foreign phase makes it re-issue its orders every tick)
+	end
+	if v == "bypass" then
+		local g, bp = EliteAI.goal, EliteAI.best_pos
+		local dr = prm("GarDangerR")
+		if g and (g.kind == "gar" or g.kind == "gar_hold") then clear_goal("garrison bypass", GAR_GOALS); g = nil end
+		if g and g.kind == "detour" and d2(cx, cz, g.x, g.z) <= prm("IdleTargetR") then clear_goal("round the building"); g = nil end
+		if bp and d2(bp.x, bp.z, e.x, e.z) <= dr then                          -- the director's own target is the garrisoned place
+			if g and g.kind == "bypass" then
+				g.t = now
+			elseif not g then
+				local kind, key, x, y, z = next_goal(state, en, cx, cz)
+				if kind then set_goal("bypass", key, x, y, z, now, "the director's target is the garrisoned place", kind == "point") end
+			end
+		end
+		-- the way to where the army goes passes the building: round it (a goal GarDangerR + 10 from it on the side of the way)
+		g = EliteAI.goal
+		local to = (g and g.kind ~= "detour") and g or bp
+		if g and g.kind == "detour" then
+			g.t = now
+		elseif to and to.x then
+			local wx, wz = gar_detour(cx, cz, to.x, to.z, e.x, e.z, dr + 5)
+			if wx then set_goal("detour", tostring(G.id), wx, e.y, wz, now, fmt("the way to %.0f %.0f passes the building", to.x, to.z)) end
+		end
+		g = EliteAI.goal or bp
+		if g and g.x then gar_pull_back(state, en, G, taken, g.x, g.z) else gar_pull_back(state, en, G, taken) end
+		return false
+	end
+	-- assault
+	if d2(cx, cz, e.x, e.z) > prm("GarEngageR") then
+		set_goal("gar", tostring(G.id), e.x, e.y, e.z, now, "assault: the army walks to the building as one fist")
+		return false
+	end
+
+	clear_goal("garrison engaged", GAR_GOALS)
+	local n, mr = 0, prm("GarMeleeR")
+	local ax, az = cx - e.x, cz - e.z
+	local al = math.sqrt(ax * ax + az * az)
+	if al < 1 then ax, az, al = hx, hz, hl end
+	local wx, wz = e.x + ax / al * mr, e.z + az / al * mr                       -- where melee squads wait: on our side of the building
+	for _, u in ipairs(state.active) do
+		if not taken[u.id] and not M.runner[u.id] then
+			local c = ucls(u)
+			local _, kind = gar_tool(u)
+			local d = d2(u.pos.x, u.pos.z, e.x, e.z)
+			local last = M.gar_ord[u.id]
+			local due = (not last) or now - last >= prm("GarReissue")
+			local gren_ready = c.gar_abil and now - (M.gren[u.id] or -1000) >= prm("GarGrenCd")
+			if gren_ready and d > prm("GarGrenR") and (c.gar_w or 1) >= 1 then
+				-- 0.4: walk up to throwing distance (b2: the devils fired from 37 m and never threw): a plain move to the spot
+				-- GarGrenR - 4 from the building on the squad's own side; the throw follows on the tick it gets there
+				if due then
+					local k = (prm("GarGrenR") - 4) / d
+					local px, pz = e.x + (u.pos.x - e.x) * k, e.z + (u.pos.z - e.z) * k
+					if morder(u.id, px, u.pos.y, pz, ORD_MOVE) then
+						M.st.gar_appr = (M.st.gar_appr or 0) + 1
+						mlog("Garrison", "approach", u.id, M.names[u.id] or "?", "->", G.id, fmt("d %.0f -> %.0f m to throw", d, prm("GarGrenR") - 4))
+					end
+					M.gar_ord[u.id] = now
+				end
+			elseif gren_ready and d <= prm("GarGrenR") then
+				M.gren[u.id], M.gar_ord[u.id] = now, nil                         -- the attack order follows on the next tick
+				M.st.gren = M.st.gren + 1
+				morder(u.id, e.x, e.y, e.z, ORD_ABILITY_POS + c.gar_abil)
+				mlog("Garrison", "grenade", u.id, M.names[u.id] or "?", "->", G.id, fmt("d %.0f ability %d", d, c.gar_abil))
+			elseif kind == "jump" and c.jump and d >= prm("JumpMin") and d <= prm("JumpMax") and now - (M.jumped[u.id] or -1000) >= prm("JumpCd") then
+				M.jumped[u.id], M.gar_ord[u.id] = now, nil
+				M.st.jump = M.st.jump + 1
+				morder(u.id, e.x, e.y, e.z, ORD_ABILITY_POS + c.jump)
+				mlog("Garrison", "jump", u.id, M.names[u.id] or "?", "->", G.id, fmt("d %.0f ability %d", d, c.jump))
+			elseif c.melee and not kind and now - (G.melee0 or now) < 20 then
+				G.melee0 = G.melee0 or now                                       -- melee: the exit first, the building after 20 s
+				if due and d2(u.pos.x, u.pos.z, wx, wz) > 6 then
+					morder(u.id, wx, u.pos.y, wz, ORD_MOVE)
+					M.gar_ord[u.id] = now
+				end
+			elseif due then
+				morder(u.id, G.id, 0, 0, ORD_ATTACK_SQUAD)                       -- elite.scar: the building is attacked
+				M.gar_ord[u.id] = now
+			end
+			taken[u.id] = true
+			n = n + 1
+		end
+	end
+	EliteAI.phase = "m_garrison"
+	return n > 0
+end
+
+--------------------------------------------------------------------------------------------------
 local function stats(state)
 	if state.now - M.last_stats < prm("StatsSecs") then return end
 	M.last_stats = state.now
 	local alive = {}
 	for _, u in ipairs(state.army) do alive[u.id] = true end
-	for _, t in ipairs({ M.tie, M.repair, M.jumped, M.names }) do             -- forget squads that are gone
+	for _, t in ipairs({ M.tie, M.repair, M.jumped, M.names, M.cap, M.idle, M.norole, M.gren, M.gar_ord, M.nocap, M.capfail }) do   -- forget squads that are gone
 		for id in pairs(t) do if not alive[id] then t[id] = nil end end
 	end
 	for key, c in pairs(M.conf) do                                             -- old decisions of dead squads / points
@@ -1105,26 +1853,36 @@ local function stats(state)
 	mlog("stats", "t", math.floor(state.now), "focus", s.focus, "switch", s.focus_sw, "retreat", s.retreat, "pre", s.pre, "punish", s.punish,
 		"tie", s.tie, "jump", s.jump, "kite", s.kite, "repair", s.repair, "abil", s.abil, "abil_tasks", tasks, "runner", s.runner, "split", s.split,
 		"decap", s.decap, "conf_sw", s.conf, "orders", s.orders, "enemies", table.getn(M.en or {}), "points", table.getn(M.pts or {}), "phase", EliteAI.phase or "-")
+	local g, G = EliteAI.goal, M.gar
+	mlog("stats2", "t", math.floor(state.now), "idle", s.idle, "idle_role", s.idle_role, "goals", s.goal, "goal", g and (g.kind .. " " .. tostring(g.key)) or "-",
+		"garrisons", s.gar, "assault", s.gar_assault, "hold", s.gar_hold, "bypass", s.gar_bypass, "grenades", s.gren,
+		"garrison", G and (tostring(G.id) .. " " .. tostring(G.v)) or "-")
+	local o = EliteAI.ord_st
+	if o then mlog("stats3", "t", math.floor(state.now), "orders_sent", o.sent, "repeat_skipped", o.skip, "to_move", o.alt, "ceiling", o.cap, "director_waited", o.held, "approach", s.gar_appr or 0) end
 end
 
--- entry point (see the header); the order inside a tick: retreats (whole army) > runners, split > Repair, MeleeApproach,
--- MeleeTie (per squad) > PunishTurn > FocusFire
+-- entry point (see the header); the order inside a tick: retreats (whole army) > Garrison (assault: the whole army) > the
+-- goal's capturing squad, runners, split > Repair, MeleeApproach, MeleeTie (per squad) > PunishTurn > FocusFire > Idle
 function EliteAI_Mechanics(state)
 	if not state or not state.army or not state.active then return false end
 	local now = state.now or World_GetGameTime()
 	state.now = now
+	M.now = now
 	local on = {}
-	for _, k in ipairs({ "FocusFire", "Repair", "ArmyRetreat", "PreRetreat", "PunishTurn", "MeleeTie", "RaceAbilities", "ArmyRoles" }) do on[k] = mech_on(k) end
+	for _, k in ipairs({ "FocusFire", "Repair", "ArmyRetreat", "PreRetreat", "PunishTurn", "MeleeTie", "RaceAbilities", "ArmyRoles", "Idle", "Garrison" }) do on[k] = mech_on(k) end
 	if not M.said.on then
 		M.said.on = true
 		mlog("on", "variant", tostring(EliteAI.variant or "-"), "idx", vidx(), "version", EliteAI_MECH_VERSION,
 			"FocusFire", on.FocusFire and 1 or 0, "Repair", on.Repair and 1 or 0, "ArmyRetreat", on.ArmyRetreat and 1 or 0, "PreRetreat", on.PreRetreat and 1 or 0,
-			"PunishTurn", on.PunishTurn and 1 or 0, "MeleeTie", on.MeleeTie and 1 or 0, "RaceAbilities", on.RaceAbilities and 1 or 0, "ArmyRoles", on.ArmyRoles and 1 or 0)
+			"PunishTurn", on.PunishTurn and 1 or 0, "MeleeTie", on.MeleeTie and 1 or 0, "RaceAbilities", on.RaceAbilities and 1 or 0, "ArmyRoles", on.ArmyRoles and 1 or 0,
+			"Idle", on.Idle and 1 or 0, "Garrison", on.Garrison and 1 or 0)
 		mlog("rules", "MeleeApproach", rule("MeleeApproach"), "FocusLeave", rule("FocusLeave"), "Chase", rule("Chase"), "Split", rule("Split"),
 			"Decap", rule("Decap"), "HoldVP", rule("HoldVP"), "TieVsFocus", rule("TieVsFocus"), "RepairVsFight", rule("RepairVsFight"),
-			"PreEngage", rule("PreEngage"), "RunnerFight", rule("RunnerFight"), "AbilitySave", rule("AbilitySave"))
+			"PreEngage", rule("PreEngage"), "RunnerFight", rule("RunnerFight"), "AbilitySave", rule("AbilitySave"), "Garrison", rule("Garrison"))
+		api()
 	end
-	if not (on.FocusFire or on.Repair or on.ArmyRetreat or on.PreRetreat or on.PunishTurn or on.MeleeTie or on.RaceAbilities or on.ArmyRoles) then return false end
+	if not (on.FocusFire or on.Repair or on.ArmyRetreat or on.PreRetreat or on.PunishTurn or on.MeleeTie or on.RaceAbilities or on.ArmyRoles
+		or on.Idle or on.Garrison) then return false end
 	M.focus_force = nil
 	local cx, cz = centre(state.active)
 	if not cx then cx, cz = centre(state.army) end
@@ -1133,11 +1891,19 @@ function EliteAI_Mechanics(state)
 		if not h then return false end
 		cx, cz = h.x, h.z
 	end
+	-- 0.3: the army's centre without the runners (last tick's roles) - for the goals, the Idle logic and the Garrison pattern
+	-- (a runner on the far flank moved the centre off the army and the army never "arrived")
+	local ax, az, an = 0, 0, 0
+	for _, u in ipairs(state.active) do
+		if not M.runner[u.id] then ax, az, an = ax + u.pos.x, az + u.pos.z, an + 1 end
+	end
+	if an > 0 then ax, az = ax / an, az / an else ax, az = cx, cz end
 	local en = scan_enemies(now, cx, cz, state.army, on.MeleeTie or on.FocusFire)
 	scan_own(state.army)
-	if on.ArmyRoles or rule("HoldVP") >= 2 then scan_points() end
+	if on.ArmyRoles or on.Idle or on.Garrison or rule("HoldVP") >= 2 then scan_points() end
 	if on.RaceAbilities then ra_clump(en, cx, cz, state.army); run_race_abilities() end
 	stats(state)
+	if on.Idle then idle_clock(state) end                                      -- 0.3: before any return, the clocks run every tick
 	-- 1) the whole army: retreats
 	if M.retreat then
 		if run_retreat(state, en, cx, cz, h) then return true end
@@ -1145,21 +1911,42 @@ function EliteAI_Mechanics(state)
 		if on.ArmyRetreat and check_army_retreat(state, en, cx, cz, h) then return true end
 		if on.PreRetreat and check_pre_retreat(state, en, cx, cz, h) then return true end
 	end
-	if table.getn(state.active) == 0 then return false end
 	local taken = {}
-	-- 2) roles: runners (always theirs), the split after a fight
-	if on.ArmyRoles and run_army_roles(state, en, cx, cz, taken) then return true end
-	-- 3) per squad
-	if on.Repair then run_repair(state, en, taken) end
-	run_melee_approach(state, en, cx, cz, taken)
-	local r7 = rule("TieVsFocus")
-	if on.MeleeTie and r7 == 1 then run_tie(state, en, taken, false) end       -- tie first, the rest focus
-	-- 4) the rest of the army
+	-- 1b) 0.3 Garrison: an enemy squad in a building next to something of ours (assault = the whole army is ordered here).
+	-- 0.4: also while the director has no squad of its own (all of them in Elite's capture tasks, sent home or runners: the
+	-- scene b3 - found 44 s late and "bypass" at once): the garrison is found, the decision taken and the purchase scripts
+	-- told (EliteAI.gar) all the same; "the army" is then where its squads will come from - our HQ
+	local gtook = false
+	if on.Garrison and api().hold then
+		local gx, gz = ax, az
+		if an == 0 and h then gx, gz = h.x, h.z end
+		gtook = run_garrison(state, en, gx, gz, h, taken)
+	elseif M.gar then
+		M.gar, EliteAI.gar = nil, nil
+		clear_goal("Garrison off", GAR_GOALS)
+	end
+	if table.getn(state.active) == 0 then return false end
+	if on.Idle or on.Garrison then goal_tick(state, en, ax, az, taken) end     -- the goal's life, the squad that takes the goal point
+	-- 2) roles: runners (always theirs), the split after a fight (true = the rest of the army covers the split)
+	local covering = false
+	if on.ArmyRoles then covering = run_army_roles(state, en, cx, cz, taken) end
 	local took = false
-	if on.PunishTurn then took = run_punish(state, en, cx, cz, h, taken) end
-	if on.MeleeTie and r7 == 3 and not took then run_tie(state, en, taken, true) end   -- jump squads tie, the rest focus
-	if not took and on.FocusFire then took = run_focus(state, en, cx, cz, taken) end
-	if on.MeleeTie and r7 == 2 and not took then run_tie(state, en, taken, false) end  -- focus first; tie only without a focus target
+	if not covering then
+		-- 3) per squad
+		if on.Repair then run_repair(state, en, taken) end
+		run_melee_approach(state, en, cx, cz, taken)
+		local r7 = rule("TieVsFocus")
+		if on.MeleeTie and r7 == 1 then run_tie(state, en, taken, false) end       -- tie first, the rest focus
+		-- 4) the rest of the army
+		if on.PunishTurn then took = run_punish(state, en, cx, cz, h, taken) end
+		if on.MeleeTie and r7 == 3 and not took then run_tie(state, en, taken, true) end   -- jump squads tie, the rest focus
+		if not took and on.FocusFire then took = run_focus(state, en, cx, cz, taken) end
+		if on.MeleeTie and r7 == 2 and not took then run_tie(state, en, taken, false) end  -- focus first; tie only without a focus target
+	end
+	-- 5) 0.3 Idle: squads nobody ordered and that stand out of a fight; the next goal for an army that stands at its target
+	if on.Idle then run_idle(state, en, ax, az, taken, covering) end
+
+	if covering then return true end                                           -- as before: the director issues nothing during the cover
 	-- the squads ordered here are not the director's this tick
 	local keep, removed = {}, 0
 	for _, u in ipairs(state.active) do if taken[u.id] then removed = removed + 1 else table.insert(keep, u) end end
@@ -1167,5 +1954,6 @@ function EliteAI_Mechanics(state)
 		for i = table.getn(state.active), 1, -1 do table.remove(state.active, i) end
 		for _, u in ipairs(keep) do table.insert(state.active, u) end
 	end
-	return took
+	return took or gtook
 end
+
