@@ -58,7 +58,7 @@
 --    heavy-weapon teams are the first focus target, get a grenade / a jump / a squad from the side; the purchase scripts
 --    are told to buy the race's answers.
 
-EliteAI_MECH_VERSION = "0.8"
+EliteAI_MECH_VERSION = "1.0"
 
 -- every tunable (EliteAI.ini [Lua] Mech_<Key> overrides); metres and seconds of game time; "strength" = health points
 -- (a squad ~ 300-900, a tank ~ 1500+), vehicles weighted by VehW
@@ -191,6 +191,7 @@ local MP = {
 	IdleMute = 60,
 	IdleRoleBan = 120,   -- a runner / split squad found idle is not given a capture role again for this long
 	IdleCapR = 14,       -- a squad this close to a point we are capturing is busy capturing, not idle
+	IdleCapMax = 45,     -- 0.9: ... a squad without a capture role for this long at most
 	IdleTargetR = 18,    -- "at the target": within this distance of the director's target / the goal
 	IdleArmySecs = 12,   -- the army standing at its target for this long gets the next goal
 	GoalSecs = 60,       -- a goal lives at most this long
@@ -248,6 +249,17 @@ local MP = {
 	DefOutSecs = 3,      -- 0.8: ... or still inside this long after it was first seen there (the next tick)
 	DefBeatenHP = 0.5,   -- 0.8: a squad Defence itself sent home above this health was not "beaten back" (the turret's memory does not count it)
 	DefArtR = 110,       -- artillery within this distance shells a turret the army stays away from
+	DefRangeData = 1,    -- 0.9: 1 = a turret's zone is the range of its weapon (DEF_RANGE, Elite's attributes) + DefRangePad; 0 = DefR for every turret (0.8)
+	DefRangeDef = 49,    -- 0.9: ... the range of a turret the table does not name (the heavy-bolter / shuriken / shoota turrets of every base: 49)
+	DefRangePad = 3,
+	Siege = 1,           -- 0.9: 1 = a squad that outranges the turret shells it from a spot outside its zone, one decision per squad and turret (below); 0 = as 0.8
+	SiegeStandD = 20,    -- 0.9: the spot is this far outside the zone (never farther than the squad's range - SiegeInD, never closer than its minimum range + SiegeInD)
+	SiegeInD = 5,
+	SiegeSpotR = 8,      -- 0.9: "at the spot": within this distance of it
+	SiegeCoverR = 100,   -- 0.9: a siege is begun (and begun anew) only with another squad of the army within this distance of the squad
+	SiegeHoldSecs = 60,  -- 0.9: the decision holds until the turret is gone, the squad is lost, or this long - no "siege -> out -> siege" (s20: a manticore lost that way)
+	SiegeCastSecs = 20,  -- 0.9: the ability that shells the turret is ordered at most this often (the recharge is the engine's)
+	SiegeNeedSecs = 90,  -- 0.9: "the army stays away from a turret and nothing of ours outranges it" is fresh this long (EliteAI.def_need: the counter layer asks for the tools)
 	DefConfHold = 16,    -- assault / avoid holds this long (two switches in 30 s at most)
 	DodgeCfgSecs = 30,   -- 0.8 Dodge: the policy is sent to elite.scar again this often (a lost queue costs half a minute at most)
 	DangerSecs = 60,     -- 0.8 Dodge: a mine / a charge elite.scar told us about closes its spot for this long after it was last seen ...
@@ -262,6 +274,16 @@ local MP = {
 	VehLeadD = 20,       -- "ahead": this much closer to the army's target than the nearest infantry squad ...
 	VehAloneD = 35,      -- ... with no infantry squad of ours within this distance
 	VehReissue = 6,
+	-- 1.0 (Orca fb 529): what comes in is counted, not only what is left; a transport is never the point of the army
+	VehRate = 0.03,      -- a vehicle that loses this share of its health a second (over VehRateSecs) ...
+	VehRateSecs = 3,
+	VehTtd = 12,         -- ... and would be dead within this many seconds at that rate pulls back, whatever its health
+	VehLightHP = 0.7,    -- a light vehicle / transport (X.VEH_LIGHT) under fire below this health with an anti-vehicle squad or a set-up team within VehAvR pulls back
+	VehAvR = 40,
+	VehCalm = 8,         -- pulled back early: it stays out until it has not been hit for this long (and VehBackDoneHP / the army's contact, as before)
+	VehTransport = 1,    -- 1 = a transport (TRANSPORTS) keeps VehTransD behind the nearest infantry squad on the way to the target and in a fight
+	VehTransD = 10,
+	VehRunner = 1,       -- 1 = the pull-back rules hold for a runner that is a vehicle as well (0 = a runner is the runner logic's alone, as 0.9)
 	-- Setup (0.7): enemy heavy-weapon teams that set up (SETUP_SBPS) and support heroes
 	FocusSetupW = 0.8,   -- FocusFire: a set-up team scores this much more ...
 	FocusSupportW = 0.5, -- ... a support hero this much
@@ -271,13 +293,36 @@ local MP = {
 	SetupNearD = 12,     -- closer than this the arc does not matter any more (the team must pack up to turn)
 	SetupFlankD = 22,    -- the flank spot: this far to the side of the team
 	SetupReissue = 6,
+	SetupApproach = 1,   -- 1.0: 1 = a squad with a grenade / stun / knock-back walks to its throw range of a set-up team (0 = it throws only from where it stands)
 	SetupBuyMin = 2,     -- the purchase scripts are told (EliteAI.setup) once the enemy fields this many set-up teams
+	-- Counter (0.9): the answer to what the enemy fields
+	CounterMemSecs = 120,  -- an enemy squad counts this long after it was last seen
+	CounterSightR = 45,    -- no AIPlayer_CanSeeSquad here: a squad within this distance of one of ours (or fighting us) is seen
+	CounterDomShare = 0.5, -- Conf_CounterVsPlan rule 1: a share class is countered from this share of the remembered strength
+	CounterBuySecs = 15,   -- ... rule 2: a class that has been present for this long
+	CounterConfHold = 30,  -- counter / plan holds this long (two switches a minute at most)
+	CounterMult = 2.0,     -- the demand of an answer to a countered class while we have none ...
+	CounterMultHave = 1.3, -- ... with fewer than CounterMaxHave of them
+	CounterMaxHave = 2,
+	CounterMultPlan = 1.2, -- a class that is seen but left to the plan: its answer while we have none
+	CounterAddonMult = 2.0,-- a squad upgrade against a countered class
+	CounterLogSecs = 30,
+	CounterAvFocus = 1,  -- 1.0: 1 = a squad with an anti-vehicle weapon (X.is_av) shoots the enemy's vehicle, not the army's focus target
+	CounterBpLog = 40,   -- 1.0: "COUNTER bp squad ..." - how an enemy squad was recognised - for the first this many squads of a match
+	CounterTech = 1,       -- 1 = against a line of set-up teams, with a tool against them in the army, the next tier comes CounterTechSecs earlier
+	CounterTechSecs = 45,
+	CounterControl = 1,    -- 1 = stun / slow / knock-back abilities on a dangerous melee squad that comes at us
+	CtrlFriendR = 6,       -- ... not with a squad of ours this close to it
+	CtrlTargetCd = 12,     -- ... one throw per target per this long
+	CtrlLead = 1.0,        -- ... aimed where it will be in this many seconds
+	FocusDetectW = 0.4,    -- FocusFire: a detector scores this much more
 }
 
 -- squad abilities cast through elite.scar (EliteAI_MECH_ABILITIES there: THE SAME NUMBERING, keep both in sync)
 local ABIL_REPAIR_SM, ABIL_REPAIR_IG, ABIL_REPAIR_ORK, ABIL_REPAIR_GROT, ABIL_REPAIR_ELD, ABIL_REPAIR_CSM, ABIL_REPAIR_TAU = 1, 2, 3, 4, 5, 6, 7
 local ABIL_JUMP_SM, ABIL_JUMP_CSM, ABIL_JUMP_ORK, ABIL_JUMP_TYR, ABIL_JUMP_ELD = 8, 9, 10, 11, 12
 local ABIL_GREN_SM, ABIL_GREN_IG_DEVILS, ABIL_GREN_IG_KASRKIN, ABIL_GREN_ELD, ABIL_GREN_ORK, ABIL_GREN_CSM, ABIL_GREN_GK = 13, 14, 15, 16, 17, 18, 19
+local ABIL_SIEGE_IG_MANTICORE = 20                                          -- 0.9: the manticore's rockets (a position ability: its attack order uses the 38 m las turret)
 -- our squads by sbps name (PBG_GetName -> "sbps\pvp\race_marine\troops\sm_assault_marine", lower case, '\' -> '/'), substrings
 local REPAIRERS = {                                                  -- who repairs (ebps with the ability, Elite attrib)
 	{ "heroes/sm_techmarine", ABIL_REPAIR_SM }, { "sm_scout_marine", ABIL_REPAIR_SM },
@@ -352,6 +397,24 @@ local DEF_TOOLS = {
 	{ "ork_tankbustas", "av" }, { "tyr_zoanthrope", "av" }, { "tyr_warrior_venom_cannon", "av" }, { "tau_broadside", "av" },
 }
 local TRANSPORTS = { "sm_rhino", "gk_rhino", "ig_chimera", "ork_wartrukk", "tau_devilfish" }
+-- 0.9 (TECH_RU.md 17.1): how far a defence building shoots, by its blueprint name (a substring; the first that fits) - the
+-- maximum range of its weapon in Elite's attributes (weapons/weapon/pvp; gamedata/attrib, else the game's): the heavy-bolter
+-- turrets of every base, the eldar shuriken turret, the orks' shoota turret, the tau base turret 49 (the default,
+-- DefRangeDef); IG super turret 65 (cannon / battle cannon; plasma 48), chaos lascannon turret 55, the techmarine's missile
+-- turret 55, the mek's turret 41, IG laser turret 38, IG fire turret 20. The zone of 0.7 / 0.8 was 40 m for all of them:
+-- a squad ordered "out" to 48 m of a base turret stood inside its range.
+local DEF_RANGE = { { "super_turret", 65 }, { "lascannon", 55 }, { "missile_turret", 55 }, { "turret_mek", 41 }, { "ig_laser_turret", 38 }, { "ig_fire_turret", 20 } }
+-- 0.9 who shells a turret from outside its zone: { end of the sbps name, range, minimum range, the ability that fires (ABIL) or
+-- false = its own weapon (an attack order) } - Elite's attributes: ig_manticore_rockets 40-150 (fired by the ability
+-- ig_manticore_shot only; an attack order makes the manticore drive up to the 38 m of its las turret - s20), sm_whirlwind_launcher
+-- 12-80, eld_prism_cannon 65, eld_d_cannon 15-82, sm_plasma_cannon 10-70, the brightlance platform 65, tyr_warp_blast_zoanthrope
+-- 10-60, tau_broadside_rail_rifle 10-70. A squad whose range does not reach from outside the zone is no siege squad at all
+-- (the rest of DEF_TOOLS: fire dragons, wraithguard 38, tankbustas 44, the venom-cannon warriors 44 - they go in with an assault only).
+local SIEGE = {
+	{ "ig_manticore", 150, 40, ABIL_SIEGE_IG_MANTICORE }, { "sm_whirlwind", 80, 12, false }, { "eld_fire_prism", 65, 0, false },
+	{ "eld_guardian_d_cannon", 82, 15, false }, { "sm_devastator_plasma_cannon", 70, 10, false }, { "eld_guardian_brightlance", 65, 0, false },
+	{ "tyr_zoanthrope", 60, 10, false }, { "tau_broadside", 70, 10, false },
+}
 -- 0.7 Setup: the squads that set a heavy weapon up before they shoot (suppression / plasma / lance teams - kb.yaml roles
 -- suppression_setup, plasma_setup, av_setup, aoe_setup) and the support heroes, as "sbps/pvp/<this>" - the names of Elite's
 -- attributes (gamedata/attrib/.../sbps/pvp). An enemy squad is recognised by its blueprint id (X.classes)
@@ -475,7 +538,17 @@ local function api()
 		-- 0.8 Defence: is a squad of ours suppressed (it crawls: walking out from under a turret takes too long). The SCAR side
 		-- of the game calls it with a squad (one argument); the same library as Squad_IsUnderAttack - looked up, never assumed
 		sup = (type(Squad_IsSuppressed) == "function") and EliteAI.num("Mech_SupApi", 1) >= 1,
+		-- 0.9 Counter: does our player see that squad (the fog of war). Elite's tactics.ai:116 has the call, commented out:
+		-- "AIPlayer_CanSeeSquad( s_selfplayer, target_squad )" - the same arguments here; never called by Elite's scripts in
+		-- the game, so: looked up, and Mech_CounterSeeApi=0 = not called (then: within CounterSightR of one of our squads)
+		see = (type(AIPlayer_CanSeeSquad) == "function") and EliteAI.num("Mech_CounterSeeApi", 1) >= 1,
+		-- 1.0 Counter: the blueprint NAME of a squad. elite.scar (the SCAR state) calls Squad_GetBlueprintName on our squads since
+		-- 0.8 and the polygon prints the names it returns ("sbps\\pvp\\race_ork\\troops\\ork_slugga"); in THIS state it is looked up -
+		-- Mech_CounterNameApi=0 = not called (then: the blueprint id, and the names elite.scar tells us - EliteAI_ScarNote kind 3)
+		bpname = (type(Squad_GetBlueprintName) == "function") and EliteAI.num("Mech_CounterNameApi", 1) >= 1,
 	}
+	X.clog("api", "AIPlayer_CanSeeSquad", type(AIPlayer_CanSeeSquad), "use", M.api.see and 1 or 0, "(0 = seen is what stands within", prm("CounterSightR"), "m of one of ours)")
+	X.clog("api", "Squad_GetBlueprintName", type(Squad_GetBlueprintName), "use", M.api.bpname and 1 or 0, "(0 = a squad's blueprint by its id, and by the names elite.scar tells)")
 	mlog("api", "Squad_IsSuppressed", type(Squad_IsSuppressed), "use", M.api.sup and 1 or 0)
 	mlog("api", "Squad_IsInHoldEntity", type(Squad_IsInHoldEntity), "use", M.api.hold and 1 or 0, "AISquad_HasFiredWeapon", type(AISquad_HasFiredWeapon),
 		"PBG_CanCapture", type(PBG_CanCapture))
@@ -504,7 +577,9 @@ local function scan_enemies(now, cx, cz, army, want_tdist)
 	end
 	local list, prev, seen, vw = {}, M.en_prev, {}, prm("VehW")
 	local hold_api = api().hold                                               -- 0.3: is the squad inside a building (Garrison)
-	local bp = X.classes()                                                    -- 0.7: blueprint id -> "setup" / "support" (empty without the api)
+	local bp = X.classes()                                                    -- 0.7: blueprint id -> "setup" / "support" (nil without the api)
+	local see = api().see                                                     -- 0.9 Counter: the fog of war
+	local known = (bp ~= nil) or api().bpname or (M.sname_n or 0) > 0         -- 1.0: is there any way to tell what a squad is
 	local n_pl = World_GetPlayerCount()                                       -- cache.ai:62-64
 	for i = 1, n_pl do
 		local p = World_GetPlayerAt(i)
@@ -520,10 +595,12 @@ local function scan_enemies(now, cx, cz, army, want_tdist)
 					local e = { id = id, x = pos.x, y = pos.y, z = pos.z, hp = hp, hmax = hmax, n = n, veh = veh,
 						hit = Squad_IsUnderAttack(sq, 3), w = hmax * hp * (veh and vw or 1) }
 					if hold_api then e.held = (Squad_IsInHoldEntity(sq) == true) end   -- groups.scar:1891 (sq exists, has models)
-					if bp ~= nil then                                              -- 0.7 (the squad exists and has models)
-						local c = bp[Squad_GetBlueprintID(sq)]
-						if c == "setup" then e.setup = true elseif c == "support" then e.support = true end
+					if known then                                                  -- 0.7 / 1.0 (the squad exists and has models)
+						local k = X.squad_bp(sq, id)
+						if k.kind == "setup" then e.setup = true elseif k.kind == "support" then e.support = true end
+						e.cls, e.by = k.cls, k.by
 					end
+					if see then e.vis = (AIPlayer_CanSeeSquad(s_selfplayer, sq) == true) end   -- 0.9 (the squad exists and has models)
 					e.d = d2(e.x, e.z, cx, cz)
 					local pr = prev[id]
 					if pr then e.px, e.pz, e.php = pr.x, pr.z, pr.hp end
@@ -540,6 +617,13 @@ local function scan_enemies(now, cx, cz, army, want_tdist)
 			for _, u in ipairs(army) do if d2(e.x, e.z, u.pos.x, u.pos.z) <= sr then e.contact = true; break end end
 		end
 		if e.contact then contact = true end
+		if e.vis == nil then                                                    -- 0.9: no fog-of-war function - what is near one of ours, or fights us
+			e.vis = e.contact
+			if not e.vis then
+				local cr = prm("CounterSightR")
+				for _, u in ipairs(army) do if d2(e.x, e.z, u.pos.x, u.pos.z) <= cr then e.vis = true; break end end
+			end
+		end
 		-- verify 10.11: SquadQuery_GetAnySquadCombatTarget is no longer called on ENEMY squads (Elite calls it on its own
 		-- squads only; unproven on others = hang risk). "Ranged" surrogate from numbers only: in contact, not a vehicle,
 		-- not closing in since the last scan, and keeps tdist = distance to our nearest squad
@@ -890,6 +974,8 @@ local function run_focus(state, en, cx, cz, taken)
 	local hits = {}
 	for _, u in ipairs(state.active) do if u.hit then table.insert(hits, u) end end
 	local best, bests, cur, curs
+	local vt = nil
+	local av_on = mech_on("Counter") and prm("CounterAvFocus") >= 1
 	for _, e in ipairs(en) do
 		-- (0.7: nor is an enemy under the guns of a turret the army stays away from - e.nogo, the Defence pattern)
 		if e.contact and not e.gar and not e.nogo then                         -- 0.3: a garrison is the Garrison pattern's (storm or leave), not a focus target
@@ -902,10 +988,13 @@ local function run_focus(state, en, cx, cz, taken)
 				if e.veh and e.hp > 0.4 then s = s - prm("FocusVehPen") end
 				-- 0.7 (Orca, fb 511 / 513): set-up teams and support heroes first - a heavy weapon that is set up pins the whole
 				-- army, a healer / a shield undoes the focus on everything else
-				if e.setup then s = s + prm("FocusSetupW") elseif e.support then s = s + prm("FocusSupportW") end
+				if e.setup then s = s + prm("FocusSetupW") elseif e.support then s = s + prm("FocusSupportW")
+				elseif X.has_cls(e, "detector") then s = s + prm("FocusDetectW") end   -- 0.9 (fb 513: detectors among the first targets)
 				if M.focus_force == e.id then s = s + 5 end                      -- Conf_MeleeApproach rule 3: shoot the attacker
 				if not best or s > bests or (s == bests and e.id < best.id) then best, bests = e, s end
 				if M.focus and e.id == M.focus.id then cur, curs = e, s end
+				-- 1.0: the vehicle our anti-vehicle squads shoot (the most hurt one, then the lower id)
+				if (e.veh or X.has_cls(e, "vehicle")) and (not vt or e.hp < vt.hp or (e.hp == vt.hp and e.id < vt.id)) then vt = e end
 			end
 		end
 	end
@@ -920,17 +1009,35 @@ local function run_focus(state, en, cx, cz, taken)
 		M.focus = { id = pick.id, t0 = now }
 		M.st.focus = M.st.focus + 1
 		mlog("FocusFire", "target", pick.id, fmt("hp %.2f n %d hmax %.0f d %.0f %s score %.2f", pick.hp, pick.n, pick.hmax, pick.d, pick.veh and "veh" or "inf", picks))
+		local pc = (pick.setup and "setup") or (pick.support and "support") or (X.has_cls(pick, "detector") and "detector") or nil
+		if pc then
+			M.st.cn_focus = (M.st.cn_focus or 0) + 1
+			X.clog("focus", "target", pick.id, "class", pc, fmt("score %.2f d %.0f hp %.2f", picks, pick.d, pick.hp))
+		end
 	end
 	local n, r = 0, rule("FocusLeave")
 	for _, u in ipairs(state.active) do
 		if not taken[u.id] then
-			local go, d = true, d2(u.pos.x, u.pos.z, pick.x, pick.z)
+			-- 1.0 (Orca fb 529: the dreadnought was ignored): a squad with an anti-vehicle weapon shoots the vehicle, whatever the
+			-- army's target is (Mech_CounterAvFocus=0 = the army's target for everybody)
+			local tgt = pick
+			if av_on and vt ~= nil and vt.id ~= pick.id and X.is_av(M.names[u.id]) then
+				tgt = vt
+				M.av_said = M.av_said or {}
+				if now - (M.av_said[u.id] or -1000) >= prm("CounterLogSecs") then
+					M.av_said[u.id] = now
+					M.st.cn_av = (M.st.cn_av or 0) + 1
+					X.clog("focus", "av", u.id, string.gsub(M.names[u.id] or "", "^.*/", ""), "-> vehicle", vt.id, fmt("hp %.2f d %.0f", vt.hp, d2(u.pos.x, u.pos.z, vt.x, vt.z)),
+						"(the army's target", pick.id .. ")")
+				end
+			end
+			local go, d = true, d2(u.pos.x, u.pos.z, tgt.x, tgt.z)
 			if u.hit and d > prm("FocusLeaveR") then                             -- it would leave its spot under fire
 				local v = "go"
-				if r == 1 then v = "stay" elseif r == 2 then v = (pick.hp < prm("FocusLeaveHp")) and "go" or "stay" end
-				go = decide("FocusLeave", u.id, v, fmt("target %d d %.0f hp %.2f", pick.id, d, pick.hp), now) == "go"
+				if r == 1 then v = "stay" elseif r == 2 then v = (tgt.hp < prm("FocusLeaveHp")) and "go" or "stay" end
+				go = decide("FocusLeave", u.id, v, fmt("target %d d %.0f hp %.2f", tgt.id, d, tgt.hp), now) == "go"
 			end
-			if go then morder(u.id, pick.id, 0, 0, ORD_ATTACK_SQUAD) end        -- "stay": no order, it keeps its own fight
+			if go then morder(u.id, tgt.id, 0, 0, ORD_ATTACK_SQUAD) end         -- "stay": no order, it keeps its own fight
 			taken[u.id] = true; n = n + 1
 		end
 	end
@@ -1580,7 +1687,10 @@ local function is_hero(id) return string.find(M.names[id] or "", "/heroes/", 1, 
 local function runner_plan(state)
 	local n, now = table.getn(state.army), state.now
 	local want = prm("Runners")
-	if n >= prm("Runners2At") then want = want + 1 end
+	-- 0.9: the second runner comes at Runners2At squads and goes two squads below it, not at the same number (s20, tyranids at 7-8
+	-- squads: a ravener was made a runner, sent to a point and released three times in a minute, and stood in between)
+	if n >= prm("Runners2At") then M.runner2 = true elseif n <= prm("Runners2At") - 2 then M.runner2 = false end
+	if M.runner2 then want = want + 1 end
 	local r, mode = rule("RunnerArmy"), "all"
 	local small = prm("RunnerMinArmy") + ((r == 3) and 1 or 0)
 	if n <= small and now >= prm("RunnerOpenSecs") then mode = (r == 2) and "near" or "none" end
@@ -2054,6 +2164,13 @@ local function run_idle(state, en, cx, cz, taken, covering)
 				r.t0 = now; still = 0
 				rec.capd = true
 			end
+			-- 0.9: a squad without a role that stands at a point we are capturing is capturing it (a runner released while it
+			-- captured: s20, 50019 at 65/-96 got "-> army at 65 -94" - an attack-move that broke the capture off)
+			-- Only a squad that can capture, and for IdleCapMax at most (a capture takes less).
+			if role == "army" and still >= near_secs and can_cap(u.id) and idle_capturing(u) then
+				r.capt = r.capt or now
+				if now - r.capt <= prm("IdleCapMax") then r.t0 = now; still = 0 end
+			elseif role == "army" then r.capt = nil end
 			if role == "army" then
 				army_n = army_n + 1
 				if still >= prm("IdleArmySecs") and not taken[u.id] then idle_n = idle_n + 1 end
@@ -2113,6 +2230,15 @@ local function run_idle(state, en, cx, cz, taken, covering)
 						if r.n >= prm("IdleTries") then
 							r.mute, r.n = now + prm("IdleMute"), 0
 							mlog("Idle", u.id, "does not move after", prm("IdleTries"), "orders: left alone for", prm("IdleMute"), "s")
+							-- 0.9 (TECH_RU.md 17.3): what the squad is doing, for the next log - s20 could not tell why a ravener
+							-- ignored seven orders in 100 s. Squad_HasActiveCommand / Squad_GetActiveCommand are main.ai's builder
+							-- check (in the game since newai-14), Squad_IsSuppressed is Defence's; the squad exists and has models
+							local cmd, sup = "-", "-"
+							if EliteAI.api_build and u.sq ~= nil then cmd = (Squad_HasActiveCommand(u.sq) == true) and tostring(Squad_GetActiveCommand(u.sq)) or "none" end
+							if api().sup and u.sq ~= nil then sup = (Squad_IsSuppressed(u.sq) == true) and 1 or 0 end
+							local o = M.own[u.id] or {}
+							mlog("Idle", u.id, "stuck:", "command", cmd, "suppressed", sup, "melee_stance", o.mstance and 1 or 0, "meleed", o.meleed and 1 or 0,
+								"fired", o.fired and 1 or 0, "hit", u.hit and 1 or 0, fmt("hp %.2f at %.0f %.0f", u.hp, u.pos.x, u.pos.z))
 						end
 					end
 				end
@@ -2513,16 +2639,147 @@ function X.def_exit(px, pz, d0, defs)
 	end
 	return best_x, best_z, best_l
 end
+-- 0.9: a turret's zone by its blueprint name
+function X.def_r(nm)
+	if prm("DefRangeData") < 1 then return prm("DefR") end
+	for _, t in ipairs(DEF_RANGE) do if string.find(nm, t[1], 1, true) then return t[2] + prm("DefRangePad") end end
+	return prm("DefRangeDef") + prm("DefRangePad")
+end
+function X.siege_row(u)
+	local name = M.names[u.id] or ""
+	for _, t in ipairs(SIEGE) do if ends_with(name, t[1]) then return t end end
+	return nil
+end
+-- 0.9 SIEGE FROM OUTSIDE (TECH_RU.md 17.1; s20: "siege 50023 d 105", "d 48", "d 43", "out ... d 37 hp 0.56", "siege d 49", "out ...
+-- d 37 hp 0.22", "lost a squad there: 50023" - the manticore was sent at the turret with an attack order, drove up to the
+-- range of its las turret, that was inside the zone, the next tick ordered it out, two ticks later at the turret again).
+-- One decision per squad and turret, kept in M.siege[id] = { key, mode, x, z, t0 } until the turret is gone, the squad is
+-- lost or SiegeHoldSecs:
+--   "standoff" - its range reaches from outside the zone: the spot SiegeStandD outside the zone (inside its range, beyond
+--                its minimum range, outside every other turret's zone) on the squad's side of the turret; it goes there
+--                with a plain move - also when it stands inside the zone now - and fires from there (the ability at the
+--                turret's position, or an attack order when its own weapon reaches);
+--   "none"     - its range does not reach, or there is no such spot: it is no siege squad for that turret - it is ordered
+--                like everybody else (out of the zone, in with an assault) and never at the turret from outside.
+-- Returns true = ordered here (the squad is taken), "skip" = it shells another turret (nothing for this one), nil = not a
+-- siege squad here.
+function X.siege_tick(u, d, defs, now, h, act)
+	local row = X.siege_row(u)
+	if row == nil then return nil end
+	M.siege = M.siege or {}
+	local S = M.siege[u.id]
+	local du = d2(u.pos.x, u.pos.z, d.x, d.z)
+	if S ~= nil and S.key ~= d.key then
+		if S.mode == "standoff" then return "skip" end
+		return nil
+	end
+	if S == nil then
+		if du > prm("DefArtR") then return nil end
+		-- not alone: a decision is taken only with another squad of the army within SiegeCoverR of this one (the army went on to
+		-- another goal: the squad follows it at the next decision, SiegeHoldSecs at the latest)
+		local cover = false
+		for _, v in ipairs(act or {}) do
+			if v.id ~= u.id and not M.runner[v.id] and d2(v.pos.x, v.pos.z, u.pos.x, u.pos.z) <= prm("SiegeCoverR") then cover = true; break end
+		end
+		if not cover then return nil end
+		S = { key = d.key, t0 = now, last = -1000, cast = -1000, range = row[2], minr = row[3] }
+		local far = row[2] - prm("SiegeInD")
+		local why = nil
+		if far < d.r + 1 then why = fmt("its range %d does not reach from outside the zone %d", row[2], d.r)
+		else
+			local sd = math.min(far, math.max(d.r + prm("SiegeStandD"), row[3] + prm("SiegeInD")))
+			local bx, bz = u.pos.x - d.x, u.pos.z - d.z
+			local bl = math.sqrt(bx * bx + bz * bz)
+			if bl < 1 then
+				bx, bz = (h and h.x or (d.x + 1)) - d.x, (h and h.z or d.z) - d.z
+				bl = math.max(math.sqrt(bx * bx + bz * bz), 1)
+			end
+			bx, bz = bx / bl, bz / bl
+			for i = 0, 15 do                                                      -- the squad's side first, then turned by 22.5 degrees: 1, -1, 2, -2 ... 8
+				local k = (i - math.floor(i / 2) * 2 == 1) and ((i + 1) / 2) or (-(i / 2))
+				local a = k * math.pi / 8
+				local c, sn = math.cos(a), math.sin(a)
+				local px, pz = d.x + (bx * c - bz * sn) * sd, d.z + (bx * sn + bz * c) * sd
+				local free = true
+				for _, q in ipairs(defs) do if q.key ~= d.key and d2(px, pz, q.x, q.z) <= q.r + 1 then free = false; break end end
+				if free then S.x, S.z, S.sd = px, pz, sd; break end
+			end
+			if S.x == nil then why = "no spot outside the zones of the other turrets" end
+		end
+		if why then
+			S.mode = "none"
+			M.st.def_nosiege = (M.st.def_nosiege or 0) + 1
+			mlog("Defence", d.key, "siege", u.id, M.names[u.id] or "?", "no:", why, "- other means; held", prm("SiegeHoldSecs"), "s")
+		else
+			S.mode = "standoff"
+			M.st.def_standoff = (M.st.def_standoff or 0) + 1
+			mlog("Defence", d.key, "siege", u.id, M.names[u.id] or "?", fmt("stand-off: range %d (min %d) zone %d -> the spot %.0f %.0f, %.0f m from the turret (now %.0f m)", row[2], row[3], d.r, S.x, S.z, S.sd, du),
+				"held until the turret is gone or", prm("SiegeHoldSecs"), "s")
+		end
+		M.siege[u.id] = S
+	end
+	if S.mode ~= "standoff" then return nil end
+	weight_of(u)
+	-- a damaged squad under fire is not held at its spot: the Vehicles mechanic / the director's retreat take it out
+	if u.hit and u.hp < prm("VehBackHP") then return nil end
+	local ds = d2(u.pos.x, u.pos.z, S.x, S.z)
+	if ds > prm("SiegeSpotR") then
+		if now - S.last >= prm("DefReissue") then
+			S.last = now
+			morder(u.id, S.x, u.pos.y, S.z, ORD_MOVE)
+			if not S.said then S.said = true; mlog("Defence", d.key, "siege", u.id, fmt("to its spot %.0f %.0f (%.0f m away, %.0f m from the turret now)", S.x, S.z, ds, du)) end
+		end
+	elseif row[4] then
+		if now - S.cast >= prm("SiegeCastSecs") then
+			S.cast = now
+			morder(u.id, d.x, d.y or 0, d.z, ORD_ABILITY_POS + row[4])
+			M.st.def_siege = (M.st.def_siege or 0) + 1
+			mlog("Defence", d.key, "siege", u.id, M.names[u.id] or "?", fmt("fires ability %d from %.0f m (outside the zone %d)", row[4], du, d.r))
+		end
+	elseif now - S.cast >= prm("DefReissue") * 2 then
+		S.cast = now
+		morder(u.id, d.x, d.y or 0, d.z, ORD_ATTACK_STRUCT)
+		M.st.def_siege = (M.st.def_siege or 0) + 1
+		mlog("Defence", d.key, "siege", u.id, M.names[u.id] or "?", fmt("attacks from %.0f m (outside the zone %d)", du, d.r))
+	end
+	return true
+end
+-- the decisions that are over (each entry on its own; the ids sorted for the log)
+function X.siege_end(defs, now)
+	if M.siege == nil then return end
+	local live, ids = {}, {}
+	for _, d in ipairs(defs) do live[d.key] = true end
+	for id in pairs(M.siege) do table.insert(ids, id) end
+	table.sort(ids)
+	for _, id in ipairs(ids) do
+		local S = M.siege[id]
+		local why = nil
+		if M.exists ~= nil and M.exists[id] ~= true then why = "the squad is lost"
+		elseif not live[S.key] then why = "the turret is gone"
+		elseif now - S.t0 >= prm("SiegeHoldSecs") then why = "time" end
+		if why then
+			M.siege[id] = nil
+			mlog("Defence", S.key, "siege", id, "ends after", math.floor(now - S.t0), "s why", why, "mode", S.mode)
+		end
+	end
+end
+-- 1.0 (Orca fb 527: "did the scan take our own turrets for the enemy's?"): only the entities of the players the engine calls
+-- our ENEMY are read (Player_GetRelationship == R_ENEMY, the filter of scan_enemies; we ourselves and our allies are never
+-- asked for theirs), and every turret keeps the index and the team of the player it was read from - the scan line names
+-- them ("<key> owner p<i> team <t>", "we: team <t>"). A turret whose owner's team is ours is dropped and counted ("own_team
+-- skipped N": must stay 0 - a number above 0 says the engine's relationship answer is not what we think it is).
 function X.def_scan(now, en_players)
 	if M.def_t ~= nil and now - M.def_t < prm("DefScanSecs") then return end
 	M.def_t = now
-	local list = {}
+	local list, own_skip = {}, 0
 	if api().ents then
 		local n_pl = World_GetPlayerCount()
 		for i = 1, n_pl do
 			local p = World_GetPlayerAt(i)
 			if p and Player_IsAlive(p) and Player_GetRelationship(s_self_modplayer, p) == R_ENEMY then
-				local eg = Player_GetEntities(p)
+				local team = Player_GetTeam(p)                                      -- (scan_points asks the same of every player)
+				local eg = (team ~= s_self_team) and Player_GetEntities(p) or nil
+				if team == s_self_team then own_skip = own_skip + 1 end
 				local cnt = eg and EGroup_CountSpawned(eg) or 0
 				for j = 1, cnt do
 					local e = EGroup_GetSpawnedEntityAt(eg, j)
@@ -2531,7 +2788,8 @@ function X.def_scan(now, en_players)
 						if has_key(nm, DEF_KEYS) then
 							local pos, hp = Entity_GetPosition(e), Entity_GetHealthPercentage(e) or 1
 							if pos ~= nil and pos.x ~= nil and pos.z ~= nil and hp > 0 then
-								table.insert(list, { x = pos.x, y = pos.y, z = pos.z, hp = hp, w = prm("DefW") * hp, r = prm("DefR"), key = fmt("%.0f/%.0f", pos.x, pos.z), n = 1 })
+								table.insert(list, { x = pos.x, y = pos.y, z = pos.z, hp = hp, w = prm("DefW") * hp, r = X.def_r(nm), key = fmt("%.0f/%.0f", pos.x, pos.z), n = 1,
+									own = i, team = team })
 							end
 						end
 					end
@@ -2547,8 +2805,13 @@ function X.def_scan(now, en_players)
 	local was = {}
 	for _, d in ipairs(M.defs or {}) do was[d.key] = d.v end                   -- the decision outlives the rescan
 	for _, d in ipairs(list) do d.v = was[d.key] end
-	if table.getn(list) ~= (M.defs and table.getn(M.defs) or -1) then
-		mlog("Defence", "scan", table.getn(list), api().ents and "turrets" or "zones at enemy HQs", "t", math.floor(now))
+	local sig = {}
+	for i, d in ipairs(list) do if i <= 8 then table.insert(sig, d.key .. " owner " .. (d.own and ("p" .. d.own .. " team " .. tostring(d.team)) or "hq")) end end
+	sig = table.concat(sig, ", ")
+	if table.getn(list) ~= (M.defs and table.getn(M.defs) or -1) or sig ~= M.def_sig then
+		M.def_sig = sig
+		mlog("Defence", "scan", table.getn(list), api().ents and "turrets" or "zones at enemy HQs", "t", math.floor(now), "|", sig, "| we: team", tostring(s_self_team),
+			"own_team skipped", own_skip)
 	end
 	M.defs = list
 end
@@ -2557,6 +2820,10 @@ function X.run_def(state, en, cx, cz, h, taken)
 	X.def_scan(now)
 	M.def_mem, M.def_in, M.def_ord, M.def_said = M.def_mem or {}, M.def_in or {}, M.def_ord or {}, M.def_said or {}
 	local defs = M.defs or {}
+	local sg_on = prm("Siege") >= 1
+	if sg_on then X.siege_end(defs, now) elseif M.siege then M.siege = nil end
+	local skeys, need_n, need_key = {}, 0, nil                                -- 0.9: the turrets somebody shells from outside; the ones nothing of ours outranges
+	for _, S in pairs(M.siege or {}) do if S.mode == "standoff" then skeys[S.key] = true end end   -- (a set)
 	-- the memory: who was inside a zone at the last tick and is dead, or was sent home hurt, now
 	local alive_now = {}
 	for _, u in ipairs(state.army) do alive_now[u.id] = true end
@@ -2589,7 +2856,7 @@ function X.run_def(state, en, cx, cz, h, taken)
 	local blocks, hold_for = {}, nil
 	local def_seen = {}                                                       -- 0.8: who is inside a zone it has to leave, this tick
 	for _, d in ipairs(defs) do
-		local near = (dest ~= nil and dest.x ~= nil and d2(dest.x, dest.z, d.x, d.z) <= d.r + 5)
+		local near = (dest ~= nil and dest.x ~= nil and d2(dest.x, dest.z, d.x, d.z) <= d.r + 5) or (skeys[d.key] == true)
 		if not near then
 			for _, u in ipairs(state.active) do if d2(u.pos.x, u.pos.z, d.x, d.z) <= d.r + prm("DefNearPad") then near = true; break end end
 		end
@@ -2627,11 +2894,17 @@ function X.run_def(state, en, cx, cz, h, taken)
 				table.insert(blocks, { x = d.x, z = d.z, r = d.r, key = d.key })
 				M.st.def_avoid = (M.st.def_avoid or 0) + 1
 				if near and dest ~= nil and dest.x ~= nil and d2(dest.x, dest.z, d.x, d.z) <= d.r + 5 then hold_for = d end
+				local n_stand = 0
 				for _, u in ipairs(state.active) do
 					if not taken[u.id] then
 						local du = d2(u.pos.x, u.pos.z, d.x, d.z)
 						local last = M.def_ord[u.id] or -1000
-						if du <= d.r then
+						local sg = nil                                                    -- 0.9: the squads that outrange it - one decision, from outside
+						if sg_on and not d.virtual then sg = X.siege_tick(u, d, defs, now, h, state.active) end
+						if sg == true then taken[u.id] = true; n_stand = n_stand + 1
+						elseif sg == "skip" then
+							if du <= prm("DefArtR") then n_stand = n_stand + 1 end       -- (it shells the turret next to this one)
+						elseif du <= d.r then
 							-- 0.8: out by the shortest way out of all the zones (X.def_exit), at once; a squad under fire that
 							-- cannot walk out quickly retreats (a retreat is fast and cannot be suppressed; a vehicle has none)
 							local ex, ez, L = X.def_exit(u.pos.x, u.pos.z, d, defs)
@@ -2664,7 +2937,7 @@ function X.run_def(state, en, cx, cz, h, taken)
 								mlog("Defence", d.key, "out", u.id, M.names[u.id] or "?", fmt("d %.0f hp %.2f", du, u.hp), fmt("to %.0f %.0f (%.0f m)", ex, ez, L))
 							end
 							taken[u.id] = true
-						elseif not d.virtual and du <= prm("DefArtR") and X.tool(u) == "art" then
+						elseif not sg_on and not d.virtual and du <= prm("DefArtR") and X.tool(u) == "art" then   -- (Mech_Siege=0: as 0.8)
 							if now - last >= prm("DefReissue") * 2 then
 								M.def_ord[u.id] = now
 								morder(u.id, d.x, d.y or 0, d.z, ORD_ATTACK_STRUCT)
@@ -2675,11 +2948,17 @@ function X.run_def(state, en, cx, cz, h, taken)
 						end
 					end
 				end
+				-- 0.9: the army stays away and nothing of ours shells it from outside - other means are asked for (EliteAI.def_need)
+				if n_stand == 0 and not d.virtual then need_n = need_n + 1; need_key = need_key or d.key end
 			else
 				M.st.def_assault = (M.st.def_assault or 0) + 1
 				if not d.virtual then
 					for _, u in ipairs(state.active) do
-						if not taken[u.id] and d2(u.pos.x, u.pos.z, d.x, d.z) <= prm("DefArmyR") and X.tool(u) ~= nil and u.hp >= prm("VehBackHP") then
+						local sg = nil
+						if sg_on and not taken[u.id] then sg = X.siege_tick(u, d, defs, now, h, state.active) end
+						if sg == true then taken[u.id] = true
+						elseif sg == "skip" then
+						elseif not taken[u.id] and d2(u.pos.x, u.pos.z, d.x, d.z) <= prm("DefArmyR") and X.tool(u) ~= nil and u.hp >= prm("VehBackHP") then
 							if now - (M.def_ord[u.id] or -1000) >= prm("DefReissue") * 2 then
 								M.def_ord[u.id] = now
 								morder(u.id, d.x, d.y or 0, d.z, ORD_ATTACK_STRUCT)
@@ -2710,6 +2989,17 @@ function X.run_def(state, en, cx, cz, h, taken)
 		end
 	end
 	EliteAI.def_block = blocks
+	if need_n > 0 then
+		local N = EliteAI.def_need
+		if type(N) ~= "table" or now - (N.t or -1000) > prm("SiegeNeedSecs") then
+			N = { t0 = now }
+			mlog("Defence", need_key, "the army stays away and nothing of ours outranges it: other means are asked for (turrets", need_n, ")")
+		end
+		N.t, N.n, N.key = now, need_n, need_key
+		EliteAI.def_need = N
+	elseif type(EliteAI.def_need) == "table" and now - (EliteAI.def_need.t or -1000) > prm("SiegeNeedSecs") then
+		EliteAI.def_need = nil
+	end
 	if M.def_first then for id in pairs(M.def_first) do if not def_seen[id] then M.def_first[id] = nil end end end   -- it is out: the clock starts anew
 	for _, e in ipairs(en) do if X.blocked(e.x, e.z, 0) then e.nogo = true end end
 	-- the army's destination lies under a turret it stays away from: another goal, or the hold spot outside the zone
@@ -2745,13 +3035,43 @@ end
 --  * ahead: closer to the army's target than the nearest infantry squad by VehLeadD (20 m) with no infantry squad of ours
 --    within VehAloneD (35 m) - it goes back to the nearest infantry squad and comes on with it ("... -> waits for the army").
 -- An army of vehicles only has nobody to wait for. Mech_Vehicles=0 = off.
-function X.run_veh(state, en, cx, cz, h, taken)
+-- 1.0 (Orca fb 527 / 529: "the chimera drove ahead alone and did not carry the guard; the sentinels were given away on open
+-- ground - a grenade, the devastators: the bot does not reckon what comes in"). Three more rules:
+--  * the RATE: the health of every vehicle is remembered between ticks (numbers); one that loses VehRate of it a second and
+--    would be dead within VehTtd at that rate pulls back at once ("-> back: loses 0.05 a second, 9 s to live") - 0.7 waited
+--    for 0.4 and the chimera left at 0.16;
+--  * a LIGHT vehicle (X.VEH_LIGHT: the transports and the sentinel) that is hit, below VehLightHP, with an anti-vehicle squad
+--    of the enemy (X.is_av by its blueprint: tankbustas, brightlance, fire dragons ...; a carrier of an anti-vehicle upgrade;
+--    a set-up team) within VehAvR pulls back ("-> back: light, hp 0.62, <enemy blueprint> 28 m away"). Pulled back early it
+--    stays out until it has not been hit for VehCalm;
+--  * a TRANSPORT is never the point: on the way and in a fight it keeps VehTransD behind the nearest infantry squad, on the
+--    side of our HQ ("... transport -> behind the infantry"); the chimera is IG's reinforce point (ig_chimera_mobile_base) -
+--    behind the line is where it works. Mech_VehTransport=0 = the "ahead and alone" rule of 0.7 only.
+-- NOT done: loading the infantry and carrying it. The engine has Command_SquadSquadLoad and SCMD_Load / SCMD_Unload /
+-- SCMD_UnloadSquads (the strings of DOW2.exe), but the game's SCAR library (command.scar) is not unpacked on this server and
+-- the arguments of the call could not be read - a call with guessed arguments is the kind of engine error that left the Lua
+-- mutex locked (HANDOFF, step 3). To be done after command.scar is read (TECH_RU.md 18.6).
+X.VEH_LIGHT = { "ig_sentinel", "ig_chimera", "sm_rhino", "gk_rhino", "ork_wartrukk", "tau_devilfish" }
+function X.enemy_av(e)                                                         -- is this enemy squad a threat to a vehicle (by what we know of it)
+	if e.setup then return true end
+	local k = M.ecls and M.ecls[e.id]
+	local key = k and k.key or nil
+	if key == nil then return false end
+	for _, t in ipairs(DEF_TOOLS) do if t[2] == "av" and ends_with(key, t[1]) then return true end end
+	for _, row in ipairs(X.AV_UPG) do if ends_with(key, row[2]) then return true end end
+	return false
+end
+-- runners_only: the pass before the roles - a RUNNER that is a vehicle (the sentinel is IG's runner) is pulled out of the
+-- fire by the same rules (it is "taken" then: the runner logic leaves it alone this tick); nothing else is done in that pass
+function X.run_veh(state, en, cx, cz, h, taken, runners_only)
 	local now = state.now
 	M.veh = M.veh or {}
 	local inf, vehs = {}, {}
 	for _, u in ipairs(state.active) do
 		weight_of(u)
-		if u.veh then table.insert(vehs, u) elseif not M.runner[u.id] then table.insert(inf, u) end
+		-- 1.0: the sentinel is no vehicle for the engine (SquadQuery_IsVehicle is false: Orca's log has it as the RUNNER, and
+		-- pick_runners takes no vehicle) - so this pattern never looked at it. A squad of X.VEH_LIGHT is a vehicle here by its name
+		if u.veh or has_key(M.names[u.id] or "", X.VEH_LIGHT) then table.insert(vehs, u) elseif not M.runner[u.id] then table.insert(inf, u) end
 	end
 	if table.getn(vehs) == 0 then return 0 end
 	local icx, icz = centre(inf)
@@ -2762,12 +3082,42 @@ function X.run_veh(state, en, cx, cz, h, taken)
 	for _, u in ipairs(vehs) do
 		local r = M.veh[u.id]
 		if not r then r = { last = -1000 }; M.veh[u.id] = r end
-		if not taken[u.id] then
+		if not taken[u.id] and (not runners_only or M.runner[u.id]) then
 			local danger = false
 			for _, e in ipairs(en) do if d2(e.x, e.z, u.pos.x, u.pos.z) <= prm("VehDangerR") then danger = true; break end end
-			if r.back and (u.hp >= prm("VehBackDoneHP") or not contact) then
+			-- 1.0: the rate of the damage (the health at the sample VehRateSecs ago; a repair makes it negative)
+			if u.hit then r.hit_t = now end
+			if r.s_t == nil or now - r.s_t > prm("VehRateSecs") * 3 then r.s_t, r.s_hp, r.rate = now, u.hp, 0
+			elseif now - r.s_t >= prm("VehRateSecs") then r.rate = (r.s_hp - u.hp) / (now - r.s_t); r.s_t, r.s_hp = now, u.hp end
+			local nm = M.names[u.id] or ""
+			local light, why = false, nil
+			for _, key in ipairs(X.VEH_LIGHT) do if ends_with(nm, key) then light = true; break end end
+			if not r.back and (danger or u.hit) then
+				if (r.rate or 0) >= prm("VehRate") and u.hp / r.rate <= prm("VehTtd") then
+					why = fmt("loses %.2f a second, %.0f s to live", r.rate, u.hp / r.rate)
+				elseif light and u.hit and u.hp < prm("VehLightHP") then
+					local ae, ad
+					for _, e in ipairs(en) do
+						local d = d2(e.x, e.z, u.pos.x, u.pos.z)
+						if d <= prm("VehAvR") and e.vis ~= false and X.enemy_av(e) and (not ad or d < ad or (d == ad and e.id < ae.id)) then ae, ad = e, d end
+					end
+					if ae then
+						local k = M.ecls and M.ecls[ae.id]
+						why = fmt("light, hp %.2f, %s %.0f m away", u.hp, (k and k.key and string.gsub(k.key, "^.*/", "")) or (ae.setup and "a set-up team") or "?", ad)
+					end
+				end
+			end
+			-- 0.9: "the army has no contact" ends it only when nothing threatens the vehicle itself (s20: a chimera at 0.05 was "back in
+			-- the line" and "-> back" again in the same tick, seven times - an enemy within VehDangerR of it, none near the army's centre)
+			local calm = (not r.early) or (now - (r.hit_t or -1000) >= prm("VehCalm"))   -- 1.0: pulled back early - not while it is still shot at
+			if r.back and ((u.hp >= prm("VehBackDoneHP") and calm) or (not contact and not danger and not u.hit)) then
 				mlog("Vehicle", u.id, M.names[u.id] or "?", fmt("hp %.2f", u.hp), "back in the line", fmt("after %.0f s", now - r.back))
-				r.back = nil
+				r.back, r.early = nil, nil
+			end
+			if not r.back and why ~= nil then
+				r.back, r.early = now, true
+				M.st.veh_back, M.st.veh_early = (M.st.veh_back or 0) + 1, (M.st.veh_early or 0) + 1
+				mlog("Vehicle", u.id, M.names[u.id] or "?", fmt("hp %.2f", u.hp), "-> back:", why, icx and "- behind the infantry" or "- towards home")
 			end
 			if not r.back and u.hp < prm("VehBackHP") and (danger or u.hit) then
 				r.back = now
@@ -2785,14 +3135,32 @@ function X.run_veh(state, en, cx, cz, h, taken)
 				end
 				if now - r.last >= prm("VehReissue") and d2(u.pos.x, u.pos.z, tx, tz) > 6 then r.last = now; morder(u.id, tx, u.pos.y, tz, ORD_MOVE) end
 				taken[u.id] = true; n = n + 1
-			elseif icx and dest ~= nil and dest.x ~= nil then
+			elseif not runners_only and icx and dest ~= nil and dest.x ~= nil then
 				local nf, nd                                                      -- the nearest infantry squad of ours
 				for _, f in ipairs(inf) do
 					local d = d2(f.pos.x, f.pos.z, u.pos.x, u.pos.z)
 					if not nd or d < nd or (d == nd and f.id < nf.id) then nf, nd = f, d end
 				end
 				local lead = d2(nf.pos.x, nf.pos.z, dest.x, dest.z) - d2(u.pos.x, u.pos.z, dest.x, dest.z)
-				if nd > prm("VehAloneD") and lead >= prm("VehLeadD") then
+				local trans = prm("VehTransport") >= 1 and has_key(nm, TRANSPORTS)
+				if trans and (lead > 0 or nd > prm("VehAloneD")) then
+					-- 1.0: a transport nearer to the target than the infantry next to it (or far from all of it): the spot VehTransD
+					-- behind that squad, on the side of our HQ (no HQ known: away from the target)
+					local bx, bz = (h and h.x or (2 * nf.pos.x - dest.x)) - nf.pos.x, (h and h.z or (2 * nf.pos.z - dest.z)) - nf.pos.z
+					local bl = math.sqrt(bx * bx + bz * bz)
+					if bl < 1 then bx, bz, bl = 0, 0, 1 end
+					local tx, tz = nf.pos.x + bx / bl * prm("VehTransD"), nf.pos.z + bz / bl * prm("VehTransD")
+					if now - r.last >= prm("VehReissue") and d2(u.pos.x, u.pos.z, tx, tz) > 6 then
+						r.last = now
+						morder(u.id, tx, nf.pos.y, tz, ORD_MOVE)
+						M.st.veh_trans = (M.st.veh_trans or 0) + 1
+						if not r.said or now - r.said >= 20 then
+							r.said = now
+							mlog("Vehicle", u.id, nm, fmt("transport %.0f m ahead of the infantry, the nearest squad %.0f m away", lead, nd), "-> behind the infantry")
+						end
+					end
+					taken[u.id] = true; n = n + 1
+				elseif nd > prm("VehAloneD") and lead >= prm("VehLeadD") then
 					if now - r.last >= prm("VehReissue") then
 						r.last = now
 						morder(u.id, nf.pos.x, nf.pos.y, nf.pos.z, ORD_MOVE)
@@ -2823,21 +3191,128 @@ end
 -- The count of set-up teams goes to the purchase scripts (EliteAI.setup = { n, t0, t }: strategy_unit_purchase.ai raises
 -- the counter units of the race while the enemy fields SetupBuyMin of them). Lines "MECH Setup <eid> grenade|jump|flank|
 -- attack <id> <sbps> ...". Mech_Setup=0 = off; without the blueprint ids (api line: "setup teams off") nothing is done.
+-- 1.0 (TECH_RU.md 17.9: in the game "COUNTER data ... 62 of 62" and not one class in ~90 "seen" lines, while the set-up
+-- teams of the same scan were recognised). 0.9 kept two tables - blueprint id -> "setup" / "support" (filled by ipairs over
+-- a list, proven in the game) and blueprint id -> classes (filled by pairs over X.CN_UNITS, never hit in the game; the stub
+-- with ids that were strings - and with numbers - finds every class, so the cause is not in this file's logic and is NOT
+-- established). Now there is ONE way: X.bp_rows() = every blueprint we know, by its path ("race_x/troops/unit" -> { kind,
+-- cls }), walked as a sorted list; M.bpn[blueprint id] = that path, written in the loop that the set-up teams are found by.
+-- A squad is recognised once (X.squad_bp, by squad id; numbers and strings only are kept):
+--   1. by NAME when we have it - Squad_GetBlueprintName in this state (looked up, Mech_CounterNameApi=0 = not called), or
+--      the name elite.scar read in the SCAR state and told us (EliteAI_ScarNote kind 3; Mech_CounterScarNames=0 = not sent);
+--   2. by blueprint ID (M.bpn) - what 0.7 does for the set-up teams.
+-- Both are read when both are there; they must agree ("by name (id says ...)" in the log when not). The log says what was
+-- really found: "COUNTER data ... | PBG_Get N of R named K distinct ids D readback B | <three ids>" (named = the blueprint
+-- PBG_Get returned carries the name we asked for; distinct = different ids among them; readback = asked again, the same id),
+-- "COUNTER bp squad <id> bid <n> name <path|-> class <...> by name|id|scar|none" once per enemy squad (the first CounterBpLog),
+-- and "known K of N (name A id B scar C none D)" in every "seen" line.
+function X.bp_key(nm)                                                          -- "sbps\pvp\race_x\troops\unit" -> "race_x/troops/unit"
+	if type(nm) ~= "string" then return nil end
+	local k = string.gsub(string.lower(nm), "\\", "/")
+	k = string.gsub(k, "%.%a+$", "")                                           -- (a file extension, should the engine give one)
+	local i = string.find(k, "race_", 1, true)                                -- every path of ours starts at the race folder
+	if i then k = string.sub(k, i) end
+	return k
+end
+function X.bp_rows()
+	if M.rows ~= nil then return M.rows, M.row_keys end
+	local rows, keys = {}, {}
+	local function row(path) local r = rows[path]; if r == nil then r = {}; rows[path] = r; table.insert(keys, path) end; return r end
+	for _, path in ipairs(SETUP_SBPS) do row(path).kind = "setup" end
+	for _, path in ipairs(SUPPORT_SBPS) do row(path).kind = "support" end
+	for path, cls in pairs(X.CN_UNITS) do row(path).cls = cls end               -- (each entry on its own: the order of pairs() does not matter)
+	table.sort(keys)
+	M.rows, M.row_keys = rows, keys
+	return rows, keys
+end
 function X.classes()
 	if M.bp ~= nil or M.bp_off then return M.bp end
-	if not api().bpid then M.bp_off = true; return nil end
-	local bp, ns, nh = {}, 0, 0
-	for _, path in ipairs(SETUP_SBPS) do
+	if not api().bpid then
+		M.bp_off = true
+		if mech_on("Counter") then X.clog("data", "no blueprint ids here (Squad_GetBlueprintID / PBG_Get / PBG_GetID): squads are known by name only") end
+		return nil
+	end
+	local rows, keys = X.bp_rows()
+	local bp, bpn, ns, nh, nc, nall = {}, {}, 0, 0, 0, 0
+	local got, named, sample = 0, 0, {}
+	for _, path in ipairs(keys) do
+		local r = rows[path]
+		if r.cls ~= nil then nall = nall + 1 end
 		local pbg = PBG_Get("sbps/pvp/" .. path)                                -- strategy_unit_purchase.ai:26-50 (Elite's, the same form)
-		if pbg ~= nil then bp[PBG_GetID(pbg)] = "setup"; ns = ns + 1 end
+		if pbg ~= nil then
+			local id = PBG_GetID(pbg)
+			got = got + 1
+			if X.bp_key(PBG_GetName(pbg)) == path then named = named + 1 end      -- (PBG_GetName of a PBG_Get: strategy_defence_purchase.ai:125)
+			if id ~= nil then
+				bpn[id] = path
+				if r.kind ~= nil then bp[id] = r.kind end
+				if r.kind == "setup" then ns = ns + 1 elseif r.kind == "support" then nh = nh + 1 end
+				if r.cls ~= nil then nc = nc + 1 end
+				if table.getn(sample) < 3 then table.insert(sample, path .. "=" .. tostring(id)) end
+			end
+		end
 	end
-	for _, path in ipairs(SUPPORT_SBPS) do
+	local distinct, back = 0, 0
+	for _ in pairs(bpn) do distinct = distinct + 1 end                          -- (a count: the order of pairs() does not matter)
+	for _, path in ipairs(keys) do                                            -- asked again: is the id of a path the same, and is it ours
 		local pbg = PBG_Get("sbps/pvp/" .. path)
-		if pbg ~= nil then bp[PBG_GetID(pbg)] = "support"; nh = nh + 1 end
+		if pbg ~= nil and bpn[PBG_GetID(pbg)] == path then back = back + 1 end
 	end
-	M.bp = bp
+	M.bp, M.bpn = bp, bpn
 	mlog("Setup", "data", "set-up teams", ns, "of", table.getn(SETUP_SBPS), "support heroes", nh, "of", table.getn(SUPPORT_SBPS))
+	if mech_on("Counter") then
+		X.clog("data", "enemy blueprints with a class", nc, "of", nall, "| PBG_Get", got, "of", table.getn(keys), "named", named, "distinct ids", distinct,
+			"readback", back, "|", table.concat(sample, " "))
+	end
 	return bp
+end
+-- what an enemy squad is: { kind = "setup" | "support" | nil, cls = "light mswarm" | nil, by = "name" | "id" | "scar" | "none",
+-- key = its path or nil }, found once per squad id (a squad that was "none" is asked again when elite.scar has told its name).
+-- Entry: the squad exists and has models (scan_enemies).
+function X.squad_bp(sq, id)
+	M.ecls = M.ecls or {}
+	local k = M.ecls[id]
+	local told = M.sname ~= nil and M.sname[id] or nil
+	if k ~= nil and not (k.by == "none" and told ~= nil) then return k end
+	local rows = X.bp_rows()
+	local bid, idkey = nil, nil
+	if M.bpn ~= nil then
+		bid = Squad_GetBlueprintID(sq)
+		if bid ~= nil then idkey = M.bpn[bid] end
+	end
+	-- the name first; a name that is in none of our tables while the id is (a name in a form we do not expect) leaves it to the id
+	local nkey, by = nil, "none"
+	if api().bpname then
+		nkey = X.bp_key(Squad_GetBlueprintName(sq))
+		if nkey ~= nil and nkey ~= "" then by = "name" else nkey = nil end
+	end
+	if nkey == nil and told ~= nil then nkey, by = told, "scar" end
+	local key = nkey
+	if idkey ~= nil and (key == nil or rows[key] == nil) then key, by = idkey, "id" end
+	local r = key and rows[key] or nil
+	k = { kind = r and r.kind or nil, cls = r and r.cls or nil, by = by, key = key }
+	M.ecls[id] = k
+	M.st.cn_bp = (M.st.cn_bp or 0) + 1
+	local diff = (idkey ~= nil and nkey ~= nil and idkey ~= nkey) and ((by == "id") and ("(the name says " .. nkey .. ")") or ("(id says " .. idkey .. ")")) or ""
+	if diff ~= "" then M.st.cn_bp_diff = (M.st.cn_bp_diff or 0) + 1 end
+	if mech_on("Counter") and (M.st.cn_bp <= prm("CounterBpLog") or diff ~= "") and (M.st.cn_bp_said or 0) < prm("CounterBpLog") * 2 then
+		M.st.cn_bp_said = (M.st.cn_bp_said or 0) + 1
+		X.clog("bp", "squad", id, "bid", tostring(bid), "name", key or "-", "class", (k.cls or "-") .. (k.kind and (" " .. k.kind) or ""), "by", by, diff)
+	end
+	return k
+end
+-- 1.0 (Orca fb 529: "the devastators were never knocked down or suppressed; the grenades went at the scouts"): 0.7 threw only when
+-- the grenade squad already stood within SetupGrenR of the team - a team that sits 40 m away never saw a grenade. Now the
+-- squad that has a tool WALKS to its throw range (as the Garrison pattern's grenadiers do): from outside the team's arc
+-- straight in, from inside the arc to the side first; one squad per team; the tool = the stun / slow / knock-back ability of
+-- X.CONTROL with its real range and minimum range (stikkbommas 60 / 20, cultists 50 / 10, frag grenades 25 / 8 ...), else the
+-- grenade / launch of GAR_TOOLS (SetupGrenR, minimum 8 m, the devils' launch 15 m). The team is this squad's cast target
+-- before anything else: X.run_setup runs before X.run_control, a squad on its way is "taken". Mech_SetupApproach=0 = as 0.7.
+X.SETUP_MIN = { [ABIL_GREN_IG_DEVILS] = 15 }                                   -- (minimum ranges, Elite's attributes; the rest 8)
+function X.setup_tool(nm, c)
+	for _, row in ipairs(X.CONTROL) do if ends_with(nm, row[1]) then return row[2], row[3], row[4] end end
+	if c.gar_abil then return c.gar_abil, prm("SetupGrenR"), X.SETUP_MIN[c.gar_abil] or 8 end
+	return nil
 end
 function X.run_setup(state, en, cx, cz, taken)
 	local now = state.now
@@ -2856,7 +3331,11 @@ function X.run_setup(state, en, cx, cz, taken)
 	M.setup_ord = M.setup_ord or {}
 	local n = 0
 	local teams = {}
-	for _, e in ipairs(en) do if e.setup and e.contact and not e.held and not e.nogo then table.insert(teams, e) end end
+	local appr = prm("SetupApproach") >= 1
+	-- 1.0: a team that we SEE counts too, not only one "in contact" (hit by us, or within SightR 30 m): devastators shoot from
+	-- beyond that - the team that pinned Orca's army was never "in contact" and the pattern never looked at it. The grenade
+	-- (throw and approach) and the jump are for every team in sight within SetupR; the melee flank stays for teams in contact
+	for _, e in ipairs(en) do if e.setup and (e.contact or (appr and e.vis)) and not e.held and not e.nogo then table.insert(teams, e) end end
 	table.sort(teams, function(a, b) if a.d ~= b.d then return a.d < b.d end return a.id < b.id end)
 	for _, e in ipairs(teams) do
 		-- where it shoots: from the team towards our army's centre
@@ -2871,18 +3350,39 @@ function X.run_setup(state, en, cx, cz, taken)
 				local c = ucls(u)
 				local last = M.setup_ord[u.id] or -1000
 				if d <= prm("SetupR") then
-					if c.gar_abil and not gren_done and d <= prm("SetupGrenR") and now - (M.gren[u.id] or -1000) >= prm("GarGrenCd") then
+					local ab, rng, rmin = nil, 0, 0
+					if appr then ab, rng, rmin = X.setup_tool(M.names[u.id] or "", c)
+					elseif c.gar_abil then ab, rng, rmin = c.gar_abil, prm("SetupGrenR"), 0 end
+					local ready = ab ~= nil and not gren_done and now - (M.gren[u.id] or -1000) >= prm("GarGrenCd")
+					if ready and d <= rng and d >= rmin then
 						M.gren[u.id] = now; gren_done = true
-						morder(u.id, e.x, e.y, e.z, ORD_ABILITY_POS + c.gar_abil)
+						morder(u.id, e.x, e.y, e.z, ORD_ABILITY_POS + ab)
 						M.st.setup_gren = (M.st.setup_gren or 0) + 1
-						mlog("Setup", e.id, "grenade", u.id, M.names[u.id] or "?", fmt("d %.0f ability %d", d, c.gar_abil))
+						mlog("Setup", e.id, "grenade", u.id, M.names[u.id] or "?", fmt("d %.0f ability %d", d, ab))
+						taken[u.id] = true; n = n + 1
+					elseif ready and appr and d > rng and u.hp >= prm("TieMinHP") then
+						gren_done = true                                                -- (one squad per team walks up)
+						if now - last >= prm("SetupReissue") then
+							M.setup_ord[u.id] = now
+							local ux, uz = (u.pos.x - e.x) / math.max(d, 0.1), (u.pos.z - e.z) / math.max(d, 0.1)
+							local in_arc = (ux * fx + uz * fz) >= math.cos(math.rad(prm("SetupCone")))
+							local tr = math.max(rng - 4, rmin + 1)
+							local px, pz = ux, uz                                       -- outside its arc: straight in, to the throw range
+							if in_arc then                                              -- inside: the side of the firing line the squad is on
+								local side = (fx * uz - fz * ux) >= 0 and 1 or -1
+								px, pz = -fz * side, fx * side
+							end
+							morder(u.id, e.x + px * tr, u.pos.y, e.z + pz * tr, ORD_MOVE)
+							M.st.setup_appr = (M.st.setup_appr or 0) + 1
+							mlog("Setup", e.id, "approach", u.id, M.names[u.id] or "?", fmt("d %.0f -> %.0f m to cast ability %d%s", d, tr, ab, in_arc and " (round its arc)" or ""))
+						end
 						taken[u.id] = true; n = n + 1
 					elseif c.jump and d >= prm("JumpMin") and d <= prm("JumpMax") and now - (M.jumped[u.id] or -1000) >= prm("JumpCd") and u.hp >= prm("TieMinHP") then
 						attack_or_jump(u, e, now)
 						M.st.setup_jump = (M.st.setup_jump or 0) + 1
 						mlog("Setup", e.id, "jump", u.id, M.names[u.id] or "?", fmt("d %.0f", d))
 						taken[u.id] = true; n = n + 1
-					elseif c.melee and u.hp >= prm("TieMinHP") then
+					elseif c.melee and e.contact and u.hp >= prm("TieMinHP") then
 						-- inside the arc? the angle between where it shoots and the line from the team to our squad
 						local ux, uz = (u.pos.x - e.x) / math.max(d, 0.1), (u.pos.z - e.z) / math.max(d, 0.1)
 						local cosa = ux * fx + uz * fz
@@ -2911,6 +3411,387 @@ function X.run_setup(state, en, cx, cz, taken)
 end
 
 --------------------------------------------------------------------------------------------------
+-- 0.9 COUNTER - the answer to what the enemy fields (TECH_RU.md 17.4; the owner and the tester Orca, fb 513 / 515: "several lines
+-- of behaviour, changed by the player's army: against masses of sluggas - shotguns and suppression; keep the warboss / the nobs
+-- at a distance by abilities; set-up teams and support heroes are the first targets"). Three parts, one core for every race,
+-- the races' data in the tables below (reports/tactics_kb/kb.yaml; what kb.yaml does not say is not made up - it is marked):
+--  1. SEEN: the enemy squads we SEE (AIPlayer_CanSeeSquad - the game's own fog-of-war question, looked up, Mech_CounterSeeApi=0 =
+--     not called; without it: what stands within CounterSightR of one of our squads or fights us) are classified by blueprint
+--     id (X.CN_UNITS: kb.yaml units.*.armor_class / role) and remembered: M.cn.mem[id] = { last seen, classes, strength }. A
+--     squad counts for CounterMemSecs after it was last seen; one that is no squad any more right after we saw it is forgotten
+--     at once (we saw it die). Nothing is read about a squad we do not see. Line "COUNTER seen ...".
+--  2. DEMAND: per class - n squads, its share of the remembered strength, our answers in the army - the arbiter
+--     Conf_CounterVsPlan says "counter" or "plan" (answer now, or keep the purchase plan: both cost, the outcome is not clear):
+--       1 (A) = the plan first: counter only what dominates (a share class at CounterDomShare of the strength, a count class
+--               at twice its minimum);
+--       2 (B) = by weight: counter a class that is present (X.CN_MIN: squads, share) for CounterBuySecs;
+--       3 (C) = the counter first: from one squad short of the minimum on, at once.
+--     Hysteresis CounterConfHold, every switch "MECH Conf_CounterVsPlan <class> plan->counter ...". The purchase scripts ask
+--     EliteAI_MechCounterMult(<sbps>) for every buildable squad - an answer of X.CN_ANSWER to a class that is countered gets
+--     x CounterMult while we have none, x CounterMultHave below CounterMaxHave of them (an answer, not an army of answers);
+--     a class on "plan" gives its answer x CounterMultPlan while we have none - and EliteAI_MechCounterAddon(<upgrade>) for
+--     the squad upgrades (X.CN_ADDON, by name: flamers and shotguns against light masses, plasma and power weapons against
+--     heavy infantry, melta / lascannon / missiles against vehicles). Garrisons and set-up teams keep their own multipliers
+--     (EliteAI.gar, EliteAI.setup: steps 19 and 22) - they are in the "seen" line, not counted twice. Line "COUNTER demand ...".
+--     The tech plan asks EliteAI_MechCounterTech: against set-up teams with an answer of ours in the army the next tier
+--     comes CounterTechSecs earlier (kb.yaml suppression_spam.general: tech_up_if_line_holds, never without an answer;
+--     rules 2 and 3). Line "COUNTER tech ...".
+--  3. FOCUS: set-up teams, support heroes (0.7) and detectors are the first focus targets ("COUNTER focus target <id> class
+--     ..."); a dangerous melee squad (class mhero: warboss, nobs, force commander, seer council ...) that comes at us and has
+--     none of ours next to it gets a stun / slow / knock-back ability thrown at where it will be in a second, by a squad
+--     that has one (X.CONTROL; cast as the grenades are: ORD_ABILITY_POS through elite.scar, no new engine call) - "COUNTER
+--     focus control <id> ... <- <squad> ability K".
+-- Mech_Counter=0 = all of it off; Mech_CounterControl=0, Mech_CounterTech=0, Counter_Buy=0 (the purchase side) = the parts.
+--
+-- the enemy's squads by blueprint ("sbps/pvp/<this>") -> classes, generated from kb.yaml units (54 of its 71 units have an armour
+-- class or a role that is a class): light = armor_class infantry (set-up teams aside), mswarm = light and a melee role, heavy =
+-- heavy / super heavy infantry, vehicle = armor_class vehicle (and whatever the engine calls a vehicle), jump = a jump role,
+-- invis = infiltrator, sniper, detector = a detector role, mhero = elite_melee / super_heavy_melee / melee_tank. NOT in kb.yaml
+-- (no armour class there, so no light / heavy for them): dire avengers, warp spiders, dark reapers, wraithguard, autarch,
+-- bloodletters, zoanthropes, carnifex, spore mines, tau drones, knarloc - they count in the total only.
+X.CN_UNITS = {
+	["race_eldar/troops/eld_guardian"] = "light", ["race_eldar/troops/eld_banshee"] = "light mswarm", ["race_eldar/troops/eld_ranger"] = "light sniper detector",
+	["race_eldar/troops/eld_fire_dragon"] = "heavy", ["race_eldar/vehicles/eld_wraithlord"] = "vehicle", ["race_eldar/vehicles/eld_falcon"] = "vehicle",
+	["race_eldar/troops/eld_seer_council"] = "mhero", ["race_eldar/vehicles/eld_fire_prism"] = "vehicle", ["race_marine/troops/sm_scout_marine"] = "light",
+	["race_marine/troops/sm_tactical_marine"] = "heavy", ["race_marine/troops/sm_assault_marine"] = "heavy jump", ["race_marine/troops/sm_devastator"] = "heavy",
+	["race_marine/troops/sm_devastator_plasma_cannon"] = "heavy", ["race_marine/vehicles/sm_dreadnought"] = "vehicle", ["race_marine/troops/sm_terminator"] = "heavy",
+	["race_marine/troops/sm_terminator_assault"] = "heavy mhero", ["race_marine/vehicles/sm_whirlwind"] = "vehicle", ["race_chaos/troops/csm_cultist"] = "light mswarm",
+	["race_chaos/troops/csm_tactical_marine"] = "heavy", ["race_chaos/troops/csm_havoc"] = "heavy", ["race_chaos/troops/csm_raptor"] = "heavy jump",
+	["race_chaos/troops/csm_noise_marines"] = "heavy", ["race_chaos/troops/csm_plague_marines"] = "heavy", ["race_chaos/vehicles/csm_dreadnought"] = "vehicle",
+	["race_chaos/troops/csm_terminator"] = "heavy", ["race_imperial_guard/troops/ig_guardsmen_squad"] = "light", ["race_imperial_guard/troops/ig_devils"] = "detector",
+	["race_imperial_guard/troops/ig_spotter_squad"] = "light", ["race_imperial_guard/vehicles/ig_sentinel"] = "heavy", ["race_imperial_guard/troops/ig_ogryn_squad"] = "mhero",
+	["race_imperial_guard/vehicles/ig_manticore"] = "vehicle", ["race_imperial_guard/vehicles/ig_leman_russ"] = "vehicle", ["race_ork/troops/ork_slugga"] = "light mswarm",
+	["race_ork/troops/ork_shoota"] = "light", ["race_ork/troops/ork_stormboy"] = "light mswarm jump", ["race_ork/troops/ork_kommandos"] = "light invis",
+	["race_ork/troops/ork_stikkbommas"] = "light", ["race_ork/troops/ork_nob_squad"] = "heavy mhero", ["race_ork/troops/ork_tankbustas"] = "light",
+	["race_ork/vehicles/ork_deff_dread"] = "vehicle", ["race_tyranid/troops/tyr_termagaunt"] = "light", ["race_tyranid/troops/tyr_hormagaunt"] = "light mswarm",
+	["race_tyranid/troops/tyr_ravener"] = "jump", ["race_tyranid/troops/tyr_warrior"] = "heavy", ["race_grey_knights/troops/gk_strike_squad"] = "heavy",
+	["race_grey_knights/troops/gk_interceptor_squad"] = "heavy jump", ["race_grey_knights/troops/gk_purgation_squad"] = "heavy", ["race_grey_knights/troops/gk_operatives"] = "light",
+	["race_grey_knights/troops/gk_vindicare_assassin"] = "sniper", ["race_tau/troops/tau_fire_warriors"] = "light", ["race_tau/troops/tau_pathfinders"] = "light",
+	["race_tau/troops/tau_kroot_squad"] = "light mswarm", ["race_tau/troops/tau_vespid_squad"] = "jump", ["race_tau/vehicles/tau_devilfish"] = "vehicle",
+	-- the melee heroes (NOT kb.yaml, which has no heroes: the director's own list MELEE_HEROES above, by their blueprints)
+	["race_ork/heroes/ork_warboss"] = "mhero", ["race_marine/heroes/sm_force_commander"] = "mhero", ["race_marine/heroes/sm_force_commander_terminator"] = "mhero",
+	["race_chaos/heroes/csm_chaos_lord"] = "mhero", ["race_ork/heroes/ork_hero_kommando"] = "mhero", ["race_tyranid/heroes/tyr_hero_lictor"] = "mhero",
+	["race_tyranid/heroes/tyr_hero_ravener"] = "mhero", ["race_grey_knights/heroes/gk_brother_captain"] = "mhero",
+}
+-- our answers, by the end of the sbps name. Source per class:
+--  light / mswarm - kb.yaml threats.melee_swarm (flamers, aoe, suppression_plus_knockback, walker_counter_initiate; tau: fire
+--    warriors) and units.*.counters infantry / light_infantry / blobs / melee_blob / orks / ork_t1 / shoota / ranged_blob /
+--    melee: the suppression teams, the area weapons, the walkers that counter melee. Orks: kb.yaml has no answer of theirs.
+--  heavy - threats.heavy_infantry_mass and counters heavy_infantry (the rest is upgrades: plasma, power weapons - X.CN_ADDON).
+--  vehicle - counters vehicle / vehicle_haywire; the venom-cannon warriors, zoanthropes, broadsides and wraithguard are the
+--    armour-piercing squads of DEF_TOOLS (Elite's attributes), not kb.yaml. IG, chaos, GK: upgrades only (X.CN_ADDON).
+--  mhero - kb.yaml: "kite, plasma, dispersed_knockback" - no unit; the plasma upgrades and X.CONTROL.
+--  jump - threats.jump_infantry (IG: ig_devils) and counters jump / jump_infantry. Others: no data.
+--  invis - the detectors of kb.yaml (roles sniper_detector, anti_setup_detector_flame). Others: no data.
+--  sniper - threats.sniper_turtle: eldar rangers, "all: jump" (the jump squads of JUMPERS and kb.yaml).
+--  turret - the squads that outrange turrets (SIEGE above; kb.yaml: the plasma devastators counter "turret").
+X.CN_ANSWER = {
+	light = { "sm_devastator", "ig_heavy_weapon_squad", "eld_guardian_shuriken_cannon", "csm_havoc", "ork_lootas", "gk_heavy_weapon_squad",
+		"sm_whirlwind", "ig_manticore", "gk_purgation_squad", "tau_vespid_squad", "csm_noise_marines", "troops/tyr_warrior", "eld_dark_reaper" },
+	mswarm = { "sm_devastator", "ig_heavy_weapon_squad", "eld_guardian_shuriken_cannon", "csm_havoc", "ork_lootas", "gk_heavy_weapon_squad",
+		"sm_whirlwind", "ig_devils", "gk_purgation_squad", "tau_vespid_squad", "csm_noise_marines", "sm_dreadnought", "eld_wraithlord", "tau_fire_warriors" },
+	heavy = { "sm_devastator_plasma_cannon", "eld_fire_dragon", "eld_dark_reaper", "eld_wraithguard", "tyr_zoanthrope" },
+	vehicle = { "eld_guardian_brightlance", "eld_fire_dragon", "eld_warp_spider", "ork_tankbustas", "sm_terminator_assault",
+		"tyr_warrior_venom_cannon", "tyr_zoanthrope", "tau_broadside", "eld_wraithguard",
+		-- 1.0 (Orca fb 529: "no storm troopers with the melta, no lascannon for the heavy weapon team"): the infantry that TAKES an
+		-- anti-vehicle upgrade (X.AV_UPG, Elite's attributes) - without the carrier the upgrade cannot be bought at all
+		"ig_stormtrooper_squad", "ig_kasrkin_squad", "ig_heavy_weapon_squad", "troops/sm_devastator", "troops/sm_tactical_marine", "csm_raptor",
+		"gk_heavy_weapon_squad", "tau_crisis" },
+	mhero = {},
+	jump = { "ig_devils", "eld_banshee", "eld_wraithlord" },
+	invis = { "eld_ranger", "ig_devils" },
+	sniper = { "eld_ranger", "sm_assault_marine", "csm_raptor", "ork_stormboy", "troops/tyr_ravener", "gk_interceptor_squad", "tau_vespid_squad" },
+	turret = { "ig_manticore", "sm_whirlwind", "sm_devastator_plasma_cannon", "eld_fire_prism", "eld_guardian_d_cannon", "eld_guardian_brightlance", "tyr_zoanthrope", "tau_broadside" },
+}
+-- squad upgrades by a part of their blueprint name (Elite's attributes, upgrade/pvp: ig_guardsmen_flamer, sm_flamer, sm_shotgun,
+-- ork_burna, ig_guardsmen_plasma_gun, sm_plasma_gun, ig_kasrkin_melta_guns, sm_devastator_lascannon, sm_missile_launcher,
+-- ig_sentinel_missile, eld_brightlance, tyr_venom_cannon_warrior ...). What the upgrade does is taken from its name.
+X.CN_ADDON = {
+	light = { "flamer", "shotgun", "burna" }, mswarm = { "flamer", "shotgun", "burna" },
+	heavy = { "plasma", "power_fist", "power_sword", "power_claw", "power_axe" }, mhero = { "plasma" },
+	vehicle = { "melta", "lascannon", "missile_launcher", "sentinel_missile", "rokkit", "brightlance", "venom_cannon", "haywire", "av_kit", "fusion", "railgun" },
+}
+-- 1.0: the anti-vehicle squad upgrades and the squad that takes each - { a part of the upgrade's blueprint name, the end of the
+-- carrier's sbps name }. Elite's attributes: the upgrade stands in the squad_upgrade list of that sbps (upgrade/pvp/<race>/troops,
+-- sbps/pvp). Once we have bought one, the squads of its carrier shoot the vehicle first (X.is_av).
+X.AV_UPG = {
+	{ "ig_stormtrooper_squad_av_kit", "ig_stormtrooper_squad" }, { "ig_kasrkin_melta_guns", "ig_kasrkin_squad" }, { "ig_heavy_weapon_squad_lascannon", "ig_heavy_weapon_squad" },
+	{ "ig_sentinel_missile", "ig_sentinel" }, { "sm_missile_launcher", "troops/sm_tactical_marine" }, { "sm_devastator_lascannon", "troops/sm_devastator" },
+	{ "sm_multimelta_dreadnought", "vehicles/sm_dreadnought" }, { "sm_predator_lascannon", "sm_predator" }, { "csm_raptor_meltaguns", "csm_raptor" },
+	{ "csm_predator_lascannon", "csm_predator" }, { "csm_dreadnought_missile_launcher", "csm_dreadnought" }, { "gk_heavy_weapon_squad_lascannon", "gk_heavy_weapon_squad" },
+	{ "gk_dread_multimelta", "gk_dreadnought" }, { "gk_rhino_lascannon", "gk_rhino" }, { "eld_platform_brightlance", "eld_guardian_shuriken_cannon" },
+	{ "eld_brightlance", "eld_wraithlord" }, { "eld_autarch_fusion_gun", "eld_autarch" }, { "tau_crisis_fusion_blaster", "tau_crisis" },
+	{ "tau_crisis_missile_launcher", "tau_crisis" }, { "tau_stealth_suits_fusiongun", "tau_stealth_suits" }, { "tau_hammerhead_railgun", "tau_hammerhead" },
+	{ "tyr_venom_cannon_carnifex", "tyr_carnifex" },
+}
+-- the squads whose own weapon is anti-vehicle (DEF_TOOLS "av": Elite's attributes; ork_tankbustas, the brightlance platform,
+-- fire dragons, wraithguard, zoanthropes, venom-cannon warriors, broadsides; the plasma devastators are in that list for the
+-- turrets) and the carriers of an upgrade of X.AV_UPG that we have bought in this match
+function X.is_av(nm)
+	if nm == nil or nm == "" then return false end
+	for _, t in ipairs(DEF_TOOLS) do if t[2] == "av" and ends_with(nm, t[1]) then return true end end
+	local b = M.av_bought
+	if b ~= nil then for _, row in ipairs(X.AV_UPG) do if b[row[2]] and ends_with(nm, row[2]) then return true end end end
+	return false
+end
+-- the purchase scripts: an upgrade was BOUGHT (e_addon_settle: its task is active / the count grew). Names only
+function EliteAI_MechAddonBought(name)
+	if type(name) ~= "string" then return end
+	name = string.gsub(string.lower(name), "\\", "/")
+	for _, row in ipairs(X.AV_UPG) do
+		if string.find(name, row[1], 1, true) then
+			M.av_bought = M.av_bought or {}
+			if not M.av_bought[row[2]] then
+				M.av_bought[row[2]] = true
+				X.clog("av", "upgrade", string.gsub(name, "^.*/", ""), "bought: the squads of", row[2], "shoot a vehicle first")
+			end
+		end
+	end
+end
+-- a class is "present" from { this many squads, this share of the remembered strength } (kb.yaml threats.*.detect: melee_swarm >= 2
+-- melee squads, heavy_infantry_mass share >= 0.5, sniper_turtle >= 2, jump_infantry >= 1, a vehicle / walker at all)
+X.CN_MIN = { light = { 3, 0.3 }, mswarm = { 2, 0 }, heavy = { 2, 0.5 }, vehicle = { 1, 0 }, mhero = { 1, 0 }, jump = { 1, 0 }, invis = { 1, 0 }, sniper = { 2, 0 }, turret = { 1, 0 } }
+X.CN_ORDER = { "light", "mswarm", "heavy", "vehicle", "mhero", "jump", "invis", "sniper", "turret" }
+-- who keeps a dangerous melee squad off: { end of the sbps name, ability (ABIL, elite.scar), range, minimum range, what it does } -
+-- position abilities of squads, Elite's attributes (ability/pvp): 21-25 are new in elite.scar (the stikkbommas' and the
+-- kommandos' stun grenade 60 / 34 m, the pathfinders' photon grenade - a slow - 30 m, the GK operatives' stun bomb 32 m, the
+-- warriors' electroshock grub 24 m - that one needs its upgrade), the rest are the grenades of 0.3 (a frag grenade knocks
+-- infantry down; whether it does that to a commander is NOT checked). An ability whose upgrade is missing or that is on its
+-- recharge is ignored by the engine. The first row that fits a squad is used.
+X.CONTROL = {
+	{ "ork_stikkbommas", 21, 60, 20, "stun" }, { "ork_kommandos", 22, 34, 0, "stun" }, { "tau_pathfinders", 23, 30, 8, "slow" }, { "gk_operatives", 24, 32, 0, "stun" },
+	{ "troops/tyr_warrior", 25, 24, 0, "stun" }, { "sm_scout_marine", ABIL_GREN_SM, 25, 8, "knockback" }, { "ig_kasrkin_squad", ABIL_GREN_IG_KASRKIN, 25, 8, "knockback" },
+	{ "eld_guardian", ABIL_GREN_ELD, 25, 8, "knockback" }, { "csm_cultist", ABIL_GREN_CSM, 50, 10, "knockback" },
+}
+function X.clog(...) if EliteAI.log then EliteAI.log("COUNTER", ...) end end
+function X.has_cls(e, c) return e.cls ~= nil and string.find(" " .. e.cls .. " ", " " .. c .. " ", 1, true) ~= nil end
+function X.counter_tick(state, en, now)
+	local C = M.cn
+	if C == nil then C = { mem = {}, st = {}, dsaid = {}, said = -1000, key = "" }; M.cn = C end
+	-- 1) what we see now
+	local live, nvis = {}, 0
+	for _, e in ipairs(en) do
+		live[e.id] = true
+		if e.vis then
+			nvis = nvis + 1
+			local cls = e.cls or ""
+			if e.veh and not X.has_cls(e, "vehicle") then cls = (cls == "") and "vehicle" or (cls .. " vehicle") end   -- (what the engine calls a vehicle)
+			C.mem[e.id] = { t = now, cls = cls, w = e.w, setup = e.setup, held = e.held, support = e.support, by = e.by or "none" }
+		end
+	end
+	-- 2) the memory: forgotten when we saw it die (in sight at the last tick, no squad any more) or CounterMemSecs after it was last seen
+	local ids = {}
+	for id in pairs(C.mem) do table.insert(ids, id) end
+	table.sort(ids)
+	local agg, total, nmem = { setup = { n = 0, w = 0 }, garrison = { n = 0, w = 0 }, support = { n = 0, w = 0 } }, 0, 0
+	local byn = { name = 0, id = 0, scar = 0, none = 0 }
+	for _, k in ipairs(X.CN_ORDER) do agg[k] = { n = 0, w = 0 } end
+	local mem_s, prev = prm("CounterMemSecs"), C.prev or now
+	C.dt, C.prev = now - prev, now
+	for _, id in ipairs(ids) do
+		local m = C.mem[id]
+		if (not live[id] and m.t >= prev) or now - m.t > mem_s then
+			C.mem[id] = nil
+		else
+			nmem, total = nmem + 1, total + m.w
+			byn[m.by] = (byn[m.by] or 0) + 1
+			-- 11.11: no string.gmatch and no %S here - in the game's AI Lua the pattern "%S+" finds nothing (classes never
+			-- reached `seen`, 18.12; checked in the game: "([^ ]+)" with string.find works)
+			local pos, cls = 1, m.cls or ""
+			while true do
+				local s1, e1, word = string.find(cls, "([^ ]+)", pos)
+				if not s1 then break end
+				local a = agg[word]
+				if a then a.n, a.w = a.n + 1, a.w + m.w end
+				pos = e1 + 1
+			end
+			if m.setup then agg.setup.n = agg.setup.n + 1 end
+			if m.held then agg.garrison.n = agg.garrison.n + 1 end
+			if m.support then agg.support.n = agg.support.n + 1 end
+		end
+	end
+	local N = EliteAI.def_need                                                -- the turrets nothing of ours outranges (Defence)
+	if type(N) == "table" and now - (N.t or -1000) <= prm("SiegeNeedSecs") then agg.turret.n = N.n or 1 end
+	-- 3) our answers in the army, per class; the tools against set-up teams (jump, grenades: the Setup pattern's)
+	local have, sh = {}, 0
+	for _, k in ipairs(X.CN_ORDER) do have[k] = 0 end
+	for _, u in ipairs(state.army) do
+		local nm = M.names[u.id] or ""
+		for _, k in ipairs(X.CN_ORDER) do
+			for _, key in ipairs(X.CN_ANSWER[k]) do if ends_with(nm, key) then have[k] = have[k] + 1; break end end
+		end
+		local c = cls_of(nm)
+		if c.jump or c.gar_abil then sh = sh + 1 end
+	end
+	C.setup_have = sh
+	-- 4) the arbiter, per class
+	local r = rule("CounterVsPlan")
+	local out, parts, key = {}, {}, ""
+	for _, k in ipairs(X.CN_ORDER) do
+		local a, mn = agg[k], X.CN_MIN[k]
+		local share = (total > 0 and k ~= "turret") and (a.w / total) or 0
+		if a.n > 0 then
+			local st = C.st[k]
+			if st == nil then st = { t0 = now }; C.st[k] = st end
+			local present = a.n >= mn[1] and share >= mn[2]
+			local want = "plan"
+			if r == 1 then
+				if present and ((mn[2] > 0 and share >= prm("CounterDomShare")) or (mn[2] == 0 and a.n >= mn[1] * 2)) then want = "counter" end
+			elseif r == 2 then
+				if present and now - st.t0 >= prm("CounterBuySecs") then want = "counter" end
+			elseif a.n >= math.max(1, mn[1] - 1) and share >= mn[2] * 0.5 then want = "counter" end
+			-- the decision holds CounterConfHold (the first "plan" of a class may be left at any time: it is no decision yet)
+			local hold = prm("CounterConfHold")
+			if st.v == nil then
+				st.v, st.vt = want, (want == "counter") and now or (now - hold)
+				if want == "counter" then mlog("Conf_CounterVsPlan", k, "->counter", fmt("n %d share %.2f have %d rule %d", a.n, share, have[k], r)) end
+			elseif st.v ~= want and now - st.vt >= hold then
+				mlog("Conf_CounterVsPlan", k, st.v .. "->" .. want, fmt("n %d share %.2f have %d rule %d", a.n, share, have[k], r))
+				st.v, st.vt = want, now
+				M.st.conf = M.st.conf + 1
+			end
+			local v = st.v
+			out[k] = { n = a.n, share = share, v = v, have = have[k] }
+			table.insert(parts, fmt("%s %d %.2f %s have %d", k, a.n, share, v, have[k]))
+			key = key .. k .. a.n .. v
+		else
+			C.st[k] = nil                                                       -- (the class is gone: the next sighting is decided anew)
+		end
+	end
+	EliteAI.counter = { t = now, cls = out, rule = r, n = nmem, total = total }
+	M.st.cn_mem = nmem
+	key = key .. "|" .. agg.setup.n .. "|" .. agg.garrison.n .. "|" .. agg.support.n .. "|" .. byn.none
+	M.st.cn_known, M.st.cn_none = nmem - byn.none, byn.none
+	if nmem > 0 and ((key ~= C.key and now - C.said >= 6) or now - C.said >= prm("CounterLogSecs")) then
+		C.key, C.said = key, now
+		X.clog("seen", "t", math.floor(now), "squads", nmem, "visible", nvis, "weight", math.floor(total), "|", table.concat(parts, " | "),
+			"| setup", agg.setup.n, "garrison", agg.garrison.n, "support", agg.support.n, "| rule", r, "see", api().see and "api" or "range",
+			"| known", nmem - byn.none, "of", nmem, fmt("(name %d id %d scar %d none %d)", byn.name, byn.id, byn.scar, byn.none))
+	end
+end
+-- the purchase scripts: the multiplier of a buildable squad's demand (strategy_unit_purchase.ai EliteAI_PurchaseMult). Numbers only
+function EliteAI_MechCounterMult(name, cur)
+	local C = EliteAI.counter
+	if not EliteAI.on or not mech_on("Counter") or type(C) ~= "table" or type(name) ~= "string" or M.cn == nil then return 1 end
+	local now = World_GetGameTime()                                           -- (a count that is 30 s old is not used: the director does not run)
+	if now - (C.t or -1000) > 30 then return 1 end
+	name = string.gsub(string.lower(name), "\\", "/")
+	local best, bk = 1, nil
+	for _, k in ipairs(X.CN_ORDER) do
+		local c = C.cls[k]
+		if c ~= nil then
+			for _, key in ipairs(X.CN_ANSWER[k]) do
+				if ends_with(name, key) then
+					local m = 1
+					if c.v == "counter" then
+						if c.have == 0 then m = prm("CounterMult") elseif c.have < prm("CounterMaxHave") then m = prm("CounterMultHave") end
+					elseif c.have == 0 then m = prm("CounterMultPlan") end
+					if m > best then best, bk = m, k end
+					break
+				end
+			end
+		end
+	end
+	if bk ~= nil then
+		M.st.cn_demand = (M.st.cn_demand or 0) + 1
+		local c = C.cls[bk]
+		local sk = name .. "|" .. tostring(c.v) .. "|" .. tostring(best)
+		if now - (M.cn.dsaid[sk] or -1000) >= prm("CounterLogSecs") then
+			M.cn.dsaid[sk] = now
+			X.clog("demand", string.gsub(name, "^.*/", ""), "x" .. tostring(best), "class", bk, "n", c.n, fmt("share %.2f", c.share), "have", c.have, "decision", c.v, "rule", C.rule, "of this", cur or 0)
+		end
+	end
+	return best
+end
+-- ... and of a squad upgrade (the addon filter): by a part of its name, only for a class that is countered
+function EliteAI_MechCounterAddon(name)
+	local C = EliteAI.counter
+	if not EliteAI.on or not mech_on("Counter") or type(C) ~= "table" or type(name) ~= "string" or M.cn == nil then return 1 end
+	local now = World_GetGameTime()                                           -- (a count that is 30 s old is not used: the director does not run)
+	if now - (C.t or -1000) > 30 then return 1 end
+	name = string.gsub(string.lower(name), "\\", "/")
+	for _, k in ipairs(X.CN_ORDER) do
+		local c, keys = C.cls[k], X.CN_ADDON[k]
+		if c ~= nil and c.v == "counter" and keys ~= nil and has_key(name, keys) then
+			local m = prm("CounterAddonMult")
+			M.st.cn_demand = (M.st.cn_demand or 0) + 1
+			if now - (M.cn.dsaid["a|" .. name] or -1000) >= prm("CounterLogSecs") then
+				M.cn.dsaid["a|" .. name] = now
+				X.clog("demand", "addon", string.gsub(name, "^.*/", ""), "x" .. tostring(m), "class", k, "n", c.n, fmt("share %.2f", c.share), "rule", C.rule)
+			end
+			return m, k
+		end
+	end
+	return 1
+end
+-- the tech plan (strategy_tech_purchase.ai): how many seconds earlier the next tier is wanted. The enemy holds a line of set-up
+-- teams (EliteAI.setup: SetupBuyMin of them) and we have a tool against them: out-teching the line is the answer of kb.yaml
+-- (suppression_spam.general tech_up_if_line_holds; "never a fast tech without an answer to the set-up teams")
+function EliteAI_MechCounterTech(k)
+	if not EliteAI.on or not mech_on("Counter") or prm("CounterTech") < 1 or M.cn == nil then return 0 end
+	local S, now = EliteAI.setup, World_GetGameTime()
+	if type(S) ~= "table" or now - (S.t or -1000) > 30 then return 0 end
+	local r = rule("CounterVsPlan")
+	if r == 1 or (M.cn.setup_have or 0) < 1 then return 0 end
+	local s = prm("CounterTechSecs")
+	if now - (M.cn.tsaid or -1000) >= 60 then
+		M.cn.tsaid = now
+		X.clog("tech", "T" .. tostring((k or 1) + 1), s, "s earlier: enemy set-up teams", S.n or 0, "our tools against them", M.cn.setup_have, "rule", r)
+	end
+	return s
+end
+-- a dangerous melee squad that comes at us: an ability that stuns / slows / knocks back, thrown at where it will be in CtrlLead s
+function X.run_control(state, en, cx, cz, taken)
+	if prm("CounterControl") < 1 then return 0 end
+	local now, n = state.now, 0
+	local tg = {}
+	for _, e in ipairs(en) do
+		if e.contact and e.vis and not e.held and not e.nogo and e.hp > 0.15 and X.has_cls(e, "mhero") then table.insert(tg, e) end
+	end
+	if table.getn(tg) == 0 then return 0 end
+	table.sort(tg, function(a, b) if a.d ~= b.d then return a.d < b.d end return a.id < b.id end)
+	M.ctrl = M.ctrl or {}
+	for _, e in ipairs(tg) do
+		-- not with one of ours next to it (the blast hits both; that fight is MeleeTie's), one throw per target per CtrlTargetCd
+		local friend = false
+		for _, u in ipairs(state.army) do if d2(u.pos.x, u.pos.z, e.x, e.z) <= prm("CtrlFriendR") then friend = true; break end end
+		if not friend and now - (M.ctrl[e.id] or -1000) >= prm("CtrlTargetCd") then
+			local best, bd, brow
+			for _, u in ipairs(state.active) do
+				if not taken[u.id] and not M.runner[u.id] and now - (M.gren[u.id] or -1000) >= prm("GarGrenCd") then
+					local nm = M.names[u.id] or ""
+					for _, row in ipairs(X.CONTROL) do
+						if ends_with(nm, row[1]) then
+							local d = d2(u.pos.x, u.pos.z, e.x, e.z)
+							if d >= row[4] + 1 and d <= row[3] - 1 and (bd == nil or d < bd or (d == bd and u.id < best.id)) then best, bd, brow = u, d, row end
+							break
+						end
+					end
+				end
+			end
+			if best ~= nil then
+				local tx, tz = e.x, e.z
+				local dt = M.cn and M.cn.dt or 0
+				if e.px ~= nil and dt > 0 and dt <= 10 then                        -- where it will be: its way since the last tick, CtrlLead s on (6 m at most)
+					local k = prm("CtrlLead") / dt
+					local lx, lz = (e.x - e.px) * k, (e.z - e.pz) * k
+					local ll = math.sqrt(lx * lx + lz * lz)
+					if ll > 6 then lx, lz = lx * 6 / ll, lz * 6 / ll end
+					tx, tz = tx + lx, tz + lz
+				end
+				M.gren[best.id], M.ctrl[e.id] = now, now
+				morder(best.id, tx, e.y, tz, ORD_ABILITY_POS + brow[2])
+				taken[best.id] = true; n = n + 1
+				M.st.cn_ctrl = (M.st.cn_ctrl or 0) + 1
+				X.clog("focus", "control", e.id, "class mhero", "<-", best.id, M.names[best.id] or "?", "ability", brow[2], brow[5], fmt("d %.0f hp %.2f at %.0f %.0f", bd, e.hp, tx, tz))
+			end
+		end
+	end
+	for id, t in pairs(M.ctrl) do if now - t > 120 then M.ctrl[id] = nil end end   -- (each entry on its own)
+	return n
+end
+
+--------------------------------------------------------------------------------------------------
 -- 0.8 DODGE (TECH_RU.md 16.1). The reflex itself is elite.scar's (the SCAR side sees a grenade in flight, this state does
 -- not; four times a second there, 3 s here). This side gives the policy and is told:
 --  * the policy, pseudo-order mode 10 (id = our player id): on / off (Mech_Dodge), and what a squad that does something it
@@ -2926,6 +3807,14 @@ end
 --    somebody else), 2 = a mine / a charge is seen (M.danger: Defence closes the spot, DangerSecs).
 function EliteAI_ScarNote(kind, id, x, z, r, pow, dur)
 	if type(kind) ~= "number" or type(id) ~= "number" then return end
+	if kind == 3 then                                                         -- 1.0: "squad <id> is the blueprint <name>" (a string; kept by squad id)
+		if type(x) == "string" then
+			M.sname = M.sname or {}
+			if M.sname[id] == nil then M.sname_n = (M.sname_n or 0) + 1 end
+			M.sname[id] = X.bp_key(x)
+		end
+		return
+	end
 	local now = M.now or 0
 	M.st.dodge_notes = (M.st.dodge_notes or 0) + 1
 	x, z, r, pow, dur = tonumber(x) or 0, tonumber(z) or 0, tonumber(r) or 0, tonumber(pow) or 0, tonumber(dur) or 0
@@ -2994,9 +3883,12 @@ local function stats(state)
 		"garrisons", s.gar, "assault", s.gar_assault, "hold", s.gar_hold, "bypass", s.gar_bypass, "grenades", s.gren,
 		"garrison", G and (tostring(G.id) .. " " .. tostring(G.v)) or "-")
 	mlog("stats4", "t", math.floor(state.now), "def_avoid", s.def_avoid or 0, "def_assault", s.def_assault or 0, "def_out", s.def_out or 0, "def_siege", s.def_siege or 0,
-		"def_lost", s.def_lost or 0, "def_retreat", s.def_retreat or 0, "turrets", table.getn(M.defs or {}), "veh_back", s.veh_back or 0, "veh_wait", s.veh_wait or 0,
-		"setup_gren", s.setup_gren or 0, "setup_jump", s.setup_jump or 0, "setup_flank", s.setup_flank or 0, "enemy_setups", (type(EliteAI.setup) == "table") and EliteAI.setup.n or 0)
+		"def_lost", s.def_lost or 0, "def_retreat", s.def_retreat or 0, "def_standoff", s.def_standoff or 0, "def_nosiege", s.def_nosiege or 0, "turrets", table.getn(M.defs or {}), "veh_back", s.veh_back or 0, "veh_early", s.veh_early or 0, "veh_trans", s.veh_trans or 0, "veh_wait", s.veh_wait or 0,
+		"setup_gren", s.setup_gren or 0, "setup_approach", s.setup_appr or 0, "setup_jump", s.setup_jump or 0, "setup_flank", s.setup_flank or 0, "enemy_setups", (type(EliteAI.setup) == "table") and EliteAI.setup.n or 0)
 	mlog("stats5", "t", math.floor(state.now), "dodge", s.dodge or 0, "dodge_notes", s.dodge_notes or 0, "dodge_mines", s.dodge_mines or 0, "dodge_rule", rule("DodgeBusy"))
+	mlog("stats6", "t", math.floor(state.now), "counter_known", s.cn_known or 0, "counter_none", s.cn_none or 0, "bp_asked", s.cn_bp or 0, "bp_differ", s.cn_bp_diff or 0, "av_focus", s.cn_av or 0,
+		"counter_seen", s.cn_mem or 0, "counter_demand", s.cn_demand or 0, "counter_focus", s.cn_focus or 0, "counter_control", s.cn_ctrl or 0,
+		"counter_rule", rule("CounterVsPlan"), "see", (M.api and M.api.see) and "api" or "range")
 	local o = EliteAI.ord_st
 	if o then mlog("stats3", "t", math.floor(state.now), "orders_sent", o.sent, "repeat_skipped", o.skip, "to_move", o.alt, "ceiling", o.cap, "director_waited", o.held, "approach", s.gar_appr or 0, "escalated", o.esc or 0) end
 end
@@ -3010,21 +3902,21 @@ function EliteAI_Mechanics(state)
 	M.now = now
 	X.dodge_cfg(now, mech_on("Dodge"))                                        -- 0.8: the dodge policy for elite.scar (the reflex is there)
 	local on = {}
-	for _, k in ipairs({ "FocusFire", "Repair", "ArmyRetreat", "PreRetreat", "PunishTurn", "MeleeTie", "RaceAbilities", "ArmyRoles", "Idle", "Garrison", "Defence", "Vehicles", "Setup" }) do on[k] = mech_on(k) end
+	for _, k in ipairs({ "FocusFire", "Repair", "ArmyRetreat", "PreRetreat", "PunishTurn", "MeleeTie", "RaceAbilities", "ArmyRoles", "Idle", "Garrison", "Defence", "Vehicles", "Setup", "Counter" }) do on[k] = mech_on(k) end
 	if not M.said.on then
 		M.said.on = true
 		mlog("on", "variant", tostring(EliteAI.variant or "-"), "idx", vidx(), "version", EliteAI_MECH_VERSION,
 			"FocusFire", on.FocusFire and 1 or 0, "Repair", on.Repair and 1 or 0, "ArmyRetreat", on.ArmyRetreat and 1 or 0, "PreRetreat", on.PreRetreat and 1 or 0,
 			"PunishTurn", on.PunishTurn and 1 or 0, "MeleeTie", on.MeleeTie and 1 or 0, "RaceAbilities", on.RaceAbilities and 1 or 0, "ArmyRoles", on.ArmyRoles and 1 or 0,
-			"Idle", on.Idle and 1 or 0, "Garrison", on.Garrison and 1 or 0, "Defence", on.Defence and 1 or 0, "Vehicles", on.Vehicles and 1 or 0, "Setup", on.Setup and 1 or 0)
+			"Idle", on.Idle and 1 or 0, "Garrison", on.Garrison and 1 or 0, "Defence", on.Defence and 1 or 0, "Vehicles", on.Vehicles and 1 or 0, "Setup", on.Setup and 1 or 0, "Counter", on.Counter and 1 or 0)
 		mlog("rules", "MeleeApproach", rule("MeleeApproach"), "FocusLeave", rule("FocusLeave"), "Chase", rule("Chase"), "Split", rule("Split"),
 			"Decap", rule("Decap"), "HoldVP", rule("HoldVP"), "TieVsFocus", rule("TieVsFocus"), "RepairVsFight", rule("RepairVsFight"),
 			"PreEngage", rule("PreEngage"), "RunnerFight", rule("RunnerFight"), "AbilitySave", rule("AbilitySave"), "Garrison", rule("Garrison"),
-			"AbilityVsUnit", rule("AbilityVsUnit"), "RunnerArmy", rule("RunnerArmy"))
+			"AbilityVsUnit", rule("AbilityVsUnit"), "RunnerArmy", rule("RunnerArmy"), "CounterVsPlan", rule("CounterVsPlan"))
 		api()
 	end
 	if not (on.FocusFire or on.Repair or on.ArmyRetreat or on.PreRetreat or on.PunishTurn or on.MeleeTie or on.RaceAbilities or on.ArmyRoles
-		or on.Idle or on.Garrison or on.Defence or on.Vehicles or on.Setup) then return false end
+		or on.Idle or on.Garrison or on.Defence or on.Vehicles or on.Setup or on.Counter) then return false end
 	M.focus_force = nil
 	local cx, cz = centre(state.active)
 	if not cx then cx, cz = centre(state.army) end
@@ -3045,6 +3937,7 @@ function EliteAI_Mechanics(state)
 	-- also counts an enemy our ally fights at the other end of the map)
 	for _, e in ipairs(en) do if e.contact and e.d <= prm("AbilR") then M.army_contact = now; break end end
 	scan_own(state.army)
+	if on.Counter then X.counter_tick(state, en, now) elseif EliteAI.counter then EliteAI.counter = nil end   -- 0.9: what we see of the enemy, the arbiter per class
 	if on.ArmyRoles or on.Idle or on.Garrison or on.Defence or rule("HoldVP") >= 2 then scan_points(); points_memory(en, now) end
 	if on.RaceAbilities then ra_clump(en, cx, cz, state.army, h); run_race_abilities() end
 	stats(state)
@@ -3077,12 +3970,14 @@ function EliteAI_Mechanics(state)
 	if on.Idle or on.Garrison then goal_tick(state, en, ax, az, taken) end     -- the goal's life, the squad that takes the goal point
 	-- 2) roles: runners (always theirs), the split after a fight (true = the rest of the army covers the split)
 	local covering = false
+	if on.Vehicles and on.ArmyRoles and prm("VehRunner") >= 1 then X.run_veh(state, en, ax, az, h, taken, true) end   -- 1.0: a runner that is a vehicle leaves the fire too
 	if on.ArmyRoles then covering = run_army_roles(state, en, cx, cz, taken) end
 	local took = false
 	if not covering then
 		-- 3) per squad
 		if on.Vehicles then X.run_veh(state, en, ax, az, h, taken) end             -- 0.7: before Repair - a vehicle sent back is found there
 		if on.Setup then X.run_setup(state, en, ax, az, taken) end                 -- 0.7: grenades, jumps and the flank against set-up teams
+		if on.Counter then X.run_control(state, en, ax, az, taken) end             -- 0.9: a stun / slow / knock-back on a dangerous melee squad that comes at us
 		if on.Repair then run_repair(state, en, taken) end
 		run_melee_approach(state, en, cx, cz, taken)
 		local r7 = rule("TieVsFocus")

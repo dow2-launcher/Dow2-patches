@@ -60,6 +60,14 @@ EliteAI_MECH_ABILITIES = {
 	[17] = "ability/pvp/race_ork/stikkbomma/ork_damage_aoe_stikkbomb",
 	[18] = "ability/pvp/race_chaos/cultist/csm_knockback_aoe_grenades",
 	[19] = "ability/pvp/race_grey_knights/storm_troopers/gk_storm_trooper_grenade",
+	-- 20 (mechanics.ai 0.9, Defence): the manticore's rockets at the position of a turret, from outside its zone (range 40-150)
+	[20] = "ability/pvp/race_imperial_guard/manticore/ig_manticore_shot",
+	-- 21-25 (mechanics.ai 0.9, Counter): position abilities that stun / slow a dangerous melee squad (X.CONTROL there)
+	[21] = "ability/pvp/race_ork/stikkbomma/ork_immobilize_aoe_stungrenade",
+	[22] = "ability/pvp/race_ork/kommandos/ork_immobilize_aoe_stungrenade",
+	[23] = "ability/pvp/race_tau/pathfinders/tau_slow_grenade",
+	[24] = "ability/pvp/race_grey_knights/operatives/gk_operative_stunbomb",
+	[25] = "ability/pvp/race_tyranid/warrior/tyr_electroshock_grub",
 }
 EliteAI_MechAbilityIDs = {}
 local function mech_ability(k)
@@ -244,7 +252,8 @@ EliteAI_DODGE = {
 	["projectiles/race_imperial_guard/ig_satchel_charge_pvp"]       = { r = 5, fuse = 3.0,  pow = 3 },   -- (v) ig_devils_satchel 390 (the game's weapon; the area in the file is 4 m, 1 m added)
 	["projectiles/race_grey_knights/gk_satchel_charge"]             = { r = 5, fuse = 3.75, pow = 3 },   -- (E) gk_operative_satchel_charge 450
 	-- salvos of abilities and the artillery of vehicles
-	["projectiles/race_imperial_guard/ig_grenade_launcher_shot"]    = { r = 4, fuse = 0,    pow = 1, salvo = true },   -- (E) ig_grenade_shot 40 x 3 (the devils' triple launch), 45-55 m/s: SEEN (h_ig_setup)
+	["projectiles/race_imperial_guard/ig_grenade_launcher_shot"]    = { r = 4, fuse = 0,    pow = 1, salvo = true, quick = true },   -- (E) ig_grenade_shot 40 x 3 (the devils' triple launch), 45-55 m/s: SEEN (h_ig_setup);
+	                                                                                                             -- 0.9 quick: the three land within a quarter of a second (r9 scene i: "see n 1", "n 2" in one tick, "n 3" in the next) - when the first lies the salvo is over
 	["projectiles/race_chaos/csm_frag_grenade_launcher_barrage"]    = { r = 4, fuse = 0,    pow = 1, salvo = true },   -- (E) the grenade barrages (heretics, the IG commander, the sniper squad) 25 a shot, 10-15 m/s
 	["projectiles/race_grey_knights/gk_frag_grenade_launcher_barrage"] = { r = 4, fuse = 0, pow = 1, salvo = true },   -- (E) gk_grenade_launcher_barrage
 	["pvp/race_imperial_guard/projectiles/ig_manticore_rocket"]     = { r = 6, fuse = 0,    pow = 3, salvo = true },   -- (v) ig_manticore_rockets 170 a rocket, 30 m/s
@@ -263,6 +272,14 @@ EliteAI_DODGE_MINES = {
 	["projectiles/race_tyranid/tyr_burrow_trap"]              = { r = 5, pow = 2 },   -- (E)
 	["projectiles/race_imperial_guard/ig_devils_remote_detonate"] = { r = 6, pow = 3 },   -- (E) the devils' remote bomb
 	["projectiles/race_ork/ork_remote_detonate"]              = { r = 6, pow = 3 },   -- (E)
+}
+-- 0.9 (TECH_RU.md 17.2): what "MECH Dodge unknown projectile" named in s20 and the scenes of r9, looked up in the attributes -
+-- known and NOT stepped out of (no "unknown" line for these any more):
+EliteAI_DODGE_IGNORE = {
+	["projectiles/race_tyranid/tyr_spore_mine"]                     = true,   -- (v) the shot of tyr_spore_mine_launcher (40, 3-38 m, 10-20 m/s, delay 0.1): an ordinary weapon's shot
+	["projectiles/race_tyranid/tyr_barbed_strangler"]               = true,   -- (v) the shot of the barbed strangler (warrior 35 r 6, carnifex 125 r 7; every 2 s + reload): an ordinary weapon's shot - a squad would dance
+	["projectiles/race_ork/ork_missile"]                            = true,   -- (v) the rokkit of ork_rokkit_launcha and the kommandos' rokkits (12.8-100, r 2-5, up to 45 m/s): an ordinary weapon's shot
+	["projectiles/race_imperial_guard/ig_stormtrooper_spawn_effect"] = true,  -- (v) no weapon fires it: the picture of the storm troopers' drop (ebps/pvp/.../buildings/ig_stormtrooper_spawn_effect) - no grenade
 }
 -- (the code below sits in one block: its helpers are not locals of the whole script - this file is appended to Elite's
 -- elite.scar, and a chunk has room for 200 locals)
@@ -322,10 +339,11 @@ local function dodge_api()
 	D.horizon, D.fly, D.ahead = dnum("DodgeHorizon", 2.5), dnum("DodgeFly", 2), dnum("DodgeAhead", 60)
 	D.dmin, D.dstep, D.speed, D.minr = dnum("DodgeDelay", 0.5), dnum("DodgeDelayStep", 0.25), dnum("DodgeWalk", 4), dnum("DodgeMinRange", 8)
 	D.arc = (dnum("DodgeArc", 1) >= 1)                                       -- 0 = the landing spot is not reckoned: the course only
+	D.spent = (dnum("DodgeLate", 1) >= 1)                                    -- 0.9: 0 = a shell without a fuse that is seen lying is stepped out of as in 0.8
 	_log("MECH", "Dodge", "api", D.api and "ok" or ("OFF, missing:" .. missing), "state", D.state and 1 or 0, "SQUADSTATEID_Capture", type(SQUADSTATEID_Capture),
 		"SQUADSTATEID_Melee", type(SQUADSTATEID_Melee), "Squad_IsSuppressed", type(Squad_IsSuppressed), "Squad_IsInHoldEntity", type(Squad_IsInHoldEntity),
 		"Player_CanSeeEntity", type(Player_CanSeeEntity), "mines", D.see and 1 or 0, "AI_DoString", type(AI_DoString), "tell", D.tell and 1 or 0,
-		"pad", D.pad, "scan", D.scan, "delay", D.dmin, "+", D.dstep, "x 0..2")
+		"pad", D.pad, "scan", D.scan, "delay", D.dmin, "+", D.dstep, "x 0..2", "late", D.spent and 1 or 0)
 end
 local function dodge_key(nm)
 	if type(nm) ~= "string" then return nil end
@@ -344,7 +362,10 @@ local function dodge_kind(D, s)
 			local nm = Squad_GetBlueprintName(s.sq)
 			if type(nm) == "string" then
 				nm = string.lower(nm)
-				if string.find(nm, "vehicles", 1, true) then k = "veh"
+				-- 1.0 (Orca fb 529, his log: "Dodge 50004 ...ig_sentinel stays: vehicle - ...sm_frag_grenade_pvp pow 3"): the sentinel
+				-- lies in the vehicles folder and has the armour of heavy infantry (kb.yaml units ig_sentinel) - a grenade hurts it,
+				-- it steps out like infantry
+				if string.find(nm, "vehicles", 1, true) and not string.find(nm, "ig_sentinel", 1, true) then k = "veh"
 				else for _, f in ipairs(DODGE_SETUP) do if string.find(nm, f, 1, true) then k = "setup"; break end end end
 				D.nm[s.id] = nm
 			end
@@ -422,6 +443,18 @@ local function dodge_threat(D, pr, s, now)
 	if left < 0 then left = 0 end
 	return pr.x, pr.z, left, false
 end
+-- 0.9 (TECH_RU.md 16.10 / 17.2; scene i of r9: three steps out of the devils' salvo, every one "on its fuse bursts in 0.0 s" -
+-- the squad saw the shell lying, i.e. AFTER it had burst, and stepped for nothing). A projectile without a fuse bursts when it
+-- lands: one that is seen lying has burst already - no step ("too late"), unless something is still to come there: it burns
+-- where it fell (linger), or it is one of a salvo that goes on for seconds (salvo without quick: the manticore's rockets, the
+-- grenade barrages). Mech_DodgeLate=0 = as 0.8.
+local function dodge_spent(D, pr)
+	if not D.spent or pr.mine or pr.n < 2 or pr.sp > D.fly then return false end
+	local def = pr.def
+	if (def.fuse or 0) > 0 or def.linger then return false end
+	if def.salvo and not def.quick then return false end
+	return true
+end
 local function dodge_sg(sq)
 	local sg = SGroup_CreateIfNotFound("eliteai_dodge_sg")
 	SGroup_Clear(sg); SGroup_Add(sg, sq)
@@ -431,6 +464,8 @@ end
 local function dodge_step(D, s, e, pr, now)
 	local cx, cz, eta, flying, ux, uz = dodge_threat(D, pr, s, now)
 	if cx == nil then return false end                                       -- it is out already (it walked on, or the course changed)
+	-- 0.9: a shell without a fuse that comes down before the next look (a quarter of a second) cannot be stepped out of
+	if D.spent and flying and eta < 0.3 and (pr.def.fuse or 0) <= 0 and not pr.def.linger and not (pr.def.salvo and not pr.def.quick) then return false, "late" end
 	if dodge_stays(D, s, pr.def) ~= nil then return false end                -- (what it does now: it began to retreat, to capture ...)
 	local R = pr.def.r + D.pad + 1
 	local dx, dz = s.x - cx, s.z - cz
@@ -512,7 +547,7 @@ local function dodge_scan(D, c, eg, ot, now, seen, mines)
 						else D.skip[id] = true end
 					else
 						D.skip[id] = true                                             -- never looked up again
-						if key ~= nil and not mines and def == nil and not D.unknown[key] and D.n_unknown < 60 then
+						if key ~= nil and not mines and def == nil and not EliteAI_DODGE_IGNORE[key] and not D.unknown[key] and D.n_unknown < 60 then
 							D.unknown[key] = true; D.n_unknown = D.n_unknown + 1
 							_log("MECH", "Dodge", "unknown projectile", key)
 						end
@@ -550,8 +585,55 @@ local function dodge_scan(D, c, eg, ot, now, seen, mines)
 		end
 	end
 end
+-- 1.0 (Counter, mechanics.ai X.squad_bp; TECH_RU.md 18.2): the blueprint NAME of every squad on the map goes to the new AI's
+-- players, once per squad - AI_DoString -> string.eliteai_in[<player id>](3, <squad id>, "<name>"). Squad_GetBlueprintName is
+-- this state's own function (dodge_kind above calls it on our squads; the polygon prints what it returns); whether the AI
+-- state has it too is not known, and its blueprint ids found no class in the game (17.9) - this way does not depend on
+-- either. Every 2 s, for the players that sent mode 10 (on or off); only letters, digits, '_' and '/' go into the chunk.
+-- Mech_CounterScarNames=0 = nothing is read and nothing is sent.
+local function bp_tell(D)
+	if D.bp_api == nil then
+		D.bp_api = (type(AI_DoString) == "function" and type(Squad_GetBlueprintName) == "function" and type(World_GetPlayerCount) == "function"
+			and type(World_GetPlayerAt) == "function" and type(Player_GetSquads) == "function" and type(SGroup_CountSpawned) == "function"
+			and type(SGroup_GetSpawnedSquadAt) == "function" and type(Squad_Count) == "function" and type(Squad_GetGameID) == "function"
+			and type(Player_FromId) == "function" and type(Player_IsAlive) == "function") and dnum("CounterScarNames", 1) >= 1
+		D.bp_told, D.bp_n = {}, 0
+		_log("COUNTER", "names", "elite.scar tells the AI the blueprint names of the squads it sees:", D.bp_api and 1 or 0, "Squad_GetBlueprintName", type(Squad_GetBlueprintName),
+			"AI_DoString", type(AI_DoString), "World_GetPlayerAt", type(World_GetPlayerAt))
+	end
+	if not D.bp_api then return end
+	local n = World_GetPlayerCount()
+	for i = 1, n do
+		local pl = World_GetPlayerAt(i)
+		local sg = (pl ~= nil) and Player_GetSquads(pl) or nil
+		local cnt = (sg ~= nil) and SGroup_CountSpawned(sg) or 0
+		for j = 1, cnt do
+			local sq = SGroup_GetSpawnedSquadAt(sg, j)
+			if sq ~= nil and Squad_Count(sq) > 0 then
+				local id = Squad_GetGameID(sq)
+				if type(id) == "number" and not D.bp_told[id] then
+					D.bp_told[id] = true
+					local nm = Squad_GetBlueprintName(sq)
+					if type(nm) == "string" then
+						nm = string.gsub(string.gsub(string.lower(nm), "\\", "/"), "[^%w_/]", "")
+						for _, pid in ipairs(D.pids) do
+							local to = Player_FromId(pid)
+							if to ~= nil and Player_IsAlive(to) then
+								AI_DoString(to, string.format("local s = string local t = s and s.eliteai_in local f = t and t[%d] if f then f(3, %d, \"%s\") end", pid, id, nm))
+							end
+						end
+						D.bp_n = D.bp_n + 1
+						if D.bp_n == 1 or D.bp_n == 20 then _log("COUNTER", "names", "told", D.bp_n, "the last:", id, nm) end
+					end
+				end
+			end
+		end
+	end
+end
 function EliteAI_DodgeTick()
 	local D = EliteAI_Dodge
+	D.bp_tick = (D.bp_tick or 0) + 1
+	if table.getn(D.pids) > 0 and D.bp_tick - math.floor(D.bp_tick / 8) * 8 == 1 then bp_tell(D) end   -- 1.0: every 2 s, whatever the dodge policy
 	if not D.any then return end
 	if D.api == nil then dodge_api() end
 	if not D.api then return end
@@ -612,14 +694,23 @@ function EliteAI_DodgeTick()
 			if now >= e.t_until then dodge_back(D, s, e, now); D.sq[id] = nil end
 		elseif now >= e.act then
 			local pr = D.proj[e.pr] or D.mine[e.pr]
-			if pr == nil and e.salvo and e.cx ~= nil then                           -- it has burst, more follow: out of the place it was meant for
+			if pr == nil and e.salvo and e.cx ~= nil and not (D.spent and e.def.quick) then   -- it has burst, more follow: out of the place it was meant for
 				pr = { key = e.key, def = e.def, n = 2, sp = 0, x = e.cx, z = e.cz, land = now, t = now }
 			end
-			if pr == nil then
+			if pr == nil or dodge_spent(D, pr) then                                -- 0.9: gone, or it lies without a fuse = it has burst
 				D.st.late = D.st.late + 1
-				if D.st.late <= 20 then _log("p" .. tostring(s.pid), "MECH", "Dodge", id, "too late:", e.key, "burst before the step (delay", e.delay, ")") end
+				if D.st.late <= 20 then _log("p" .. tostring(s.pid), "MECH", "Dodge", id, "too late:", e.key, (pr == nil) and "burst before the step" or "lies without a fuse: it has burst", "(delay", e.delay, ")") end
 				D.sq[id] = nil
-			elseif not dodge_step(D, s, e, pr, now) then D.sq[id] = nil end
+			else
+				local ok, why = dodge_step(D, s, e, pr, now)
+				if not ok then
+					if why == "late" then
+						D.st.late = D.st.late + 1
+						if D.st.late <= 20 then _log("p" .. tostring(s.pid), "MECH", "Dodge", id, "too late:", e.key, "no fuse, it lands before the step", "(delay", e.delay, ")") end
+					end
+					D.sq[id] = nil
+				end
+			end
 		end
 	end
 	-- new threats (the tracks in the order of their ids, the squads in the order they were read: the same in every run)
@@ -632,8 +723,12 @@ function EliteAI_DodgeTick()
 		for _, s in ipairs(S) do
 			local dn = pr.done[s.id]
 			if D.sq[s.id] == nil and (dn == nil or (pr.mine and now - dn > 10)) then
-				local cx, cz = dodge_threat(D, pr, s, now)
-				if cx ~= nil then
+				local cx, cz, _, flying = dodge_threat(D, pr, s, now)
+				if cx ~= nil and not flying and dodge_spent(D, pr) then           -- 0.9: seen lying, no fuse: it has burst - nothing to step out of
+					pr.done[s.id] = now
+					D.st.late = D.st.late + 1
+					if D.st.late <= 20 then _log("p" .. tostring(s.pid), "MECH", "Dodge", s.id, "too late:", pr.key, "seen lying without a fuse: it has burst, no step") end
+				elseif cx ~= nil then
 					pr.done[s.id] = now
 					D.st.threat = D.st.threat + 1
 					local why, cls = dodge_stays(D, s, pr.def)

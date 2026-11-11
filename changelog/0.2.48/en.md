@@ -1,0 +1,1 @@
+- New AI 16: reads your army (light infantry, vehicles, set-up teams) and buys the answer; no more money lost to upgrades.
