@@ -816,11 +816,8 @@
     "order": 40
   },
   "soundbugtest": {
-    "version": "1",
+    "version": "off",
     "dll": "SoundBugTest.dll",
-    "files": {
-      "SoundBugTest_fmodex.bin": "soundbugtest/SoundBugTest_fmodex.bin"
-    },
     "default": false,
     "name": {
       "en": "Sound bug test",
@@ -839,9 +836,7 @@
     "conflicts": [
       "dow2-patches/SoundBugTest.dll",
       "Elite_DLLs/SoundFix.dll"
-    ],
-    "category": "experiment",
-    "order": 40
+    ]
   },
   "replayspeed": {
     "version": "1",
@@ -907,7 +902,7 @@
     }
   },
   "perflog": {
-    "version": "1",
+    "version": "off",
     "dll": "PerfLog.dll",
     "default": false,
     "category": "performance",
