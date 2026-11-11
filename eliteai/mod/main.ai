@@ -4,7 +4,7 @@
 -- (all | none | normal | <player ids, e.g. 1000>) so one match can pit the new logic against Elite's (A/B).
 -- Every tuning value can be overridden from EliteAI.ini [Lua] without rebuilding (EliteAI.num("Key", default)).
 
-EliteAI = { version = "0.17" }
+EliteAI = { version = "0.19" }
 
 -- 0.9 (10.11): THREE VARIANTS for testers to compare, chosen in the skirmish menu by the computer slot's difficulty:
 -- Easy = "NEW AI A", Normal = "NEW AI B", Hard = "NEW AI C" (EliteAI.dll relabels them); Expert = Elite's AI, untouched.
@@ -209,6 +209,17 @@ EliteAI.retreating, EliteAI.orders, EliteAI.dir_squads = {}, 0, 0
 EliteAI.weak_n = {}                                                -- 0.13: models a squad had when it last went home to be refilled (numbers by squad id)
 EliteAI.refill = {}                                                -- 0.14: squads on a refill stay { t, home_t, prog, n, got } (numbers by squad id)
 EliteAI.refill_ban = {}                                            -- 0.16: no "ordered" stay for this squad until then (its models did not come)
+-- 0.19 (TECH_RU.md 20.4; Orca fb 557: "late, without the map and the income - do not reinforce the squads that bleed"): the models a
+-- squad of the army lost lately - its count at the last look (lossn) and the falls { t, k } of the last LossKeepSecs (numbers
+-- only); the purse of the refills reads the sum (strategy_unit_purchase.ai r_goal)
+EliteAI.lossn, EliteAI.loss = {}, {}
+function EliteAI_LossRecent(id, secs)
+	local L = EliteAI.loss[id]
+	if L == nil then return 0 end
+	local now, sum = World_GetGameTime(), 0
+	for _, e in ipairs(L) do if now - e.t <= secs then sum = sum + e.k end end
+	return sum
+end
 
 local function dist(a, b) return math.sqrt((a.x - b.x) ^ 2 + (a.z - b.z) ^ 2) end
 
@@ -283,6 +294,35 @@ function EliteAI_OrderGate(id, mode, x, z, now, owner, urgent)
 		return mode
 	end
 	if not r then r = { t = -1000, n = 0, at = now }; EliteAI.ord[id] = r end
+	-- 0.18 THE BUILDER WAIT (TECH_RU.md 19.6; every log we have: "secure_req 30 secure_dead 28" (Orca, newai-17), 16 / 15 and 11 / 9
+	-- (s22), 20 / 19 (fb 544) - the structure that secures a point is the condition of every generator (strategy_resourcing.ai:
+	-- cache.total_pts_secured_w_addon_capacity), and in Orca's match the tyranids had no generator from 12:30 to 21:00). A
+	-- request of Elite's is a task the engine gives to a squad; a squad that already builds is left to it (builds() above), but
+	-- between the request and the director's next look the squad it was given to gets our march order and the task dies
+	-- "inactive". A HYPOTHESIS, not seen in the game: for BuildWaitSecs after the purchase scripts placed a Secure / generator
+	-- request (EliteAI.build_req_t) the director's and the Idle logic's march orders are not given while nobody of the army
+	-- is under attack - the next look finds the builder building. BuildWaitSecs=0 = off. Counted: stats3 "build_wait".
+	local bw = num("BuildWaitSecs", 4)
+	if bw > 0 and EliteAI.build_req_t ~= nil and now >= EliteAI.build_req_t and now - EliteAI.build_req_t < bw and not EliteAI.any_hit
+		and ((owner == "dir" and not urgent) or owner == "idle") then
+		st.bwait = (st.bwait or 0) + 1
+		return nil
+	end
+	-- 0.19 (TECH_RU.md 20.1): ... and while a request is OPEN (EliteAI.build_open, stamped every purchase tick by
+	-- strategy_unit_purchase.ai: a node whose verdict is not in yet, a generator task nobody has taken) a squad that stands
+	-- within BuildNearR of a power point of ours where something can be built (EliteAI.pw.sites, mechanics.ai's point scan) is
+	-- not marched away by the director or the Idle logic - it is the one the engine can give the structure to. Not while
+	-- anybody is under attack; the squad that builds is out of the army anyway (builds()). BuildNearR=0 = off. stats3 "build_near".
+	local bnr, bo, pw = num("BuildNearR", 30), EliteAI.build_open, EliteAI.pw
+	if bnr > 0 and bo ~= nil and now >= bo and now - bo <= num("BuildOpenSecs", 8) and not EliteAI.any_hit
+		and ((owner == "dir" and not urgent) or owner == "idle") and type(pw) == "table" and type(pw.sites) == "table" then
+		local p = EliteAI.sqpos[id]
+		if p ~= nil and p.x ~= nil and p.z ~= nil then
+			for _, q in ipairs(pw.sites) do
+				if (p.x - q.x) ^ 2 + (p.z - q.z) ^ 2 <= bnr * bnr then st.bnear = (st.bnear or 0) + 1; return nil end
+			end
+		end
+	end
 	if owner == "dir" and not urgent and r.hold and now < r.hold then st.held = st.held + 1; return nil end
 	local hold = (owner == "idle") and (now + num("OrderOwnerHold", 9)) or nil
 	local burst, after = num("OrderBurst", 3), num("OrderStuckAfter", 6)
@@ -565,6 +605,13 @@ function EliteAI_Director()
 					end
 				elseif id ~= nil and pos ~= nil and pos.x ~= nil and pos.z ~= nil then
 					local u = { sq = sq, id = id, pos = pos, hp = hp, hit = hit, n = Squad_Count(sq), full = 0 }
+					local ln = EliteAI.lossn[id]                                   -- 0.19: the models it lost since the last look
+					if ln ~= nil and u.n < ln then
+						local L = EliteAI.loss[id] or {}
+						table.insert(L, { t = now, k = ln - u.n })
+						EliteAI.loss[id] = L
+					end
+					EliteAI.lossn[id] = u.n
 					u.veh = (SquadQuery_IsVehicle(sq) == true)                    -- 0.16 (tactics.ai; mechanics.ai weight_of reads the same)
 					if EliteAI_ReinforceFull then u.full = EliteAI_ReinforceFull(aisq) or 0 end   -- models of a complete squad of its kind
 					-- 0.13 (TECH_RU.md 12): a squad of the director's army never asked for reinforcements - the engine's list is filled
@@ -590,7 +637,7 @@ function EliteAI_Director()
 						end
 						if u.hit then home_hit = true end
 					elseif EliteAI_ReinforceCan and u.full >= 3 and u.n <= u.full * wm then
-						u.can = EliteAI_ReinforceCan(aisq, u.n) or 0                  -- 0.15: would the purse pay it now (the quiet refill trip)
+						u.can = EliteAI_ReinforceCan(aisq, u.n, id) or 0              -- 0.15: would the purse pay it now (the quiet refill trip; 0.19: up to its goal)
 					end
 					if u.hit then any_hit = true end
 					table.insert(army, u)
@@ -604,7 +651,13 @@ function EliteAI_Director()
 	EliteAI.now, EliteAI.sqpos = now, {}
 	for _, u in ipairs(army) do EliteAI.sqpos[u.id] = { x = u.pos.x, y = u.pos.y, z = u.pos.z } end
 	for id, r in pairs(EliteAI.ord) do if now - r.t > 120 then EliteAI.ord[id] = nil end end   -- squads that are gone (each entry on its own)
-	EliteAI.home_hit = home_hit
+	local lkeep = num("LossKeepSecs", 300)
+	for id, L in pairs(EliteAI.loss) do                                         -- 0.19: old falls (each entry on its own)
+		local keep = {}
+		for _, e in ipairs(L) do if now - e.t <= lkeep then table.insert(keep, e) end end
+		if table.getn(keep) == 0 then EliteAI.loss[id], EliteAI.lossn[id] = nil, nil else EliteAI.loss[id] = keep end
+	end
+	EliteAI.home_hit, EliteAI.any_hit = home_hit, any_hit                       -- (0.18: any_hit for the builder wait of the order book)
 	-- 0.15: the stays of squads that are gone (dead, or taken by Elite's capture task) end; how many of the army are away refilling
 	local in_army, away = {}, 0
 	for _, u in ipairs(army) do in_army[u.id] = true end
@@ -706,6 +759,10 @@ function EliteAI_Director()
 	end
 	if not target then return end
 	if def_blocked(target) then EliteAI.phase = "def_hold"; return end         -- 0.16: the target is under such a turret - nobody is marched in (mechanics.ai gives the goal)
+	-- 0.18 (mechanics.ai 1.1 Map; Orca's log, fb 544: "Goal end point 18/105 ..." and in the same tick "Order ... -> move to -96 -98
+	-- by dir" - the enemy's base): Elite's own target inside the zone of a turret that nobody storms is not marched at either.
+	-- The goal of mechanics.ai ended after its Defence pass of this tick; the next pass gives the next goal
+	if target == EliteAI.best_pos and EliteAI_MechClosed and EliteAI_MechClosed(target.x, target.z) then EliteAI.phase = "def_hold"; return end
 	local cx, cz = 0, 0
 	for _, u in ipairs(active) do cx = cx + u.pos.x; cz = cz + u.pos.z end
 	cx, cz = cx / table.getn(active), cz / table.getn(active)

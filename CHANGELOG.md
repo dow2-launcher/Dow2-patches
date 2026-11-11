@@ -4,6 +4,18 @@ Every version gets an entry here before it reaches `main`. CI then tags `vX.Y.Z`
 version (`X.Y.0`) it also publishes a GitHub Release with the DLLs and the entries since the previous `X.Y.0`.
 The version of the set lives only in `VERSION`; each DLL still writes its own version to its log.
 
+## 0.2.56 — 2026-11-11
+New AI 19 (store newai-19, experiment, off by default, Elite only) = newai-18 + map defence, tyranid play, economy and purchase
+(main.ai, mechanics.ai, simulation/ai/strategy_unit_purchase.ai, strategy_tech_purchase.ai, append/scar/elite/elite.scar from eliteai 22ef1c2).
+- Generators: our own plan over Elite's personality cap (tyranids had 1/2/3 per tier): 2 at once, +1 every 150 s, at least 4 on T2 and 6 on T3;
+  power-node requests only for own power points, judged after 25 s; builders are not pulled away while a request is open.
+- Purchase: the answer to the enemy army is really bought (Demand_Gamma, COUNTER force), at most 3 of a kind and 2 of a vehicle/expensive unit;
+  the new tier's units are preferred after a tier-up; no unit request within 8 of the population cap (phantom buys).
+- Reinforcements by the squad's worth: runners/cappers to 0.6, bleeding squads late in a lost game to 0.5-0.75; expendable broods only from spare req.
+- Map: own threatened or lost points (power first) before the enemy base; 1-2 squads capture while the army covers or goes on; no orders into avoided turret zones.
+- Tyranids: tyrant guard against light infantry and set-up teams, warriors' suppression and the tyrant's bioplasma as counter upgrades,
+  lictor as a raider, lictor jump and alpha hook abilities.
+
 ## 0.2.55 — 2026-11-11
 Elite maps 3 (store elitemaps-3, experiment, off by default, vanilla only) - owner: Elite's maps in public rooms too ("only
 friends could test it otherwise; we kick strangers or pick the map once people are in").

@@ -1,0 +1,1 @@
+- New AI 19: builds 4-6 generators, buys the answer to your army (no more 11 dreads in a row), units of the new tier after a tier-up, defends its own points first, fewer reinforcements of doomed squads.
