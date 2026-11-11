@@ -1,0 +1,1 @@
+- Sound bug test is removed and PerfLog is turned off for everyone: the measurements are finished.

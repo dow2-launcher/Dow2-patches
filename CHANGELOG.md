@@ -4,6 +4,10 @@ Every version gets an entry here before it reaches `main`. CI then tags `vX.Y.Z`
 version (`X.Y.0`) it also publishes a GitHub Release with the DLLs and the entries since the previous `X.Y.0`.
 The version of the set lives only in `VERSION`; each DLL still writes its own version to its log.
 
+## 0.2.59 — 2026-11-12
+- Sound bug test removed from the launcher (store version "off", out of the list): its job is done; the game gets the normal sound library back.
+- PerfLog off for everyone (store version "off"): the performance measurements are closed.
+
 ## 0.2.58 — 2026-11-11
 Ctrl attack ground (store ctrlattack-1, NEW, experiment, order 1030, off by default, Elite and vanilla): CtrlAttack.dll (ctrlattack/).
 - Owner's request: Ctrl + click = attack the ground at a point (wraithguard and many other squads can), only while Ctrl is held.
