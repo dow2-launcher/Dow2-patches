@@ -1,0 +1,1 @@
+- New: Overwatch once (experiment, off by default, Elite and vanilla): a right-click (overwatch) on a unit's build button now orders one squad - it is built as soon as you can afford it, then overwatch switches itself off; no more surprise second squad.
