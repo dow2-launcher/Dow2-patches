@@ -1,0 +1,1 @@
+- Elite maps (test, vanilla Retribution): Elite's maps can be picked in public rooms again. A player without the add-on who joins a room with an Elite map already picked crashes - pick it once everyone is in.

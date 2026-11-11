@@ -21,13 +21,16 @@
 //    (GameInfo +0xC4 = 1; private 0) a pick of an Elite map is turned into the room's previous vanilla map (or the first vanilla
 //    map with as many players) before the game's own handler runs. Private rooms (friends by invitation) keep Elite's maps.
 //    The guard is installed before the archives are given to the game; if it cannot be (other DOW2.exe), no Elite map at all.
+//  - EliteMaps 3 (11.11.2026, owner): Elite's maps in ANY room again, public ones too (players kick strangers or pick the Elite
+//    map once everyone is in). The public-room guard of EliteMaps 2 is only an option now: EliteMaps.ini [EliteMaps]
+//    BlockPublic=1 (default 0 - no hook at all).
 // EliteMaps.ini [EliteMaps] Enabled=0: off. Log: EliteMaps.log next to the DLL.
 #include <windows.h>
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
 
-#define EM_VERSION "2"
+#define EM_VERSION "3"
 
 typedef BOOL(__fastcall *GetString_t)(void *self, void *edx, const char *key, char *buf, unsigned size);
 typedef const char *(__fastcall *GetSection_t)(void *self, void *edx);
@@ -201,9 +204,11 @@ static void start(HMODULE self) {
         read_names(p);
     }
     if (!g_narch) { logmsg("no Elite map archive in this game folder (is Elite installed by the launcher?): nothing"); return; }
-    if (!g_nelite) { logmsg("no map names read from the archives: nothing (the public-room guard would not know them)"); return; }
-    if (!install_guard()) { logmsg("public-room guard NOT installed (not DOW2.exe 3.19?): no Elite maps"); return; }
-    logmsg("%d Elite map names; public-room guard in (0x%08X)", g_nelite, FN_MAPPICK);
+    if (GetPrivateProfileIntW(L"EliteMaps", L"BlockPublic", 0, ini)) {     // EliteMaps 3: the guard only on request
+        if (!g_nelite) { logmsg("BlockPublic=1 but no map names read from the archives: no Elite maps"); return; }
+        if (!install_guard()) { logmsg("BlockPublic=1 but the public-room guard is NOT installed (not DOW2.exe 3.19?): no Elite maps"); return; }
+        logmsg("BlockPublic=1: %d Elite map names; no Elite map in a public room (guard 0x%08X)", g_nelite, FN_MAPPICK);
+    } else logmsg("Elite maps in every room, public ones too (EliteMaps.ini BlockPublic=1 keeps them out of public rooms)");
     HMODULE util = GetModuleHandleW(L"Util.dll");
     void **slot = find_slot(GetModuleHandleW(NULL), "Util.dll", "?GetString@ConfigFile@@QBE_NPBDPADI@Z");
     g_section = util ? (GetSection_t)GetProcAddress(util, "?GetSection@ConfigFile@@QBEPBDXZ") : NULL;

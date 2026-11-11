@@ -4,6 +4,14 @@ Every version gets an entry here before it reaches `main`. CI then tags `vX.Y.Z`
 version (`X.Y.0`) it also publishes a GitHub Release with the DLLs and the entries since the previous `X.Y.0`.
 The version of the set lives only in `VERSION`; each DLL still writes its own version to its log.
 
+## 0.2.55 — 2026-11-11
+Elite maps 3 (store elitemaps-3, experiment, off by default, vanilla only) - owner: Elite's maps in public rooms too ("only
+friends could test it otherwise; we kick strangers or pick the map once people are in").
+- The public-room guard of EliteMaps 2 (0x00487A7B hook) is now only EliteMaps.ini [EliteMaps] BlockPublic=1; by default
+  no hook, Elite's maps in every room as in EliteMaps 1.
+- Card text: in any room; only with players who have it on; a player without it joining a room with an Elite map already
+  picked crashes - pick it once everyone is in (or kick); with such a player already in the lobby an Elite-map match does not start.
+
 ## 0.2.54 — 2026-11-11
 Elite maps 2 (store elitemaps-2, experiment, off by default, vanilla only) - back after 0.2.53 switched it off.
 - Why it was off: a vanilla player WITHOUT the add-on who joins a lobby whose map he does not have crashes at once

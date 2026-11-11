@@ -627,11 +627,11 @@
       "de": "Elite maps"
     },
     "description": {
-      "en": "Vanilla Retribution only: Elite's maps in the map list, from your Elite install. Not in public rooms. Private games only with friends who have it on too: without it their game crashes on joining.",
-      "ru": "Только ваниль Retribution: карты Elite в списке карт, из вашей установки Elite. В публичных комнатах их нет. Приватная игра — только с друзьями, у кого это тоже включено: без него игра вылетает при входе.",
-      "es": "Solo Retribution vanilla: los mapas de Elite en la lista, desde tu Elite instalado. No en salas públicas. Partidas privadas solo con amigos que también lo tengan: sin él, su juego se cierra al entrar.",
-      "fr": "Retribution vanilla uniquement : les cartes d'Elite dans la liste, depuis votre Elite installé. Pas dans les salons publics. En privé, seulement avec des amis qui l'ont aussi : sans lui, leur jeu plante en entrant.",
-      "de": "Nur Vanilla Retribution: Elites Karten in der Kartenliste, aus deiner Elite-Installation. Nicht in öffentlichen Lobbys. Privat nur mit Freunden, die es auch aktiviert haben: ohne stürzt ihr Spiel beim Beitreten ab."
+      "en": "Vanilla Retribution: Elite's maps in the map list (from your Elite install), in any room. Play them only with players who have this on too. A player without it who joins a room where an Elite map is already picked crashes - pick the Elite map once everyone is in (or kick the others); if a player without it is already in the lobby, a match on an Elite map does not start.",
+      "ru": "Ваниль Retribution: карты Elite в списке карт ванили (из вашей установки Elite), в любых комнатах. Играть только с теми, у кого тоже включено. Игрок без дополнения, вошедший в комнату, где уже выбрана карта Elite, вылетает — выбирайте карту Elite, когда все зашли (или кикайте лишних); если игрок без дополнения уже в лобби, матч на карте Elite не стартует.",
+      "es": "Retribution vanilla: los mapas de Elite en la lista de mapas (desde tu Elite instalado), en cualquier sala. Juégalos solo con quien también lo tenga activado. Un jugador sin él que entra en una sala con un mapa de Elite ya elegido se cierra: elige el mapa de Elite cuando todos estén dentro (o expulsa a los demás); si ya hay en la sala un jugador sin él, la partida en un mapa de Elite no empieza.",
+      "fr": "Retribution vanilla : les cartes d'Elite dans la liste des cartes (depuis votre Elite installé), dans tous les salons. À jouer seulement avec ceux qui l'ont aussi activé. Un joueur sans lui qui rejoint un salon où une carte Elite est déjà choisie plante : choisissez la carte Elite quand tout le monde est là (ou expulsez les autres) ; si un joueur sans lui est déjà dans le salon, la partie sur une carte Elite ne démarre pas.",
+      "de": "Vanilla Retribution: Elites Karten in der Kartenliste (aus deiner Elite-Installation), in jeder Lobby. Nur mit Spielern spielen, die es auch aktiviert haben. Ein Spieler ohne es, der einer Lobby mit bereits gewählter Elite-Karte beitritt, stürzt ab - die Elite-Karte wählen, wenn alle da sind (oder andere kicken); ist ein Spieler ohne es schon in der Lobby, startet das Spiel auf einer Elite-Karte nicht."
     }
   },
   "overwatchonce": {
