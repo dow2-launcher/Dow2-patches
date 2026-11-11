@@ -131,10 +131,16 @@ local function mech_order(sg, sq, m, x, y, z)
 		-- main.ai 0.13: one reinforcement for a squad of the director's army that stands at home (Elite's squad tasks, which ask
 		-- the engine for reinforcements, do not run for it). The command of the player's reinforce button: the engine checks
 		-- the reach of a reinforce point and the money. Both names are checked - without them nothing is called.
+		-- main.ai 0.14: x = how many models (1..4; 0 from an older main.ai = 1) - the command once per model, as a player clicks the
+		-- button several times (each click takes its money and queues one model)
 		if Command_Squad and SCMD_ReinforceUnit then
-			Command_Squad(Squad_GetPlayerOwner(sq), sg, SCMD_ReinforceUnit, false)
-			EliteAI_ReinfN = (EliteAI_ReinfN or 0) + 1
-			if EliteAI_ReinfN <= 3 then _log("REINF dir scar order", EliteAI_ReinfN, "models", Squad_Count(sq)) end
+			local k = math.floor(tonumber(x) or 1)
+			if k < 1 then k = 1 elseif k > 4 then k = 4 end
+			local owner = Squad_GetPlayerOwner(sq)
+			for i = 1, k do Command_Squad(owner, sg, SCMD_ReinforceUnit, false) end
+			EliteAI_ReinfN = (EliteAI_ReinfN or 0) + k
+			EliteAI_ReinfLines = (EliteAI_ReinfLines or 0) + 1
+			if EliteAI_ReinfLines <= 6 then _log("REINF dir scar order", EliteAI_ReinfN, "x" .. k, "models", Squad_Count(sq)) end
 		elseif not EliteAI_ReinfWarned then
 			EliteAI_ReinfWarned = true
 			_log("REINF dir scar: no Command_Squad / SCMD_ReinforceUnit here", type(Command_Squad), type(SCMD_ReinforceUnit))
