@@ -1,0 +1,1 @@
+- New AI 11: more units and fewer upgrades early, reinforces its squads again, reaches T2 earlier, safer script calls.

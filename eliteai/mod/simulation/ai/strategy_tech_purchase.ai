@@ -57,6 +57,23 @@
 --    - "enemy at the base" also by the director's own scan (EliteAI.mech.en: enemy squads within Tech_BaseR 60 m of our HQ
 --      worth Tech_BaseW 300+, scan not older than 10 s): cache.threat_at_base saw the two squads 45 m from the HQ of scene a
 --      only 20 s into the fight. Tech_BaseScan=0 = Elite's value alone.
+--  * 11.11, after the verification of newai-10b (s15; TECH_RU.md 11.10 / 12), version 0.3:
+--    - THE PLAN DECIDES WHEN (Tech_PlanOnly 1): the tier research is not a candidate of the tech budget before the plan wants
+--      it. Elite's own demand bought it whenever its 300 req lay in the bank at the tech budget's turn, whatever the plan said:
+--      s15 tyranids - T3 at 8:10, four seconds after T2 was done ("level 2 -> 3 t 563 elite", the plan: T3 from 900 / 660 s),
+--      with a genestealer waiting for those 300 req since 6:50 (no unit from 5:12 to 11:02); and T2 only when 300 / 125
+--      happened to lie there (7:00 in s15, 4:38 in s13). Line "T3 wait not_planned ..." when the bank could have paid.
+--      The same for a tier research offered by UpgradeDemand (every producible PITEM_Upgrade): tier_3 at T1 in s15.
+--    - T2 EARLIER: Tech_T2Time 270 (was 420), Tech_T2Early 210 (240), Tech_T2Late 450 (720): T2 is what a good player starts
+--      at 4:30-5:00 with a normal economy; in s15 the plan first asked for it at 7:00. Rule 2 (B) of the arbiter asks for
+--      Tech_MinArmy + Tech_B_ExtraT2 (1) squads for T2 (was + 2 = 6: IG stood at 4 squads at 7:00 and the decision was "army"
+--      until Elite's demand bought it); T3 keeps + 2 (Tech_B_ExtraT3).
+--    - THE POWER FOR T2 (EliteAI_TechPowerFloor, Tech_PowFloor 1): the research costs 125 power and the T1 income is 20-50 a
+--      minute; in s15 the tyranids' T1 upgrades took 90 power before 3:10 and the bank reached 125 only at 6:15. Until the T2
+--      research is placed, an upgrade may not take the power bank below what the income cannot bring back by Tech_T2Time:
+--      cost - rate x (Tech_T2Time - now), the whole cost from Tech_T2Time on (the addon filter of strategy_unit_purchase.ai,
+--      "addon skip ... why t2_power"; units are not held by it; off Tech_PowFloorSecs 180 s after Tech_T2Late).
+--      The plan's reserve now also keeps its POWER from the upgrades (the filter looked at the req alone).
 -- SAFETY: no engine object kept between ticks (the tier PBGs are Elite's own s_personality handles), no pcall around engine calls,
 -- deterministic (engine time and state only), every function below exists in Elite's scripts (file:line in reports/TECH_RU.md).
 
@@ -76,7 +93,7 @@ DEMAND_NeverBuild = -99999
 
 -------------------------------------------------------------------------------------------------
 -- EliteAI tech plan (state: numbers, strings and plain tables only)
-EliteAI_TECH_VERSION = "0.2"
+EliteAI_TECH_VERSION = "0.3"
 EliteAI_T = { st = {}, said = {}, conf = {}, waits = {}, last_stats = -1, eval_t = -1, cost_t = -1, level = 1 }
 
 local function t_on() return EliteAI ~= nil and EliteAI.on == true end
@@ -176,9 +193,10 @@ local function t_eval(now)
 		local cost = AIPlayer_GetProductionCost( s_self_modplayer, PITEM_Upgrade, pbg )
 		T.cost_req, T.cost_pow, T.cost_t, T.cost_k = (cost and cost.requisition) or 0, (cost and cost.power) or 0, now, k
 	end
-	local tt = (k == 1) and t_num("Tech_T2Time", 420) or t_num("Tech_T3Time", 900)
-	local early = (k == 1) and t_num("Tech_T2Early", 240) or t_num("Tech_T3Early", 660)
-	local late = (k == 1) and t_num("Tech_T2Late", 720) or t_num("Tech_T3Late", 1320)
+	local tt = (k == 1) and t_num("Tech_T2Time", 270) or t_num("Tech_T3Time", 900)       -- 0.3: T2 270 / 210 / 450 (was 420 / 240 / 720)
+	local early = (k == 1) and t_num("Tech_T2Early", 210) or t_num("Tech_T3Early", 660)
+	local late = (k == 1) and t_num("Tech_T2Late", 450) or t_num("Tech_T3Late", 1320)
+	T.plan_tt, T.plan_early = tt, early
 	local min_army = (k == 1) and t_num("Tech_MinArmy", 4) or t_num("Tech_MinArmyT3", 6)
 	local army = (cache and cache.military_count) or 0
 	local res = cache and cache.resources
@@ -241,7 +259,8 @@ local function t_eval(now)
 		if army < min_army then v, why = "army", "army " .. army .. "<" .. min_army
 		elseif pct < t_num("Tech_LosingPct", -0.35) then v, why = "army", t_fmt("losing %.2f", pct) end
 	elseif r == 2 then
-		if army < min_army + 2 then v, why = "army", "army " .. army .. "<" .. (min_army + 2)
+		local need = min_army + ((k == 1) and t_num("Tech_B_ExtraT2", 1) or t_num("Tech_B_ExtraT3", 2))   -- 0.3: T2 with 5 squads (was 6)
+		if army < need then v, why = "army", "army " .. army .. "<" .. need
 		elseif pct < t_num("Tech_B_MinPct", 0) then v, why = "army", t_fmt("behind %.2f", pct)
 		elseif retreat then v, why = "army", "retreat" end
 	else
@@ -284,7 +303,7 @@ local function t_track(now, T)
 	local res = (cache and cache.resources) or {}
 	local rate = (cache and cache.resources_rate) or {}
 	local w = {}
-	for _, key in ipairs({ "money", "queue", "eta", "other", "restart", "base_attack", "gen_task", "army_first", "no_lock" }) do
+	for _, key in ipairs({ "money", "queue", "eta", "other", "restart", "base_attack", "gen_task", "army_first", "no_lock", "not_planned" }) do
 		if T.waits[key] then table.insert(w, key .. "=" .. T.waits[key]) end
 	end
 	t_log("stats", "tier", T.level, "t", math.floor(now), T.tag or "-", state, "conf", T.decision or "-", "rule", t_rule(),
@@ -335,6 +354,21 @@ function EliteAI_TechReserve()
 	if pbg and Task_CountActivePBG( s_selfplayer, pbg, true ) > 0 then return 0, 0 end   -- the research is running: paid already
 	return T.cost_req or 0, T.cost_pow or 0
 end
+-- 0.3: the power an upgrade has to leave in the bank for the T2 research (the state of the last t_eval; 0 = nothing): what the
+-- power income cannot bring back by Tech_T2Time - the whole cost from then on, until the research is placed
+function EliteAI_TechPowerFloor()
+	local T = EliteAI_T
+	if not t_on() or type(T) ~= "table" or T.k ~= 1 or t_num("Tech_PowFloor", 1) < 1 then return 0 end
+	local st = T.st and T.st[1]
+	if st and st.started then return 0 end
+	local pbg = t_tier_pbg(1)
+	if pbg and Task_CountActivePBG( s_selfplayer, pbg, true ) > 0 then return 0 end      -- bought by Elite's own demand: running
+	local now = World_GetGameTime()
+	if now >= t_num("Tech_T2Late", 450) + t_num("Tech_PowFloorSecs", 180) then return 0 end   -- something else keeps T2 away: the upgrades do not wait for ever
+	local rate = (cache and cache.resources_rate and cache.resources_rate.power) or 0    -- per minute (cache.ai:156)
+	local left = math.max(0, t_num("Tech_T2Time", 270) - now)
+	return math.max(0, (T.cost_pow or 0) - rate * left / 60)
+end
 if state_analysis and state_analysis.recalculate_budgets and not EliteAI_TechPromoteWrapped then
 	EliteAI_TechPromoteWrapped = true
 	local Elite_recalculate_budgets = state_analysis.recalculate_budgets
@@ -365,9 +399,10 @@ function strategy_tech_purchase.init()
 			table.insert(tiers, pbg and PBG_GetName(pbg) or "nil")
 		end
 		t_log("init", "version", EliteAI_TECH_VERSION, "tiers", table.concat(tiers, " "), "rule", t_rule(),
-			"T2", t_num("Tech_T2Time", 420) .. "/" .. t_num("Tech_T2Early", 240) .. "/" .. t_num("Tech_T2Late", 720),
+			"T2", t_num("Tech_T2Time", 270) .. "/" .. t_num("Tech_T2Early", 210) .. "/" .. t_num("Tech_T2Late", 450),
 			"T3", t_num("Tech_T3Time", 900) .. "/" .. t_num("Tech_T3Early", 660) .. "/" .. t_num("Tech_T3Late", 1320),
-			"min_army", t_num("Tech_MinArmy", 4) .. "/" .. t_num("Tech_MinArmyT3", 6))
+			"min_army", t_num("Tech_MinArmy", 4) .. "/" .. t_num("Tech_MinArmyT3", 6),
+			"plan_only", t_num("Tech_PlanOnly", 1), "pow_floor", t_num("Tech_PowFloor", 1), "b_extra", t_num("Tech_B_ExtraT2", 1) .. "/" .. t_num("Tech_B_ExtraT3", 2))
 	end
 end
 
@@ -539,7 +574,20 @@ function TechTierUpgradeDemand()
 	if t_on() then
 		now = World_GetGameTime()
 		T = t_eval(now)
-		if not (T.want and T.k == cache.tech_tier_level) then T = nil end
+		if not (T.want and T.k == cache.tech_tier_level) then
+			-- 0.3: the plan decides when - before it wants the tier, the research is no candidate of this budget (Elite's demand
+			-- bought T3 four seconds after T2 in s15, with the 300 req a unit had waited for). One line when the bank could pay.
+			if t_num("Tech_PlanOnly", 1) >= 1 and not T.want and T.k == cache.tech_tier_level then
+				local res = cache.resources
+				if res and (res.requisition or 0) >= (T.cost_req or 0) and (res.power or 0) >= (T.cost_pow or 0) then
+					t_wait(now, "not_planned", "bank", math.floor(res.requisition or 0) .. "/" .. math.floor(res.power or 0),
+						"cost", math.floor(T.cost_req or 0) .. "/" .. math.floor(T.cost_pow or 0),
+						"the plan wants it from", T.plan_tt or -1, "(or", T.plan_early or -1, "with the bank and the army, or by float)")
+				end
+				return
+			end
+			T = nil
+		end
 	end
 
 	local res_tasks = Task_CountInGroup( s_selfplayer, TGROUP_ResourceAddOns )
@@ -675,6 +723,22 @@ function strategy_tech_purchase.do_purchase( availableResources )
 	MilitaryStructureDemand()
 	UpgradeDemand()
 	TechTierUpgradeDemand()
+
+	-- EliteAI 0.3 (Tech_PlanOnly): a tier research the plan does not want now is no candidate, whichever list it came from.
+	-- UpgradeDemand above offers every producible PITEM_Upgrade, the tier researches among them: in s15 tier_3 was this budget's
+	-- choice at T1 all through the T2 research ("T2 wait other ... tier_3", "wait no_lock ... tier_3 300/150") and was
+	-- requested the moment 300/150 lay in the bank - T3 four seconds after T2.
+	if t_on() and t_num("Tech_PlanOnly", 1) >= 1 then
+		local P = EliteAI_T
+		for i = 1, t_tiers() do
+			local tp = t_tier_pbg(i)
+			if tp ~= nil and not (P.want and P.k == i) then
+				for cand, dem in pairs(s_techDemand) do
+					if cand and dem ~= false and dem.demand_type == DEMAND_Upgrade and PBG_IsSame( cand, tp ) then s_techDemand[ cand ] = false end
+				end
+			end
+		end
+	end
 
 	-- rule: make sure to have buildings so we can build more and better units.
 	-- should look at our resource rates, economy, and military to determine what

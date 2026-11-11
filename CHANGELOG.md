@@ -4,6 +4,16 @@ Every version gets an entry here before it reaches `main`. CI then tags `vX.Y.Z`
 version (`X.Y.0`) it also publishes a GitHub Release with the DLLs and the entries since the previous `X.Y.0`.
 The version of the set lives only in `VERSION`; each DLL still writes its own version to its log.
 
+## 0.2.43 — 2026-11-11
+New AI 11 (store newai-11, experiment, off by default, Elite only) = newai-10 + spending fixes
+(main.ai, mechanics.ai, simulation/ai/strategy_unit_purchase.ai, strategy_tech_purchase.ai, append/scar/elite/elite.scar from eliteai b5f0320).
+- Upgrades capped by a share of the req spent on the army (0.15 / 0.20 / 0.30 per tier, halved while the army is small or behind).
+- Dead upgrade requests are no longer re-placed every tick (they held money and the request slot); the log counts real buys only.
+- The director reinforces its own squads at base (SCAR SCMD_ReinforceUnit, mode 6) within the tech reserve and half the req income;
+  a squad down to a third of its models goes home to refill. Switches: Reinf_Dir=0, RetreatModels=0.
+- Tier research only as the tech plan wants it (no early T3 from Elite's upgrade demand); T2 earlier.
+- No pcall around engine calls in main.ai and strategy_unit_purchase.ai: explicit checks and direct calls.
+
 ## 0.2.42 — 2026-11-11
 New AI 10 (store newai-10, experiment, off by default, Elite only) = newai-9 + fixes found by the scene test bench
 (main.ai, mechanics.ai, simulation/ai/strategy_unit_purchase.ai, strategy_tech_purchase.ai, append/scar/elite/elite.scar from eliteai 48765e1).

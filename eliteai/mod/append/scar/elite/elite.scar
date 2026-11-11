@@ -32,6 +32,7 @@ local function variant_show()
 	if not ok then _log("PCALLERR scar_variant", tostring(err)); EliteAI_VariantShows = 0 end
 end
 
+-- main.ai 0.13: 6 = one reinforcement for the squad (no position).
 -- mechanics.ai (combat mechanics of the director) orders: 4 = attack the squad with world id x (0.3: its building when it
 -- sits in one); 5 = capture the strategic
 -- point at x,y,z (the entity is looked up near the position); 100+k = squad ability k at x,y,z; 200+k = squad ability k on
@@ -125,6 +126,18 @@ local function mech_order(sg, sq, m, x, y, z)
 		else
 			EliteAI_MechNoPoint = (EliteAI_MechNoPoint or 0) + 1
 			if EliteAI_MechNoPoint <= 5 then _log("MECH no point at", x, z) end
+		end
+	elseif m == 6 then
+		-- main.ai 0.13: one reinforcement for a squad of the director's army that stands at home (Elite's squad tasks, which ask
+		-- the engine for reinforcements, do not run for it). The command of the player's reinforce button: the engine checks
+		-- the reach of a reinforce point and the money. Both names are checked - without them nothing is called.
+		if Command_Squad and SCMD_ReinforceUnit then
+			Command_Squad(Squad_GetPlayerOwner(sq), sg, SCMD_ReinforceUnit, false)
+			EliteAI_ReinfN = (EliteAI_ReinfN or 0) + 1
+			if EliteAI_ReinfN <= 3 then _log("REINF dir scar order", EliteAI_ReinfN, "models", Squad_Count(sq)) end
+		elseif not EliteAI_ReinfWarned then
+			EliteAI_ReinfWarned = true
+			_log("REINF dir scar: no Command_Squad / SCMD_ReinforceUnit here", type(Command_Squad), type(SCMD_ReinforceUnit))
 		end
 	elseif m >= 100 then
 		local abid = mech_ability(m - 100)
