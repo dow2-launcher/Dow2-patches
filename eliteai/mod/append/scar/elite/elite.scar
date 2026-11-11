@@ -68,6 +68,11 @@ EliteAI_MECH_ABILITIES = {
 	[23] = "ability/pvp/race_tau/pathfinders/tau_slow_grenade",
 	[24] = "ability/pvp/race_grey_knights/operatives/gk_operative_stunbomb",
 	[25] = "ability/pvp/race_tyranid/warrior/tyr_electroshock_grub",
+	-- mechanics.ai 1.1 (Orca fb 538): the hive tyrant's bioplasma (position), the lictor brood's leap (position, a jump), the
+	-- lictor alpha's flesh hook (cast on a squad: mode 200+k)
+	[26] = "ability/pvp/race_tyranid/hive_tyrant/tyr_damage_aoe_bioplasma",
+	[27] = "ability/pvp/race_tyranid/lictor/tyr_jump_target_leap",
+	[28] = "ability/pvp/race_tyranid/lictor_hero/tyr_damage_target_fleshhook",
 }
 EliteAI_MechAbilityIDs = {}
 local function mech_ability(k)
