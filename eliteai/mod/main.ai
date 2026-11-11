@@ -4,7 +4,7 @@
 -- (all | none | normal | <player ids, e.g. 1000>) so one match can pit the new logic against Elite's (A/B).
 -- Every tuning value can be overridden from EliteAI.ini [Lua] without rebuilding (EliteAI.num("Key", default)).
 
-EliteAI = { version = "0.16" }
+EliteAI = { version = "0.17" }
 
 -- 0.9 (10.11): THREE VARIANTS for testers to compare, chosen in the skirmish menu by the computer slot's difficulty:
 -- Easy = "NEW AI A", Normal = "NEW AI B", Hard = "NEW AI C" (EliteAI.dll relabels them); Expert = Elite's AI, untouched.
@@ -229,7 +229,50 @@ local function dist(a, b) return math.sqrt((a.x - b.x) ^ 2 + (a.z - b.z) ^ 2) en
 --    fight - rule 1 - and every order of the mechanics pass).
 -- Retreats, captures and abilities keep their own timers and pass. OrderGate=0 switches the gate off.
 EliteAI.ord, EliteAI.sqpos, EliteAI.idle_for = {}, {}, {}
-EliteAI.ord_st = { sent = 0, skip = 0, alt = 0, cap = 0, held = 0 }
+EliteAI.ord_st = { sent = 0, skip = 0, alt = 0, cap = 0, held = 0, esc = 0 }
+-- 0.17 (TECH_RU.md 16.2; the polygon's scene a, newai-14: "Order 50010 no effect: 3 orders in 18 s ... none until the window
+-- is over last 30:2:dir 33:2:dir 36:4:mech" - the carnifex stood 32 s). The ceiling was checked before the replacement
+-- "the attack-move had no effect -> a plain move": the third order of the series (an attack on a squad) filled the ceiling,
+-- the replacement was never given and the squad waited for the end of the window. Now:
+--  * the replacement comes BEFORE the ceiling, and an attack on a squad is replaced too (a plain move towards that squad:
+--    EliteAI.enpos of mechanics.ai - numbers of the last scan);
+--  * after the replacement had no effect either (the squad still stands quiet where the series began OrderEscSecs after its
+--    last order), or at the ceiling, the squad is not left to wait for the window: the next order becomes ANOTHER order to
+--    ANOTHER spot - a short plain move (OrderStepD) towards the target first, then a step aside (the side by the squad id);
+--    OrderEscMax (2) of these per series, so a series is at most 2 attack-moves + 3 plain moves (the polygon's order_loop is
+--    4 of a kind). Lines "MECH Order <id> no effect after N orders: -> step K ...". OrderEsc=0 = the ceiling waits as 0.16.
+local function ord_quiet(id, r, p)                                            -- it stands quiet where the series began
+	return p ~= nil and r.ax ~= nil and math.sqrt((p.x - r.ax) ^ 2 + (p.z - r.az) ^ 2) <= num("OrderStuckD", 4)
+		and (EliteAI.idle_for[id] or 0) >= num("OrderStuckSecs", 4)
+end
+local function ord_escalate(id, r, p, tx, tz, now, owner)
+	if num("OrderEsc", 1) < 1 or p == nil or tx == nil or tz == nil or not ord_quiet(id, r, p) then return nil end
+	local last = r.t or -1000
+	if r.esc_t and r.esc_t > last then last = r.esc_t end
+	if now - last < num("OrderEscSecs", 6) then return nil end
+	local k = (r.esc or 0) + 1
+	if k > num("OrderEscMax", 2) then return nil end
+	local dx, dz = tx - p.x, tz - p.z
+	local l = math.sqrt(dx * dx + dz * dz)
+	if l < 1 then return nil end
+	dx, dz = dx / l, dz / l
+	local step = num("OrderStepD", 12)
+	local nx, nz, what
+	if k == 1 then
+		if step > l then step = l end
+		nx, nz, what = p.x + dx * step, p.z + dz * step, "a short move towards the target"
+	else
+		local n = math.floor(id + 0.5) + k
+		local side = (n - math.floor(n / 2) * 2 == 0) and 1 or -1               -- the side by the squad id: the same in every run
+		nx, nz, what = p.x - dz * side * step, p.z + dx * side * step, "a step aside"
+	end
+	r.esc, r.esc_t = k, now
+	EliteAI.ord_st.esc = (EliteAI.ord_st.esc or 0) + 1
+	r.hist = (r.hist and (r.hist .. " ") or "") .. string.format("%.0f:1:esc", now)
+	log("MECH", "Order", id, "no effect after", r.n, "orders in", string.format("%.0f s", now - r.at), ": -> step", k, what, string.format("%.0f %.0f", nx, nz), "by", tostring(owner), "last", r.hist or "-")
+	return 1, nx, nz
+end
+-- returns the mode to send (nil = no order) and, when the order was replaced by one to another spot, that spot (x, z)
 function EliteAI_OrderGate(id, mode, x, z, now, owner, urgent)
 	local st = EliteAI.ord_st
 	if id == nil or num("OrderGate", 1) < 1 then st.sent = st.sent + 1; return mode end
@@ -242,6 +285,7 @@ function EliteAI_OrderGate(id, mode, x, z, now, owner, urgent)
 	if not r then r = { t = -1000, n = 0, at = now }; EliteAI.ord[id] = r end
 	if owner == "dir" and not urgent and r.hold and now < r.hold then st.held = st.held + 1; return nil end
 	local hold = (owner == "idle") and (now + num("OrderOwnerHold", 9)) or nil
+	local burst, after = num("OrderBurst", 3), num("OrderStuckAfter", 6)
 	if mode == 4 then                                                       -- attack the squad with id x
 		if r.cls == 4 and r.tid == x and now - r.t < num("OrderAttackSecs", 10) then st.skip = st.skip + 1; return nil end
 		-- 0.16 (TECH_RU.md 15.6; the polygon's scene a, newai-13: a carnifex that drops every order within a second got an
@@ -252,9 +296,24 @@ function EliteAI_OrderGate(id, mode, x, z, now, owner, urgent)
 		local p4 = EliteAI.sqpos[id]
 		if p4 and (EliteAI.idle_for[id] or 0) >= num("OrderStuckSecs", 4) then
 			if r.ax == nil or now - r.at > num("OrderWindow", 30) or math.sqrt((p4.x - r.ax) ^ 2 + (p4.z - r.az) ^ 2) > num("OrderProgressD", 8) then
-				r.ax, r.az, r.at, r.n, r.alt, r.hist = p4.x, p4.z, now, 0, nil, nil
+				r.ax, r.az, r.at, r.n, r.alt, r.hist, r.esc, r.esc_t = p4.x, p4.z, now, 0, nil, nil, nil, nil
 			end
-			if r.n >= num("OrderBurst", 3) then
+			local tp = (type(EliteAI.enpos) == "table") and EliteAI.enpos[x] or nil   -- where that squad was at the last scan ({ x, z })
+			if tp ~= nil and (tp.x == nil or tp.z == nil) then tp = nil end
+			-- 0.17: the replacement before the ceiling - the orders of this series (attack-moves, attacks) had no effect
+			if tp and not r.alt and r.n >= 1 and (r.cls == 2 or r.cls == 4) and ord_quiet(id, r, p4) and now - r.at >= after then
+				r.alt = true
+				st.alt, st.sent = st.alt + 1, st.sent + 1
+				log("MECH", "Order", id, "attack-move had no effect (stands quiet", string.format("%.0f s", EliteAI.idle_for[id] or 0), "): -> move", string.format("to %.0f %.0f", tp.x, tp.z), "towards the squad", x, "by", tostring(owner), "last", r.hist or "-")
+				r.hist = (r.hist and (r.hist .. " ") or "") .. string.format("%.0f:1:%s", now, tostring(owner))
+				r.cls, r.tid, r.x, r.z, r.t, r.n, r.hold = 1, nil, tp.x, tp.z, now, r.n + 1, hold
+				return 1, tp.x, tp.z
+			end
+			if r.alt or r.n >= burst then
+				local m, nx, nz = ord_escalate(id, r, p4, tp and tp.x, tp and tp.z, now, owner)
+				if m then st.sent = st.sent + 1; return m, nx, nz end
+			end
+			if r.n >= burst then
 				st.cap = st.cap + 1
 				if not r.said or now - r.said >= 30 then
 					r.said = now
@@ -270,28 +329,34 @@ function EliteAI_OrderGate(id, mode, x, z, now, owner, urgent)
 		return mode
 	end
 	if x == nil or z == nil then return nil end
-	local p = EliteAI.sqpos[id]                                             -- where the squad is this tick ({ x, z }; nil = unknown)
+	local p = EliteAI.sqpos[id]                                             -- where the squad is this tick ({ x, y, z }; nil = unknown)
 	local pd = num("OrderProgressD", 8)
 	if p and math.sqrt((p.x - x) ^ 2 + (p.z - z) ^ 2) <= num("OrderArriveR", 6) then st.skip = st.skip + 1; return nil end   -- it is there
 	-- the series: where the squad stood when the orders to a spot began; it starts anew once the squad has moved or the window is over
 	local unstuck = false
 	if r.ax == nil or now - r.at > num("OrderWindow", 30) then
-		r.ax, r.az, r.at, r.n, r.alt, r.hist = p and p.x, p and p.z, now, 0, nil, nil
+		r.ax, r.az, r.at, r.n, r.alt, r.hist, r.esc, r.esc_t = p and p.x, p and p.z, now, 0, nil, nil, nil, nil
 	elseif p and math.sqrt((p.x - r.ax) ^ 2 + (p.z - r.az) ^ 2) > pd then
 		unstuck = (r.alt == true)
-		r.ax, r.az, r.at, r.n, r.alt, r.hist = p.x, p.z, now, 0, nil, nil
+		r.ax, r.az, r.at, r.n, r.alt, r.hist, r.esc, r.esc_t = p.x, p.z, now, 0, nil, nil, nil, nil
 	end
 	local same = (r.cls == mode and r.x ~= nil and math.sqrt((r.x - x) ^ 2 + (r.z - z) ^ 2) <= num("OrderSameR", 10))
 	-- no effect: the series began OrderStuckAfter seconds ago with an attack-move, and the squad stands quiet where it began
 	-- (whatever the spots were: the fight the army is called to may move)
 	-- (0.16: the last order of the series may also have been an attack on a squad - see mode 4 above)
-	local stuck = (p ~= nil and r.ax ~= nil and r.n >= 1 and (r.cls == 2 or r.cls == 4) and math.sqrt((p.x - r.ax) ^ 2 + (p.z - r.az) ^ 2) <= num("OrderStuckD", 4)
-		and (EliteAI.idle_for[id] or 0) >= num("OrderStuckSecs", 4) and now - r.at >= num("OrderStuckAfter", 6))
+	local stuck = (r.n >= 1 and (r.cls == 2 or r.cls == 4) and ord_quiet(id, r, p) and now - r.at >= after)
 	local alt = (mode == 2 and stuck and not r.alt)
-	if same and not alt and not unstuck and now - r.t < num("OrderMoveSecs", 12) then st.skip = st.skip + 1; return nil end
 	-- (the ceiling is for marches: a plain move of the mechanics - away from a melee squad, out from under a garrison's
 	-- windows - is never held back by it)
-	if r.n >= num("OrderBurst", 3) and (mode == 2 or owner == "dir" or owner == "idle") then
+	local march = (mode == 2 or owner == "dir" or owner == "idle")
+	-- 0.17: the replacement was tried (or the ceiling is reached) and the squad still stands: another order to another spot
+	if not alt and march and (r.alt or r.n >= burst) then
+		local m, nx, nz = ord_escalate(id, r, p, x, z, now, owner)
+		if m then st.sent = st.sent + 1; return m, nx, nz end
+	end
+	if same and not alt and not unstuck and now - r.t < num("OrderMoveSecs", 12) then st.skip = st.skip + 1; return nil end
+	-- 0.17: the replacement goes before the ceiling (it is the answer to a series that had no effect, not one more march)
+	if not alt and r.n >= burst and march then
 		st.cap = st.cap + 1
 		if not r.said or now - r.said >= 30 then
 			r.said = now
@@ -315,9 +380,10 @@ end
 -- (0.12: no pcall and no engine call here - the id is read in the army scan, the DLL queue only stores five numbers)
 local function order(u, pos, mode, urgent)
 	if not _order or not u or not u.id or not pos then return end
-	local m = EliteAI_OrderGate(u.id, mode, pos.x, pos.z, EliteAI.now or 0, "dir", urgent)
+	local m, nx, nz = EliteAI_OrderGate(u.id, mode, pos.x, pos.z, EliteAI.now or 0, "dir", urgent)
 	if not m then return end
-	_order(u.id, pos.x, pos.y, pos.z, m)
+	if nx ~= nil and nz ~= nil then _order(u.id, nx, (u.pos and u.pos.y) or pos.y, nz, m)   -- 0.17: the book gave another spot
+	else _order(u.id, pos.x, pos.y, pos.z, m) end
 	EliteAI.orders = EliteAI.orders + 1
 end
 -- 0.15: the squad stops where it stands - a plain move to its own spot ends the march order it had (the order book would
@@ -536,7 +602,7 @@ function EliteAI_Director()
 	EliteAI.base_en = base_enemies(hq, now, num("RefillBaseR", 70))             -- 0.16: enemy squads at our base (the quiet trip)
 	-- 0.12: the order book reads the time and the positions of this tick (numbers only)
 	EliteAI.now, EliteAI.sqpos = now, {}
-	for _, u in ipairs(army) do EliteAI.sqpos[u.id] = { x = u.pos.x, z = u.pos.z } end
+	for _, u in ipairs(army) do EliteAI.sqpos[u.id] = { x = u.pos.x, y = u.pos.y, z = u.pos.z } end
 	for id, r in pairs(EliteAI.ord) do if now - r.t > 120 then EliteAI.ord[id] = nil end end   -- squads that are gone (each entry on its own)
 	EliteAI.home_hit = home_hit
 	-- 0.15: the stays of squads that are gone (dead, or taken by Elite's capture task) end; how many of the army are away refilling

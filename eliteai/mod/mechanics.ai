@@ -58,7 +58,7 @@
 --    heavy-weapon teams are the first focus target, get a grenade / a jump / a squad from the side; the purchase scripts
 --    are told to buy the race's answers.
 
-EliteAI_MECH_VERSION = "0.7"
+EliteAI_MECH_VERSION = "0.8"
 
 -- every tunable (EliteAI.ini [Lua] Mech_<Key> overrides); metres and seconds of game time; "strength" = health points
 -- (a squad ~ 300-900, a tank ~ 1500+), vehicles weighted by VehW
@@ -147,6 +147,10 @@ local MP = {
 	AbilClumpR = 12,     -- a clump = enemy squads within this distance of one of them
 	AbilMinClump = 2,    -- Conf_AbilitySave rule 2: damage abilities need a clump of at least this many squads
 	AbilFriendR = 10,    -- no own squad within this distance of the clump position (friendly fire)
+	AbilQuiet = 1,       -- 0.8: 1 = a targeted call-in with no fight and no raid to land in may land next to the army (it is a unit bought
+	                     --      through another channel: the arbiter weighs it against the plan's unit as a call-in that arrives at the HQ); 0 = as 0.7
+	AbilQuietOff = 12,   -- 0.8: ... this far from the army's middle squad, towards our HQ
+	AbilWatchSecs = 60,  -- 0.8: one line per call-in this often: can the engine cast it, its cost and the bank with the red resource, why not
 	-- ArmyRoles
 	Runners = 1,         -- secondary squads that run between points ...
 	Runners2At = 8,      -- ... two of them when the army has at least this many squads
@@ -237,8 +241,17 @@ local MP = {
 	DefHoldD = 15,       -- the army's hold spot: this far outside the zone, towards our HQ
 	DefNearPad = 25,     -- a turret matters while a squad of ours is within its zone + this, or the army's target lies in the zone
 	DefReissue = 6,      -- a squad is ordered out / at the turret at most this often
+	DefRetreat = 1,      -- 0.8: 1 = a squad under fire inside a zone the army stays away from retreats when walking out is too slow (below); 0 = it walks
+	DefWalkD = 4,        -- 0.8: ... it is suppressed (Squad_IsSuppressed, when the engine has it here), or deeper than this inside the zones
+	                     --      (the shortest way out; scene f: a suppressed squad walked 12 m in 11 s),
+	DefRetreatHP = 0.75, -- 0.8: ... or below this health,
+	DefOutSecs = 3,      -- 0.8: ... or still inside this long after it was first seen there (the next tick)
+	DefBeatenHP = 0.5,   -- 0.8: a squad Defence itself sent home above this health was not "beaten back" (the turret's memory does not count it)
 	DefArtR = 110,       -- artillery within this distance shells a turret the army stays away from
 	DefConfHold = 16,    -- assault / avoid holds this long (two switches in 30 s at most)
+	DodgeCfgSecs = 30,   -- 0.8 Dodge: the policy is sent to elite.scar again this often (a lost queue costs half a minute at most)
+	DangerSecs = 60,     -- 0.8 Dodge: a mine / a charge elite.scar told us about closes its spot for this long after it was last seen ...
+	DangerPad = 6,       -- ... the spot's radius + this (points inside are nobody's, nothing is marched at there)
 	DefLogSecs = 20,
 	-- Vehicles (0.7): with the army, not ahead of it; a damaged one out of the fire
 	VehBackHP = 0.4,     -- a vehicle below this health share with an enemy within VehDangerR pulls back behind the army ...
@@ -384,12 +397,15 @@ local _morder = eliteai_order or (string and string.eliteai_order)
 -- true when the order went out
 local function morder(id, x, y, z, mode, owner)                               -- the DLL only stores five numbers: cannot raise
 	if not _morder or not id then return false end
-	local send = mode
+	local send, nx, nz = mode, nil, nil
 	if EliteAI_OrderGate then
-		send = EliteAI_OrderGate(id, mode, x, z, M.now or 0, owner or "mech", true)
+		send, nx, nz = EliteAI_OrderGate(id, mode, x, z, M.now or 0, owner or "mech", true)
 		if not send then return false end
 	end
-	_morder(id, x or 0, y or 0, z or 0, send)
+	if nx ~= nil and nz ~= nil then                                           -- 0.8: the book replaced the order by a plain move to another spot
+		local sp = EliteAI.sqpos and EliteAI.sqpos[id]
+		_morder(id, nx, (sp and sp.y) or 0, nz, send)
+	else _morder(id, x or 0, y or 0, z or 0, send) end
 	M.st.orders = M.st.orders + 1
 	if EliteAI.orders then EliteAI.orders = EliteAI.orders + 1 end
 	local r = M.idle[id]                                                       -- 0.3 Idle: a squad that just got an order is not idle yet
@@ -456,7 +472,11 @@ local function api()
 		-- 0.7 Setup: an enemy squad's blueprint id against the ids of the blueprints we know by name (Squad_GetBlueprintID:
 		-- player-tactics.ai:50; PBG_Get of an sbps path: strategy_unit_purchase.ai:26-50; PBG_GetID: player-tactics.ai:50)
 		bpid = (type(Squad_GetBlueprintID) == "function" and type(PBG_Get) == "function" and type(PBG_GetID) == "function") and EliteAI.num("Mech_SetupApi", 1) >= 1,
+		-- 0.8 Defence: is a squad of ours suppressed (it crawls: walking out from under a turret takes too long). The SCAR side
+		-- of the game calls it with a squad (one argument); the same library as Squad_IsUnderAttack - looked up, never assumed
+		sup = (type(Squad_IsSuppressed) == "function") and EliteAI.num("Mech_SupApi", 1) >= 1,
 	}
+	mlog("api", "Squad_IsSuppressed", type(Squad_IsSuppressed), "use", M.api.sup and 1 or 0)
 	mlog("api", "Squad_IsInHoldEntity", type(Squad_IsInHoldEntity), "use", M.api.hold and 1 or 0, "AISquad_HasFiredWeapon", type(AISquad_HasFiredWeapon),
 		"PBG_CanCapture", type(PBG_CanCapture))
 	mlog("api", "Player_GetEntities", type(Player_GetEntities), "Entity_GetBlueprintName", type(Entity_GetBlueprintName), "defence scan", M.api.ents and "entities" or "at enemy HQs",
@@ -534,6 +554,11 @@ local function scan_enemies(now, cx, cz, army, want_tdist)
 	end
 	if contact then M.last_contact = now end
 	M.en, M.en_prev, M.last_scan = list, seen, now
+	-- 0.8: where every enemy squad was at this scan, by id - the order book of main.ai turns an attack on a squad that had
+	-- no effect into a plain move towards it (numbers only)
+	local ep = {}
+	for _, e in ipairs(list) do ep[e.id] = { x = e.x, z = e.z } end
+	EliteAI.enpos = ep
 	return list
 end
 local function enemy_weight_near(en, x, z, r)
@@ -1162,6 +1187,27 @@ local function ra_clump(en, cx, cz, army, h)
 		end
 	end
 	M.raid = raid
+	-- 0.8 (TECH_RU.md 16.4; s19: tyranids 0 casts - the engine let a targeted ability be cast in 5 ticks of the match, each
+	-- time nobody was fighting: "nowhere to go" = no candidate). The spot next to the army: its squad nearest to the centre,
+	-- AbilQuietOff towards our HQ (not on the squads' heads). Numbers only
+	local q = nil
+	if prm("AbilQuiet") >= 1 then
+		local bu, bd
+		for _, u in ipairs(army) do
+			local d = d2(u.pos.x, u.pos.z, cx, cz)
+			if not bd or d < bd or (d == bd and u.id < bu.id) then bu, bd = u, d end
+		end
+		if bu then
+			local qx, qz = bu.pos.x, bu.pos.z
+			if h then
+				local dx, dz = h.x - qx, h.z - qz
+				local l = math.sqrt(dx * dx + dz * dz)
+				if l > 1 then local k = math.min(prm("AbilQuietOff"), l) / l; qx, qz = qx + dx * k, qz + dz * k end
+			end
+			q = { x = qx, y = bu.pos.y, z = qz, id = bu.id }
+		end
+	end
+	M.quiet = q
 end
 -- has Elite a clump it sees (the question of its own AITacticDemand_Artillery / PositionTargetFilter_EnemyClumpPosition,
 -- player-tactics.ai:131-160)? Asked at most once per tick; only the answer is kept
@@ -1187,7 +1233,8 @@ local function ra_demand(pbg, d)
 	local callin = spawn and (ra_cost(pbg)) > 0                                -- brings squads for req: a unit by another channel
 	if targeted then
 		-- 0.6: nowhere to go = no candidate (nothing is chosen, nothing is locked). A call-in goes to our fight or to a raid only
-		if not (M.clump ~= nil or (callin and (M.raid ~= nil or M.clump_any ~= nil)) or (not callin and ra_elite_target(now))) then
+		-- 0.8: ... or next to the army when nobody fights (M.quiet): a unit bought through another channel
+		if not (M.clump ~= nil or (callin and (M.raid ~= nil or M.clump_any ~= nil or (M.quiet ~= nil and not M.retreat))) or (not callin and ra_elite_target(now))) then
 			M.st.abil_notgt = (M.st.abil_notgt or 0) + 1
 			return 1
 		end
@@ -1276,6 +1323,16 @@ local function ra_unit_hold()
 						if ra_worth(name, cr) >= cr * prm("AbilBargainK") then pass = "bargain"
 						elseif r >= 3 then pass = "fight"
 						elseif ratio and ratio >= prm("AbilFightLo") and (r >= 2 or ratio <= prm("AbilFightHi")) then pass = "fight" end
+					elseif M.quiet and not M.retreat and not (fight and (M.clump or M.clump_any)) then
+						-- 0.8: nobody to land on - it lands next to the army: weighed as a call-in that arrives at the HQ, and where the
+						-- outcome is not clear the arbiter decides (the red resource it takes has no other buyer here; the unit comes
+						-- later): 1 - the unit of the plan first (a bargain aside); 2 - also when the unit waits for the HQ, is far, or
+						-- would be bought now for no less req and power than the call-in ("cheaper": a squad at the army now, the
+						-- unit with the next money); 3 - whenever the engine lets it be cast ("quiet")
+						if ra_worth(name, cr) >= cr * prm("AbilBargainK") then pass = "bargain"
+						elseif r >= 3 then pass = "quiet"
+						elseif r >= 2 and (why == "channel" or ((why == "money" or why == "save") and eta > prm("AbilUnitEta"))) then pass = "unit_far"
+						elseif r >= 2 and why == "ready" and cr <= ur and cp <= up then pass = "cheaper" end
 					end
 				elseif callin then
 					if ra_worth(name, cr) >= cr * prm("AbilBargainK") then pass = "bargain"
@@ -1375,6 +1432,10 @@ function EliteAI_MechAbilityPos(p)
 			mlog("RaceAbilities", "pos", M.raid and ("raid " .. tg.kind) or "clump", fmt("%d squads %.0f at %.0f %.0f", tg.n, tg.w, tg.x, tg.z))
 			return World_Pos(tg.x, tg.y, tg.z)                                 -- player-tactics.ai:188
 		end
+		if M.quiet and not M.retreat then                                     -- 0.8: nobody fights - next to the army
+			mlog("RaceAbilities", "pos", "quiet", fmt("next to the army (squad %d) at %.0f %.0f", M.quiet.id, M.quiet.x, M.quiet.z))
+			return World_Pos(M.quiet.x, M.quiet.y, M.quiet.z)
+		end
 		return p
 	end
 	if M.clump and (not p or p.x == COORD_INVALID) then
@@ -1397,10 +1458,46 @@ end
 -- a call-in is a unit bought through another channel) or nil = the unit goes on as it was. Nothing new is decided here:
 -- the rules are the arbiter's. Among several call-ins that passed: the most worth per req, then by name.
 -- Mech_AbilCallInFirst=0 = off (only the ability budget casts, as 0.6).
+-- 0.8 (TECH_RU.md 16.4): why is no call-in cast? s19, tyranids: not one "demand" line in 13 minutes - the engine did not offer
+-- the abilities (AIPlayer_CanPlayerCastAbility), and the log could not tell why. One line per call-in every AbilWatchSecs:
+-- "RaceAbilities watch <ability> can 0|1 cost R/P/red bank R/P/red avail R/P why ok|red|req|power|engine" (engine = the
+-- money is there: the recharge, a requirement, the population). The red resource is the field "action" of the engine's
+-- resource amounts (util/budget.ai:180) - read when it is a number, "-" otherwise.
+local function ra_watch(avail)
+	local now = World_GetGameTime()
+	if now - (M.ra_wt or -1000) < prm("AbilWatchSecs") then return end
+	M.ra_wt = now
+	local bank = cache and cache.resources
+	local br, bp, ba = bank and bank.requisition, bank and bank.power, bank and bank.action
+	for _, pbg in pairs(s_player_ability_list) do                          -- each entry on its own: the order of pairs() does not matter
+		if pbg then
+			local name = ra_name(pbg)
+			local c = AIAbility_GetCost(s_self_modplayer, pbg)
+			local cr, cp, ca = (c and c.requisition) or 0, (c and c.power) or 0, c and c.action
+			if cr > 0 and has_key(name, SPAWN_KEYS) then
+				local can = (AIPlayer_CanPlayerCastAbility(s_selfplayer, pbg) == true)
+				local why = "ok"
+				if not can then
+					if type(ca) == "number" and type(ba) == "number" and ba < ca then why = "red"
+					elseif type(br) == "number" and br < cr then why = "req"
+					elseif type(bp) == "number" and bp < cp then why = "power"
+					else why = "engine" end
+				end
+				M.st.abil_watch_can = (M.st.abil_watch_can or 0) + (can and 1 or 0)
+				mlog("RaceAbilities", "watch", name, "can", can and 1 or 0,
+					"cost", fmt("%d/%d/%s", cr, cp, type(ca) == "number" and fmt("%d", ca) or "-"),
+					"bank", fmt("%s/%s/%s", type(br) == "number" and fmt("%d", br) or "-", type(bp) == "number" and fmt("%d", bp) or "-", type(ba) == "number" and fmt("%d", ba) or "-"),
+					"avail", fmt("%d/%d", avail.requisition or 0, avail.power or 0), "why", why,
+					"fight", (M.clump or M.clump_any) and 1 or 0, "raid", M.raid and 1 or 0, "quiet", M.quiet and 1 or 0)
+			end
+		end
+	end
+end
 function EliteAI_MechCallInFirst(avail)
 	if not ra_on() or prm("AbilCallInFirst") < 1 or avail == nil then return nil end
 	if type(s_player_ability_list) ~= "table" or type(s_player_ability_demand) ~= "table" then return nil end
 	if type(CalcPlayerAbilityDemand) ~= "function" or type(PlayerAbility_Cast) ~= "function" or s_playerabilities_enabled ~= true then return nil end
+	if prm("AbilWatchSecs") > 0 then ra_watch(avail) end
 	if TASK_PlayerAbility ~= nil and Task_CountActive(s_selfplayer, TASK_PlayerAbility, false) > 0 then return nil end   -- player_abilities.ai:242: one at a time
 	local ar, ap = avail.requisition or 0, avail.power or 0
 	-- is there a call-in the engine lets us cast (player_abilities.ai:62) and this budget can pay? (yes / no over all of them)
@@ -2371,6 +2468,51 @@ function X.tool(u)                                                            --
 	if u.veh or has_key(name, GAR_SIEGE) then return "av" end
 	return nil
 end
+-- 0.8 (TECH_RU.md 16.3; the polygon's scene f, newai-14: 50008 stood in the zones of two turrets, was ordered out along the
+-- line from the first turret, 6 s later along the line from the second, walked 12 m in 11 s - suppressed - and lost 2 of 3
+-- models). The way out is one for all the zones the army stays away from: the point DefOutD outside every one of them that
+-- is nearest to the squad (16 directions, the first "straight away from this turret"; one of the others wins only when it
+-- is at least half a metre shorter). Returns x, z and the length of the way.
+function X.def_exit(px, pz, d0, defs)
+	local pad, nd = prm("DefOutD"), 16
+	local bx, bz = px - d0.x, pz - d0.z
+	local bl = math.sqrt(bx * bx + bz * bz)
+	if bl < 1 then                                                            -- on the turret itself: towards our HQ
+		local hh = home()
+		bx, bz = (hh and hh.x or (px + 1)) - d0.x, (hh and hh.z or pz) - d0.z
+		bl = math.max(math.sqrt(bx * bx + bz * bz), 1)
+	end
+	bx, bz = bx / bl, bz / bl
+	local best_l, best_x, best_z
+	for i = 0, nd - 1 do
+		local k = (i - math.floor(i / 2) * 2 == 1) and ((i + 1) / 2) or (-(i / 2))   -- 0, 1, -1, 2, -2 ... 8
+		local a = k * 2 * math.pi / nd
+		local c, sn = math.cos(a), math.sin(a)
+		local ux, uz = bx * c - bz * sn, bx * sn + bz * c
+		local L = 0
+		for pass = 1, 6 do                                                     -- the ray leaves one zone into the next: until it is out of all
+			local moved = false
+			for _, q in ipairs(defs) do
+				if q.v ~= "assault" then
+					local R = q.r + pad
+					local wx, wz = px + ux * L - q.x, pz + uz * L - q.z
+					if wx * wx + wz * wz < R * R - 0.01 then
+						local ox, oz = px - q.x, pz - q.z
+						local b = ox * ux + oz * uz
+						local disc = b * b - (ox * ox + oz * oz - R * R)
+						if disc > 0 then
+							local t = -b + math.sqrt(disc)
+							if t > L then L = t; moved = true end
+						end
+					end
+				end
+			end
+			if not moved then break end
+		end
+		if best_l == nil or L < best_l - 0.5 then best_l, best_x, best_z = L, px + ux * L, pz + uz * L end
+	end
+	return best_x, best_z, best_l
+end
 function X.def_scan(now, en_players)
 	if M.def_t ~= nil and now - M.def_t < prm("DefScanSecs") then return end
 	M.def_t = now
@@ -2421,6 +2563,7 @@ function X.run_def(state, en, cx, cz, h, taken)
 	for id, key in pairs(M.def_in) do                                         -- each entry on its own: the order of pairs() does not matter
 		local dead = (M.exists ~= nil and M.exists[id] ~= true)
 		local home = (not dead) and EliteAI.retreating ~= nil and EliteAI.retreating[id] ~= nil and now - EliteAI.retreating[id] <= 4
+		if home and M.def_own ~= nil and M.def_own[id] ~= nil and now - M.def_own[id] <= 60 then home = false end   -- 0.8: sent home by Defence itself, not beaten
 		M.def_cnt = M.def_cnt or {}
 		if (dead or home) and now - (M.def_cnt[id] or -1000) >= 60 then        -- (once per squad: it is still inside while it runs home)
 			M.def_cnt[id] = now
@@ -2444,6 +2587,7 @@ function X.run_def(state, en, cx, cz, h, taken)
 	local g = EliteAI.goal
 	local dest = (g and g.x and now - (g.t or -1000) <= prm("GoalSecs")) and g or EliteAI.best_pos
 	local blocks, hold_for = {}, nil
+	local def_seen = {}                                                       -- 0.8: who is inside a zone it has to leave, this tick
 	for _, d in ipairs(defs) do
 		local near = (dest ~= nil and dest.x ~= nil and d2(dest.x, dest.z, d.x, d.z) <= d.r + 5)
 		if not near then
@@ -2488,19 +2632,38 @@ function X.run_def(state, en, cx, cz, h, taken)
 						local du = d2(u.pos.x, u.pos.z, d.x, d.z)
 						local last = M.def_ord[u.id] or -1000
 						if du <= d.r then
-							-- out: along the line from the turret through the squad (a squad on the turret itself: towards our HQ)
-							local dx, dz = u.pos.x - d.x, u.pos.z - d.z
-							if du < 1 and h then dx, dz = h.x - d.x, h.z - d.z; du = math.max(d2(h.x, h.z, d.x, d.z), 1) end
-							if du >= 1 then
-								local k = (d.r + prm("DefOutD")) / du
-								if now - last >= prm("DefReissue") then
-									M.def_ord[u.id] = now
-									morder(u.id, d.x + dx * k, u.pos.y, d.z + dz * k, ORD_MOVE)
-									M.st.def_out = (M.st.def_out or 0) + 1
-									mlog("Defence", d.key, "out", u.id, M.names[u.id] or "?", fmt("d %.0f hp %.2f", du, u.hp))
-								end
-								taken[u.id] = true
+							-- 0.8: out by the shortest way out of all the zones (X.def_exit), at once; a squad under fire that
+							-- cannot walk out quickly retreats (a retreat is fast and cannot be suppressed; a vehicle has none)
+							local ex, ez, L = X.def_exit(u.pos.x, u.pos.z, d, defs)
+							local depth = L - prm("DefOutD")
+							M.def_first, M.def_ret, M.def_own = M.def_first or {}, M.def_ret or {}, M.def_own or {}
+							local first = M.def_first[u.id] or now
+							M.def_first[u.id] = first
+							def_seen[u.id] = true
+							local why = nil
+							local sup = api().sup and u.sq ~= nil and Squad_IsSuppressed(u.sq) == true
+							if prm("DefRetreat") >= 1 and (u.hit or sup) and not u.veh then
+								if sup then why = "suppressed"
+								elseif depth > prm("DefWalkD") then why = "deep"
+								elseif u.hp < prm("DefRetreatHP") then why = "hurt"
+								elseif now - first >= prm("DefOutSecs") then why = "slow" end
 							end
+							if why then
+								if now - (M.def_ret[u.id] or -1000) >= prm("DefReissue") then
+									M.def_ret[u.id] = now
+									morder(u.id, u.pos.x, u.pos.y, u.pos.z, ORD_RETREAT)
+									if EliteAI.retreating then EliteAI.retreating[u.id] = now end
+									if u.hp >= prm("DefBeatenHP") then M.def_own[u.id] = now end
+									M.st.def_retreat = (M.st.def_retreat or 0) + 1
+									mlog("Defence", d.key, "retreat", u.id, M.names[u.id] or "?", fmt("d %.0f hp %.2f", du, u.hp), fmt("the way out %.0f m", L), "why", why)
+								end
+							elseif now - last >= prm("DefReissue") then
+								M.def_ord[u.id] = now
+								morder(u.id, ex, u.pos.y, ez, ORD_MOVE)
+								M.st.def_out = (M.st.def_out or 0) + 1
+								mlog("Defence", d.key, "out", u.id, M.names[u.id] or "?", fmt("d %.0f hp %.2f", du, u.hp), fmt("to %.0f %.0f (%.0f m)", ex, ez, L))
+							end
+							taken[u.id] = true
 						elseif not d.virtual and du <= prm("DefArtR") and X.tool(u) == "art" then
 							if now - last >= prm("DefReissue") * 2 then
 								M.def_ord[u.id] = now
@@ -2535,7 +2698,19 @@ function X.run_def(state, en, cx, cz, h, taken)
 			end
 		end
 	end
+	-- 0.8: the mines / charges elite.scar told us about (EliteAI_ScarNote): their spots are closed like a turret's zone
+	if M.danger then
+		local keys = {}
+		for key in pairs(M.danger) do table.insert(keys, key) end
+		table.sort(keys)
+		for _, key in ipairs(keys) do
+			local g = M.danger[key]
+			if now - g.t > prm("DangerSecs") then M.danger[key] = nil
+			else table.insert(blocks, { x = g.x, z = g.z, r = g.r + prm("DangerPad"), key = "mine " .. key }) end
+		end
+	end
 	EliteAI.def_block = blocks
+	if M.def_first then for id in pairs(M.def_first) do if not def_seen[id] then M.def_first[id] = nil end end end   -- it is out: the clock starts anew
 	for _, e in ipairs(en) do if X.blocked(e.x, e.z, 0) then e.nogo = true end end
 	-- the army's destination lies under a turret it stays away from: another goal, or the hold spot outside the zone
 	if hold_for ~= nil then
@@ -2736,12 +2911,71 @@ function X.run_setup(state, en, cx, cz, taken)
 end
 
 --------------------------------------------------------------------------------------------------
+-- 0.8 DODGE (TECH_RU.md 16.1). The reflex itself is elite.scar's (the SCAR side sees a grenade in flight, this state does
+-- not; four times a second there, 3 s here). This side gives the policy and is told:
+--  * the policy, pseudo-order mode 10 (id = our player id): on / off (Mech_Dodge), and what a squad that does something it
+--    would have to drop sits through - where stepping out and staying both cost and the outcome is not clear the arbiter
+--    decides, Conf_DodgeBusy (A / B / C = 1 / 2 / 3; threats are 1 weak, 2 medium, 3 heavy):
+--      1 - a capturing squad sits through a weak one, a melee squad through a medium one (only a heavy one breaks a melee);
+--      2 - both sit through a weak one only (a melee is left for a medium one too);
+--      3 - both sit through a medium one (the capture and the melee come first, a heavy one aside).
+--    A weak grenade never takes a squad off a point (all three). Mech_DodgeHoldCap / Mech_DodgeHoldMelee = 0..3 set them by hand.
+--  * elite.scar tells through the game's AI_DoString (when it is there): EliteAI_ScarNote below, registered in
+--    string.eliteai_in[player id] (the string table is what the DLL's functions reach this state through). Numbers only,
+--    no engine call inside. 1 = a squad steps out of a blast (the order book starts its series anew - it was moved by
+--    somebody else), 2 = a mine / a charge is seen (M.danger: Defence closes the spot, DangerSecs).
+function EliteAI_ScarNote(kind, id, x, z, r, pow, dur)
+	if type(kind) ~= "number" or type(id) ~= "number" then return end
+	local now = M.now or 0
+	M.st.dodge_notes = (M.st.dodge_notes or 0) + 1
+	x, z, r, pow, dur = tonumber(x) or 0, tonumber(z) or 0, tonumber(r) or 0, tonumber(pow) or 0, tonumber(dur) or 0
+	if kind == 1 then
+		M.dodge = M.dodge or {}
+		M.dodge[id] = { t = now, dur = dur }
+		M.st.dodge = (M.st.dodge or 0) + 1
+		if type(EliteAI.ord) == "table" then EliteAI.ord[id] = nil end
+		if M.st.dodge <= 10 then mlog("Dodge", "note", id, "steps out of a blast", fmt("at %.0f %.0f r %.0f pow %.0f for %.1f s", x, z, r, pow, dur)) end
+	elseif kind == 2 then
+		M.danger = M.danger or {}
+		local key = fmt("%.0f/%.0f", x, z)
+		if M.danger[key] == nil then
+			M.st.dodge_mines = (M.st.dodge_mines or 0) + 1
+			mlog("Dodge", "note", "a mine at", key, fmt("r %.0f pow %.0f", r, pow), "- its spot is closed for", prm("DangerSecs"), "s")
+		end
+		M.danger[key] = { x = x, z = z, r = r, t = now }
+	end
+end
+function X.dodge_cfg(now, on)
+	if not _morder or s_selfplayerid == nil then return end
+	if not M.said.note then                                                   -- where elite.scar finds us
+		M.said.note = true
+		if type(string) == "table" then
+			local t = string.eliteai_in
+			if type(t) ~= "table" then t = {}; string.eliteai_in = t end
+			t[s_selfplayerid] = EliteAI_ScarNote
+		end
+	end
+	local r = rule("DodgeBusy")
+	local hc, hm = (r == 3) and 2 or 1, (r == 2) and 1 or 2
+	local v = EliteAI.num("Mech_DodgeHoldCap", -1)
+	if v >= 0 then hc = math.floor(v) end
+	v = EliteAI.num("Mech_DodgeHoldMelee", -1)
+	if v >= 0 then hm = math.floor(v) end
+	local key = (on and 100 or 0) + hc * 10 + hm
+	if M.dodge_key == key and now - (M.dodge_t or -1000) < prm("DodgeCfgSecs") then return end
+	if M.dodge_key ~= key then
+		mlog("Dodge", on and "on" or "off", "rule", r, "a capturing squad sits through", hc, "a melee squad through", hm, "(1 weak 2 medium 3 heavy) -> elite.scar, mode 10")
+	end
+	M.dodge_key, M.dodge_t = key, now
+	_morder(s_selfplayerid, on and 1 or 0, hc, hm, 10)
+end
+
 local function stats(state)
 	if state.now - M.last_stats < prm("StatsSecs") then return end
 	M.last_stats = state.now
 	local alive = {}
 	for _, u in ipairs(state.army) do alive[u.id] = true end
-	for _, t in ipairs({ M.tie, M.repair, M.jumped, M.names, M.cap, M.idle, M.norole, M.gren, M.gar_ord, M.nocap, M.capfail, M.def_ord or {}, M.veh or {}, M.setup_ord or {} }) do   -- forget squads that are gone
+	for _, t in ipairs({ M.tie, M.repair, M.jumped, M.names, M.cap, M.idle, M.norole, M.gren, M.gar_ord, M.nocap, M.capfail, M.def_ord or {}, M.veh or {}, M.setup_ord or {}, M.def_ret or {}, M.def_own or {}, M.dodge or {} }) do   -- forget squads that are gone
 		for id in pairs(t) do if not alive[id] then t[id] = nil end end
 	end
 	for key, c in pairs(M.conf) do                                             -- old decisions of dead squads / points
@@ -2760,10 +2994,11 @@ local function stats(state)
 		"garrisons", s.gar, "assault", s.gar_assault, "hold", s.gar_hold, "bypass", s.gar_bypass, "grenades", s.gren,
 		"garrison", G and (tostring(G.id) .. " " .. tostring(G.v)) or "-")
 	mlog("stats4", "t", math.floor(state.now), "def_avoid", s.def_avoid or 0, "def_assault", s.def_assault or 0, "def_out", s.def_out or 0, "def_siege", s.def_siege or 0,
-		"def_lost", s.def_lost or 0, "turrets", table.getn(M.defs or {}), "veh_back", s.veh_back or 0, "veh_wait", s.veh_wait or 0,
+		"def_lost", s.def_lost or 0, "def_retreat", s.def_retreat or 0, "turrets", table.getn(M.defs or {}), "veh_back", s.veh_back or 0, "veh_wait", s.veh_wait or 0,
 		"setup_gren", s.setup_gren or 0, "setup_jump", s.setup_jump or 0, "setup_flank", s.setup_flank or 0, "enemy_setups", (type(EliteAI.setup) == "table") and EliteAI.setup.n or 0)
+	mlog("stats5", "t", math.floor(state.now), "dodge", s.dodge or 0, "dodge_notes", s.dodge_notes or 0, "dodge_mines", s.dodge_mines or 0, "dodge_rule", rule("DodgeBusy"))
 	local o = EliteAI.ord_st
-	if o then mlog("stats3", "t", math.floor(state.now), "orders_sent", o.sent, "repeat_skipped", o.skip, "to_move", o.alt, "ceiling", o.cap, "director_waited", o.held, "approach", s.gar_appr or 0) end
+	if o then mlog("stats3", "t", math.floor(state.now), "orders_sent", o.sent, "repeat_skipped", o.skip, "to_move", o.alt, "ceiling", o.cap, "director_waited", o.held, "approach", s.gar_appr or 0, "escalated", o.esc or 0) end
 end
 
 -- entry point (see the header); the order inside a tick: retreats (whole army) > Garrison (assault: the whole army) > the
@@ -2773,6 +3008,7 @@ function EliteAI_Mechanics(state)
 	local now = state.now or World_GetGameTime()
 	state.now = now
 	M.now = now
+	X.dodge_cfg(now, mech_on("Dodge"))                                        -- 0.8: the dodge policy for elite.scar (the reflex is there)
 	local on = {}
 	for _, k in ipairs({ "FocusFire", "Repair", "ArmyRetreat", "PreRetreat", "PunishTurn", "MeleeTie", "RaceAbilities", "ArmyRoles", "Idle", "Garrison", "Defence", "Vehicles", "Setup" }) do on[k] = mech_on(k) end
 	if not M.said.on then

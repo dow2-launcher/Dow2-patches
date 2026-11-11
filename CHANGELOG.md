@@ -4,6 +4,16 @@ Every version gets an entry here before it reaches `main`. CI then tags `vX.Y.Z`
 version (`X.Y.0`) it also publishes a GitHub Release with the DLLs and the entries since the previous `X.Y.0`.
 The version of the set lives only in `VERSION`; each DLL still writes its own version to its log.
 
+## 0.2.47 — 2026-11-11
+New AI 15 (store newai-15, experiment, off by default, Elite only) = newai-14 + grenade dodge
+(main.ai, mechanics.ai, simulation/ai/strategy_unit_purchase.ai, strategy_tech_purchase.ai, append/scar/elite/elite.scar from eliteai 6592623).
+- Grenade dodge in elite.scar (4 times a second): a thrown grenade or a fused one on the ground near a New AI squad - the squad steps just out
+  of the radius after a human-like 0.5-1 s and goes back to what it did; vehicles, garrisons, retreating and suppressed squads stay;
+  a weak grenade never pulls a squad off a capture (Conf_DodgeBusy A/B/C for capture and melee). Seen mines are noted. Switch: Mech_Dodge=0.
+- Turrets: one shortest way out of all zones, a squad under fire retreats (suppressed, deep in the zone, below 0.75 health).
+- Order ceiling: a standing squad gets another order instead of waiting the window out.
+- Race call-ins without a fight land next to the army; RaceAbilities watch line logs why a call-in is not available.
+
 ## 0.2.46 — 2026-11-11
 New AI 14 (store newai-14, experiment, off by default, Elite only) = newai-13 + base defences, vehicles, set-up teams
 (main.ai, mechanics.ai, simulation/ai/strategy_unit_purchase.ai, strategy_tech_purchase.ai, append/scar/elite/elite.scar from eliteai 6caf4bc).
