@@ -1,0 +1,1 @@
+- Elite maps (test, vanilla Retribution only) is back: Elite's maps can no longer be picked in a public room, so nobody walks into one by chance. Private games only with friends who have it on too.
