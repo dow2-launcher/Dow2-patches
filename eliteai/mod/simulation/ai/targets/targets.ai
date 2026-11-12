@@ -326,6 +326,11 @@ function Target_CalcCapturePriority(capturePoint, vp_mult)
 		local power_diff = math.max(0, cache.all_power_resource_pts_total - cache.total_power_pts_owned) + 1
 	
 		typeScore = typeScore + ((targetChoice_powerPoint + (power_rate / 5)) * power_diff)		
+		-- EliteAI step 6 (strategy_unit_purchase.ai EliteAI_GenSiteWanted; VANILLA_BASE_RU.md 18): the generator plan is behind and no
+		-- power point of ours has a place for one - the power points first (x Energy_GenSiteMult); nil / false = vanilla's own
+		if EliteAI_GenSiteWanted and EliteAI_GenSiteWanted() then
+			typeScore = typeScore * ((EliteAI and EliteAI.num and EliteAI.num("Energy_GenSiteMult", 3)) or 3)
+		end
 	elseif capturePointType == CPT_RequisitionPoint then
 		local req_diff = math.max(0, cache.all_requisition_resource_pts_total - cache.total_requisition_pts_owned) + 1
 		

@@ -4,7 +4,45 @@
 -- (all | none | normal | <player ids, e.g. 1000>) so one match can pit the new logic against Elite's (A/B).
 -- Every tuning value can be overridden from EliteAI.ini [Lua] without rebuilding (EliteAI.num("Key", default)).
 
-EliteAI = { version = "0.23" }
+EliteAI = { version = "0.27" }
+-- 0.27 (12.11, step 8 of the vanilla base; VANILLA_BASE_RU.md 21.4 p.3 / 21.6 p.3): A HURT WALKER FAR FROM HOME GOES TO THE REAR FIRST.
+-- s7: 11 of 16 walkers lost (orks + IG), 7 of them "walker 0" (they stayed with the army, 0.26) - most in the phase m_retreat,
+-- 200-300 m from the HQ: a dreadnought / sentinel walks slower than the retreating infantry and what chases it, and it was the
+-- last of the column. Now a walker that stays with the army (farther than WalkerHomeR) below its threshold (WalkerHP 0.5 for the
+-- /vehicles/ folder) is no squad of the army's attack any more: it is led to the REAR of the army - WalkerRearD (40 m) from the
+-- army's centre towards our HQ, where no enemy is near and the Repair mechanic can reach it (it repairs only out of the fire) -
+-- and it waits there; hit at the rear it goes on home; when the army retreats (mechanics.ai M.retreat) it goes home at once,
+-- ahead of the others. "MECH Walker <id> <unit> hp H -> the rear|home ..." (once per 30 s), "walk_rear" in the T line, "rear 0|1"
+-- in the LOST line. Repaired above its threshold it is the army's again. WalkerRear=0 = as 0.26.
+-- 0.26 (12.11, step 7 of the vanilla base; VANILLA_BASE_RU.md 19 / 20): A WALKER FAR FROM HOME STAYS WITH THE ARMY. s6: all 4 walkers lost
+-- (+1 in s6_tyr_ig) died on the way home, 92-254 m from the HQ, led there at 0.43-0.50 - a dreadnought walks slower than what
+-- chases it, alone. Now a walker is led home only within WalkerHomeR (120 m) of the HQ; farther it stays in the army (no order
+-- of its own: it goes back with the army's retreat - mechanics.ai leads it home then - and the Repair mechanic comes to it
+-- in the field) - "MECH Walker <id> <unit> hp H stays with the army: home D m". A walk begun goes on. WalkerHomeR=0 = as 0.25.
+-- "walk_far" at the end of the T line.
+-- 0.25 (12.11, step 6 of the vanilla base; VANILLA_BASE_RU.md 17 / 18): A WALKER GOES HOME EARLIER. s5: of 4 walkers lost 3 died
+-- "on the way home" - sent at 0.15-0.35 of their health (RetreatHP of the variant: 0.22 for C), the deff dread 6 s before
+-- its death, the sentinels 57 and 175 m from the HQ; all 9 that reached home were repaired. A walker of the /vehicles/
+-- folder (what a repair is for) is led home below WalkerHP (0.5; never above RetreatHP's own value if that is higher) and
+-- is the army's again above WalkerBackHP (0.7, was 0.5). The other squads without a retreat (terminators, carnifex ...:
+-- nobody repairs them) keep RetreatHP. WalkerHP=0 = RetreatHP for all, as 0.24.
+-- 0.24 (12.11, step 5 of the vanilla base; VANILLA_BASE_RU.md 16.2): THE SQUADS THAT CANNOT RETREAT. s4, five mirrors: of 34 deff
+-- dreads, sentinels and tyrant guards bought by both sides 31 were lost - every one with "retreat 1", at 0.01-0.41 of its
+-- health (the median 0.09; the other squads 0.27-0.29), 113-312 m from the HQ, not one near home. They are no vehicles for
+-- the engine (SquadQuery_IsVehicle false: "veh 0"), so the rule of 0.16 for vehicles passed them by, and the game's data say
+-- they have no retreat (sbps: squad_combat_behaviour_ext.can_retreat = false - every blueprint of the /vehicles/ folder and
+-- the terminators, the carnifex, the tyrant guard, the wraithlord, the crisis suits ...: mechanics.ai X.NO_RETREAT). Below
+-- RetreatHP such a squad got the retreat order it cannot execute, was taken out of the army for RetreatSecs (40 s) - no
+-- order at all, it kept the attack-move it had - and, still below RetreatHP, was "sent home" again: until it was dead.
+-- Now (EliteAI_MechWalker of mechanics.ai names them by the blueprint; Mech_Walkers: 1 on the vanilla base, 0 on the Elite base):
+--  * below RetreatHP it gets a PLAIN MOVE to our HQ, repeated through the order book while it is on its way
+--    ("MECH Walker <id> <unit> hp H -> home by a plain move ...");
+--  * at home it waits for a repair (mechanics.ai Repair takes the walkers of the /vehicles/ folder too) - WalkerParkSecs
+--    (90 s) at most; repaired above WalkerBackHP (0.5) it is the army's again ("... repaired"), not repaired it is
+--    RELEASED: it fights on with the army as it is and is not sent home again until it has been repaired ("... released") -
+--    a walker nobody repairs does not stand at the base for the rest of the match;
+--  * a fight at home (it is hit there, or a squad of the army is) takes it into the army at once.
+-- "walk_home" at the end of the T line; "walker 0|1|2" (1 = led home / parked, 2 = released) at the end of the LOST line.
 -- 0.23 (12.11, step 4 of the vanilla base; VANILLA_BASE_RU.md 14.3): WHICH SQUAD WAS LOST, WHERE, IN WHAT STATE. The telemetry counts
 -- the squads that are gone ("squads_lost") and nothing says which: in 7 mirrors of step 3 this side lost 56 squads after 12:00
 -- against 39 of the released AI with FEWER models lost (479 against 506 a series) - and the log cannot tell a manticore left
@@ -264,6 +302,7 @@ EliteAI.director = EliteAI.on and cfg("Director", "1") == "1"
 local ORD_MOVE, ORD_ATTACK, ORD_RETREAT = 1, 2, 3
 local _order = eliteai_order or (string and string.eliteai_order)
 EliteAI.retreating, EliteAI.orders, EliteAI.dir_squads = {}, 0, 0
+EliteAI.walk, EliteAI.walk_home = {}, 0                            -- 0.24: the squads that cannot retreat, led home ({ t0, park, rel } by squad id), how many times
 EliteAI.weak_n = {}                                                -- 0.13: models a squad had when it last went home to be refilled (numbers by squad id)
 EliteAI.refill = {}                                                -- 0.14: squads on a refill stay { t, home_t, prog, n, got } (numbers by squad id)
 EliteAI.refill_ban = {}                                            -- 0.16: no "ordered" stay for this squad until then (its models did not come)
@@ -629,6 +668,66 @@ local function refill_step(u, f, now)
 	return why
 end
 
+-- 0.24: a squad that cannot retreat (see the head of this file) below RetreatHP, or one that was led home and is not repaired
+-- yet. u = its entry of the army list (this tick); true = it is the army's this tick (active), false = it is led home / parked.
+-- Numbers per squad id between ticks (EliteAI.walk); no engine call.
+local function walker_step(u, now, hq, home_hit)
+	local W = EliteAI.walk[u.id]
+	local nm = (type(EliteAI.mech) == "table" and type(EliteAI.mech.names) == "table" and EliteAI.mech.names[u.id]) or "?"
+	if W ~= nil and u.hp >= num("WalkerBackHP", 0.7) then
+		log("MECH", "Walker", u.id, nm, "hp", string.format("%.2f", u.hp), "repaired: back to the army after", math.floor(now - W.t0), "s")
+		EliteAI.walk[u.id], EliteAI.retreating[u.id] = nil, nil
+		return true
+	end
+	if W == nil then
+		W = { t0 = now }
+		EliteAI.walk[u.id] = W
+		EliteAI.walk_home = (EliteAI.walk_home or 0) + 1
+		log("MECH", "Walker", u.id, nm, "hp", string.format("%.2f", u.hp), "-> home by a plain move (it cannot retreat)", "home", math.floor(u.dhome or -1), "m", "hit", u.hit and 1 or 0, "n", EliteAI.walk_home)
+	end
+	if W.rel then EliteAI.retreating[u.id] = nil; return true end
+	if u.home then
+		if W.park == nil then W.park = now end
+		if u.hit or home_hit then EliteAI.retreating[u.id] = nil; return true end   -- a fight at home: it fights
+		if now - W.park >= num("WalkerParkSecs", 90) then
+			W.rel = true
+			EliteAI.walk_rel = (EliteAI.walk_rel or 0) + 1
+			log("MECH", "Walker", u.id, nm, "hp", string.format("%.2f", u.hp), "released: not repaired in", math.floor(now - W.park), "s at home - it fights on as it is", "n", EliteAI.walk_rel)
+			EliteAI.retreating[u.id] = nil
+			return true
+		end
+		EliteAI.retreating[u.id] = now                                            -- parked: mechanics.ai (Repair) reads the army list, not the active one
+		return false
+	end
+	EliteAI.retreating[u.id] = now
+	if hq ~= nil then order(u, hq, ORD_MOVE, true) end                            -- (the order book repeats it when due, as the quiet refill trip)
+	return false
+end
+EliteAI_WalkerStep = walker_step                                                -- the stub run
+-- 0.27: a hurt walker that stays with the army (see the head of this file). rear = { x, y, z, dh (its distance to the HQ), retreat }.
+-- true = it is the army's this tick (active); false = it goes to the rear / home or waits at the rear. No engine call.
+local function walker_rear(u, now, hq, rear)
+	local why, to
+	if rear.retreat then why, to = "home first (the army retreats)", hq
+	elseif (u.dhome or 0) > rear.dh + num("WalkerRearSlack", 15) then why, to = "the rear of the army", rear
+	elseif u.hit then why, to = "home (hit at the rear)", hq
+	end
+	EliteAI.walk_rear_t = EliteAI.walk_rear_t or {}
+	local seen = EliteAI.walk_rear_t[u.id]
+	if seen == nil then EliteAI.walk_rear = (EliteAI.walk_rear or 0) + 1 end
+	if to ~= nil then order(u, to, ORD_MOVE, true) end                          -- (the order book repeats it when due)
+	EliteAI.walk_rear_said = EliteAI.walk_rear_said or {}
+	if now - (EliteAI.walk_rear_said[u.id] or -1000) >= 30 then
+		EliteAI.walk_rear_said[u.id] = now
+		local nm = (type(EliteAI.mech) == "table" and type(EliteAI.mech.names) == "table" and EliteAI.mech.names[u.id]) or "?"
+		log("MECH", "Walker", u.id, nm, "hp", string.format("%.2f", u.hp), "->", why or "waits at the rear", "home", math.floor(u.dhome or -1), "m", "rear", math.floor(rear.dh), "m",
+			"hit", u.hit and 1 or 0, "n", EliteAI.walk_rear)
+	end
+	EliteAI.walk_rear_t[u.id] = now
+	return false
+end
+EliteAI_WalkerRear = walker_rear                                                -- the stub run
+
 function EliteAI_Director()
 	if not EliteAI.director then return end
 	local now = World_GetGameTime()
@@ -761,11 +860,57 @@ function EliteAI_Director()
 	local active = {}
 	local rm, stay = num("RetreatModels", 0.34), (num("Refill", 1) >= 1)
 	local vehs_on = (EliteAI_Mechanics ~= nil and tonumber(cfg("Mech_Vehicles", nil) or 1) >= 1)
+	-- 0.24: the squads that cannot retreat, by their blueprint (mechanics.ai keeps the names; a squad seen for the first time
+	-- this tick has none yet and is not hurt either)
+	local walk_on = (EliteAI_MechWalker ~= nil and num("Mech_Walkers", (EliteAI.base == "vanilla") and 1 or 0) >= 1)
+	local whp = num("WalkerHP", 0.5)                                           -- 0.25
+	local whr = num("WalkerHomeR", 120)                                        -- 0.26
+	-- 0.27: the rear of the army - WalkerRearD from its centre towards our HQ (numbers of this tick)
+	local rear = nil
+	if walk_on and hq ~= nil and num("WalkerRear", 1) >= 1 and table.getn(army) > 0 then
+		local ax, az, an = 0, 0, 0
+		for _, u in ipairs(army) do
+			local rt = EliteAI.walk_rear_t and EliteAI.walk_rear_t[u.id]          -- (not the walkers at the rear: the rear would follow them)
+			if EliteAI.walk[u.id] == nil and not EliteAI.refill[u.id] and not (rt ~= nil and now - rt <= 10) then ax, az, an = ax + u.pos.x, az + u.pos.z, an + 1 end
+		end
+		if an > 0 then
+			ax, az = ax / an, az / an
+			local dx, dz = hq.x - ax, hq.z - az
+			local d = math.sqrt(dx * dx + dz * dz)
+			local k = (d > 1) and math.min(1, num("WalkerRearD", 40) / d) or 0
+			rear = { x = ax + dx * k, y = hq.y or army[1].pos.y, z = az + dz * k, dh = d * (1 - k),
+				retreat = (type(EliteAI.mech) == "table" and EliteAI.mech.retreat ~= nil) }
+		end
+	end
 	for _, u in ipairs(army) do
 		local r = EliteAI.retreating[u.id]
 		local f = EliteAI.refill[u.id]
 		local thin = (rm > 0 and u.full >= 3 and u.n <= u.full * rm)          -- down to a third of its models
-		if f then
+		-- (0.25: a walker of the /vehicles/ folder - the second value - leaves below WalkerHP)
+		local walker, wfar = false, false
+		if walk_on and not u.veh and not f then
+			local wk, wveh = false, false
+			if u.hp < math.max(rhp, whp) or EliteAI.walk[u.id] ~= nil then wk, wveh = EliteAI_MechWalker(u.id) end
+			walker = (wk == true) and (EliteAI.walk[u.id] ~= nil or u.hp < rhp or (wveh == true and u.hp < whp))
+			-- 0.26: not led home from farther than WalkerHomeR - it stays the army's (see the head of this file)
+			if walker and EliteAI.walk[u.id] == nil and whr > 0 and u.dhome ~= nil and u.dhome > whr then
+				walker, wfar = false, true
+				EliteAI.walk_far_t = EliteAI.walk_far_t or {}
+				if now - (EliteAI.walk_far_t[u.id] or -1000) >= 30 then
+					if EliteAI.walk_far_t[u.id] == nil then EliteAI.walk_far = (EliteAI.walk_far or 0) + 1 end
+					EliteAI.walk_far_t[u.id] = now
+					local nm = (type(EliteAI.mech) == "table" and type(EliteAI.mech.names) == "table" and EliteAI.mech.names[u.id]) or "?"
+					log("MECH", "Walker", u.id, nm, "hp", string.format("%.2f", u.hp), "stays with the army: home", math.floor(u.dhome), "m", "over", whr, "hit", u.hit and 1 or 0)
+				end
+			end
+		end
+		if walker then
+			-- 0.24: no retreat order for it - a plain move home, the wait for a repair, the release (walker_step)
+			if walker_step(u, now, hq, home_hit) then table.insert(active, u) end
+		elseif wfar then
+			-- 0.26: far from home - the army's (no retreat order: it has none); 0.27: to the rear of the army, home first in its retreat
+			if rear == nil or walker_rear(u, now, hq, rear) then table.insert(active, u) end
+		elseif f then
 			-- 0.14: it went home to be refilled - it stays there while the models come (refill_step: why it leaves, or nil)
 			if refill_step(u, f, now) then
 				EliteAI.refill[u.id], EliteAI.retreating[u.id] = nil, nil
@@ -900,6 +1045,9 @@ EliteAI.gone, EliteAI.squads_back = {}, 0                           -- 0.23: the
 local function lost_line(id, n)
 	local t = World_GetGameTime() or -1
 	EliteAI.gone[id] = { t = t, n = n }
+	local wk = EliteAI.walk and EliteAI.walk[id]                               -- 0.24: led home / parked (1), released (2); the entry ends here
+	local wflag = (wk ~= nil) and ((wk.rel and 2) or 1) or 0
+	if EliteAI.walk then EliteAI.walk[id] = nil end
 	if num("LostLog", 1) < 1 then return end
 	local m = EliteAI.mech
 	local nm = (type(m) == "table" and type(m.names) == "table" and m.names[id]) or "?"
@@ -911,7 +1059,9 @@ local function lost_line(id, n)
 	end
 	log("LOST", id, nm, "t", math.floor(t), "role", r.role, "models", n, "of", r.full or 0, "hp", string.format("%.2f", r.hp or -1), "hit", r.hit or 0, "veh", r.veh or 0,
 		"at", string.format("%.0f %.0f", r.x or 0, r.z or 0), "home", string.format("%.0f", r.dh or -1), "m", "seen", string.format("%.0f", t - (r.t or t)), "s ago",
-		"phase", EliteAI.phase or "-", "retreat", (EliteAI.retreating and EliteAI.retreating[id]) and 1 or 0, "refill", (EliteAI.refill and EliteAI.refill[id]) and 1 or 0)
+		"phase", EliteAI.phase or "-", "retreat", (EliteAI.retreating and EliteAI.retreating[id]) and 1 or 0, "refill", (EliteAI.refill and EliteAI.refill[id]) and 1 or 0,
+		"rear", (EliteAI.walk_rear_t and EliteAI.walk_rear_t[id] and t - EliteAI.walk_rear_t[id] <= 30) and 1 or 0,   -- 0.27 (before "walker": the tools read it last)
+		"walker", wflag)                                                         -- 0.24
 	EliteAI.last[id] = nil
 end
 function EliteAI_Sample()
@@ -986,7 +1136,8 @@ function EliteAI_Telemetry()
 		"attpct", string.format("%.2f", (state_analysis and state_analysis.military_attackPercentage) or -1),
 		"race", tostring(s_current_race), "popmax", f(c.max_population_personnel), "tier", f(c.tech_tier_level), "gens", f(gens),
 		"req", f(r.requisition), "pow", f(r.power), "reqr", f(rr.requisition), "powr", f(rr.power),
-		"caps", EliteAI.caps_n or -1, "builders", EliteAI.builders or -1, "squads_back", EliteAI.squads_back or 0)
+		"caps", EliteAI.caps_n or -1, "builders", EliteAI.builders or -1, "squads_back", EliteAI.squads_back or 0,
+		"walk_home", EliteAI.walk_home or 0, "walk_rel", EliteAI.walk_rel or 0, "walk_far", EliteAI.walk_far or 0, "walk_rear", EliteAI.walk_rear or 0)   -- 0.24 / 0.26 / 0.27
 end
 
 local Elite_InitializeAI = InitializeAI
