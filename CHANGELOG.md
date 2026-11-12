@@ -21,7 +21,7 @@ Case: mid++ (11.11.2026, Elite 3.2.1, cursor x2) and the owner on 4K: "UI scale"
   Util.dll SystemConfig::GetSetting with DOW2.exe's key 0x013AAFB4, once per start); Scale=<percent> in UIScale.ini: fixed.
   Every form has k = 1.0. Interface layout only - no simulation, sync or replays.
 - Stand 1 (12.11, sess.sh, shots in /var/www/media/dow2_archive/reports/uiscale_1112/): 4K auto 2.0 (Elite and vanilla), 4K 150 /
-  250 = 1.5 / 2.5, 1440p auto 1.333, 800p 75 / 100 / 150 / auto = 0.75 / 1.0 / 1.5 / 0.74,
+  250 = 1.5 / 2.5, 4K auto x slider 150 / 75 = 3.0 / 1.5, 800p auto x slider 200 = 1.48, 1440p auto 1.333, 800p 75 / 100 / 150 / auto = 0.75 / 1.0 / 1.5 / 0.74,
   Enabled=0 = the game's own; Elite started from the main menu (Profiler, InjectedFiles) loads it without trouble; the minimap stays
   inside the screen at every size.
 
