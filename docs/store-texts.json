@@ -687,5 +687,41 @@
       "fr": "Corrige un plantage rare du jeu lors d'une élimination (répliques des unités sur les séries d'éliminations).",
       "de": "Behebt einen seltenen Spielabsturz bei einem Abschuss (Einheitensprüche zu Abschussserien)."
     }
+  },
+  "langswitch": {
+    "category": "experiment",
+    "order": 1050,
+    "name": {
+      "en": "LangSwitch",
+      "ru": "LangSwitch",
+      "es": "LangSwitch",
+      "fr": "LangSwitch",
+      "de": "LangSwitch"
+    },
+    "description": {
+      "en": "Alt+Shift, Ctrl+Shift and Win+Space switch the keyboard language right in the game, e.g. to chat in Russian - no more alt-tab.",
+      "ru": "Alt+Shift, Ctrl+Shift и Win+Пробел переключают язык клавиатуры прямо в игре, например для чата по-русски, - без сворачивания.",
+      "es": "Alt+Shift, Ctrl+Shift y Win+Espacio cambian el idioma del teclado dentro del juego, por ejemplo para el chat, sin salir con Alt+Tab.",
+      "fr": "Alt+Maj, Ctrl+Maj et Win+Espace changent la langue du clavier directement dans le jeu, par exemple pour le chat, sans Alt+Tab.",
+      "de": "Alt+Umschalt, Strg+Umschalt und Win+Leertaste wechseln die Tastatursprache direkt im Spiel, etwa für den Chat - ohne Alt+Tab."
+    }
+  },
+  "nohints": {
+    "category": "experiment",
+    "order": 1060,
+    "name": {
+      "en": "NoHints",
+      "ru": "NoHints",
+      "es": "NoHints",
+      "fr": "NoHints",
+      "de": "NoHints"
+    },
+    "description": {
+      "en": "No beginner hints in matches (\"select a squad\", \"build a generator\", \"capture victory points\"...). Only for you, other players are not affected.",
+      "ru": "Без подсказок для новичков в матче («выделите отряд», «постройте генератор», «захватите точки победы»...). Только у вас, другим игрокам не мешает.",
+      "es": "Sin consejos para principiantes en las partidas («selecciona una escuadra», «construye un generador»...). Solo para ti, no afecta a los demás.",
+      "fr": "Plus de conseils pour débutants en partie (« sélectionnez une escouade », « construisez un générateur »...). Pour vous seul, sans effet sur les autres.",
+      "de": "Keine Anfängertipps im Match („Trupp auswählen“, „Generator bauen“, „Siegpunkte einnehmen“...). Nur bei dir, andere Spieler merken nichts."
+    }
   }
 }

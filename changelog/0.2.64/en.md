@@ -1,0 +1,2 @@
+- New: LangSwitch (experiment, off by default, Elite and vanilla): Alt+Shift, Ctrl+Shift and Win+Space switch the keyboard language right in the game (for the chat), no more alt-tab.
+- New: NoHints (experiment, off by default, Elite and vanilla): no beginner hints in matches ("select a squad", "build a generator"...).

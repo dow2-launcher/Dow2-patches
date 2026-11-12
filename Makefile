@@ -28,6 +28,8 @@ all: $(OUT)/EliteMaps.dll
 all: $(OUT)/OverwatchOnce.dll
 all: $(OUT)/CtrlAttack.dll
 all: $(OUT)/SpeechStreakFix.dll
+all: $(OUT)/LangSwitch.dll
+all: $(OUT)/NoHints.dll
 
 $(OUT):
 	mkdir -p $(OUT)
@@ -159,6 +161,15 @@ $(OUT)/OverwatchOnce.dll: overwatchonce/overwatchonce.c | $(OUT)
 
 # 11.11.2026: the kill-streak speech read 4 bytes past its list for a unit's first kill (crash at 0x00B8FC24); 4 bytes patched
 $(OUT)/SpeechStreakFix.dll: speechstreakfix/speechstreakfix.c | $(OUT)
+	$(CC) $(CFLAGS) -shared -o $@ $< -static-libgcc
+
+# 12.11.2026: Alt+Shift / Ctrl+Shift / Win+Space switch the keyboard language inside the game window (the game's message loop
+# left the text services' messages in the queue); Platform.dll's PeekMessageA import wrapped
+$(OUT)/LangSwitch.dll: langswitch/langswitch.c | $(OUT)
+	$(CC) $(CFLAGS) -shared -o $@ $< -static-libgcc
+
+# 12.11.2026: no beginner hints in matches (skirmish quick tips): Misc_QuickTipsEnabled answers false, 3 bytes
+$(OUT)/NoHints.dll: nohints/nohints.c | $(OUT)
 	$(CC) $(CFLAGS) -shared -o $@ $< -static-libgcc
 
 # 11.11.2026: Ctrl + right-click on the ground = the game's own attack-ground order (core action G) for the squads that can
