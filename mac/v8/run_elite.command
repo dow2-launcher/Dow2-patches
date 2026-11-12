@@ -1,6 +1,6 @@
 #!/bin/bash
 # Dawn of War II: Retribution, native Mac, Elite mod (-modname Elite), with crossplay_fix v8 (joins Windows players' lobbies; v7: Windows math; v8: Windows random floats).
-# Steam must be running and signed in. First run downloads the Elite files (2.7 GB).   ./run_elite.command nomath  - the same without the math part (for comparison).
+# Steam must be running and signed in. Elite itself is installed and kept up to date by the Elite Launcher, not by this patch.   ./run_elite.command nomath  - the same without the math part (for comparison).
 MODE=elite
 SRC="$(cd "$(dirname "$0")" && pwd)"; HOME_DIR="$HOME/dow2mac"
 # always work from ~/dow2mac, wherever the archive was unpacked
@@ -15,13 +15,6 @@ APP=$(find "$GAME" -maxdepth 2 -name "*.app" -type d | head -1)
 [ -n "$APP" ] || { echo "Dawn of War II app not found in $GAME"; read -r; exit 1; }
 EXTRA=()
 if [ "$MODE" = elite ]; then
-  DATA=$(dirname "$(find "$GAME" -maxdepth 4 -iname "DOW2.module" | head -1)")
-  [ -d "$DATA" ] || { echo "game data folder not found"; read -r; exit 1; }
-  if [ ! -f "$DATA/Elite.module" ]; then
-    echo "Downloading Elite files (2.7 GB)..."
-    curl -L --fail -o "$DIR/elite_mac_files.tar" https://rts.fintebtc.de/elite/stage/mac/elite32_mac_files.tar || { echo "download failed"; read -r; exit 1; }
-    tar xf "$DIR/elite_mac_files.tar" -C "$DATA" && rm -f "$DIR/elite_mac_files.tar" && echo "Elite installed into $DATA"
-  fi
   EXTRA=(-modname Elite)
 fi
 echo "game app: $APP   mode: $MODE"

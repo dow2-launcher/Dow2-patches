@@ -15,13 +15,6 @@ APP=$(find "$GAME" -maxdepth 2 -name "*.app" -type d | head -1)
 [ -n "$APP" ] || { echo "Dawn of War II app not found in $GAME"; read -r; exit 1; }
 EXTRA=()
 if [ "$MODE" = elite ]; then
-  DATA=$(dirname "$(find "$GAME" -maxdepth 4 -iname "DOW2.module" | head -1)")
-  [ -d "$DATA" ] || { echo "game data folder not found"; read -r; exit 1; }
-  if [ ! -f "$DATA/Elite.module" ]; then
-    echo "Downloading Elite files (2.7 GB)..."
-    curl -L --fail -o "$DIR/elite_mac_files.tar" https://rts.fintebtc.de/elite/stage/mac/elite32_mac_files.tar || { echo "download failed"; read -r; exit 1; }
-    tar xf "$DIR/elite_mac_files.tar" -C "$DATA" && rm -f "$DIR/elite_mac_files.tar" && echo "Elite installed into $DATA"
-  fi
   EXTRA=(-modname Elite)
 fi
 echo "game app: $APP   mode: $MODE"
