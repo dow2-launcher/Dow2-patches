@@ -39,7 +39,12 @@ start since wrote it.
   3 ms, Playback 100 MB in 79 ms, Platform's Setup and the game's first question (0.2 s) got the new place, LiveReplay / EliteAI
   too, warnings.txt and the match's temp.rec in the new place; second start - kept without a copy; Elite's injector only (9 s) -
   "NOT redirected ... too late", the game as without the add-on; vanilla with the launcher's loader - DocsFix first (0.05 s),
-  redirected. Every run: game files and Documents settings back by md5, the mount undone, the new folder removed.
+  redirected. Final build (the loaders' hold): Elite early winmm and vanilla launcher loader - "the early loader holds the game's
+  first question" (Loader.log: "DocsFix.dll: the game's first folder question held until DocsFix.dll is in"), redirect + match ->
+  temp.rec WRITTEN in the new place; Options > Audio master volume 255 -> 105, Accept, Quit: the game wrote configuration.lua
+  (mastervolume = 105) into the new place on quit, the read-only Documents untouched; the new winmm without DocsFix.dll - the game
+  as before; late load - "NOT redirected ... too late"; writable Documents - "nothing redirected". Every run: game files and
+  Documents settings back by md5, the mount undone, the new folder removed.
 
 ## 0.2.64 — 2026-11-12
 Two new add-ons from tester Orca (12.11.2026), both experiment, off by default, games elite + vanilla; one feature - one DLL.
