@@ -31,6 +31,7 @@ all: $(OUT)/SpeechStreakFix.dll
 all: $(OUT)/DocsFix.dll
 all: $(OUT)/LangSwitch.dll
 all: $(OUT)/NoHints.dll
+all: $(OUT)/UIScale.dll
 
 $(OUT):
 	mkdir -p $(OUT)
@@ -70,6 +71,10 @@ $(OUT)/ShellFix.dll: shellfix/shellfix.c | $(OUT)
 # 07.11.2026: a bigger mouse cursor at high resolutions (the game's own Windows cursor, scaled when it is made; the UI scale stays)
 $(OUT)/CursorScale.dll: cursorscale/cursorscale.c | $(OUT)
 	$(CC) $(CFLAGS) -shared -o $@ $< -lgdi32 -static-libgcc
+
+# 12.11.2026: the in-match interface bigger than its own size (the game caps its UI scale at 1.0: nothing above 100 % at 1440p/4K)
+$(OUT)/UIScale.dll: uiscale/uiscale.c | $(OUT)
+	$(CC) $(CFLAGS) -shared -o $@ $< -static-libgcc
 
 clean:
 	rm -rf $(OUT)
