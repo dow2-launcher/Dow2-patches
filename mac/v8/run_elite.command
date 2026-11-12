@@ -1,6 +1,6 @@
 #!/bin/bash
 # Dawn of War II: Retribution, native Mac, Elite mod (-modname Elite), with crossplay_fix v8 (joins Windows players' lobbies; v7: Windows math; v8: Windows random floats).
-# Steam must be running and signed in. Elite must be installed first (Elite Launcher for macOS).   ./run_elite.command nomath  - the same without the math part (for comparison).
+# Steam must be running and signed in. Elite itself is installed and kept up to date by the Elite Launcher, not by this patch.   ./run_elite.command nomath  - the same without the math part (for comparison).
 MODE=elite
 SRC="$(cd "$(dirname "$0")" && pwd)"; HOME_DIR="$HOME/dow2mac"
 # always work from ~/dow2mac, wherever the archive was unpacked
@@ -15,11 +15,6 @@ APP=$(find "$GAME" -maxdepth 2 -name "*.app" -type d | head -1)
 [ -n "$APP" ] || { echo "Dawn of War II app not found in $GAME"; read -r; exit 1; }
 EXTRA=()
 if [ "$MODE" = elite ]; then
-  DATA=$(dirname "$(find "$GAME" -maxdepth 4 -iname "DOW2.module" | head -1)")
-  [ -d "$DATA" ] || { echo "game data folder not found"; read -r; exit 1; }
-  if [ ! -f "$DATA/Elite.module" ]; then
-    echo "Elite is not installed in $DATA - install it with the Elite Launcher first (https://rts.fintebtc.de/elite/), then run this again."; read -r; exit 1
-  fi
   EXTRA=(-modname Elite)
 fi
 echo "game app: $APP   mode: $MODE"
