@@ -18,9 +18,7 @@ if [ "$MODE" = elite ]; then
   DATA=$(dirname "$(find "$GAME" -maxdepth 4 -iname "DOW2.module" | head -1)")
   [ -d "$DATA" ] || { echo "game data folder not found"; read -r; exit 1; }
   if [ ! -f "$DATA/Elite.module" ]; then
-    echo "Downloading Elite files (2.7 GB)..."
-    curl -L --fail -o "$DIR/elite_mac_files.tar" https://rts.fintebtc.de/elite/stage/mac/elite32_mac_files.tar || { echo "download failed"; read -r; exit 1; }
-    tar xf "$DIR/elite_mac_files.tar" -C "$DATA" && rm -f "$DIR/elite_mac_files.tar" && echo "Elite installed into $DATA"
+    echo "Elite is not installed in $DATA - install it with the Elite Launcher first (https://rts.fintebtc.de/elite/), then run this again."; read -r; exit 1
   fi
   EXTRA=(-modname Elite)
 fi

@@ -1,6 +1,6 @@
 #!/bin/bash
 # Dawn of War II: Retribution, native Mac, Elite mod (-modname Elite), with crossplay_fix v19 (joins Windows players' lobbies; v7: Windows math; v8: Windows random floats; v9: Windows pathfinder heap, terrain height, Lua numbers; v10: Windows rounding of unit turns and the cell line walk; v11: projectiles and entity facings; v12: collision queries and meshes as SimEngine.dll, doCollision, CRC trace; v13: weapons aim / scatter / hit point, range checks, more sums in Windows order; v14: weapon burst / reload counters as Windows; v15: where shells hit the terrain as Windows; v16: melee special attack chance, accuracy power, sync-kill transform as Windows; v17: knockback fly target and durations as Windows; v18: walkable-surface height as SimEngine.dll; v19: weapon target choice among equal priorities as Windows).
-# Steam must be running and signed in. First run downloads the Elite files (2.7 GB).   ./run_elite.command nomath  - the same without the math part (for comparison).
+# Steam must be running and signed in. Elite must be installed first (Elite Launcher for macOS).   ./run_elite.command nomath  - the same without the math part (for comparison).
 MODE=elite
 SRC="$(cd "$(dirname "$0")" && pwd)"; HOME_DIR="$HOME/dow2mac"
 # always work from ~/dow2mac, wherever the archive was unpacked
@@ -18,9 +18,7 @@ if [ "$MODE" = elite ]; then
   DATA=$(dirname "$(find "$GAME" -maxdepth 4 -iname "DOW2.module" | head -1)")
   [ -d "$DATA" ] || { echo "game data folder not found"; read -r; exit 1; }
   if [ ! -f "$DATA/Elite.module" ]; then
-    echo "Downloading Elite files (2.7 GB)..."
-    curl -L --fail -o "$DIR/elite_mac_files.tar" https://rts.fintebtc.de/elite/stage/mac/elite32_mac_files.tar || { echo "download failed"; read -r; exit 1; }
-    tar xf "$DIR/elite_mac_files.tar" -C "$DATA" && rm -f "$DIR/elite_mac_files.tar" && echo "Elite installed into $DATA"
+    echo "Elite is not installed in $DATA - install it with the Elite Launcher first (https://rts.fintebtc.de/elite/), then run this again."; read -r; exit 1
   fi
   EXTRA=(-modname Elite)
 fi
