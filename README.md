@@ -47,6 +47,8 @@ are client-side, and the other players in the match don't need them.
 | **Elite maps** (new, staging, experiment, vanilla only) | Vanilla Retribution: Elite's 1v1-3v3 maps (60 of its 62; the 2 FFA maps are not offered by vanilla) in the map list of skirmish and custom games, read from the player's own Elite installation in the same game folder. EliteMaps 3: in any room, public ones too (EliteMaps.ini BlockPublic=1 keeps them out of public rooms, as EliteMaps 2 did); a player without it crashes joining a room with an Elite map already picked, and with him already in the lobby an Elite-map match does not start (vanilla has no map download) - pick the Elite map once everyone is in. Vanilla maps, the data checksum and the automatch stay vanilla's. | `elitemaps` → `elitemaps-3` (staging) | `elitemaps/` | maps only (no game data) |
 | **Overwatch once** (new, staging, experiment) | Right-click (overwatch) on a unit's build button orders one squad: it is built as soon as it is affordable, then the overwatch mark goes off by itself (no surprise second squad). Elite and vanilla. | `overwatchonce` → `overwatchonce-1` (staging) | `overwatchonce/` | no (overwatch lives in the HUD only; at most one build order less) |
 | **Speech streak fix** (new, staging, experiment) | Fixes a rare crash of the game when a unit gets a kill: the unit speech about kill streaks read past its list for a unit's first kill. Elite and vanilla. | `speechstreakfix` → `speechstreakfix-1` (staging) | `speechstreakfix/` | no (speech only) |
+| **LangSwitch** (new, staging, experiment) | Alt+Shift, Ctrl+Shift and Win+Space switch the keyboard language inside the game window (for the chat), no alt-tab. Elite and vanilla. | `langswitch` → `langswitch-1` (staging) | `langswitch/` | no (window messages only) |
+| **NoHints** (new, staging, experiment) | No beginner hints in matches (select a squad, build a generator, capture victory points, lots of resources, population cap, WAAAGH/faith bar): the skirmish quick tips are not started; the player's own setting is not changed. Elite and vanilla. | `nohints` → `nohints-1` (staging) | `nohints/` | no (local hints only; the data checksum stays) |
 | **Ctrl attack ground** (new, staging, experiment) | Hold Ctrl and LEFT-click the ground: the selected squads that can attack the ground (wraithguard, D-cannon, predators, tankbustas, zoanthropes...) fire at that point - the game's own Attack ground (core action G) without pressing G; Shift queues it. Ctrl + right-click is not touched (Reverse). Ctrl + left click on a unit, or with no squad that can: the game's own click. Elite and vanilla. | `ctrlattack` → `ctrlattack-2` (staging) | `ctrlattack/` | no (the game's own SCMD_Attack order, the same as G + click) |
 | **Observer lag fix (experimental)** | Spectating a live game no longer stutters. | `obsfix_r2` → `obsfix-1` | `obsfix/` | no |
 | **Join a lobby from the launcher (test)** | Experiment by siritos: a Join button on the launcher's Lobbies tab (and elite:// links of the ladder site); the game starts and walks into the room by itself. | `roomjoin` → `roomjoin-4` (staging; live: `roomjoin-3`) | `roomjoin/` | no |
@@ -237,6 +239,30 @@ speechstreakfix/ - **SpeechStreakFix.dll** (SpeechStreakFix 1)
     page (TvangeS 11.11.2026). 4 bytes at 0x00B8FC1C ("je +2; mov ebp,eax" -> "mov ebp,eax; je 0x00B8FC2D"): not found = 0 kills,
     no read. The 13 bytes around it are checked first. Speech only, no sync impact. SpeechStreakFix.ini: Enabled.
     Built with -DSTAND_PROBE (stand only, not shipped): the same logic in a stub that counts known / new killers.
+
+langswitch/ - **LangSwitch.dll** (LangSwitch 1)
+    The game's message loop, Plat::Window::ProcessMessages (Platform.dll 0x1000B7B0), takes messages with PeekMessageA(&msg,
+    <game window>, 0, 0, PM_REMOVE): messages posted to the main thread's OTHER windows (Default IME, the text services' MSCTFIME UI /
+    CicMarshalWnd...) and to the thread itself stay in the queue for good. Windows 8+ switches the input language through the text
+    services of the focused window's thread with such messages (the likely cause; not reproducible under Wine), so Alt+Shift / Ctrl+Shift / Win+Space did nothing in the game;
+    alt-tab worked (the switch happens elsewhere, the new layout is SENT to the game on activation). The window procedures pass
+    WM_INPUTLANGCHANGEREQUEST / WM_INPUTLANGCHANGE to DefWindowProcA (Platform 0x1000B190 -> DOW2.exe 0x0067F7F0 -> Win32InputDevice
+    0x10003210 -> class proc 0x1000B380; Spooge's subclass passes all), and the chat follows the thread's layout by itself
+    (TranslateMessage -> WM_CHAR -> 0x0067F7F0, CP_ACP -> UTF-16 char event).
+    LangSwitch wraps Platform.dll's PeekMessageA import: before the game takes its next message, the others queued before it are taken
+    out and dispatched (at most 64 per call; WM_QUIT and the game's own messages untouched). Fallback: after a clean Alt+Shift /
+    Ctrl+Shift that Windows has as the language / layout hotkey (HKCU\Keyboard Layout\Toggle), if the thread's layout has not
+    changed in FallbackDelay ms, WM_INPUTLANGCHANGEREQUEST(next layout) to the game window, then ActivateKeyboardLayout. The log says
+    which one did it. LangSwitch.ini: Enabled, Pump, Fallback, FallbackDelay (500), Verbose. -DSTAND_PROBE (stand only): a hidden
+    window of the game thread fed from another thread, and layout requests posted to the game window, counted in the log.
+
+nohints/ - **NoHints.dll** (NoHints 1)
+    The hints are simulation/scar/skirmishquicktips.scar (vanilla), started by Skirmish_Start (skirmish.scar, vanilla and Elite):
+    `if Misc_QuickTipsEnabled() then Rule_AddInterval(Skirmish_UpdateQuickTips, 1) end` - HintPoint markers and tutorial event cues
+    for the local player only ("Non-deterministic EVIL! ... shouldn't touch the simulation"). Misc_QuickTipsEnabled = DOW2.exe
+    0x00AFE940 = SystemConfig "ShowQuicktips" (configuration.lua showquicktips; the in-game Options radio), a per-player setting.
+    NoHints writes "xor eax,eax; ret" over its first 3 bytes (26 bytes and the registration at 0x00B023F9 checked first): the tips
+    are never started; the setting and the archives are not touched. NoHints.ini: Enabled.
 
 obsfix/ - **ObsFix.dll** (ObsFix v1)
     When you spectate a live game the client asks "which slot am I in" dozens of times per frame and rebuilds the whole match

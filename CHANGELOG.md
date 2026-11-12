@@ -4,6 +4,41 @@ Every version gets an entry here before it reaches `main`. CI then tags `vX.Y.Z`
 version (`X.Y.0`) it also publishes a GitHub Release with the DLLs and the entries since the previous `X.Y.0`.
 The version of the set lives only in `VERSION`; each DLL still writes its own version to its log.
 
+## 0.2.64 — 2026-11-12
+Two new add-ons from tester Orca (12.11.2026), both experiment, off by default, games elite + vanilla; one feature - one DLL.
+
+LangSwitch (store langswitch-1, order 1050) - Alt+Shift / Ctrl+Shift / Win+Space did not switch the keyboard language in the game window.
+- Cause: the game's message loop, Plat::Window::ProcessMessages (Platform.dll 0x1000B7B0), takes messages with PeekMessageA(&msg,
+  <game window>, 0, 0, PM_REMOVE). Messages posted to the main thread's other windows (Default IME, the text services' hidden
+  windows) and to the thread itself are never taken out nor dispatched (proven on the stand, below); Windows 8+ does the language
+  switch through the text services of the focused thread with such messages (the likely cause - Wine has no such switch to show it). Alt-tab works because the layout is then SENT to the game on activation.
+  The window procedure chain is not the cause: Platform 0x1000B190 -> DOW2.exe 0x0067F7F0 -> Win32InputDevice 0x10003210 -> class
+  proc 0x1000B380 pass WM_INPUTLANGCHANGEREQUEST / WM_INPUTLANGCHANGE to DefWindowProcA (Spooge's subclass passes everything). The
+  chat follows the thread's layout by itself (TranslateMessage -> WM_CHAR -> 0x0067F7F0 -> CP_ACP -> UTF-16 Scaleform char event).
+- LangSwitch.dll: Platform.dll's PeekMessageA import wrapped (ProcessMessages' bytes checked): before the game takes its next
+  message, the ones queued for other windows of the thread / for the thread are taken out and dispatched (max 64 per call; WM_QUIT
+  and the game's own messages and their order untouched). Fallback: a clean Alt+Shift / Ctrl+Shift that Windows has as the
+  language / layout hotkey (HKCU\Keyboard Layout\Toggle) and no layout change in 500 ms -> WM_INPUTLANGCHANGEREQUEST(next
+  layout) to the game window, then ActivateKeyboardLayout; the log says which way it went.
+- Stand 1 (Wine 11.20): probe build (-DSTAND_PROBE) with a hidden window of the game thread fed from another thread every 200 ms:
+  pump off 0 of 300 messages dispatched, 0 of 300 thread messages taken out (= the bug); pump on 599 of 600 / 599 of 600 (the last
+  in flight). Alt+Shift and Ctrl+Shift in the game recognised (menu and match), nothing to switch to under Wine (one layout).
+  Vanilla and Elite, -dev skirmish and normal launch through the main menu (Custom game -> match -> Exit -> post-game): no crash.
+  The real switch and typing Russian in the chat can only be checked on Windows.
+
+NoHints (store nohints-1, order 1060) - the beginner hints of a match ("Select a unit", "Build a generator", victory points, "Spend
+your Resources", population cap, WAAAGH/faith bar).
+- They are simulation/scar/skirmishquicktips.scar, started by Skirmish_Start (skirmish.scar, vanilla and Elite) only when
+  Misc_QuickTipsEnabled() - DOW2.exe 0x00AFE940 = SystemConfig "ShowQuicktips" (configuration.lua showquicktips, the in-game Options
+  radio of ingame_game_options.gfx): a per-player setting, the tips run for the local player only.
+- NoHints.dll: "xor eax,eax; ret" over the first 3 bytes of 0x00AFE940 (its 26 bytes, the registration at 0x00B023F9 and the name
+  checked first). No archive touched (data checksum, Join unchanged), the player's setting not written.
+- Stand 1: SCAR state every 10 s: without NoHints enabled=true, the select-squad hint at 20 s (screenshot: "Select a unit", "Select
+  one of your available units."); with it enabled=false, the tips never initialised, no cues (vanilla and Elite, also a
+  menu-launched Elite match with 10441 requisition: no "Spend your Resources"). Sync: replays crossed both ways (recorded with tips,
+  played with NoHints; recorded with NoHints, played without) - SCAR state of both players every 5 s identical to the live game,
+  23/23 lines, vanilla and Elite.
+
 ## 0.2.63 — 2026-11-12
 New AI 22 (store newai-22, experiment, off by default, Elite only): the new AI moves to the vanilla base ("vanilla + ours", eliteai
 branch vanilla-ours 53cfa69 = be78608 + the default below; EliteAI.dll 0.11 unchanged).
