@@ -4,6 +4,10 @@ Every version gets an entry here before it reaches `main`. CI then tags `vX.Y.Z`
 version (`X.Y.0`) it also publishes a GitHub Release with the DLLs and the entries since the previous `X.Y.0`.
 The version of the set lives only in `VERSION`; each DLL still writes its own version to its log.
 
+## 0.2.69 — 2026-11-12
+New AI 23.1 (newai-23.1): an observer's match with the new AI no longer stops in its first second - elite.scar variant_show called
+Player_GetSquads(Game_GetLocalPlayer()) and an observer has no player of its own (found by the Match speed checks); now it skips.
+
 ## 0.2.68 — 2026-11-12
 Match speed (store matchspeed-1, new, experiment, order 1090, off by default, games elite + vanilla): MatchSpeed.dll, speed x2 / x4
 and a pause for a live match where the player is the only person (AI testers: "посмотреть битву ботов с возможностью увеличить
