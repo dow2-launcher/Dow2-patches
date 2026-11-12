@@ -23,6 +23,7 @@ local function variant_show()
 	EliteAI_VariantShows = EliteAI_VariantShows - 1
 	local ok, err = pcall(function()
 		local lp = Game_GetLocalPlayer()
+		if lp == nil then EliteAI_VariantShows = 0; return end   -- an observer has no player of its own: Player_GetSquads(nil) stops the match
 		local sg = Player_GetSquads(lp)
 		if SGroup_CountSpawned(sg) == 0 then return end
 		local sq = SGroup_GetSpawnedSquadAt(sg, 1)

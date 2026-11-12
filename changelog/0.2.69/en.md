@@ -1,0 +1,1 @@
+- New AI 23.1: a match with the new AI that you watch as an observer no longer stops in its first second.
