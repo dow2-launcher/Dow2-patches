@@ -4,6 +4,48 @@ Every version gets an entry here before it reaches `main`. CI then tags `vX.Y.Z`
 version (`X.Y.0`) it also publishes a GitHub Release with the DLLs and the entries since the previous `X.Y.0`.
 The version of the set lives only in `VERSION`; each DLL still writes its own version to its log.
 
+## 0.2.65 — 2026-11-12
+Documents fix (store docsfix-1, new, experiment, order 1070, off by default, games elite + vanilla) and the early loaders' hold for it.
+
+Case: Malum (12.11.2026) - the volume reset after every start, no replay since 30.08 (EliteAI.log: "no temp.rec of this match ...
+temp.rec 2026-08-30 18:46:41"), the game kept READING Documents\My Games\Dawn of War II - Retribution, our logs in the game folder
+were written. His Logfiles\warnings.txt there is the same in every bundle of 10.-12.11: a vanilla start of 09.11 17:31 - no Elite
+start since wrote it.
+- How the game gets the folder: Platform.dll Plat::File::Setup (0x10002335) SHGetFolderPathA(NULL, CSIDL_PERSONAL, NULL, 0) +
+  "My Games" + "Dawn of War II - Retribution" (CreateDirectoryA each), dbCrash::SetWorkingFolder; kept in Platform's buffer
+  0x10015708 = Plat::File::GetPathUserStorage, which DOW2.exe imports (slot 0x00F87D08) to mount its Logfiles/Screenshots/Settings/
+  Playback/Stats/Cache/Saved Games/Badges aliases once at the start (InitCoreSystems 0x0041453A) and to read Settings/Local.ini.
+- common/docscheck.h (the proof, from the game process, at the start and after every match): the folder in Platform's buffer,
+  Documents (usual / OneDrive / moved, ANSI round trip), attributes of Documents / Settings / Playback, when configuration.lua and
+  temp.rec were written, configuration.lua opened for writing, a test file created + written + closed + deleted in Settings and
+  Playback with GetLastError of the failing step, Controlled folder access (registry: policy, user setting, DOW2.exe allowed?), the
+  exe's signature / integrity level / parent. "docs check (...)" + "DOCSCHECK k=v" / "DOCSEXE" lines; after a match "temp.rec
+  WRITTEN / NOT written". The log summary on rts prints it on one line.
+- DocsFix.dll: when the game process may not write there (or redirected before: DocsFix.txt), the game's Documents becomes
+  %LOCALAPPDATA%\EliteLauncher\Documents (write-tested; 8.3 name when not ANSI-safe), the old folder copied the first time (never
+  overwriting; Logfiles not), Platform's buffer and dbCrash's folder set, SHGetFolderPathA/W(CSIDL_PERSONAL) answer the new place to
+  modules of the game folder (shell32 export table + loaded modules' imports) - EliteAI / MMFind / LiveReplay follow without a
+  change. DOW2.exe's GetPathUserStorage and Platform's SHGetFolderPathA imports wait (max 20 s) for the decision. DocsFix.redirect
+  next to the DLL for the launcher (1.5.9: hotkeys, UI scale, "Send logs"). Nothing changes when Documents is writable; no system
+  setting is touched; untick = back to Documents. DocsFix.ini Mode=auto|always|never.
+- vanilla-loader/winmm_proxy.c (build/early/winmm.dll of Automatch, build/launcher/winmm.dll): DocsFix.dll loaded first; when it is
+  there, DllMain already points DOW2.exe's GetPathUserStorage import at a hold (max 15 s, event Local\dow2_docsfix_hold_<pid>) that
+  is released once DocsFix.dll is loaded - the game cannot build its paths before DocsFix has decided, however late the loader's
+  thread runs. Without DocsFix.dll nothing changes. In Elite the add-on needs this winmm.dll in Automatch (mmfind-0.51, a hand
+  release); loaded later (Elite's injector) it only checks and logs "NOT redirected ... too late".
+- Stand 1 (Wine 11.20, Elite 3.2.1; "may not write" = the game's folder bind-mounted read-only): writable - nothing redirected,
+  temp.rec of a match written; read-only + Mode=never - "Settings FAILED at create, error 2", "configuration.lua open for writing
+  FAILED, error 5", the game writes nothing there (not even warnings.txt); read-only + auto - REDIRECTED, Settings etc. copied in
+  3 ms, Playback 100 MB in 79 ms, Platform's Setup and the game's first question (0.2 s) got the new place, LiveReplay / EliteAI
+  too, warnings.txt and the match's temp.rec in the new place; second start - kept without a copy; Elite's injector only (9 s) -
+  "NOT redirected ... too late", the game as without the add-on; vanilla with the launcher's loader - DocsFix first (0.05 s),
+  redirected. Final build (the loaders' hold): Elite early winmm and vanilla launcher loader - "the early loader holds the game's
+  first question" (Loader.log: "DocsFix.dll: the game's first folder question held until DocsFix.dll is in"), redirect + match ->
+  temp.rec WRITTEN in the new place; Options > Audio master volume 255 -> 105, Accept, Quit: the game wrote configuration.lua
+  (mastervolume = 105) into the new place on quit, the read-only Documents untouched; the new winmm without DocsFix.dll - the game
+  as before; late load - "NOT redirected ... too late"; writable Documents - "nothing redirected". Every run: game files and
+  Documents settings back by md5, the mount undone, the new folder removed.
+
 ## 0.2.64 — 2026-11-12
 Two new add-ons from tester Orca (12.11.2026), both experiment, off by default, games elite + vanilla; one feature - one DLL.
 

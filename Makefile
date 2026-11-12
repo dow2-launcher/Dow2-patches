@@ -28,6 +28,7 @@ all: $(OUT)/EliteMaps.dll
 all: $(OUT)/OverwatchOnce.dll
 all: $(OUT)/CtrlAttack.dll
 all: $(OUT)/SpeechStreakFix.dll
+all: $(OUT)/DocsFix.dll
 all: $(OUT)/LangSwitch.dll
 all: $(OUT)/NoHints.dll
 
@@ -242,3 +243,9 @@ $(OUT)/SoundFix.dll: soundfix/soundfix.c | $(OUT)
 # no frame cap - plus a detailed sound log (SoundBugTest.log / SoundBugTest_events.log). Conflicts with SoundFix.
 $(OUT)/SoundBugTest.dll: soundbugtest/soundbugtest.c | $(OUT)
 	$(CC) $(CFLAGS) -shared -o $@ $< -lole32 -lpsapi -static-libgcc -Wl,--exclude-all-symbols
+
+# 12.11.2026 (experiment): Documents fix - the game's settings and replays to %LOCALAPPDATA%\EliteLauncher\Documents when the game
+# process may not write to Documents\My Games (write test from the game; common/docscheck.h logs the proof at the start and after
+# every match). Loaded first by the early winmm loaders (EARLY list / vanilla loader).
+$(OUT)/DocsFix.dll: docsfix/docsfix.c common/docscheck.h | $(OUT)
+	$(CC) $(CFLAGS) -shared -o $@ $< -lshell32 -ladvapi32 -static-libgcc -Wl,--exclude-all-symbols

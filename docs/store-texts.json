@@ -723,5 +723,23 @@
       "fr": "Plus de conseils pour débutants en partie (« sélectionnez une escouade », « construisez un générateur »...). Pour vous seul, sans effet sur les autres.",
       "de": "Keine Anfängertipps im Match („Trupp auswählen“, „Generator bauen“, „Siegpunkte einnehmen“...). Nur bei dir, andere Spieler merken nichts."
     }
+  },
+  "docsfix": {
+    "category": "experiment",
+    "order": 1070,
+    "name": {
+      "en": "Documents fix",
+      "ru": "Documents fix",
+      "es": "Documents fix",
+      "fr": "Documents fix",
+      "de": "Documents fix"
+    },
+    "description": {
+      "en": "For when the game forgets its settings (volume, graphics) and saves no replays: Windows does not let the game write to Documents\\My Games (for example Controlled folder access). Then the game keeps them in %LOCALAPPDATA%\\EliteLauncher\\Documents instead (moved there the first time). When Documents works, nothing changes. In Elite it needs Automatch on. The check goes with \"Send logs\".",
+      "ru": "Если игра забывает настройки (громкость, графику) и не сохраняет реплеи: Windows не даёт ей писать в Документы\\My Games (например, «Контролируемый доступ к папкам»). Тогда игра хранит их в %LOCALAPPDATA%\\EliteLauncher\\Documents (в первый раз переносятся туда). Если в Документы писать можно, ничего не меняется. В Elite нужна включённая галочка Automatch. Результат проверки уходит с «Отправить логи».",
+      "es": "Para cuando el juego olvida sus ajustes (volumen, gráficos) y no guarda repeticiones: Windows no le deja escribir en Documentos\\My Games (por ejemplo, el acceso controlado a carpetas). Entonces el juego los guarda en %LOCALAPPDATA%\\EliteLauncher\\Documents (se copian allí la primera vez). Si Documentos funciona, no cambia nada. En Elite necesita Automatch activado. La comprobación va con «Enviar registros».",
+      "fr": "Quand le jeu oublie ses réglages (volume, graphismes) et n'enregistre aucun replay : Windows ne le laisse pas écrire dans Documents\\My Games (par exemple l'accès contrôlé aux dossiers). Le jeu les garde alors dans %LOCALAPPDATA%\\EliteLauncher\\Documents (copiés là la première fois). Si Documents fonctionne, rien ne change. Dans Elite, il faut Automatch activé. La vérification part avec « Envoyer les journaux ».",
+      "de": "Wenn das Spiel seine Einstellungen (Lautstärke, Grafik) vergisst und keine Replays speichert: Windows lässt es nicht in Dokumente\\My Games schreiben (z. B. überwachter Ordnerzugriff). Dann legt das Spiel sie in %LOCALAPPDATA%\\EliteLauncher\\Documents ab (beim ersten Mal dorthin kopiert). Wenn Dokumente funktioniert, ändert sich nichts. In Elite muss Automatch an sein. Die Prüfung geht mit „Logs senden“ mit."
+    }
   }
 }
