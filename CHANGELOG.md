@@ -4,6 +4,33 @@ Every version gets an entry here before it reaches `main`. CI then tags `vX.Y.Z`
 version (`X.Y.0`) it also publishes a GitHub Release with the DLLs and the entries since the previous `X.Y.0`.
 The version of the set lives only in `VERSION`; each DLL still writes its own version to its log.
 
+## 0.2.68 — 2026-11-12
+Match speed (store matchspeed-1, new, experiment, order 1090, off by default, games elite + vanilla): MatchSpeed.dll, speed x2 / x4
+and a pause for a live match where the player is the only person (AI testers: "посмотреть битву ботов с возможностью увеличить
+скорость игры x2 и x4"; a pause to look at the map).
+- Speed = sim ticks per second through the sim rate interface ReplaySpeed uses (*(*(0x01335720)+8)+0x68, vtable 0x0108DFAC +0x28 /
+  +0x2C): 10 / 20 / 40, nudged up to +15 % while a small shortfall remains (Elite at 60 fps: 39 -> 40 ticks/s); pause = rate
+  0.0001 (the simulation and the AI stand, camera / minimap / selection work). SimulationController::Update runs at most one tick
+  a frame: x4 needs 40 fps.
+- "Nobody else": live game (settings+0x118 not 0 / 0x800), every GameInfo slot (settings+0x118+0x810, 0xA8 each, +0 type) is the
+  local human 0, a computer 1, the local observer 2 or empty (6 open / 7 closed), and the match session is not connected; checked at
+  the start and every 2 s; otherwise nothing is shown and a rate of ours goes back to 10. Seen on the stand: a private custom game
+  with the host in an observer slot and computers in the team slots starts as game type 4 (the game cuts the session of a match
+  with one person); replays of people's matches: remote humans are type 3 (MS_TEST build, replays of 1v1 and 3v3).
+- Controls: two buttons on the left edge of the minimap frame (the minimap movie, Receive_LoadMovie of the replay panel's own
+  textures hud/playback_panel/large_btn*, pause / play and the 1x / 2x / 4x icons, gold toggled_on when paused / faster), clicks by
+  GetAsyncKeyState + _xmouse/_ymouse with the movie's default mouse callbacks; Ctrl+= / Ctrl+NumPad+, Ctrl+- / Ctrl+NumPad-, Ctrl+P.
+  Hooks: the minimap form's per-frame update (chained with ChatHide / APM / MatchTimer) and the Menu button's (keys without a
+  minimap). No Direct3D, nothing in the simulation.
+- Stand 1 (12.11, 1280x800, DXVK 60 fps cap): Elite 3.2.1 player vs Elite AI: x2 20.0, x4 40.0 ticks/s; with the new AI (newai-23,
+  local slot handed to the AI): x2 20.0, x4 38.9-39.6 (before the nudge); vanilla: x2 20.0, x4 40.0; observer custom game (Elite):
+  clicks on both buttons, all hotkeys, x4 40.0, pause 0.0 ticks/s, the camera moves while paused, the game's own Menu still pauses
+  (its dialog covers the map; an observer's Pause key does nothing). The new AI stands while paused and goes on after it (EliteAI.log
+  silent during the pause, its 30-game-second telemetry 7.7 real s apart at x4). Replays of the sped-up matches: the sim state CRC
+  of every tick (-sync_high + CrcTrace) equals the live match - vanilla 3005 ticks, Elite 3012 ticks (x2, x4, pause, resume, x1).
+  Found on the way (not this add-on): the new AI hangs an observer's match at its first second (elite.scar variant_show:
+  Player_GetSquads(Game_GetLocalPlayer()) with no local player, inside pcall) - also without MatchSpeed.
+
 ## 0.2.67 — 2026-11-12
 UI Scale (store uiscale-1, new, experiment, order 1080, off by default, games elite + vanilla): UIScale.dll, the in-match interface
 bigger than the game allows. No launcher change: the value is the launcher's existing UI scale slider (configuration.lua uiscale).

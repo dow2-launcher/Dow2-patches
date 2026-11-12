@@ -1,0 +1,1 @@
+- New: Match speed: speed x2 / x4 and a pause in a match where you are the only person - against computers, or watching computers fight from an observer slot of a custom game. Two buttons by the minimap, Ctrl+= / Ctrl+- / Ctrl+P. Does nothing when another person is in the match. Experiment, off by default.

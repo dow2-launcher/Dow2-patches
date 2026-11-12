@@ -759,5 +759,23 @@
       "fr": "Agrandit l'interface en partie (minicarte, panneau d'unité, capacités, ressources, portraits) en haute résolution : le jeu ne la rend jamais plus grande que sa taille propre, donc son échelle d'interface ne change rien au-delà de 100 % en 1440p et 4K. Case cochée, la taille suit la hauteur d'écran (1080p 100 %, 1440p 133 %, 4K 200 %) multipliée par le curseur UI scale des Paramètres (en 4K : 75 % = 150, 150 % = 300). Le menu principal et le salon ne changent pas.",
       "de": "Vergrößert die Oberfläche im Match (Minikarte, Einheitenleiste, Fähigkeiten, Ressourcen, Porträts) bei hohen Auflösungen: das Spiel macht sie nie größer als ihre eigene Größe, daher ändert seine UI-Skalierung über 100 % bei 1440p und 4K nichts. Mit Häkchen folgt die Größe der Bildschirmhöhe (1080p 100 %, 1440p 133 %, 4K 200 %) mal dem Regler UI scale in den Einstellungen (bei 4K: 75 % = 150, 150 % = 300). Hauptmenü und Lobby bleiben, wie sie sind."
     }
+  },
+  "matchspeed": {
+    "category": "experiment",
+    "order": 1090,
+    "name": {
+      "en": "Match speed",
+      "ru": "Match speed",
+      "es": "Match speed",
+      "fr": "Match speed",
+      "de": "Match speed"
+    },
+    "description": {
+      "en": "Speed x2 / x4 and a pause for a match where you are the only person: against computers, or watching computers fight from an observer slot. Buttons by the minimap, Ctrl+= / Ctrl+- / Ctrl+P.",
+      "ru": "Скорость x2 / x4 и пауза в матче, где вы единственный человек: против компьютеров или наблюдателем за битвой компьютеров. Кнопки у миникарты, Ctrl+= / Ctrl+- / Ctrl+P.",
+      "es": "Velocidad x2 / x4 y pausa en una partida donde eres la única persona: contra la IA o mirando a la IA como observador. Botones junto al minimapa, Ctrl+= / Ctrl+- / Ctrl+P.",
+      "fr": "Vitesse x2 / x4 et pause dans une partie où vous êtes la seule personne : contre l'IA ou en observateur d'un combat d'IA. Boutons près de la minicarte, Ctrl+= / Ctrl+- / Ctrl+P.",
+      "de": "Tempo x2 / x4 und Pause in einem Spiel, in dem du der einzige Mensch bist: gegen die KI oder als Beobachter eines KI-Kampfs. Knöpfe an der Minikarte, Strg+= / Strg+- / Strg+P."
+    }
   }
 }
