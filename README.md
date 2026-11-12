@@ -365,6 +365,8 @@ frameprobe/ - FrameProbe.dll (off), eliteai/ - EliteAI.dll (store id newai since
     site (mirrors checked first, 2.5 s; EliteAI.ini [Replays] Upload=0 off, Server=host;host); MMFind sends only matches with people.
     newai-22 (0.2.63): eliteai/mod = the generated vanilla base (eliteai branch vanilla-ours, tools/vanilla_dispatch.py): 53 served
     dispatchers in simulation/ai, default.ai with the people's plan + main.ai + mechanics.ai inside; [Lua] NewAI default vanilla+ours.
+    newai-23 (0.2.66): the same layout from vanilla-ours a3a378a (main.ai 0.27, mechanics.ai 1.9): generators and nodes on people's
+    clock, the first T3 unit right after the tier, the dear unit, hurt walkers to the rear / home first.
 
 ## Building
 

@@ -141,7 +141,7 @@ DEMAND_NeverBuild = -99999
 
 -------------------------------------------------------------------------------------------------
 -- EliteAI tech plan (state: numbers, strings and plain tables only)
-EliteAI_TECH_VERSION = "0.9"
+EliteAI_TECH_VERSION = "0.11"
 EliteAI_T = { st = {}, said = {}, conf = {}, waits = {}, last_stats = -1, eval_t = -1, cost_t = -1, level = 1 }
 
 local function t_on() return EliteAI ~= nil and EliteAI.on == true end
@@ -463,6 +463,20 @@ local function t_eval(now)
 	if not reason and t_num("Tech_Lead", 1) >= 1 and army >= t_num("Tech_C_MinArmy", 2) then
 		local rate = (cache and cache.resources_rate) or {}
 		local rr, rp = rate.requisition or 0, rate.power or 0
+		-- 0.10 (step 5 of the vanilla base; VANILLA_BASE_RU.md 15.4 / 16.3): what the bank really gets - the rate x the factor the
+		-- purchase script measures (EliteAI_IncomeK: 1.30 +- 0.05 on the computer slots of the stand in every mode, 1.0 on the
+		-- local slot; 1 until it is measured). With the rate alone a computer slot counted its money 30 % slower than it came
+		-- and wanted the tier that much earlier than the income needed. Tech_LeadIncomeK=0 = the rate as it is (0.9).
+		-- 0.11 (step 6; VANILLA_BASE_RU.md 17 / 18): OFF by default. s5 against the same revision without it (s4_mir_h, s5_ref_en):
+		-- "T3 want" 20 s later by the median on the computer slots (690 against 670 s - the lead itself), the research done
+		-- 36 s later (826 against 790 s; the rest is the time the req and the power take to gather, 9-133 s a player), and
+		-- nothing gained for it. The plan's times were measured with the rate as it is. Tech_LeadIncomeK=1 = 0.10.
+		T.lead_k = nil
+		if t_num("Tech_LeadIncomeK", 0) >= 1 and type(EliteAI_IncomeK) == "function" then
+			local kp, kr = EliteAI_IncomeK()
+			rr, rp = rr * (kr or 1), rp * (kp or 1)
+			T.lead_k = kr or 1
+		end
 		local lmax = (k == 1) and t_num("Tech_T2LeadMax", 70) or t_num("Tech_T3LeadMax", 100)
 		local lead = lmax
 		if rr > 0 then lead = 60 * T.cost_req / rr end
@@ -632,7 +646,8 @@ local function t_track(now, T)
 		"army", (cache and cache.military_count) or -1, "threat", math.floor((cache and cache.threat_at_base) or 0),
 		"cost", math.floor(T.cost_req or 0) .. "/" .. math.floor(T.cost_pow or 0), "switches", T.switches or 0,
 		"waits", table.concat(w, ","), "minor_threat", T.n_minor or 0, "plan", math.floor(T.plan_tt or -1) .. "/" .. math.floor(T.plan_early or -1) .. "/" .. math.floor(T.plan_late or -1),
-		"reason", T.want and (T.want_reason or "-") or "-")
+		"reason", T.want and (T.want_reason or "-") or "-",
+		"lead", math.floor(T.lead or -1), "lead_k", string.format("%.2f", T.lead_k or 1))   -- 0.10 (step 5): the lead and the income factor it was worked out with
 end
 
 -- every 0.5 s (wrapped state_analysis.recalculate_budgets, before the purchases): the tech budget goes first in the purchase
@@ -738,7 +753,8 @@ function strategy_tech_purchase.init()
 			"ignored", tostring(bad2 or "-") .. "/" .. tostring(bad3 or "-"), "lead", t_num("Tech_Lead", 1), "base_real", t_num("Tech_BaseReal", 1),
 			"tech_plan", t_plan(), "window", t_num("Tech_HumanWindow", 1),
 			"min_army", t_num("Tech_MinArmy", 4) .. "/" .. t_num("Tech_MinArmyT3", 6),
-			"plan_only", t_num("Tech_PlanOnly", 1), "pow_floor", t_num("Tech_PowFloor", 1), "b_extra", t_num("Tech_B_ExtraT2", 1) .. "/" .. t_num("Tech_B_ExtraT3", 2))
+			"plan_only", t_num("Tech_PlanOnly", 1), "pow_floor", t_num("Tech_PowFloor", 1), "b_extra", t_num("Tech_B_ExtraT2", 1) .. "/" .. t_num("Tech_B_ExtraT3", 2),
+			"lead_income_k", t_num("Tech_LeadIncomeK", 0))                       -- 0.10 (step 5)
 	end
 end
 
