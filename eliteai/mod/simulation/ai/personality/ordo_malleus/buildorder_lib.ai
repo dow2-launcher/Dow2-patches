@@ -1,0 +1,70 @@
+if EliteAI_VANILLA then
+-- elite-compat: generated from personality/space_marines/buildorder_lib.ai (vanilla has no ordo_malleus)
+import( 'util/lua_consts.ai' )
+
+-- list of buildorders that can be used by the personalities
+
+ordo_malleus_buildorder = {
+
+	-- this build-order isn't optimal, but will add some flavor and randomness, even for Hard/Expert.
+	{
+		name = "Play by my own rules.",
+		list = {
+		}
+	},
+}
+
+s_personality.demand_diversity_bonus_multiplier = 0.8
+
+s_personality.securing_structures = 
+{
+	{pbg = EBP.GK_SECURE, buildstyle = BS_Secure, demand_type = DEMAND_Building},
+	{pbg = EBP.GK_TURRET, buildstyle = BS_Defend, demand_type = DEMAND_Building},
+}
+
+s_personality.resource_structures = 
+{
+	{pbg = EBP.GK_GENERATOR, demand_type = DEMAND_Building,},
+}
+
+s_personality.tech_tier_upgrades = 
+{
+	{pbg = UPG.GK_TIER2,},
+	{pbg = UPG.GK_TIER3,},
+}
+
+else
+import( 'util/lua_consts.ai' )
+
+-- list of buildorders that can be used by the personalities
+
+ordo_malleus_buildorder = {
+
+	-- this build-order isn't optimal, but will add some flavor and randomness, even for Hard/Expert.
+	{
+		name = "Play by my own rules.",
+		list = {
+		}
+	},
+}
+
+s_personality.demand_diversity_bonus_multiplier = 0.8
+
+s_personality.securing_structures = 
+{
+	{pbg = EBP.GK_SECURE, buildstyle = BS_Secure, demand_type = DEMAND_Building},
+	{pbg = EBP.GK_TURRET, buildstyle = BS_Defend, demand_type = DEMAND_Building},
+}
+
+s_personality.resource_structures = 
+{
+	{pbg = EBP.GK_GENERATOR, demand_type = DEMAND_Building,},
+}
+
+s_personality.tech_tier_upgrades = 
+{
+	{pbg = UPG.GK_TIER2,},
+	{pbg = UPG.GK_TIER3,},
+}
+
+end

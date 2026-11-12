@@ -1,0 +1,151 @@
+if EliteAI_VANILLA then
+import('personality/base_standard.ai')
+import('personality/chaos_marines/buildorder_lib.ai')
+
+-- randomly choose a build order from the given list defined in the buildorders lib 
+s_personality.buildorder = RandomlyChooseBuildorder( chaos_marines_buildorder )
+
+s_personality.securing_structures = 
+{
+	{pbg = EBP.CSM_SECURE, buildstyle = BS_Secure, demand_type = DEMAND_Building, limit = 3},
+}
+
+s_personality.resource_structures = 
+{
+	{pbg = EBP.CSM_GENERATOR, demand_type = DEMAND_Building, limit = 4},
+}
+
+s_personality.tech_tier_upgrades = 
+{
+	{pbg = UPG.CSM_TIER2,},
+}
+
+else
+
+-- create global race modifier
+raceFact=1
+
+import('personality/base_standard.ai')
+
+import('personality/chaos_marines/buildorder_lib.ai')
+
+-- randomly choose a build order from the given list defined in the buildorders lib 
+s_personality.buildorder = RandomlyChooseBuildorder( chaos_marines_buildorder )
+
+--kk add a value here we can use in the state_analysis code
+GEN_BUILDING = CSM_GENERATOR
+
+s_personality.securing_structures = 
+{
+	{pbg = EBP.CSM_SECURE, buildstyle = BS_Secure, demand_type = DEMAND_Building, limit = build_max},
+	{pbg = EBP.CSM_TURRET, buildstyle = BS_Defend, demand_type = DEMAND_Building, limit = 1},
+	{pbg = EBP.CSM_REINFORCEPOINT1, buildstyle = BS_Defend, demand_type = DEMAND_Building, limit =2},
+	{pbg = EBP.CSM_REINFORCEPOINT2, buildstyle = BS_Defend, demand_type = DEMAND_Building, limit = 2},
+	{pbg = EBP.CSM_REINFORCEPOINT3, buildstyle = BS_Defend, demand_type = DEMAND_Building, limit = 2},
+}
+
+s_personality.resource_structures = 
+{
+	{pbg = EBP.CSM_GENERATOR, demand_type = DEMAND_Building, limit = build_max + 2},
+}
+
+s_personality.tech_tier_upgrades = 
+{
+	{pbg = UPG.CSM_TIER2,},
+	{pbg = UPG.CSM_TIER3,},
+}
+
+UPG.CSM_CULTIST_AC 		= PBG_Get("upgrade/pvp/race_chaos/troops/csm_cultist_aspiring_champion")
+UPG.CSM_CULTIST_GRENADE 	= PBG_Get("upgrade/pvp/race_chaos/troops/csm_cultist_grenade_launchers")
+UPG.CSM_TAC_ETERNALWAR 	= PBG_Get("upgrade/pvp/race_chaos/troops/csm_chaos_bolter")
+UPG.CSM_TAC_AC 		= PBG_Get("upgrade/pvp/race_chaos/troops/csm_csm_aspiring_champion")
+UPG.CSM_TAC_INFERNO 		= PBG_Get("upgrade/pvp/race_chaos/troops/csm_marines_mark_of_tzeentch")
+UPG.CSM_TAC_KHORNE		= PBG_Get("upgrade/pvp/race_chaos/troops/csm_marines_mark_of_khorne")
+UPG.CSM_HAV_LANCE	 	= PBG_Get("upgrade/pvp/race_chaos/troops/csm_havok_mark_of_tzeentch")
+UPG.CSM_HAV_CANNON	 	= PBG_Get("upgrade/pvp/race_chaos/troops/csm_havok_mark_of_khorne")
+UPG.CSM_NOISE_BLAST	 	= PBG_Get("upgrade/pvp/race_chaos/troops/csm_blastmaster")
+UPG.CSM_DNOUGHT_CLAW	 = PBG_Get("upgrade/pvp/race_chaos/troops/dreadnought_double_claw")
+UPG.CSM_DNOUGHT_MISSILE	 = PBG_Get("upgrade/pvp/race_chaos/troops/csm_dreadnought_missile_launcher")
+
+UPG.CSM_RAP_AC		= PBG_Get("upgrade/pvp/race_chaos/troops/csm_raptor_aspiring_champion")
+UPG.CSM_RAP_MAUL		= PBG_Get("upgrade/pvp/race_chaos/troops/csm_raptor_daemon_maul")
+UPG.CSM_RAP_MELTA		= PBG_Get("upgrade/pvp/race_chaos/troops/csm_raptor_meltaguns")
+
+UPG.CSM_LORD_ICON		= PBG_Get("upgrade/pvp/race_chaos/wargear/acc_chaos_lord_blood_runes")
+UPG.CSM_LORD_VISAGE 		= PBG_Get("upgrade/pvp/race_chaos/wargear/acc_chaos_lord_daemonic_visage")
+UPG.CSM_LORD_HALO 		= PBG_Get("upgrade/pvp/race_chaos/wargear/acc_chaos_lord_iron_halo")
+UPG.CSM_LORD_HARNESS		= PBG_Get("upgrade/pvp/race_chaos/wargear/arm_chaos_lord_enrage_armor")
+UPG.CSM_LORD_HATE		= PBG_Get("upgrade/pvp/race_chaos/wargear/arm_chaos_lord_drain_armor")
+UPG.CSM_LORD_INFERNO		= PBG_Get("upgrade/pvp/race_chaos/wargear/arm_chaos_lord_fireball_armor")
+UPG.CSM_LORD_COMBIFLAMER	= PBG_Get("upgrade/pvp/race_chaos/wargear/wp1_chaos_lord_sword_combie")
+UPG.CSM_LORD_CLAWS		= PBG_Get("upgrade/pvp/race_chaos/wargear/wp_chaos_lord_lightning_claws")
+UPG.CSM_LORD_MAUL		= PBG_Get("upgrade/pvp/race_chaos/wargear/wp_chaos_lord_2handed_maul")
+
+UPG.CSM_SORC_SIGIL 		= PBG_Get("upgrade/pvp/race_chaos/wargear/acc_sorceror_rift")
+UPG.CSM_SORC_ICON 		= PBG_Get("upgrade/pvp/race_chaos/wargear/acc_sorceror_doom")
+UPG.CSM_SORC_SUBJUGATE 	= PBG_Get("upgrade/pvp/race_chaos/wargear/acc_sorceror_mind_control")
+UPG.CSM_SORC_WARP 		= PBG_Get("upgrade/pvp/race_chaos/wargear/arm_sorceror_teleport")
+UPG.CSM_SORC_CHAINS 		= PBG_Get("upgrade/pvp/race_chaos/wargear/arm_sorceror_chains")
+UPG.CSM_SORC_DOME 		= PBG_Get("upgrade/pvp/race_chaos/wargear/arm_sorceror_chains")
+UPG.CSM_SORC_SWORD 		= PBG_Get("upgrade/pvp/race_chaos/wargear/wp_sorceror_sword")
+UPG.CSM_SORC_STAFF 		= PBG_Get("upgrade/pvp/race_chaos/wargear/wp_sorceror_staff")
+
+UPG.CSM_PLAGUEHERO_GRENADE	= PBG_Get("upgrade/pvp/race_chaos/wargear/acc_plaguemarine_blight_grenade")
+UPG.CSM_PLAGUEHERO_HEAL	= PBG_Get("upgrade/pvp/race_chaos/wargear/acc_plaguemarine_speed_aura")
+UPG.CSM_PLAGUEHERO_NURGLE	= PBG_Get("upgrade/pvp/race_chaos/wargear/acc_plaguemarine_heal_aura")
+UPG.CSM_PLAGUEHERO_FETID	= PBG_Get("upgrade/pvp/race_chaos/wargear/arm_plaguemarine_stench_armor")
+UPG.CSM_PLAGUEHERO_PESTIL	= PBG_Get("upgrade/pvp/race_chaos/wargear/arm_plaguemarine_girth")
+UPG.CSM_PLAGUEHERO_BILE	= PBG_Get("upgrade/pvp/race_chaos/wargear/wp_plaguemarine_flamer")
+UPG.CSM_PLAGUEHERO_FIST	= PBG_Get("upgrade/pvp/race_chaos/wargear/wp_plaguemarine_power_fist")
+UPG.CSM_PLAGUEHERO_SWORD	= PBG_Get("upgrade/pvp/race_chaos/wargear/wp_plaguemarine_plague_sword")
+
+-- kk this line creates a nil value so we can use this in the table. This means we can have a tier multiplier but can allow game engine to create demand for an upgrade. Also allows the anti blob or anti vehicle multipliers
+nilvalue= -99
+
+s_personality.essential_upgrades = 	{
+					{  UPG.CSM_CULTIST_AC, 20,1, 2, 2, anti_melee = true, anti_veh = false, anti_HI = false, },
+					{  UPG.CSM_CULTIST_GRENADE, 10,1, 1, 1, anti_melee = false, anti_veh = false, anti_HI = false, },	
+					{ UPG.CSM_TAC_ETERNALWAR , 10,1, 2, 3, anti_melee = false, anti_veh = false, anti_HI = false,},
+					{ UPG.CSM_TAC_AC, 15,1, 1, 1, anti_melee = false, anti_veh = false, anti_HI = false,},
+					{ UPG.CSM_TAC_INFERNO, 5,1, 1, 1, anti_melee = false, anti_veh = true, anti_HI = true,},
+ 					{ UPG.CSM_TAC_KHORNE, 8,1, 1, 0.5, anti_melee = true, anti_veh = false, anti_HI = false,},
+					{ UPG.CSM_HAV_LANCE, 3,1, 1, 1, anti_melee = false, anti_veh = true, anti_HI = false,},
+ 					{ UPG.CSM_HAV_KHORNE, 1,1, 1, 0.5, anti_melee = true, anti_veh = false, anti_HI = true,},
+					{ UPG.CSM_NOISE_BLAST, 5,1, 1, 1, anti_melee = false, anti_veh = false, anti_HI = true,},
+					{ UPG.CSM_DNOUGHT_CLAW, 5,1, 1, 1, anti_melee = true, anti_veh = false, anti_HI = false,},
+					{ UPG.CSM_DNOUGHT_MISSILE, 10,1, 1, 1, anti_melee = false, anti_veh = true, anti_HI = false,},
+
+
+					{ UPG.CSM_RAP_AC, 20,1, 1, 1, anti_melee = false, anti_veh = false, anti_HI = false, },
+					{ UPG.CSM_RAP_MAUL, 5,1, 1, 1, anti_melee = true, anti_veh = false, anti_HI = false, },
+					{ UPG.CSM_RAP_MELTA, 5,1, 1, 1, anti_melee = false, anti_veh = true, anti_HI = false, },
+
+					{ UPG.CSM_LORD_ICON, 5,1, 1, 1, anti_melee = true, anti_veh = false, anti_HI = false, hero_gear = true, },	
+					{ UPG.CSM_LORD_VISAGE, 5,1, 1, 1, anti_melee = false, anti_veh = false, anti_HI = false,hero_gear = true,},
+					{ UPG.CSM_LORD_HALO, 8,1, 1, 1, anti_melee = false, anti_veh = false, anti_HI = false,hero_gear = true,},
+					{ UPG.CSM_LORD_HATE, 5,1,1, 1, anti_melee = false, anti_veh = false, anti_HI = false,hero_gear = true,},
+					{ UPG.CSM_LORD_HARNESS, 5,1, 0.5, 0.5, anti_melee = false, anti_veh = false, anti_HI = false,hero_gear = true,},
+					{ UPG.CSM_LORD_INFERNO, 9,1, 1, 1, anti_melee = true, anti_veh = false, anti_HI = false,hero_gear = true,},
+					{ UPG.CSM_LORD_COMBIFLAMER, 8,1, 0.5, 0.5, anti_melee = true, anti_veh = false, anti_HI = false,hero_gear = true,},
+					{ UPG.CSM_LORD_CLAWS, 8, 1, 1, 2, anti_melee = true, anti_veh = true, anti_HI = false,hero_gear = true,},
+					{ UPG.CSM_LORD_MAUL, 5, 1, 1, 1, anti_melee = true, anti_veh = false, anti_HI = true,},
+
+					{  UPG.CSM_SORC_SIGIL, 5,1, 1, 1, anti_melee = false, anti_veh = false, anti_HI = false, hero_gear = true,},
+					{ UPG.CSM_SORC_DOOM, 6,1, 1, 1, anti_melee = false, anti_veh = false, anti_HI = false, hero_gear = true,},
+					{ UPG.CSM_SORC_SUBJUGATE, 8,1, 1, 1, anti_melee = false, anti_veh = false, anti_HI = false, hero_gear = true,},
+					{ UPG.CSM_SORC_TELEPORT, 5,1, 1, 1, anti_melee = true, anti_veh = false, anti_HI = false, hero_gear = true,},
+					{ UPG.CSM_SORC_CHAINS, 8,1, 1, 1, anti_melee = false, anti_veh = false, anti_HI = false, hero_gear = true,},
+					{ UPG.CSM_SORC_DOME, 8,1, 1, 1, anti_melee = false, anti_veh = false, anti_HI = false, hero_gear = true,},
+					{ UPG.CSM_SORC_SWORD, 5,1, 1, 1, anti_melee = true, anti_veh = false, anti_HI = false, hero_gear = true,},
+					{ UPG.CSM_SORC_SWORD, 8,1, 1, 1, anti_melee = false, anti_veh = false, anti_HI = false, hero_gear = true,},
+
+					{  UPG.CSM_PLAGUEHERO_GRENADE, 8,1, 1, 1, anti_melee = false, anti_veh = false, anti_HI = false, hero_gear = true,},
+					{  UPG.CSM_PLAGUEHERO_HEAL, 8,1, 1, 1, anti_melee = false, anti_veh = false, anti_HI = false, hero_gear = true,},
+					{ UPG.CSM_PLAGUEHERO_NURGLE, 8,1, 1, 1, anti_melee = true, anti_veh = false, anti_HI = true,},
+					{ UPG.CSM_PLAGUEHERO_FETID, 5,1, 1, 0.5, anti_melee = true, anti_veh = false, anti_HI = false, hero_gear = true,},
+					{ UPG.CSM_PLAGUEHERO_PESTIL, 8,1, 1, 1, anti_melee = true, anti_veh = false, anti_HI = false,},
+					{ UPG.CSM_PLAGUEHERO_FIST, 5,1, 1, 1, anti_melee = false, anti_veh = true, anti_HI = true, hero_gear = true,},
+					{ UPG.CSM_PLAGUEHERO_FLAMER, 8,1, 1, 0.5, anti_melee = false, anti_veh = false, anti_HI = false, hero_gear = true,},
+					{ UPG.CSM_PLAGUEHERO_SWORD, 5,1, 1, 1, anti_melee = true, anti_veh = false, anti_HI = true, hero_gear = true,},
+			          	}
+end

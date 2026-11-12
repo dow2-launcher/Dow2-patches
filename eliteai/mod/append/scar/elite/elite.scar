@@ -804,10 +804,12 @@ function EliteAI_ExecuteOrders()
 			if not sq or Squad_Count(sq) == 0 then return end              -- nothing to order (all models dead)
 			SGroup_Clear(sg)
 			SGroup_Add(sg, sq)
-			local pos = World_Pos(tonumber(x), tonumber(y), tonumber(z))
+			-- step 4 of the vanilla base (VANILLA_BASE_RU.md 13.3): the position is built only for the orders that have one (1, 2).
+			-- In 4 and 200+k x is the id of the target squad - World_Pos(50002, 0, 0) wrote "World_Pos has generated a position
+			-- outside the world and was clamped" into SCAR-trace ~800 times a match (harmless: the value was never used)
 			local m = tonumber(mode)
-			if m == 1 then Cmd_MoveToPos(sg, pos)
-			elseif m == 2 then Cmd_AttackMovePos(sg, pos)
+			if m == 1 then Cmd_MoveToPos(sg, World_Pos(tonumber(x), tonumber(y), tonumber(z)))
+			elseif m == 2 then Cmd_AttackMovePos(sg, World_Pos(tonumber(x), tonumber(y), tonumber(z)))
 			elseif m == 3 then Cmd_Retreat(sg)
 			else mech_order(sg, sq, m, x, y, z)                                 -- 4, 5, 100+k, 200+k: mechanics.ai
 			end

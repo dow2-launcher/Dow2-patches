@@ -4,7 +4,33 @@
 -- (all | none | normal | <player ids, e.g. 1000>) so one match can pit the new logic against Elite's (A/B).
 -- Every tuning value can be overridden from EliteAI.ini [Lua] without rebuilding (EliteAI.num("Key", default)).
 
-EliteAI = { version = "0.20" }
+EliteAI = { version = "0.23" }
+-- 0.23 (12.11, step 4 of the vanilla base; VANILLA_BASE_RU.md 14.3): WHICH SQUAD WAS LOST, WHERE, IN WHAT STATE. The telemetry counts
+-- the squads that are gone ("squads_lost") and nothing says which: in 7 mirrors of step 3 this side lost 56 squads after 12:00
+-- against 39 of the released AI with FEWER models lost (479 against 506 a series) - and the log cannot tell a manticore left
+-- in front of the army from a squad in a capture task or a brood that was not sent home. The director now keeps, per squad id,
+-- what it read at its last look (numbers: role army / cap / build, models, health, under fire, a vehicle, the place, the
+-- distance to the HQ), and EliteAI_Sample - the very place that counts the loss - writes one line when the id is gone:
+--   "LOST <id> <sbps> t T role R models N of F hp H hit 0|1 veh 0|1 at X Z home D m seen S s ago phase P retreat 0|1 refill 0|1"
+-- and "BACK <id> ... after S s" when an id that was counted as lost shows up again (a squad out of a transport or a building
+-- is not a loss: "squads_back" in the T line). No engine call is added - the numbers are the ones the scan reads anyway.
+-- Nothing is decided by it; both bases write it. LostLog=0 = no lines.
+-- 0.22 (12.11, step 3 of the vanilla base; VANILLA_BASE_RU.md 11.1): THE CAPTURE TASKS ARE WATCHED. With the director on the only
+-- engine tasks that still move squads are the capture tasks (attack / defend tasks are killed every tick, sniper / immobile
+-- tasks are never asked for) - and a squad in one is in nobody's list: no retreat by its health, no "FightLeave", no look at
+-- the force it walks into; on the vanilla base it did not even shoot back (tactics.ai TacticFilter_ShouldRetaliate, Relic's
+-- health-in-hit-points bug). The director now reads these squads too (the same calls, the same checks as for the army) and
+-- hands them to mechanics.ai (state.caps, X.run_capwatch): hurt under fire or outweighed where it stands -> a retreat order,
+-- as a squad of the army would get. Mech_CapWatch: 1 on the vanilla base, 0 on the Elite base (the released AI is not changed).
+-- AggrMax: the ceiling of Military_SetSquadAggression - vanilla raises it to 1.0 ("allow units to die") at the population
+-- cap with a full bank, which is exactly where the new AI ends up; 0.75 on the vanilla base, 1 (no ceiling) on the Elite base.
+-- 0.21 (11.11, the vanilla base; reports/ai_doctrine/VANILLA_BASE_RU.md section 7): this module also runs on top of the
+-- VANILLA 3.19 scripts. The dispatcher (tools/vanilla_dispatch.py, the head of the served default.ai) decides per player and
+-- leaves EliteAI_MODE = { base = "vanilla" | "elite", ours = true | false, real_diff, diff }; without a dispatcher (the DLL
+-- appends this module to Elite's own default.ai) EliteAI_MODE is nil and everything is as before. EliteAI.base names the base.
+-- On the vanilla base the scripts see Hard (VanillaDiff), not Standard: vanilla's Hard personality is the base of the new AI
+-- (T2 + T3, no caps on generators / nodes, attacks bases); the personality fields Elite added are set in s_personality.Create.
+EliteAI.base = (type(EliteAI_MODE) == "table" and EliteAI_MODE.base) or "elite"
 
 -- 0.9 (10.11): THREE VARIANTS for testers to compare, chosen in the skirmish menu by the computer slot's difficulty:
 -- Easy = "NEW AI A", Normal = "NEW AI B", Hard = "NEW AI C" (EliteAI.dll relabels them); Expert = Elite's AI, untouched.
@@ -77,14 +103,17 @@ end
 EliteAI.cfg, EliteAI.num = cfg, num
 
 EliteAI.real_diff = s_diffLevel                                    -- the slot's difficulty = the variant (before ForceDiff)
+if type(EliteAI_MODE) == "table" and EliteAI_MODE.real_diff ~= nil then EliteAI.real_diff = EliteAI_MODE.real_diff end   -- the dispatcher has applied ForceDiff / VanillaDiff already
 -- tests: the local slot handed to the AI gets Hard; ForceDiff makes the scripts of every AI see the same level
+-- (the Elite base only: the vanilla base sees VanillaDiff, set by the dispatcher)
 do
 	local fd = tonumber(eliteai_cfg and eliteai_cfg("ForceDiff") or "")
-	if fd then s_diffLevel = fd end
+	if fd and EliteAI.base ~= "vanilla" then s_diffLevel = fd end
 end
 
 -- is the new logic on for this AI player?
 local function new_logic_on()
+	if type(EliteAI_MODE) == "table" then return EliteAI_MODE.ours == true end   -- 0.21: the dispatcher's decision (vanilla | vanilla+ours | elite+ours | elite)
 	local mode = cfg("NewAI", "normal")
 	if mode == "all" then return true end
 	if mode == "none" then return false end
@@ -103,9 +132,13 @@ if EliteAI.on then
 	if not EliteAI_VARIANTS[v] then v = (d == AD_Easy and "A") or (d == AD_Hard and "C") or "B" end
 	EliteAI.variant, EliteAI.vp = v, EliteAI_VARIANTS[v]
 	-- every variant plays the standard personality and build orders (Elite reads the level again in Reset/buildorder conditions)
-	s_diffLevel = AD_Standard
-	local Elite_GetDiff = AIPlayer_GetDifficultyLevel
-	AIPlayer_GetDifficultyLevel = function(p) Elite_GetDiff(p); return AD_Standard end
+	-- 0.21: on the vanilla base every variant plays the level the dispatcher set (Hard, or VanillaDiff) - its wrapper of
+	-- AIPlayer_GetDifficultyLevel is in place and default.ai has read s_diffLevel through it
+	if EliteAI.base ~= "vanilla" then
+		s_diffLevel = AD_Standard
+		local Elite_GetDiff = AIPlayer_GetDifficultyLevel
+		AIPlayer_GetDifficultyLevel = function(p) Elite_GetDiff(p); return AD_Standard end
+	end
 end
 
 --------------------------------------------------------------------------------------------------
@@ -182,7 +215,11 @@ end
 -- stay in a fight longer before squads break off (Elite: 0.4 - 1.0 by population/economy)
 local Elite_SetAggression = Military_SetSquadAggression
 Military_SetSquadAggression = function(player, level)
-	if EliteAI.on then level = math.max(level, num("AggrMin", 0.75)) end
+	if EliteAI.on then
+		level = math.max(level, num("AggrMin", 0.75))
+		local amax = num("AggrMax", (EliteAI.base == "vanilla") and 0.75 or 1)   -- 0.22: no "allow units to die" on the vanilla base
+		if level > amax then level = amax end
+	end
 	EliteAI.aggression = level
 	return Elite_SetAggression(player, level)
 end
@@ -193,6 +230,27 @@ s_personality.Create = function()
 	Elite_PersonalityCreate()
 	if EliteAI.on then
 		s_personality.attack_prefer_threat = cfg("AttackPreferThreat", "1") == "1"
+		-- 0.21, the vanilla base: the personality is vanilla's own (Hard). Nothing of Elite's personality is brought back; the
+		-- two numbers below are ours and can be set from the ini. Base_MaxCapturers: squads vanilla keeps in capture tasks
+		-- (vanilla 4; the director and the runners of mechanics.ai take the map, so it is not raised). Base_Glue: vanilla
+		-- stops buying units while its army is this many times the closest enemy's (default personality 1.0) - SPEND ignores
+		-- the verdict (Spend_NoGlue), the number is left as it is unless set.
+		-- Base_SecureMinPts (1; vanilla Hard 4): points owned before the first node is asked for - the node is the way to
+		-- the generators, and when / how many is the business of the plan (ENERGY: the first node always, another by need).
+		-- Base_PowerLock (15; vanilla 150): the power default.ai keeps back for squad abilities (ability_money_cache) - a
+		-- part of the dead power bank. -1 = vanilla's own number.
+		if EliteAI.base == "vanilla" then
+			local mc, glue, smin, lock = num("Base_MaxCapturers", -1), num("Base_Glue", -1), num("Base_SecureMinPts", 1), num("Base_PowerLock", 15)
+			if mc >= 0 then s_personality.max_num_capturers = mc end
+			if glue >= 0 then s_personality.glue_military_percentage = glue end
+			if smin >= 0 then s_personality.min_captured_pts_before_securing = smin end
+			if lock >= 0 then s_powerToLock = lock end
+			if not EliteAI.base_said then
+				EliteAI.base_said = true
+				log("base", "vanilla", "diff", tostring(s_diffLevel), "max_capturers", tostring(s_personality.max_num_capturers), "glue", tostring(s_personality.glue_military_percentage),
+					"secure_min_pts", tostring(s_personality.min_captured_pts_before_securing), "max_secured", tostring(s_personality.max_secured_pts), "power_lock", tostring(s_powerToLock))
+			end
+		end
 		if s_personality.kite_chance then s_personality.kite_chance = s_personality.kite_chance * num("KiteChance", 1) end
 		if s_personality.kite_ratio then s_personality.kite_ratio = s_personality.kite_ratio * num("KiteRatio", 1) end
 	end
@@ -580,6 +638,9 @@ function EliteAI_Director()
 	local wm, stand_d = num("RefillModels", 0.5), num("RefillStandD", 3)
 	local bfree, rhp, nbuild = (num("BuilderFree", 1) >= 1), num("RetreatHP", 0.35), 0
 	EliteAI.build_said = EliteAI.build_said or {}
+	-- 0.22: the squads in the engine's capture tasks, for mechanics.ai's watch (numbers and this tick's squad, as the army's entries)
+	local capw, caps = (num("Mech_CapWatch", (EliteAI.base == "vanilla") and 1 or 0) >= 1), {}
+	local lostL = (num("LostLog", 1) >= 1) and (EliteAI.last or {}) or nil     -- 0.23: the last look at every squad (numbers by squad id)
 	for i = 0, n - 1 do
 		-- 0.8: an engine call that raises a Lua error inside the AI job leaks the Lua mutex (LuaBinding::GetMutex) on
 		-- the xthread worker -> the main thread waits forever (hang). Seen: AISquad_ConvertToSimSquad -> nil for a squad
@@ -587,7 +648,23 @@ function EliteAI_Director()
 		-- 0.13: the pcall around this scan is gone (it caught the error, the mutex leaked all the same): the squad exists, is
 		-- spawned and has models before anything is read from it; an entry without an id or a position is not taken
 		local aisq = Military_GetAISquadAtIndex(s_selfplayer, i)
-		if aisq ~= nil and not AISquad_InCaptureTask(aisq) then
+		local incap = (aisq ~= nil) and AISquad_InCaptureTask(aisq)
+		if aisq ~= nil and incap and capw then
+			-- 0.22: in a capture task - not the army's, but watched (the same calls in the same order, every one after its check)
+			local sq = AISquad_ConvertToSimSquad(aisq)
+			if sq ~= nil and Squad_Count(sq) > 0 then
+				local id, pos = Squad_GetGameID(sq), Squad_GetPosition(sq)
+				if id ~= nil and pos ~= nil and pos.x ~= nil and pos.z ~= nil then
+					local c = { sq = sq, id = id, pos = pos, hp = Squad_GetHealth(sq) / math.max(Squad_GetHealthMax(sq) or 1, 1),
+						hit = Squad_IsUnderAttack(sq, 3), n = Squad_Count(sq), full = 0 }
+					c.veh = (SquadQuery_IsVehicle(sq) == true)
+					if EliteAI_ReinforceFull then c.full = EliteAI_ReinforceFull(aisq) or 0 end
+					if hq ~= nil then c.dhome = math.sqrt((pos.x - hq.x) ^ 2 + (pos.z - hq.z) ^ 2) end
+					table.insert(caps, c)
+				end
+			end
+		end
+		if aisq ~= nil and not incap then
 			local sq = AISquad_ConvertToSimSquad(aisq)
 			if sq ~= nil and Squad_Count(sq) > 0 then
 				local id, pos = Squad_GetGameID(sq), Squad_GetPosition(sq)
@@ -598,6 +675,9 @@ function EliteAI_Director()
 				-- under fire is the director's all the same (it goes home below)
 				if id ~= nil and bfree and builds(sq) and not (hit and hp < rhp) then
 					nbuild = nbuild + 1
+					if lostL and pos ~= nil and pos.x ~= nil and pos.z ~= nil then          -- 0.23
+						lostL[id] = { t = now, role = "build", x = pos.x, z = pos.z, hp = hp, n = -1, full = 0, hit = hit and 1 or 0, veh = 0, dh = -1 }
+					end
 					local bs = EliteAI.build_said[id]
 					if bs == nil or now - bs >= 60 then
 						EliteAI.build_said[id] = now
@@ -645,7 +725,17 @@ function EliteAI_Director()
 			end
 		end
 	end
-	EliteAI.dir_squads, EliteAI.builders = table.getn(army), nbuild
+	EliteAI.dir_squads, EliteAI.builders, EliteAI.caps_n = table.getn(army), nbuild, (capw and table.getn(caps) or -1)
+	if lostL then                                                               -- 0.23: for the "LOST" line of EliteAI_Sample
+		for _, u in ipairs(army) do
+			lostL[u.id] = { t = now, role = "army", x = u.pos.x, z = u.pos.z, hp = u.hp, n = u.n, full = u.full, hit = u.hit and 1 or 0, veh = u.veh and 1 or 0, dh = u.dhome or -1 }
+		end
+		for _, c in ipairs(caps) do
+			lostL[c.id] = { t = now, role = "cap", x = c.pos.x, z = c.pos.z, hp = c.hp, n = c.n, full = c.full, hit = c.hit and 1 or 0, veh = c.veh and 1 or 0, dh = c.dhome or -1 }
+		end
+		for id, r in pairs(lostL) do if now - r.t > num("LostKeepSecs", 240) then lostL[id] = nil end end   -- (each entry on its own)
+		EliteAI.last = lostL
+	end
 	EliteAI.base_en = base_enemies(hq, now, num("RefillBaseR", 70))             -- 0.16: enemy squads at our base (the quiet trip)
 	-- 0.12: the order book reads the time and the positions of this tick (numbers only)
 	EliteAI.now, EliteAI.sqpos = now, {}
@@ -739,7 +829,7 @@ function EliteAI_Director()
 		end
 	end
 	-- mechanics.ai (10.11): true = it ordered the army this tick; it also drops the squads it ordered from `active`
-	if EliteAI_Mechanics and EliteAI_Mechanics({ now = now, army = army, active = active }) then return end
+	if EliteAI_Mechanics and EliteAI_Mechanics({ now = now, army = army, active = active, caps = caps }) then return end
 	if table.getn(active) == 0 then return end
 	-- 1) a fight is on: everybody goes there (help, don't trickle)
 	for _, u in ipairs(active) do
@@ -805,6 +895,25 @@ end
 
 -- losses, counted every 5 s: models that left a squad (killed; reinforcements only add) and whole squads that are gone
 EliteAI.seen, EliteAI.models_lost, EliteAI.squads_lost, EliteAI.engaged = {}, 0, 0, 0
+EliteAI.gone, EliteAI.squads_back = {}, 0                           -- 0.23: the ids counted as lost (the time, the models) and those that came back
+-- 0.23: one line per squad that is gone, with what the director read at its last look (numbers and strings only)
+local function lost_line(id, n)
+	local t = World_GetGameTime() or -1
+	EliteAI.gone[id] = { t = t, n = n }
+	if num("LostLog", 1) < 1 then return end
+	local m = EliteAI.mech
+	local nm = (type(m) == "table" and type(m.names) == "table" and m.names[id]) or "?"
+	if nm == "" then nm = "?" end
+	local r = EliteAI.last and EliteAI.last[id]
+	if r == nil then
+		log("LOST", id, nm, "t", math.floor(t), "role", "?", "models", n, "phase", EliteAI.phase or "-")
+		return
+	end
+	log("LOST", id, nm, "t", math.floor(t), "role", r.role, "models", n, "of", r.full or 0, "hp", string.format("%.2f", r.hp or -1), "hit", r.hit or 0, "veh", r.veh or 0,
+		"at", string.format("%.0f %.0f", r.x or 0, r.z or 0), "home", string.format("%.0f", r.dh or -1), "m", "seen", string.format("%.0f", t - (r.t or t)), "s ago",
+		"phase", EliteAI.phase or "-", "retreat", (EliteAI.retreating and EliteAI.retreating[id]) and 1 or 0, "refill", (EliteAI.refill and EliteAI.refill[id]) and 1 or 0)
+	EliteAI.last[id] = nil
+end
 function EliteAI_Sample()
 	-- 0.13: no pcall around the scan (TECH_RU.md 12): the group and every squad are checked before they are read; a squad
 	-- without models is counted and nothing else is asked of it (no position, no "under attack")
@@ -829,7 +938,21 @@ function EliteAI_Sample()
 		end
 	end
 	for id, n in pairs(EliteAI.seen) do
-		if now[id] == nil then EliteAI.squads_lost = EliteAI.squads_lost + 1; EliteAI.models_lost = EliteAI.models_lost + n end
+		if now[id] == nil then
+			EliteAI.squads_lost = EliteAI.squads_lost + 1; EliteAI.models_lost = EliteAI.models_lost + n
+			lost_line(id, n)                                                  -- 0.23: which, where, in what state
+		end
+	end
+	-- 0.23: an id counted as lost that is here again was not a loss (out of a transport / a building)
+	for id, n in pairs(now) do
+		local g = EliteAI.gone[id]
+		if g ~= nil then
+			EliteAI.gone[id] = nil
+			EliteAI.squads_back = EliteAI.squads_back + 1
+			if num("LostLog", 1) >= 1 then
+				log("BACK", id, "t", math.floor(World_GetGameTime() or -1), "after", string.format("%.0f", (World_GetGameTime() or 0) - g.t), "s", "models", g.n, "->", n)
+			end
+		end
 	end
 	EliteAI.seen, EliteAI.engaged = now, engaged
 	-- army spread: mean distance of squads to their centre (a fist = small), averaged over the samples
@@ -847,20 +970,30 @@ function EliteAI_Telemetry()
 	local c = cache or {}
 	local att = Task_CountCombat(s_selfplayer, COMBAT_Attack)         -- 0.13: direct, as Elite's strategy_military.ai:98-99
 	local def = Task_CountCombat(s_selfplayer, COMBAT_Defend)
-	log("T", gametime(), EliteAI.on and "new" or "elite",
+	local side = EliteAI.on and "new" or "elite"
+	if EliteAI.base == "vanilla" then side = EliteAI.on and "vanilla_ours" or "vanilla" end
+	local r, rr = c.resources or {}, c.resources_rate or {}
+	local gens = -1                                                   -- (a count of our generators: strategy_resourcing.ai, UtilPBG_CountTotal)
+	local rs = s_personality and s_personality.resource_structures
+	if rs and rs[1] and rs[1].pbg then gens = UtilPBG_CountTotal(rs[1].pbg) end
+	local function f(x) if type(x) == "number" then return math.floor(x) end; return -1 end
+	log("T", gametime(), side,
 		"mil", math.floor(c.military_value or -1), "lost", EliteAI.models_lost, "squads_lost", EliteAI.squads_lost, "engaged", EliteAI.engaged,
 		"spread", math.floor((EliteAI.spread_sum or 0) / math.max(EliteAI.spread_n or 0, 1)),
 		"squads", c.military_count or -1, "pop", c.current_population_personnel or -1, "pts", c.total_pts_owned or -1,
 		"vp", c.self_vp_tickers or -1, "vp_enemy", c.enemy_vp_tickers or -1,
 		"rc", EliteAI.rc, "dir", EliteAI.dir_squads, "orders", EliteAI.orders, "phase", EliteAI.phase or "-", "att", att or -1, "def", def or -1, "aggr", EliteAI.aggression or -1,
-		"attpct", string.format("%.2f", (state_analysis and state_analysis.military_attackPercentage) or -1))
+		"attpct", string.format("%.2f", (state_analysis and state_analysis.military_attackPercentage) or -1),
+		"race", tostring(s_current_race), "popmax", f(c.max_population_personnel), "tier", f(c.tech_tier_level), "gens", f(gens),
+		"req", f(r.requisition), "pow", f(r.power), "reqr", f(rr.requisition), "powr", f(rr.power),
+		"caps", EliteAI.caps_n or -1, "builders", EliteAI.builders or -1, "squads_back", EliteAI.squads_back or 0)
 end
 
 local Elite_InitializeAI = InitializeAI
 function InitializeAI()
 	Elite_InitializeAI()
 	log("init", "race", tostring(s_current_race), "difficulty", tostring(s_diffLevel), "team", tostring(s_self_team),
-		"logic", EliteAI.on and "new" or "elite", "eliteai", EliteAI.version)
+		"logic", EliteAI.on and "new" or "elite", "eliteai", EliteAI.version, "base", EliteAI.base)
 	-- what the AI environment can do directly (for a combat director that orders squads itself)
 	local avail = {}
 	for _, n in ipairs({ "Command_SquadPos", "Command_SquadAttackMovePos", "Command_Squad", "Military_GetAISquadAtIndex",

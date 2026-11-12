@@ -1,0 +1,143 @@
+if EliteAI_VANILLA then
+import('personality/base_standard.ai')
+import('personality/tyranids/buildorder_lib.ai')
+
+-- randomly choose a build order from the given list defined in the buildorders lib 
+s_personality.buildorder = RandomlyChooseBuildorder( tyranids_buildorder )
+
+s_personality.securing_structures = 
+{
+	{pbg = EBP.TYR_SECURE, buildstyle = BS_Secure, demand_type = DEMAND_Building, limit = 3},
+}
+
+s_personality.resource_structures = 
+{
+	{pbg = EBP.TYR_GENERATOR, demand_type = DEMAND_Building, limit = 4},
+}
+
+s_personality.tech_tier_upgrades = 
+{
+	{pbg = UPG.TYR_TIER2,},
+}
+
+else
+
+-- create global race modifier
+raceFact = 1.25
+
+import('personality/base_standard.ai')
+import('personality/tyranids/buildorder_lib.ai')
+
+-- randomly choose a build order from the given list defined in the buildorders lib 
+s_personality.buildorder = RandomlyChooseBuildorder( tyranids_buildorder )
+
+--kk add a value here we can use in the state_analysis code
+GEN_BUILDING = TYR_GENERATOR
+
+s_personality.securing_structures = 
+{
+	-- {pbg = EBP.TYR_INFEST, buildstyle = BS_Defend, demand_type = DEMAND_Building, limit = build_max},
+	{pbg = EBP.TYR_SECURE, buildstyle = BS_Secure, demand_type = DEMAND_Building, limit = build_max},
+	{pbg = EBP.TYR_REINFORCEPOINT, buildstyle = BS_Defend, demand_type = DEMAND_Building, limit = 1},	
+}
+
+s_personality.resource_structures = 
+{
+	{pbg = EBP.TYR_GENERATOR, demand_type = DEMAND_Building, limit = build_max},
+}
+
+s_personality.tech_tier_upgrades = 
+{
+	{pbg = UPG.TYR_TIER2,},
+	{pbg = UPG.TYR_TIER3,},
+}
+
+
+-- INSTRUCTIONS FOR MODDERS FOR USING ESSENTIAL UPGRADE TABLE
+-- the following data is used in strategy_addon_purchase.ai in the function Update_SquadDemand()
+
+-- FIRST add any important upgrades here. Copy the format exactly
+-- for example UPG.TYR_ANY_NAME_ULIKE = PBG_Get("upgrade/pvp/race_tyranid/troops/tyr_hormagaunt_adrenal_glands")
+
+UPG.TYR_HORM_GLAND 		= PBG_Get("upgrade/pvp/race_tyranid/troops/tyr_hormagaunt_adrenal_glands")
+UPG.TYR_TERM_CRIPPLE 		= PBG_Get("upgrade/pvp/race_tyranid/troops/tyr_termagant_crippling_poison")
+UPG.TYR_WARRIOR_BARBED	= PBG_Get("upgrade/pvp/race_tyranid/troops/tyr_barbed_strangler_warrior")
+
+UPG.TYR_TYRANT_BIOPLASM	= PBG_Get("upgrade/pvp/race_tyranid/wargear/acc_hive_bioplasma")
+UPG.TYR_TYRANT_SHIELD		= PBG_Get("upgrade/pvp/race_tyranid/wargear/acc_hive_psychic_shield")
+UPG.TYR_TYRANT_SCREAM	= PBG_Get("upgrade/pvp/race_tyranid/wargear/acc_hive_scream")
+UPG.TYR_TYRANT_CARAPACE	= PBG_Get("upgrade/pvp/race_tyranid/wargear/tyr_arm_hive_extended_carapace")
+UPG.TYR_TYRANT_SYNAPSE	= PBG_Get("upgrade/pvp/race_tyranid/wargear/arm_hive_synapse_aura_health")
+UPG.TYR_TYRANT_INVULNERABLE	= PBG_Get("upgrade/pvp/race_tyranid/wargear/tyr_arm_hive_invulnerable")
+UPG.TYR_TYRANT_TALON		= PBG_Get("upgrade/pvp/race_tyranid/wargear/wp_hive_knockback")
+UPG.TYR_TYRANT_CLAW		= PBG_Get("upgrade/pvp/race_tyranid/wargear/wp_hive_heavy_claw")
+UPG.TYR_TYRANT_CANNON	= PBG_Get("upgrade/pvp/race_tyranid/wargear/wp_hive_venom_cannon")
+
+UPG.TYR_RAVHERO_BURROWTRAP= PBG_Get("upgrade/pvp/race_tyranid/wargear/acc_ravener_burrow_trap")
+UPG.TYR_RAVHERO_SINEW	= PBG_Get("upgrade/pvp/race_tyranid/wargear/acc_ravener_synapse_aura_speed")
+UPG.TYR_RAVHERO_SYNAPSE	= PBG_Get("upgrade/pvp/race_tyranid/wargear/acc_ravener_synapse_aura_damage")
+UPG.TYR_RAVHERO_TOXIC	= PBG_Get("upgrade/pvp/race_tyranid/wargear/acc_ravener_synapse_poison_cloud")
+UPG.TYR_RAVHERO_BURROW	= PBG_Get("upgrade/pvp/race_tyranid/wargear/tyr_arm_ravener_regeneration_carapace")
+UPG.TYR_RAVHERO_REINFORCED	= PBG_Get("upgrade/pvp/race_tyranid/wargear/tyr_arm_ravener_reflective_carapace")
+UPG.TYR_RAVHERO_REGENERATE	= PBG_Get("upgrade/pvp/race_tyranid/wargear/tyr_arm_ravener_revive_carapace")
+UPG.TYR_RAVHERO_CRIPPLE	= PBG_Get("upgrade/pvp/race_tyranid/wargear/tyr_ravener_revive_crippling_talon")
+UPG.TYR_RAVHERO_ACID		= PBG_Get("upgrade/pvp/race_tyranid/wargear/tyr_ravener_revive_acid_splatter")
+UPG.TYR_RAVHERO_CORROSIVE	= PBG_Get("upgrade/pvp/race_tyranid/wargear/tyr_ravener_devourer_ap")
+
+UPG.TYR_LICTHERO_PHEREMONE	= PBG_Get("upgrade/pvp/race_tyranid/wargear/acc_lictor_pheremone")
+UPG.TYR_LICTHERO_LONER	= PBG_Get("upgrade/pvp/race_tyranid/wargear/acc_lictor_loner")
+UPG.TYR_LICTHERO_VISAGE	= PBG_Get("upgrade/pvp/race_tyranid/wargear/acc_lictor_retreat")
+UPG.TYR_LICTHERO_ADRENAL	= PBG_Get("upgrade/pvp/race_tyranid/wargear/tyr_arm_lictor_energy_glands")
+UPG.TYR_LICTHERO_TOXIC	= PBG_Get("upgrade/pvp/race_tyranid/wargear/tyr_arm_lictor_poison_cloud")
+UPG.TYR_LICTHERO_JUMP		= PBG_Get("upgrade/pvp/race_tyranid/wargear/tyr_arm_lictor_elite_jump")
+UPG.TYR_LICTHERO_FEEDER	= PBG_Get("upgrade/pvp/race_tyranid/wargear/wp_lictor_feeder_tendrils")
+UPG.TYR_LICTHERO_TALON	= PBG_Get("upgrade/pvp/race_tyranid/wargear/wp_lictor_scything_talons")
+UPG.TYR_LICTHERO_MIASMA	= PBG_Get("upgrade/pvp/race_tyranid/wargear/wp_lictor_toxic_miasma")
+UPG.TYR_LICTHERO_CORROSIVE	= PBG_Get("upgrade/pvp/race_tyranid/wargear/wp_lictor_corrosive_claws")
+
+-- SECOND add the upgrade to the essential upgrade table, again copying the format exactly. Make sure to include all the correct commas
+-- the number value is the priority of the upgrade. Tier 1 upgrades need a higher priority than other upgrades due to a tier multiplier used in the function Upgrade_SquadDemand
+
+-- kk this line creates a nil value so we can use this in the table. This means we can have a tier multiplier but can allow game engine to create demand for an upgrade
+nilvalue= -99
+
+s_personality.essential_upgrades = 	{
+					{  UPG.TYR_TERM_CRIPPLE, 8, 1, 1, 1, anti_melee = true, anti_veh = false, anti_HI = true,},
+					{  UPG.TYR_HORM_GLAND, 3, 1, 1, 1, anti_melee = true, anti_veh = false, anti_HI = false,},
+					{  UPG.TYR_WARRIOR_BARBED, 5,1, 1, 1, anti_melee = false, anti_veh = true, anti_HI = false,},
+
+					{  UPG.TYR_TYRANT_BIOPLASM, 3,1, 1, 1, anti_melee = true, anti_veh = false, anti_HI = false, hero_gear = true, },
+					{  UPG.TYR_TYRANT_SHIELD, 5,1, 1, 1, anti_melee = false, anti_veh = false, anti_HI = true, hero_gear = true, },
+					{  UPG.TYR_TYRANT_SCREAM, 5,1, 1, 1, anti_melee = true, anti_veh = false, anti_HI = false, hero_gear = true, },
+					{  UPG.TYR_TYRANT_CARAPACE, 5,1, 1, 1, anti_melee = true, anti_veh = false, anti_HI = false, hero_gear = true, },
+					{  UPG.TYR_TYRANT_SYNAPSE, 5,1, 1, 1, anti_melee = false, anti_veh = false, anti_HI = false, hero_gear = true, },
+					{  UPG.TYR_TYRANT_INVULNEABLE, 8,1, 1, 1, anti_melee = false, anti_veh = false, anti_HI = false, hero_gear = true, },
+					{  UPG.TYR_TYRANT_TALON, 5,1, 1, 1, anti_melee = true, anti_veh = false, anti_HI = false, hero_gear = true, },
+					{  UPG.TYR_TYRANT_CLAW, 8,1, 1, 1, anti_melee = false, anti_veh = true, anti_HI = true, hero_gear = true, },
+					{  UPG.TYR_TYRANT_CANNON, 8,1, 1, 1, anti_melee = false, anti_veh = true, anti_HI = false, hero_gear = true, },
+
+				{  UPG.TYR_TYRANT_RAVHERO_BURROWTRAP, 3,1, 1, 1, anti_melee = false, anti_veh = false, anti_HI = false, hero_gear = true, },
+					{  UPG.TYR_TYRANT_RAVHERO_SINEW, 4,1, 1, 1, anti_melee = true, anti_veh = false, anti_HI = false, hero_gear = true, },
+					{  UPG.TYR_TYRANT_RAVHERO_SYNAPSE, 5,1, 1, 1, anti_melee = false, anti_veh = false, anti_HI = false, hero_gear = true, },
+					{  UPG.TYR_TYRANT_RAVHERO_TOXIC, 5,1, 1, 1, anti_melee = true, anti_veh = false, anti_HI = false, hero_gear = true, },
+					{  UPG.TYR_TYRANT_RAVHERO_BURROW, 5,1, 1, 1, anti_melee = false, anti_veh = false, anti_HI = true, hero_gear = true, },
+					{  UPG.TYR_TYRANT_RAVHERO_REINFORCED, 5,1, 1, 1, anti_melee = true, anti_veh = false, anti_HI = false, hero_gear = true, },
+					{  UPG.TYR_TYRANT_RAVHERO_REGENERATE, 16,1, 1, 1, anti_melee = false, anti_veh = false, anti_HI = false, hero_gear = true, },
+					{  UPG.TYR_TYRANT_RAVHERO_CRIPPLE, 8,1, 1, 1, anti_melee = true, anti_veh = false, anti_HI = false, hero_gear = true, },
+					{  UPG.TYR_TYRANT_RAVHERO_ACID, 6,1, 1, 1, anti_melee = true,  anti_veh = false, anti_HI = true, hero_gear = true, },
+					{  UPG.TYR_TYRANT_RAVHERO_BURROW, 8,1, 1, 1, anti_melee = false, anti_veh = true, anti_HI = true,  hero_gear = true, },
+
+					{  UPG.TYR_TYRANT_LICTHERO_PHEREMONE, 5,1, 1, 1, anti_melee = false, anti_veh = false, anti_HI = false, hero_gear = true, },
+					{  UPG.TYR_TYRANT_LICTHERO_LONER, 8,1, 1, 1, anti_melee = false, anti_veh = false, anti_HI = false, hero_gear = true, },
+					{  UPG.TYR_TYRANT_LICTHERO_VISAGE, 18,1, 1, 1, anti_melee = true, anti_veh = false, anti_HI = true, hero_gear = true, },
+					{  UPG.TYR_TYRANT_LICTHERO_ADRENAL, 6,1, 1, 1, anti_melee = false, anti_veh = false, anti_HI = false, hero_gear = true, },
+					{  UPG.TYR_TYRANT_LICTHERO_TOXIC, 5,1, 1, 1, anti_melee = true, anti_veh = false, anti_HI = false, hero_gear = true, },
+					{  UPG.TYR_TYRANT_LICTHERO_PHEREMONE, 8,1, 1, 1, anti_melee = false, anti_veh = false, anti_HI = false, hero_gear = true, },
+					{  UPG.TYR_TYRANT_LICTHERO_FEEDER, 11,1, 1, 0.5, anti_melee = false, anti_veh = false, anti_HI = false, hero_gear = true, },
+					{  UPG.TYR_TYRANT_LICTHERO_TALON, 5,1, 0.5, 0.25, anti_melee = false, anti_veh = false, anti_HI = false, hero_gear = true, },
+					{  UPG.TYR_TYRANT_LICTHERO_MIASMA, 8,1, 1, 0.5, anti_melee = true, anti_veh = false, anti_HI = false, hero_gear = true, },
+					{  UPG.TYR_TYRANT_LICTHERO_CORROSIVE, 8,1, 1, 1, anti_melee = false, anti_veh = false, anti_HI = false, hero_gear = true, },
+
+			       	}
+
+end

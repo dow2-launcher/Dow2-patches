@@ -58,7 +58,9 @@
 --    heavy-weapon teams are the first focus target, get a grenade / a jump / a squad from the side; the purchase scripts
 --    are told to buy the race's answers.
 
-EliteAI_MECH_VERSION = "1.3"
+-- 1.5 (12.11, step 4 of the vanilla base - VANILLA_BASE_RU.md 14.3): a vehicle in the retreat of the whole army gets a plain move to
+-- our HQ instead of the retreat order it cannot execute (retreat_order; Mech_RetreatVeh: 1 on the vanilla base, 0 on the Elite base).
+EliteAI_MECH_VERSION = "1.5"
 
 -- every tunable (EliteAI.ini [Lua] Mech_<Key> overrides); metres and seconds of game time; "strength" = health points
 -- (a squad ~ 300-900, a tank ~ 1500+), vehicles weighted by VehW
@@ -333,6 +335,21 @@ local MP = {
 	-- 1.2 (TECH_RU.md 20): the purchase scripts' look at our power points; the regressions of the polygon's scenes g and m
 	PowerScan = 1,       -- 1 = a power point of ours: has it a node, how many generators (EliteAI.pw for strategy_unit_purchase.ai); 0 = no such calls
 	PowerSlots = 3,      -- generators a node takes (strategic_point_pvp: maximum_addon_structures)
+	-- step 3 of the vanilla base (VANILLA_BASE_RU.md 11.3): in a team game "ours" is the TEAM's point - the ally's power points (his
+	-- nodes, his generators) were counted as places where we can build ("power points ours 4 without a node 2", "free places 0"
+	-- for an IG whose own two points had lost their nodes and whose ally's two were full). 1 = EliteAI.pw (own / unsec / slots /
+	-- sites) counts only the points this player owns (Player_GetID == s_selfplayerid, as targets.ai:14-17); 0 = the team's, as
+	-- 1.3. The default is by the base: 1 on the vanilla base, 0 on the Elite base (the released AI is not changed)
+	PowerMine = (EliteAI.base == "vanilla") and 1 or 0,
+	-- 1.4 (step 3 of the vanilla base, VANILLA_BASE_RU.md 11.1): the squads in the engine's capture tasks (X.run_capwatch)
+	CapWatch = (EliteAI.base == "vanilla") and 1 or 0,   -- 1 = they are watched (main.ai hands them over as state.caps); 0 = left to the engine, as 1.3
+	-- 1.5 (step 4 of the vanilla base, VANILLA_BASE_RU.md 14.3): a vehicle in the army's retreat (retreat_order)
+	RetreatVeh = (EliteAI.base == "vanilla") and 1 or 0, -- 1 = it gets a plain move to our HQ; 0 = the retreat order it cannot execute, as 1.4
+	CapWatchR = 40,      -- the enemy "at" such a squad: within this distance of it
+	CapWatchSupR = 45,   -- our squads of the army within this distance of it count as its support (whole)
+	CapWatchRatio = 1.4, -- it leaves when the enemy there >= (its own strength + the support) x this (= RetreatLocalRatio)
+	CapWatchMinW = 500,  -- ... and the enemy there weighs at least this (a single scout squad stops nobody: it shoots back or finishes the capture)
+	CapWatchSecs = 40,   -- one retreat order per squad in this many seconds (= RetreatSecs: it runs home meanwhile)
 	MapOnBaseR = 95,     -- "the army goes on": never to a point within this distance of an enemy HQ ...
 	MapOnThreatR = 60,   -- ... nor to one with enemy squads within this distance that weigh more than MapOnRatio of the army
 	MapOnRatio = 0.5,
@@ -801,7 +818,7 @@ local function scan_points()
 	local pts, byk, hqs = {}, {}, {}
 	local pw_api = (prm("PowerScan") >= 1 and type(Military_MilitaryPointIsSecuredPoint) == "function"
 		and type(Military_GetCapturePointFromMilitaryPoint) == "function" and type(AIResource_GetCapturePointAddOnCount) == "function")
-	local function add(mp, team)
+	local function add(mp, team, mine)
 		if not Military_IsMilitaryPointValid(mp) then return end
 		local t = Military_GetMilitaryPointType(mp)
 		local p = Military_GetMilitaryPointPosition(mp)
@@ -817,6 +834,7 @@ local function scan_points()
 			us_cap = Military_IsMilitaryPointBeingCapturedByUs(s_selfplayer, mp) }
 		e.key = fmt("%.0f/%.0f", e.x, e.z)
 		e.ours = (team == s_self_team)
+		e.mine = (e.ours and mine ~= false)                                     -- step 3: this player's own point (PowerMine=0: any point of the team)
 		e.enemy = (team ~= -1 and team ~= s_self_team)
 		-- 1.2 (TECH_RU.md 20.1): a power point of ours - has it its node (the structure every generator needs), and how many
 		-- generators stand at it. The calls and their order are Elite's own for every military point (targets.ai:92-97); the
@@ -831,12 +849,15 @@ local function scan_points()
 		table.insert(pts, e); byk[e.key] = e
 	end
 	local n_pl = World_GetPlayerCount()
+	local mine_on = (prm("PowerMine") >= 1 and type(Player_GetID) == "function" and s_selfplayerid ~= nil)
 	for i = 1, n_pl do
 		local pl = World_GetPlayerAt(i)
 		if pl then
 			local team = Player_GetTeam(pl)
+			local mine = true
+			if mine_on and team == s_self_team then mine = (Player_GetID(pl) == s_selfplayerid) end   -- (targets.ai:14-17: the same call on the same players)
 			local cnt = Military_GetMilitaryPointCount(s_selfplayer, pl)
-			for j = 0, cnt - 1 do add(Military_GetMilitaryPointAt(s_selfplayer, pl, j), team) end
+			for j = 0, cnt - 1 do add(Military_GetMilitaryPointAt(s_selfplayer, pl, j), team, mine) end
 		end
 	end
 	local cnt = Military_GetNeutralMilitaryPointCount(s_selfplayer)
@@ -851,7 +872,7 @@ local function scan_points()
 	if pw_api then                                                            -- numbers for the purchase scripts (strategy_unit_purchase.ai e_pw)
 		local own, unsec, slots, sites = 0, 0, 0, {}
 		for _, e in ipairs(pts) do
-			if e.pow and e.ours then
+			if e.pow and e.ours and e.mine then
 				own = own + 1
 				local free = 0
 				if not e.sec then unsec = unsec + 1
@@ -896,10 +917,29 @@ end
 
 --------------------------------------------------------------------------------------------------
 -- ArmyRetreat / PreRetreat: one retreat state for both (M.retreat = { t0, reason, bx, bz, last })
+-- 1.5 (step 4 of the vanilla base; VANILLA_BASE_RU.md 14.3) A VEHICLE IN THE ARMY'S RETREAT. A vehicle has no retreat (main.ai 0.16,
+-- TECH_RU.md 15.8: "the order did nothing and the vehicle then stood 40 s"): the director leaves it in the army, FightLeave gives
+-- it a plain move home, the Vehicles pattern takes a damaged one behind the infantry. The retreat of the WHOLE army did not know:
+-- start_retreat / run_retreat gave every squad the retreat order, and while M.retreat lasts (15-75 s, 25 s on average in s3h)
+-- this file returns before any other pattern and the director orders nothing - a vehicle kept the order it had (the attack-move
+-- into the fight the infantry had just left) for the whole of it. s3h, 7 mirrors, after 12:00: of the 36 squads this side's IG
+-- lost, 27 were lost within a minute of an "ArmyRetreat start" (the released AI's IG: 15 of 27), and the ids that vanish are
+-- vehicles first (manticores 18 of 53, chimeras; the orks' deff dreads) - each one bought again for 270-300 req. Now a vehicle
+-- gets a plain move to our HQ at the start and at every repeat (the order book lets a move through as any other).
+-- Mech_RetreatVeh: 1 on the vanilla base, 0 on the Elite base (the released AI is not changed). "veh_home" in stats4.
+local function retreat_order(u)
+	local h = M.home
+	if prm("RetreatVeh") >= 1 and u.veh and h then
+		morder(u.id, h.x, u.pos.y, h.z, ORD_MOVE)
+		M.st.veh_home = (M.st.veh_home or 0) + 1
+		return
+	end
+	morder(u.id, u.pos.x, u.pos.y, u.pos.z, ORD_RETREAT)
+end
 local function start_retreat(state, reason, cx, cz, info)
 	M.retreat = { t0 = state.now, reason = reason, bx = cx, bz = cz, last = state.now }
 	M.punish, M.focus, M.split = nil, nil, nil
-	for _, u in ipairs(state.active) do morder(u.id, u.pos.x, u.pos.y, u.pos.z, ORD_RETREAT) end
+	for _, u in ipairs(state.active) do retreat_order(u) end
 	M.st[reason] = M.st[reason] + 1
 	mlog(reason == "pre" and "PreRetreat" or "ArmyRetreat", "start", info, "squads", table.getn(state.active), "t", math.floor(state.now))
 	EliteAI.phase = "m_retreat"
@@ -909,7 +949,7 @@ local function run_retreat(state, en, cx, cz, h)
 	if now - r.last >= 9 then                                                 -- keep those still out there going home
 		r.last = now
 		for _, u in ipairs(state.active) do
-			if not h or d2(u.pos.x, u.pos.z, h.x, h.z) > prm("HomeR") then morder(u.id, u.pos.x, u.pos.y, u.pos.z, ORD_RETREAT) end
+			if not h or d2(u.pos.x, u.pos.z, h.x, h.z) > prm("HomeR") then retreat_order(u) end
 		end
 	end
 	EliteAI.phase = "m_retreat"
@@ -4400,6 +4440,62 @@ function X.engage_rally(en, tx, tz, h, cur)                                   --
 	if best then return best.key, best.x, best.y, best.z end
 	return "home", h.x, h.y or 0, h.z
 end
+-- 1.4 (step 3 of the vanilla base; VANILLA_BASE_RU.md 11.1) THE CAPTURE TASKS ARE WATCHED. A squad in the engine's capture task is
+-- outside every list of this file and of the director - in the mirror of step 2 a quarter of the vanilla side's squads at
+-- any moment (T: squads - dir = 1.7-1.9 of 6-7). Nobody sent it home when it was shot to a third, nobody looked at the force
+-- it stood in. For each of them (state.caps: this tick's squad, position, health, models - main.ai), every tick:
+--   HURT: under attack and below RetreatHP of its health or down to RetreatModels of its models -> a retreat order (the
+--         director's own thresholds for a squad of the army);
+--   OUTWEIGHED: under attack, or an enemy squad within SightR of it, and the enemy within CapWatchR weighs CapWatchMinW or more
+--         and at least CapWatchRatio x (the squad + our army's squads within CapWatchSupR) -> a retreat order.
+-- One order per squad per CapWatchSecs (a retreat cannot be called off; the engine's task takes the squad out again when it
+-- is home - it then walks to a point with its models refilled by the engine's own reinforcement request, not with two models).
+-- A vehicle is not watched (it has no retreat and does not capture). Not at home (HomeR of the HQ). Lines "MECH CapWatch <id> hurt|leaves ...",
+-- "caps / cap_hurt / cap_leave" in stats9. Mech_CapWatch=0 = as 1.3 (the default on the Elite base).
+function X.run_capwatch(state, en, h)
+	local caps = state.caps
+	if prm("CapWatch") < 1 or type(caps) ~= "table" or not h then return end
+	local now = state.now
+	M.capw = M.capw or {}
+	local seen = {}
+	local rhp, rm = EliteAI.num("RetreatHP", 0.35), EliteAI.num("RetreatModels", 0.34)
+	local wr, sr, need, minw, sight = prm("CapWatchR"), prm("CapWatchSupR"), prm("CapWatchRatio"), prm("CapWatchMinW"), prm("SightR")
+	for _, c in ipairs(caps) do
+		seen[c.id] = true
+		local last = M.capw[c.id]
+		if not c.veh and (last == nil or now - last >= prm("CapWatchSecs")) and d2(c.pos.x, c.pos.z, h.x, h.z) > prm("HomeR") then
+			local why = nil
+			local thin = (rm > 0 and (c.full or 0) >= 3 and c.n <= c.full * rm)
+			if c.hit and (c.hp < rhp or thin) then
+				why = fmt("hurt hp %.2f models %d of %d", c.hp, c.n, c.full or 0)
+				M.st.cap_hurt = (M.st.cap_hurt or 0) + 1
+			else
+				local ew, n, near = 0, 0, false
+				for _, e in ipairs(en) do
+					local d = d2(e.x, e.z, c.pos.x, c.pos.z)
+					if d <= wr then ew, n = ew + e.w, n + 1 end
+					if d <= sight then near = true end
+				end
+				if (c.hit or near) and ew >= minw then
+					local ours, sup = weight_of(c), 0
+					for _, u in ipairs(state.army) do
+						if d2(u.pos.x, u.pos.z, c.pos.x, c.pos.z) <= sr then sup = sup + weight_of(u) end
+					end
+					if ew >= (ours + sup) * need then
+						why = fmt("leaves: enemy %.0f (%d squads) ours %.0f (+%.0f near) ratio %.2f need %.2f", ew, n, ours, sup, ew / math.max(ours + sup, 1), need)
+						M.st.cap_leave = (M.st.cap_leave or 0) + 1
+					end
+				end
+			end
+			if why then
+				M.capw[c.id] = now
+				morder(c.id, c.pos.x, c.pos.y, c.pos.z, ORD_RETREAT)               -- (the order book lets a retreat through and keeps no series for it)
+				mlog("CapWatch", c.id, why, fmt("at %.0f %.0f home %.0f m", c.pos.x, c.pos.z, d2(c.pos.x, c.pos.z, h.x, h.z)))
+			end
+		end
+	end
+	for id in pairs(M.capw) do if not seen[id] and now - M.capw[id] >= prm("CapWatchSecs") then M.capw[id] = nil end end   -- (each entry on its own)
+end
 function X.run_engage(state, en, cx, cz, h)
 	local now = state.now
 	local G = M.eng or { hold = false }
@@ -4680,7 +4776,8 @@ local function stats(state)
 		"garrison", G and (tostring(G.id) .. " " .. tostring(G.v)) or "-")
 	mlog("stats4", "t", math.floor(state.now), "def_avoid", s.def_avoid or 0, "def_assault", s.def_assault or 0, "def_out", s.def_out or 0, "def_siege", s.def_siege or 0,
 		"def_lost", s.def_lost or 0, "def_retreat", s.def_retreat or 0, "def_standoff", s.def_standoff or 0, "def_nosiege", s.def_nosiege or 0, "turrets", table.getn(M.defs or {}), "veh_back", s.veh_back or 0, "veh_early", s.veh_early or 0, "veh_trans", s.veh_trans or 0, "veh_wait", s.veh_wait or 0,
-		"setup_gren", s.setup_gren or 0, "setup_approach", s.setup_appr or 0, "setup_jump", s.setup_jump or 0, "setup_flank", s.setup_flank or 0, "enemy_setups", (type(EliteAI.setup) == "table") and EliteAI.setup.n or 0)
+		"setup_gren", s.setup_gren or 0, "setup_approach", s.setup_appr or 0, "setup_jump", s.setup_jump or 0, "setup_flank", s.setup_flank or 0, "enemy_setups", (type(EliteAI.setup) == "table") and EliteAI.setup.n or 0,
+		"veh_home", s.veh_home or 0, "retreat_veh", prm("RetreatVeh"))
 	mlog("stats5", "t", math.floor(state.now), "dodge", s.dodge or 0, "dodge_notes", s.dodge_notes or 0, "dodge_mines", s.dodge_mines or 0, "dodge_rule", rule("DodgeBusy"))
 	mlog("stats6", "t", math.floor(state.now), "counter_known", s.cn_known or 0, "counter_none", s.cn_none or 0, "bp_asked", s.cn_bp or 0, "bp_differ", s.cn_bp_diff or 0, "av_focus", s.cn_av or 0,
 		"counter_seen", s.cn_mem or 0, "counter_demand", s.cn_demand or 0, "counter_focus", s.cn_focus or 0, "counter_control", s.cn_ctrl or 0,
@@ -4691,6 +4788,9 @@ local function stats(state)
 		"map_on", s.map_on or 0, "map_cover", s.map_cover or 0, "raiders", s.raid or 0, "raiders_now", nr, "map_rule", rule("MapDefend"))
 	mlog("stats8", "t", math.floor(state.now), "eng_hold", s.eng_hold or 0, "eng_ticks", s.eng_ticks or 0, "eng_drop", s.eng_drop or 0, "eng_point", s.eng_point or 0, "eng_rally", s.eng_rally or 0,
 		"holding", (M.eng and M.eng.hold) and 1 or 0, "fight_army", s.fight_army or 0, "fight_leave", s.fight_leave or 0, "trade", s.trade or 0, "way_cap", s.way_cap or 0, "runner_safe", s.runner_safe or 0, "engage_rule", rule("Engage"))
+	mlog("stats9", "t", math.floor(state.now), "caps", table.getn(state.caps or {}), "cap_hurt", s.cap_hurt or 0, "cap_leave", s.cap_leave or 0,
+		"cap_watch", prm("CapWatch"), "power_mine", prm("PowerMine"), "pw_own", (type(EliteAI.pw) == "table") and EliteAI.pw.own or -1,
+		"pw_unsec", (type(EliteAI.pw) == "table") and EliteAI.pw.unsec or -1, "pw_slots", (type(EliteAI.pw) == "table") and EliteAI.pw.slots or -1)
 	local o = EliteAI.ord_st
 	if o then mlog("stats3", "t", math.floor(state.now), "orders_sent", o.sent, "repeat_skipped", o.skip, "to_move", o.alt, "ceiling", o.cap, "director_waited", o.held, "approach", s.gar_appr or 0, "escalated", o.esc or 0, "build_wait", o.bwait or 0, "build_near", o.bnear or 0) end
 end
@@ -4746,6 +4846,7 @@ function EliteAI_Mechanics(state)
 	if on.RaceAbilities then ra_clump(en, cx, cz, state.army, h); run_race_abilities() end
 	stats(state)
 	if on.Idle then idle_clock(state) end                                      -- 0.3: before any return, the clocks run every tick
+	X.run_capwatch(state, en, h)                                               -- 1.4: the squads in the engine's capture tasks (before any return)
 	-- 1) the whole army: retreats
 	if M.retreat then
 		if run_retreat(state, en, cx, cz, h) then return true end

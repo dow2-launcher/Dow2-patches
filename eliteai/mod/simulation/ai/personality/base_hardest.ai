@@ -1,0 +1,34 @@
+if EliteAI_VANILLA then
+
+
+-- overrides of the defaults
+s_personality.start_attack_time = 0
+s_personality.start_attack_time_variance = 0
+s_personality.military_strength_modifier = 1.2
+s_personality.ability_avoidance_percentage = 0.95
+s_personality.demand_variance = 0.15
+s_personality.min_captured_pts_before_securing = 2
+s_personality.max_secured_pts = 10
+s_personality.vp_aggressiveness = 0.8
+s_personality.prefer_power_percentage = 0.6
+
+else
+
+
+-- overrides of the defaults
+s_personality.start_attack_time = 0
+s_personality.start_attack_time_variance = 1*60
+s_personality.military_strength_modifier = 1
+s_personality.ability_avoidance_percentage = 0.95
+s_personality.demand_variance = 0.3
+s_personality.min_captured_pts_before_securing = 1
+s_personality.max_secured_pts = 50
+s_personality.vp_aggressiveness = 0.8
+s_personality.prefer_power_percentage = 0.75
+s_personality.min_percentage_pts_captured_for_vp = 0
+s_personality.min_military_value_start = -1
+s_personality.min_military_value_increment_per_minute = 0
+s_personality.attack_prefer_threat = true
+--s_personality.early_capture_want_closer = false
+--s_personality.early_rush = true
+end

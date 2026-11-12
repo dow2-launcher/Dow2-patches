@@ -1,0 +1,175 @@
+if EliteAI_VANILLA then
+import('personality/base_standard.ai')
+import('personality/eldar/buildorder_lib.ai')
+
+-- randomly choose a build order from the given list defined in the buildorders lib 
+s_personality.buildorder = RandomlyChooseBuildorder( eldar_buildorder )
+
+s_personality.securing_structures = 
+{
+	{pbg = EBP.ELD_SECURE, buildstyle = BS_Secure, demand_type = DEMAND_Building, limit = 3},
+}
+
+s_personality.resource_structures = 
+{
+	{pbg = EBP.ELD_GENERATOR, demand_type = DEMAND_Building, limit = 4},
+}
+
+s_personality.tech_tier_upgrades = 
+{
+	{pbg = UPG.ELD_TIER2,},
+}
+
+else
+
+-- create global race modifier
+raceFact=1.1
+
+import('personality/base_standard.ai')
+import('personality/eldar/buildorder_lib.ai')
+
+-- randomly choose a build order from the given list defined in the buildorders lib 
+s_personality.buildorder = RandomlyChooseBuildorder( eldar_buildorder )
+
+--kk add a value here we can use in the state_analysis code
+GEN_BUILDING = ELD_GENERATOR
+
+s_personality.securing_structures = 
+{
+	{pbg = EBP.ELD_SECURE, buildstyle = BS_Secure, demand_type = DEMAND_Building, limit = build_max},
+	{pbg = EBP.ELD_WEBWAYGATE, buildstyle = BS_Defend, demand_type = DEMAND_Building, limit = build_max},		
+}
+
+s_personality.resource_structures = 
+{
+	{pbg = EBP.ELD_GENERATOR, demand_type = DEMAND_Building, limit = build_max + 3},
+}
+
+s_personality.tech_tier_upgrades = 
+{
+	{pbg = UPG.ELD_TIER2,},
+	{pbg = UPG.ELD_TIER3,},
+}
+
+
+-- INSTRUCTIONS FOR MODDERS FOR USING ESSENTIAL UPGRADE TABLE
+-- the following data is used in strategy_addon_purchase.ai in the function Update_SquadDemand()
+
+-- FIRST add any important upgrades here. Copy the format exactly
+-- for example UPG.TYR_ANY_NAME_ULIKE = PBG_Get("upgrade/pvp/race_tyranid/troops/tyr_hormagaunt_adrenal_glands")
+
+-- SECOND add the upgrade to the essential upgrade table, again copying the format exactly. Make sure to include all the correct commas
+-- the number value is the priority of the upgrade. Tier 1 upgrades need a higher priority than other upgrades due to a tier multiplier used in the function Upgrade_SquadDemand
+
+
+
+UPG.ELD_GUARD_GEAR 		= PBG_Get("upgrade/pvp/race_eldar/troops/battle_equipment")
+UPG.ELD_GUARD_WARLOCK 	= PBG_Get("upgrade/pvp/race_eldar/troops/eld_warlock")
+UPG.ELD_BANSHEE_SHOUT	= PBG_Get("upgrade/pvp/race_eldar/troops/aspect_of_banshee")
+UPG.ELD_BANSHEE_EXARCH	= PBG_Get("upgrade/pvp/race_eldar/troops/eld_banshee_exarch")
+UPG.ELD_RANGER_PATH		= PBG_Get("upgrade/pvp/race_eldar/troops/pathfinder_gear")
+UPG.ELD_WARP_ASPECT		= PBG_Get("upgrade/pvp/race_eldar/troops/aspect_of_warp_spider")
+UPG.ELD_WARP_EXARCH		= PBG_Get("upgrade/pvp/race_eldar/troops/eld_warpspider_exarch")
+UPG.ELD_WRAITH_WARLOCK 	= PBG_Get("upgrade/pvp/race_eldar/troops/eld_warlock_wraithguard")
+UPG.ELD_FALCON_SHIELD		= PBG_Get("upgrade/pvp/race_eldar/troops/falcon_holofield")
+UPG.ELD_AUT_SWORD		= PBG_Get("upgrade/pvp/race_eldar/troops/eld_autarch_sword")
+UPG.ELD_AUT_GUN		= PBG_Get("upgrade/pvp/race_eldar/troops/eld_autarch_fusion_gun")
+UPG.ELD_AUT_SHIELD		= PBG_Get("upgrade/pvp/race_eldar/troops/eld_autarch_forceshield")
+UPG.ELD_WLORD_LANCE		= PBG_Get("upgrade/pvp/race_eldar/troops/eld_brightlance")
+UPG.ELD_WLORD_SHURI		= PBG_Get("upgrade/pvp/race_eldar/troops/eld_shuriken_cannon_wl")
+UPG.ELD_WLORD_REPAIR		= PBG_Get("upgrade/pvp/race_eldar/troops/wraithbone_synergy")
+
+UPG.ELD_BANSHEE_SPEAR	= PBG_Get("upgrade/pvp/race_eldar/troops/eld_banshee_aspect_spear")
+UPG.ELD_BANSHEE_SWORD	= PBG_Get("upgrade/pvp/race_eldar/troops/eld_banshee_aspect_swords")
+UPG.ELD_TEAM_LANCE		= PBG_Get("upgrade/pvp/race_eldar/troops/eld_platform_brightlance")
+UPG.ELD_REAPER_EXARCH	= PBG_Get("upgrade/pvp/race_eldar/troops/eld_dark_reaper_exarch")
+UPG.ELD_REAPER_LAUNCHER	= PBG_Get("upgrade/pvp/race_eldar/troops/eld_dark_reaper_tempest_launcher")
+UPG.ELD_DRAGON_EXARCH	= PBG_Get("upgrade/pvp/race_eldar/troops/eld_fire_dragon_exarch")
+
+UPG.ELD_FARSEER_STONES 	= PBG_Get("upgrade/pvp/race_eldar/wargear/acc_farse_spirit_stones")
+UPG.ELD_FARSEER_HELM 		= PBG_Get("upgrade/pvp/race_eldar/wargear/acc_farse_ghosthelm")
+UPG.ELD_FARSEER_RUNE 		= PBG_Get("upgrade/pvp/race_eldar/wargear/acc_farse_runes_of_reaping")
+UPG.ELD_FARSEER_FORTUNE 	= PBG_Get("upgrade/pvp/race_eldar/wargear/arm_farse_armour_of_fortune")
+UPG.ELD_FARSEER_RUNE_ARM 	= PBG_Get("upgrade/pvp/race_eldar/wargear/arm_farse_rune_armour")
+UPG.ELD_FARSEER_TIME 		= PBG_Get("upgrade/pvp/race_eldar/wargear/arm_farse_aegis_of_ages")
+UPG.ELD_FARSEER_DOOM		= PBG_Get("upgrade/pvp/race_eldar/wargear/wp_farse_witchblade_doombringer")
+UPG.ELD_FARSEER_SPEAR	= PBG_Get("upgrade/pvp/race_eldar/wargear/wp_farse_witchblade_singing_spear")
+UPG.ELD_FARSEER_GRAVITY	= PBG_Get("upgrade/pvp/race_eldar/wargear/wp_farse_witchblade_sky_gauntlets")
+
+UPG.ELD_WARLOCK_CHANNEL	= PBG_Get("upgrade/pvp/race_eldar/wargear/acc_warlock_channeling_runes")
+UPG.ELD_WARLOCK_THROW	= PBG_Get("upgrade/pvp/race_eldar/wargear/acc_warlock_force_gauntlet")
+UPG.ELD_WARLOCK_DARKNESS	= PBG_Get("upgrade/pvp/race_eldar/wargear/acc_warlock_heart_of_darkness")
+UPG.ELD_WARLOCK_ROBE 	= PBG_Get("upgrade/pvp/race_eldar/wargear/arm_warlock_champions_robe")
+UPG.ELD_WARLOCK_SHADOWS	= PBG_Get("upgrade/pvp/race_eldar/wargear/arm_warlock_cloak_of_shadows")
+UPG.ELD_WARLOCK_PROV		= PBG_Get("upgrade/pvp/race_eldar/wargear/arm_warlock_providence")
+UPG.ELD_WARLOCK_IMMOLATE	= PBG_Get("upgrade/pvp/race_eldar/wargear/wp_warlock_witchblade_immolator")
+UPG.ELD_WARLOCK_MERCILESS	= PBG_Get("upgrade/pvp/race_eldar/wargear/wp_warlock_witchblade_enervator")
+UPG.ELD_WARLOCK_KURNOUS	= PBG_Get("upgrade/pvp/race_eldar/wargear/wp_warlock_witchblade_dimensional_blade")
+
+UPG.ELD_WARP_TARGET		= PBG_Get("upgrade/pvp/race_eldar/wargear/acc_warp_improved_targeters")
+UPG.ELD_WARP_GRENADE	= PBG_Get("upgrade/pvp/race_eldar/wargear/acc_warp_anti_grav_grenade")
+UPG.ELD_WARP_ORB		= PBG_Get("upgrade/pvp/race_eldar/wargear/acc_warp_anti_shimmer_orb")
+UPG.ELD_WARP_STABIL		= PBG_Get("upgrade/pvp/race_eldar/wargear/arm_warp_enhanced_warp_stabilizers")
+UPG.ELD_WARP_IMPR_JUMP	= PBG_Get("upgrade/pvp/race_eldar/wargear/arm_warp_improved_warp_generator")
+UPG.ELD_WARP_PHASE		= PBG_Get("upgrade/pvp/race_eldar/wargear/arm_warp_enhanced_phase_armour")
+UPG.ELD_WARP_HEAVY		= PBG_Get("upgrade/pvp/race_eldar/wargear/wp_heavy_gauge_filament")
+UPG.ELD_WARP_WEB		= PBG_Get("upgrade/pvp/race_eldar/wargear/wp_warp_entangling_web")
+UPG.ELD_WARP_BLADES		= PBG_Get("upgrade/pvp/race_eldar/wargear/wp_warp_powerblades")
+
+-- kk this line creates a nil value so we can use this in the table. This means we can have a tier multiplier but can allow game engine to create demand for an upgrade
+nilvalue= -99
+
+s_personality.essential_upgrades = 	{
+					{  UPG.ELD_GUARD_GEAR , 150,1, 1, 1, anti_melee = true, anti_veh = false, anti_HI = false,},
+					{  UPG.ELD_GUARD_WARLOCK , 50,1, 1, 1, anti_melee =true, anti_veh = false, anti_HI = false,},
+					{  UPG.ELD_BANSHEE_SHOUT, 75,1, 1, 1, anti_melee = true, anti_veh = false, anti_HI = false,},
+					{  UPG.ELD_BANSHEE_EXARCH, 25,1, 1, 1, anti_melee = false, anti_veh = false, anti_HI = false,},
+					{  UPG.ELD_RANGER_PATH, 25,1, 1, 1, anti_melee = true, anti_veh = false, anti_HI = false,},
+					{  UPG.ELD_WARP_ASPECT, 45,1, 1, 1, anti_melee = false, anti_veh = true, anti_HI = false,},
+					{  UPG.ELD_WARP_EXARCH, 45,1, 1, 1, anti_melee = false, anti_veh = false, anti_HI = false,},
+					{  UPG.ELD_WRAITH_WARLOCK, 10,1, 1, 1, anti_melee = true, anti_veh = false, anti_HI = false,},
+					{  UPG.ELD_FALCON_SHIELD, 50,1, 1, 1, anti_melee = false, anti_veh = true, anti_HI = true,},
+					{  UPG.ELD_AUT_GUN, 10,1, 1, 1, anti_melee = false, anti_veh = true, anti_HI = false,},
+					{  UPG.ELD_AUT_SWORD, 10,1, 1, 1, anti_melee = true, anti_veh = false, anti_HI = false,},
+					{  UPG.ELD_AUT_SHIELD, 10,1, 1, 1, anti_melee = false, anti_veh = false, anti_HI = false,},
+					{  UPG.ELD_WLORD_LANCE, 5,1, 1, 1, anti_melee = false, anti_veh = true, anti_HI = false,},
+					{  UPG.ELD_WLORD_SHURI, 5,1, 1, 1, anti_melee = false, anti_veh = false, anti_HI = false,},
+					{  UPG.ELD_WLORD_REPAIR, 10,1, 1, 1, anti_melee = false, anti_veh = true, anti_HI = false,},
+
+					{  UPG.ELD_BANSHEE_SPEAR, 15,1, 1, 1, anti_melee = false, anti_veh = true, anti_HI = true,},
+					{  UPG.ELD_BANSHEE_SWORD, 10,1, 1, 1, anti_melee = true, anti_veh = false, anti_HI = false,},
+					{  UPG.ELD_TEAM_LANCE, 1,1, 1, 1, anti_melee = false, anti_veh = true, anti_HI = false,},
+					{  UPG.ELD_REAPER_EXARCH, 8,1, 1, 1, anti_melee = false, anti_veh = false, anti_HI = false,},
+					{  UPG.ELD_REAPER_LAUNCHER, 10,1, 1, 1, anti_melee = false, anti_veh = false, anti_HI = true,},
+					{  UPG.ELD_DRAGON_EXARCH, 8,1, 1, 1, anti_melee = false, anti_veh = false, anti_HI = false,},
+					
+					{  UPG.ELD_FARSEER_RUNE, 5,1, 1, 1, anti_melee = true, anti_veh = false, anti_HI = false, hero_gear = true,},	
+					{  UPG.ELD_FARSEER_STONES, 6,1, 1, 1, anti_melee = false, anti_veh = false, anti_HI = false, hero_gear = true,},							{  UPG.ELD_FARSEER_HELM, 1,1, 1, 1, anti_melee = false, anti_veh = false, anti_HI = true, hero_gear = true,},	
+					{  UPG.ELD_FARSEER_FORTUNE, 5,1, 1, 0.5, anti_melee = false, anti_veh = false, anti_HI = false, hero_gear = true,},
+					{  UPG.ELD_FARSEER_RUNE_ARM, 5,0.75, 1, 0.5, anti_melee = false, anti_veh = false, anti_HI = true, hero_gear = true,},						{  UPG.ELD_FARSEER_RUNE_TIME, 8,1, 1, 1, anti_melee = true, anti_veh = true, anti_HI = true, hero_gear = true,},
+					{  UPG.ELD_FARSEER_DOOM,5,1, 0.75, 0.25, anti_melee = false, anti_veh = false, anti_HI = false, hero_gear = true,},
+					{  UPG.ELD_FARSEER_SPEAR, 5,1, 1, 1, anti_melee = false, anti_veh = true, anti_HI = false, hero_gear = true,},
+					{  UPG.ELD_FARSEER_GRAVITY, 5,1, 1, 2, anti_melee = true, anti_veh = false, anti_HI = true, hero_gear = true,},
+					
+					{  UPG.ELD_ELD_WARLOCK_CHANNEL, 5,1, 1, 1, anti_melee = false, anti_veh = false, anti_HI = false, hero_gear = true,},
+					{  UPG.ELD_ELD_WARLOCK_THROW, 8,1, 1, 1, anti_melee = false, anti_veh = false, anti_HI = false, hero_gear = true,},
+					{  UPG.ELD_ELD_WARLOCK_DARK, 8,1, 1, 1, anti_melee = false, anti_veh = false, anti_HI = false, hero_gear = true,},
+					{  UPG.ELD_ELD_WARLOCK_ROBE, 5,1, 1, 1, anti_melee = false, anti_veh = false, anti_HI = false, hero_gear = true,},
+					{  UPG.ELD_ELD_WARLOCK_SHADOWS, 8,1, 1, 1, anti_melee = false, anti_veh = false, anti_HI = false, hero_gear = true,},
+					{  UPG.ELD_ELD_WARLOCK_PROV, 9,1, 1, 1, anti_melee = false, anti_veh = false, anti_HI = false, hero_gear = true,},
+					{  UPG.ELD_ELD_WARLOCK_IMMOLATE, 5,1, 1, 0.5, anti_melee = true, anti_veh = false, anti_HI = false, hero_gear = true,},
+					{  UPG.ELD_ELD_WARLOCK_MERCILESS, 5,1, 1, 0.5, anti_melee = false, anti_veh = false, anti_HI = false, hero_gear = true,},
+					{  UPG.ELD_ELD_WARLOCK_KURNOUS, 8,1, 1, 1, anti_melee = true, anti_veh = false, anti_HI = true, hero_gear = true,},
+
+					{  UPG.ELD_WARP_TARGET, 8,1, 1, 1, anti_melee = false, anti_veh = false, anti_HI = false, hero_gear = true,},
+					{  UPG.ELD_WARP_GRENADE, 5,1, 1, 1, anti_melee = true, anti_veh = false, anti_HI = false, hero_gear = true,},
+					{  UPG.ELD_WARP_ORB, 5,1, 1, 1, anti_melee = true, anti_veh = false, anti_HI = true, hero_gear = true,},
+					{  UPG.ELD_WARP_STABIL, 5,1, 1, 1, anti_melee = false, anti_veh = false, anti_HI = false, hero_gear = true,},
+					{  UPG.ELD_WARP_IMPR_JUMP, 3,1, 1, 1, anti_melee = false, anti_veh = false, anti_HI = false, hero_gear = true,},
+					{  UPG.ELD_WARP_PHASE, 8,1, 1, 1, anti_melee = true, anti_veh = false, anti_HI = false, hero_gear = true,},
+					{  UPG.ELD_WARP_HEAVY, 5,1, 1, 0.5, anti_melee = false, anti_veh = false, anti_HI = false, hero_gear = true,},
+					{  UPG.ELD_WARP_WEB, 8,1, 1, 1, anti_melee = false, anti_veh = false, anti_HI = false, hero_gear = true,},
+					{  UPG.ELD_WARP_BLADES, 9,1, 1, 1, anti_melee = true, anti_veh = false, anti_HI = true, hero_gear = true,},
+		
+			          	}
+end

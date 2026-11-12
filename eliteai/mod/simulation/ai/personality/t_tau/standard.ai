@@ -1,0 +1,87 @@
+if EliteAI_VANILLA then
+-- elite-compat: generated from personality/space_marines/standard.ai (vanilla has no t_tau)
+import('personality/base_standard.ai')
+import('personality/t_tau/buildorder_lib.ai')
+
+-- randomly choose a build order from the given list defined in the buildorders lib 
+s_personality.buildorder = RandomlyChooseBuildorder( tau_buildorder )
+
+s_personality.securing_structures = 
+{
+	{pbg = EBP.TAU_SECURE, buildstyle = BS_Secure, demand_type = DEMAND_Building, limit = 3},
+}
+
+s_personality.resource_structures = 
+{
+	{pbg = EBP.TAU_GENERATOR, demand_type = DEMAND_Building, limit = 4},
+}
+
+s_personality.tech_tier_upgrades = 
+{
+	{pbg = UPG.TAU_TIER2,},
+}
+
+else
+
+-- create global race modifier
+raceFact=0.9
+
+import('personality/base_standard.ai')
+import('personality/t_tau/buildorder_lib.ai')
+
+print("reached this")
+
+-- randomly choose a build order from the given list defined in the buildorders lib 
+s_personality.buildorder = RandomlyChooseBuildorder( tau_buildorder )
+
+--kk add a value here we can use in the state_analysis code
+GEN_BUILDING = TAU_GENERATOR
+
+s_personality.securing_structures = 
+{
+	{pbg = EBP.TAU_SECURE, buildstyle = BS_Secure, demand_type = DEMAND_Building, limit = build_max},
+}
+
+s_personality.resource_structures = 
+{
+	{pbg = EBP.TAU_GENERATOR, demand_type = DEMAND_Building, limit = build_max + 2},
+}
+
+s_personality.tech_tier_upgrades = 
+{
+	{pbg = UPG.TAU_TIER2,},
+	{pbg = UPG.TAU_TIER3,},
+}
+
+
+-- INSTRUCTIONS FOR MODDERS FOR USING ESSENTIAL UPGRADE TABLE
+-- the following data is used in strategy_addon_purchase.ai in the function Update_SquadDemand()
+
+-- SECOND add the upgrade to the essential upgrade table, again copying the format exactly. Make sure to include all the correct commas
+-- the number value is the priority of the upgrade. Tier 1 upgrades need a higher priority than other upgrades due to a tier multiplier used in the function Upgrade_SquadDemand
+
+UPG.TAU_PATHFINDER_LEADER = PBG_Get("upgrade/pvp/race_tau/troops/tau_pathfinders_leader")
+UPG.TAU_FIRE_WARRIOR_LEADER = PBG_Get("upgrade/pvp/race_tau/troops/tau_fire_warriors_leader")
+UPG.TAU_FIRE_WARRIOR_RIFLES = PBG_Get("upgrade/pvp/race_tau/troops/tau_firewarriors_pulse_rifles")
+UPG.TAU_KROOT_LEADER = PBG_Get("upgrade/pvp/race_tau/troops/tau_kroot_leader")
+UPG.TAU_VESPID_LEADER = PBG_Get("upgrade/pvp/race_tau/troops/tau_vespid_leader")
+
+UPG.TAU_XV8_REPULSOR = PBG_Get("upgrade/pvp/race_tau/wargear/tau_xv8_repulsor_shield")
+UPG.TAU_XV8_DUAL = PBG_Get("upgrade/pvp/race_tau/wargear/tau_xv8_dual_wield")
+
+
+-- kk this line creates a nil value so we can use this in the table. This means we can have a tier multiplier but can allow game engine to create demand for an upgrade
+nilvalue= -99
+
+s_personality.essential_upgrades = 	{
+
+					{  UPG.TAU_PATHFINDER_LEADER, 15,1, 2, 3, anti_melee = false, anti_veh = false, anti_HI = true,},
+					{  UPG.TAU_FIRE_WARRIOR_RIFLES, 15,1, 2, 3, anti_melee = false, anti_veh = false, anti_HI = true,},
+					{  UPG.TAU_FIRE_WARRIOR_LEADER, 15,1, 2, 3, anti_melee = false, anti_veh = false, anti_HI = true,},
+					{  UPG.TAU_KROOT_LEADER, 15,1, 2, 3, anti_melee = true, anti_veh = false, anti_HI = true,},
+					{  UPG.TAU_VESPID_LEADER, 15,1, 2, 3, anti_melee = true, anti_veh = false, anti_HI = true,},
+
+					{  UPG.TAU_XV8_REPULSOR, 8,1, 1, 0.5, anti_melee = true, anti_veh = false, anti_HI = false, hero_gear = true, },
+					{  UPG.TAU_XV8_DUAL, 8,1, 1, 0.5, anti_melee = false, anti_veh = true, anti_HI = true, hero_gear = true, },
+			          	}
+end

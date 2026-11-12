@@ -309,6 +309,8 @@ frameprobe/ - FrameProbe.dll (off), eliteai/ - EliteAI.dll (store id newai since
     would desync everyone). Both are in the store only as "off" entries.
     EliteAI 0.11 (newai-20): back in the menu after a single-player match with the new AI, sends Playback\temp.rec to the replay
     site (mirrors checked first, 2.5 s; EliteAI.ini [Replays] Upload=0 off, Server=host;host); MMFind sends only matches with people.
+    newai-22 (0.2.63): eliteai/mod = the generated vanilla base (eliteai branch vanilla-ours, tools/vanilla_dispatch.py): 53 served
+    dispatchers in simulation/ai, default.ai with the people's plan + main.ai + mechanics.ai inside; [Lua] NewAI default vanilla+ours.
 
 ## Building
 

@@ -1,0 +1,1 @@
+- New AI 22: a new base - the logic of the original (vanilla) AI plus our mechanics; tier times and the opening purchases follow replays of strong players; fewer lost squads, vehicles drive home when the army retreats, tier-3 units are bought.

@@ -1,0 +1,173 @@
+if EliteAI_VANILLA then
+import('personality/base_standard.ai')
+import('personality/imperial_guard/buildorder_lib.ai')
+
+-- randomly choose a build order from the given list defined in the buildorders lib 
+s_personality.buildorder = RandomlyChooseBuildorder( imperial_guard_buildorder )
+
+s_personality.securing_structures = 
+{
+	{pbg = EBP.IG_SECURE, buildstyle = BS_Secure, demand_type = DEMAND_Building, limit = 3},
+}
+
+s_personality.resource_structures = 
+{
+	{pbg = EBP.IG_GENERATOR, demand_type = DEMAND_Building, limit = 4},
+}
+
+s_personality.tech_tier_upgrades = 
+{
+	{pbg = UPG.IG_TIER2,},
+}
+
+else
+
+-- create global race modifier
+raceFact=1.2
+
+import('personality/base_standard.ai')
+import('personality/imperial_guard/buildorder_lib.ai')
+
+-- randomly choose a build order from the given list defined in the buildorders lib 
+s_personality.buildorder = RandomlyChooseBuildorder( imperial_guard_buildorder )
+
+--kk add a value here we can use in the state_analysis code
+GEN_BUILDING = IG_GENERATOR
+
+s_personality.securing_structures = 
+{
+	{pbg = EBP.IG_SECURE, buildstyle = BS_Secure, demand_type = DEMAND_Building, limit = build_max},
+	{pbg = EBP.IG_TURRET, buildstyle = BS_Defend, demand_type = DEMAND_Building, limit = 1},
+}
+
+s_personality.resource_structures = 
+{
+	{pbg = EBP.IG_GENERATOR, demand_type = DEMAND_Building, limit = build_max+2},
+}
+
+s_personality.tech_tier_upgrades = 
+{
+	{pbg = UPG.IG_TIER2,},
+	{pbg = UPG.IG_TIER3,},
+}
+
+
+-- INSTRUCTIONS FOR MODDERS FOR USING ESSENTIAL UPGRADE TABLE
+-- the following data is used in strategy_addon_purchase.ai in the function Update_SquadDemand()
+
+-- FIRST add any important upgrades here. Copy the format exactly
+-- for example UPG.TYR_ANY_NAME_ULIKE = PBG_Get("upgrade/pvp/race_tyranid/troops/tyr_hormagaunt_adrenal_glands")
+
+-- SECOND add the upgrade to the essential upgrade table, again copying the format exactly. Make sure to include all the correct commas
+-- the number value is the priority of the upgrade. Tier 1 upgrades need a higher priority than other upgrades due to a tier multiplier used in the function Upgrade_SquadDemand
+
+UPG.IG_GUARD_SARGE 		= PBG_Get("upgrade/pvp/race_imperial_guard/troops/ig_guardsmen_leader")
+UPG.IG_GUARD_PLASMA 		= PBG_Get("upgrade/pvp/race_imperial_guard/troops/ig_guardsmen_plasma_gun")
+UPG.IG_GUARD_FLAMER 		= PBG_Get("upgrade/pvp/race_imperial_guard/troops/ig_guardsmen_flamer")
+UPG.IG_GUARD_COMMISAR 	= PBG_Get("upgrade/pvp/race_imperial_guard/troops/ig_guardsmen_squad_commisar")
+UPG.IG_SENTINEL_MISSILE	= PBG_Get("upgrade/pvp/race_imperial_guard/troops/ig_sentinel_missile")
+UPG.IG_DEVILS_DEMO 		= PBG_Get("upgrade/pvp/race_imperial_guard/troops/ig_devils_demolition_man")
+UPG.IG_HWT_LASER		= PBG_Get("upgrade/pvp/race_imperial_guard/troops/ig_heavy_weapon_squad_lascannon")
+UPG.IG_HWT_AUTO		= PBG_Get("upgrade/pvp/race_imperial_guard/troops/ig_heavy_weapon_squad_autocannon")
+UPG.IG_HWT_SARGE		= PBG_Get("upgrade/pvp/race_imperial_guard/troops/ig_heavy_weapon_squad_leader")
+UPG.IG_STORM_MELTA		= PBG_Get("upgrade/pvp/race_imperial_guard/troops/ig_stormtrooper_squad_av_kit")
+UPG.IG_STORM_LASER		= PBG_Get("upgrade/pvp/race_imperial_guard/troops/ig_stormtrooper_squad_assault_kit")
+UPG.IG_OGRYN_SARGE		= PBG_Get("upgrade/pvp/race_imperial_guard/troops/ig_ogryn_squad_leader")
+
+UPG.IG_SENTINEL_STOMP		= PBG_Get("upgrade/pvp/race_imperial_guard/troops/ig_sentinel_stomp")
+UPG.IG_SPOT_BIGGER		= PBG_Get("upgrade/pvp/race_imperial_guard/troops/ig_spotter_t2")
+UPG.IG_SPOT_BETTER		= PBG_Get("upgrade/pvp/race_imperial_guard/troops/ig_spotter_t3")
+UPG.IG_TURR_PLASMA		= PBG_Get("upgrade/pvp/race_imperial_guard/troops/ig_super_turret_plasma")
+UPG.IG_MANTI_EAGLE		= PBG_Get("upgrade/pvp/race_imperial_guard/troops/ig_storm_eagle")
+UPG.IG_KAS_SARGE		= PBG_Get("upgrade/pvp/race_imperial_guard/troops/ig_kasrkin_leader")
+UPG.IG_KAS_PLASMA		= PBG_Get("upgrade/pvp/race_imperial_guard/troops/ig_plasma_guns")
+UPG.IG_KAS_MELTA		= PBG_Get("upgrade/pvp/race_imperial_guard/troops/ig_melta_guns")
+UPG.IG_LEMAN_ELITE		= PBG_Get("upgrade/pvp/race_imperial_guard/troops/ig_leman_russ_elite")
+
+UPG.IG_INQ_ROSARIUS		= PBG_Get("upgrade/pvp/race_imperial_guard/wargear/ig_acc_inquisitor_refractor_field")
+UPG.IG_INQ_HERESIUS		= PBG_Get("upgrade/pvp/race_imperial_guard/wargear/ig_acc_inquisitor_stats")
+UPG.IG_INQ_MANDATE		= PBG_Get("upgrade/pvp/race_imperial_guard/wargear/ig_acc_inquisitor_flames")
+UPG.IG_INQ_INT_ARMOR		= PBG_Get("upgrade/pvp/race_imperial_guard/wargear/ig_armor_inquisitor_silently")
+UPG.IG_INQ_INT_EXCRUCIATE	= PBG_Get("upgrade/pvp/race_imperial_guard/wargear/ig_armor_inquisitor_assail")
+UPG.IG_INQ_INT_PURGATUS	= PBG_Get("upgrade/pvp/race_imperial_guard/wargear/ig_armor_inquisitor_purgatus")
+UPG.IG_INQ_INT_CROSSBOW	= PBG_Get("upgrade/pvp/race_imperial_guard/wargear/ig_weapon_inquisitor_crossbow")
+UPG.IG_INQ_INT_BRAZIER		= PBG_Get("upgrade/pvp/race_imperial_guard/wargear/ig_weapon_inquisitor_holy_brazier")
+UPG.IG_INQ_INT_INFERNO		= PBG_Get("upgrade/pvp/race_imperial_guard/wargear/ig_weapon_inquisitor_inferno_pistol")
+
+UPG.IG_COMM_CARAPACE		= PBG_Get("upgrade/pvp/race_imperial_guard/wargear/ig_armor_commissar_lord_execute_1")
+UPG.IG_COMM_FLAK		= PBG_Get("upgrade/pvp/race_imperial_guard/wargear/ig_armor_commissar_lord_execute_2")
+UPG.IG_COMM_BIONIC		= PBG_Get("upgrade/pvp/race_imperial_guard/wargear/ig_armor_commissar_lord_execute_3")
+UPG.IG_COMM_DISCIPLINE		= PBG_Get("upgrade/pvp/race_imperial_guard/wargear/ig_acc_commissar_lord_martyrdom")
+UPG.IG_COMM_STUBBORN		= PBG_Get("upgrade/pvp/race_imperial_guard/wargear/ig_acc_commissar_lord_inspiring_will")
+UPG.IG_COMM_WRATH		= PBG_Get("upgrade/pvp/race_imperial_guard/wargear/ig_acc_commissar_nuke")
+UPG.IG_COMM_SWORD		= PBG_Get("upgrade/pvp/race_imperial_guard/wargear/ig_weapon_commissar_lord_power_sword_battlecry")
+UPG.IG_COMM_FIST		= PBG_Get("upgrade/pvp/race_imperial_guard/wargear/ig_weapon_commissar_lord_power_fist")
+UPG.IG_COMM_FISTBR		= PBG_Get("upgrade/pvp/race_imperial_guard/wargear/ig_weapon_commissar_lord_power_fist")
+UPG.IG_GEN_GRENADE		= PBG_Get("upgrade/pvp/race_imperial_guard/wargear/ig_weapon_commander_grenade_launcher")
+UPG.IG_GEN_SNIPER		= PBG_Get("upgrade/pvp/race_imperial_guard/wargear/ig_weapon_commander_rifle")
+UPG.IG_GEN_MELTA		= PBG_Get("upgrade/pvp/race_imperial_guard/wargear/ig_weapon_commander_rifle")
+UPG.IG_GEN_CARAPACE		= PBG_Get("upgrade/pvp/race_imperial_guard/wargear/ig_armor_commander_stationary")
+UPG.IG_GEN_STABILIZE		= PBG_Get("upgrade/pvp/race_imperial_guard/wargear/ig_armor_commander_healing")
+UPG.IG_GEN_FLAK 		= PBG_Get("upgrade/pvp/race_imperial_guard/wargear/ig_armor_commander_stationary")
+UPG.IG_GEN_SARGE		= PBG_Get("upgrade/pvp/race_imperial_guard/wargear/ig_acc_commander_sergeant")
+UPG.IG_GEN_COMM 		= PBG_Get("upgrade/pvp/race_imperial_guard/wargear/ig_acc_commander_commissar")
+UPG.IG_GEN_VOX			= PBG_Get("upgrade/pvp/race_imperial_guard/wargear/ig_acc_commander_vox_operator")
+
+-- kk this line creates a nil value so we can use this in the table. This means we can have a tier multiplier but can allow game engine to create demand for an upgrade
+nilvalue= -99
+
+s_personality.essential_upgrades = 	{
+					{  UPG.IG_GUARD_SARGE, 150,1, 2, 3, anti_melee = false, anti_veh = false, anti_HI = false,},
+					{  UPG.IG_GUARD_FLAMER ,3, 1, 0.2, 0.2, anti_melee = true, anti_veh = false, anti_HI = false,},
+					{  UPG.IG_GUARD_PLASMA ,15,1, 1, 1, anti_melee = false, anti_veh = false, anti_HI = true,},
+					{  UPG.IG_GUARD_COMMISAR, 125,1, 1, 2, anti_melee = false, anti_veh = false, anti_HI = false,},
+					{  UPG.IG_SENTINEL_MISSILE,20,1, 1, 1, anti_melee = false, anti_veh = false, anti_HI = false,},
+					{  UPG.IG_DEVILS_DEMO,15,1, 1, 1, anti_melee = false, anti_veh = false, anti_HI = false,},
+					{  UPG.IG_HWT_LASER,1,1, 1, 3, anti_melee = false, anti_veh = true, anti_HI = false,},
+					{  UPG.IG_HWT_AUTO, 3,1, 0.5, 1, anti_melee = false, anti_veh = false, anti_HI = true,},
+					{  UPG.IG_HWT_SARGE ,20,1, 1, 1, anti_melee = false, anti_veh = false, anti_HI = false,},
+					{  UPG.IG_STORM_LASER ,10,1, 1, 1, anti_melee = false, anti_veh = false, anti_HI = true,},
+					{  UPG.IG_STORM_MELTA ,10,1, 1, 1, anti_melee = false, anti_veh = true, anti_HI = false,},
+					{  UPG.IG_OGRYN_SARGE ,50,1, 1, 1, anti_melee = true, anti_veh = false, anti_HI = false,},
+
+					{  UPG.IG_SPOT_BIGGER , 15,1, 1, 1, anti_melee = false, anti_veh = false, anti_HI = false,},
+					{  UPG.IG_SPOT_BETTER , 15,1, 1, 1, anti_melee = false, anti_veh = false, anti_HI = false,},
+					{  UPG.IG_TURR_PLASMA , 15,1, 1, 1, anti_melee = false, anti_veh = false, anti_HI = true,},
+					{  UPG.IG_MANTI_EAGLE , 15,1, 1, 1, anti_melee = false, anti_veh = false, anti_HI = false,},
+					{  UPG.IG_KAS_SARGE ,20,1, 1, 1, anti_melee = false, anti_veh = false, anti_HI = false,},
+					{  UPG.IG_KAS_PLASMA ,5,1, 1, 1, anti_melee = false, anti_veh = false, anti_HI = true,},
+					  {UPG.IG_KAS_MELTA ,5,1, 1, 1, anti_melee = false, anti_veh = true, anti_HI = false,},										
+					{  UPG.IG_LEMAN_ELITE ,5,1, 1, 1, anti_melee = false, anti_veh = false, anti_HI = false,},
+					
+					{  UPG.IG_INQ_ROSARIUS ,3,1, 0.5, 0.1, anti_melee = false, anti_veh = false, anti_HI = false, hero_gear = true,},
+					{  UPG.IG_INQ_HERESIUS ,3,1, 0.5, 0.1, anti_melee = false, anti_veh = false, anti_HI = false, hero_gear = true,},
+					{  UPG.IG_INQ_MANDATE ,5,1, 1, 2, anti_melee = false, anti_veh = false, anti_HI = false, hero_gear = true,},
+					{  UPG.IG_INQ_INT_ARMOR ,8,1, 1, 0.1, anti_melee = false, anti_veh = false, anti_HI = false, hero_gear = true,},
+					{  UPG.IG_INQ_INT_EXCRUCIATE,5,1, 1, 0.5, anti_melee = true, anti_veh = false, anti_HI = false, hero_gear = true,},
+					{  UPG.IG_INQ_INT_PURGATUS,8,1, 1, 1, anti_melee = true, anti_veh = false, anti_HI = true, hero_gear = true,},
+					{  UPG.IG_INQ_INT_CROSSBOW,5,1, 0.5, 0.5, anti_melee = true, anti_veh = false, anti_HI = false, hero_gear = true,},
+					{  UPG.IG_INQ_INT_BRAZIER,5,1, 1, 0.5, anti_melee = true, anti_veh = false, anti_HI = true, hero_gear = true,},
+					{  UPG.IG_INQ_INT_INFERNO,8,1, 1, 2, anti_melee = false, anti_veh = true, anti_HI = true, hero_gear = true,},
+
+					{  UPG.IG_COMM_CARAPACE ,3,1, 0.5, 0.1, anti_melee = false, anti_veh = false, anti_HI = false, hero_gear = true,},
+					{  UPG.IG_COMM_FLAK,5,1, 1.0, 1.0, anti_melee = false, anti_veh = false, anti_HI = false, hero_gear = true,},
+					{  UPG.IG_COMM_BIONIC,5,1, 1.0, 1.0, anti_melee = false, anti_veh = false, anti_HI = true, hero_gear = true,},
+					{  UPG.IG_COMM_STUBBORN ,5,1, 1, 1, anti_melee = true, anti_veh = false, anti_HI = false, hero_gear = true,},
+					{  UPG.IG_COMM_DISCIPLINE ,5,1, 0.5, 0.1, anti_melee = true, anti_veh = false, anti_HI = false, hero_gear = true,},
+					{  UPG.IG_COMM_WRATH ,5,1, 1, 1, anti_melee = false, anti_veh = false, anti_HI = true, hero_gear = true,},
+					{  UPG.IG_COMM_SWORD ,8,1, 0.75, 0.1, anti_melee = true, anti_veh = false, anti_HI = true, hero_gear = true,},
+					{  UPG.IG_COMM_FIST ,8,1, 1, 0.5, anti_melee = true, anti_veh = true, anti_HI = true, hero_gear = true,},
+					{  UPG.IG_COMM_FISTBR ,9,1, 1, 1, anti_melee = true, anti_veh = true, anti_HI = true, hero_gear = true,},
+
+					{  UPG.IG_SENTINEL_STOMP ,8,1, 1, 1, anti_melee = true, anti_veh = false, anti_HI = false, hero_gear = true,},
+					{  UPG.IG_GEN_GRENADE ,3,0.75, 0.25, 0.1, anti_melee = true, anti_veh = false, anti_HI = false, hero_gear = true,},
+					{  UPG.IG_GEN_SNIPER ,5,1, 1, 1, anti_melee = false, anti_veh = false, anti_HI = false, hero_gear = true,},
+					{  UPG.IG_GEN_MELTA,5,1, 1, 1, anti_melee = false, anti_veh = true, anti_HI = true, hero_gear = true,},
+					{  UPG.IG_GEN_CARAPACE ,3,1, 0.5, 0.2, anti_melee = false, anti_veh = false, anti_HI = false, hero_gear = true,},							
+					{  UPG.IG_GEN_STABILIZE, 5,1, 0.75, 0.5, anti_melee = false, anti_veh = false, anti_HI = false, hero_gear = true,},
+					{  UPG.IG_GEN_FLAK,  5,1, 1, 1, anti_melee = false, anti_veh = false, anti_HI = true, hero_gear = true,},	
+					{  UPG.IG_GEN_SARGE,  5,1, 1, 1, anti_melee = false, anti_veh = false, anti_HI = false, hero_gear = true,},	
+					{  UPG.IG_GEN_COMM,  8,1, 1, 1, anti_melee = false, anti_veh = false, anti_HI = false, hero_gear = true,},	
+					{  UPG.IG_GEN_VOX,  8,1, 1, 1, anti_melee = false, anti_veh = false, anti_HI = true, hero_gear = true,},	
+			      	}
+end
