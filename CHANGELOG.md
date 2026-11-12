@@ -4,6 +4,27 @@ Every version gets an entry here before it reaches `main`. CI then tags `vX.Y.Z`
 version (`X.Y.0`) it also publishes a GitHub Release with the DLLs and the entries since the previous `X.Y.0`.
 The version of the set lives only in `VERSION`; each DLL still writes its own version to its log.
 
+## 0.2.67 — 2026-11-12
+UI Scale (store uiscale-1, new, experiment, order 1080, off by default, games elite + vanilla): UIScale.dll, the in-match interface
+bigger than the game allows. No launcher change: the value is the launcher's existing UI scale slider (configuration.lua uiscale).
+
+Case: mid++ (11.11.2026, Elite 3.2.1, cursor x2) and the owner on 4K: "UI scale" in the launcher (uiscale 75-200) does nothing in Elite.
+- Cause (DOW2.exe 3.19, the same exe for vanilla and Elite): the 12 in-match interface movies (minimap, unit panel, abilities,
+  resources, portraits, objectives, Menu button) take their size from 0x00B7C130(h, k) = clamp(h / 1200 * uiscale / 100 * k, 0.5,
+  1.0) - never above the movies' own pixel size. 1280x800: 100 = 0.667, 150 = 200 = 300 = 1.0; 4K: 100 = 200 = 1.0 (stand, vanilla
+  and Elite alike: c_v4k_100 / c_v4k_200 / c_e4k_100 / c_e4k_200 identical). So above 1200 lines the setting can only shrink the HUD.
+  Not Windows (mid's game writes its logs in Documents\My Games, so the folder is not blocked; the setting is read through the
+  game's own SystemConfig) and not Elite (Elite follows uiscale exactly like vanilla at 800p and at 4K, Elite 75/100/150 11.11 too). The front end (main menu, multiplayer,
+  lobby) does not use uiscale at all and already grows with the screen height (4K screenshots).
+- UIScale puts a jump at 0x00B7C130 (bytes checked) to a stub with the same contract (2 stack args, ret 8, the result in xmm0,
+  eax/ecx/edx kept): scale = S * k, 0.25-4.0; Scale=auto (default): S = h / 1080 * uiscale / 100 (uiscale read the game's way,
+  Util.dll SystemConfig::GetSetting with DOW2.exe's key 0x013AAFB4, once per start); Scale=<percent> in UIScale.ini: fixed.
+  Every form has k = 1.0. Interface layout only - no simulation, sync or replays.
+- Stand 1 (12.11, sess.sh, shots in /var/www/media/dow2_archive/reports/uiscale_1112/): 4K auto 2.0 (Elite and vanilla), 4K 150 /
+  250 = 1.5 / 2.5, 1440p auto 1.333, 800p 75 / 100 / 150 / auto = 0.75 / 1.0 / 1.5 / 0.74,
+  Enabled=0 = the game's own; Elite started from the main menu (Profiler, InjectedFiles) loads it without trouble; the minimap stays
+  inside the screen at every size.
+
 ## 0.2.66 — 2026-11-12
 New AI 23 (store newai-23, experiment, off by default, Elite only): eliteai branch vanilla-ours a3a378a (steps 5-8 of the vanilla base
 on top of newai-22 = 53cfa69; EliteAI.dll 0.11 unchanged). eliteai/mod = mod/ of a3a378a byte for byte (the same 57 files as newai-22,

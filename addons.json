@@ -1382,5 +1382,30 @@
       "fr": "Quand le jeu oublie ses réglages (volume, graphismes) et n'enregistre aucun replay : Windows ne le laisse pas écrire dans Documents\\My Games (par exemple l'accès contrôlé aux dossiers). Le jeu les garde alors dans %LOCALAPPDATA%\\EliteLauncher\\Documents (copiés là la première fois). Si Documents fonctionne, rien ne change. Dans Elite, il faut Automatch activé. La vérification part avec « Envoyer les journaux ».",
       "de": "Wenn das Spiel seine Einstellungen (Lautstärke, Grafik) vergisst und keine Replays speichert: Windows lässt es nicht in Dokumente\\My Games schreiben (z. B. überwachter Ordnerzugriff). Dann legt das Spiel sie in %LOCALAPPDATA%\\EliteLauncher\\Documents ab (beim ersten Mal dorthin kopiert). Wenn Dokumente funktioniert, ändert sich nichts. In Elite muss Automatch an sein. Die Prüfung geht mit „Logs senden“ mit."
     }
+  },
+  "uiscale": {
+    "version": "1",
+    "dll": "UIScale.dll",
+    "default": false,
+    "games": [
+      "elite",
+      "vanilla"
+    ],
+    "category": "experiment",
+    "order": 1080,
+    "name": {
+      "en": "UI Scale",
+      "ru": "UI Scale",
+      "es": "UI Scale",
+      "fr": "UI Scale",
+      "de": "UI Scale"
+    },
+    "description": {
+      "en": "Makes the in-match interface (minimap, unit panel, abilities, resources, portraits) bigger at high resolutions: the game itself never grows it above its own size, so its UI scale does nothing above 100 % at 1440p and 4K. With the tick on, the size follows the screen height (1080p 100 %, 1440p 133 %, 4K 200 %) times the UI scale slider in Settings (at 4K: 75 % = 150, 150 % = 300). The main menu and the lobby stay as they are.",
+      "ru": "Крупнее интерфейс в матче (миникарта, панель отряда, способности, ресурсы, портреты) на больших разрешениях: сама игра не увеличивает его больше собственного размера, поэтому её масштаб интерфейса выше 100 % на 1440p и 4K ничего не меняет. С галочкой размер подбирается по высоте экрана (1080p — 100 %, 1440p — 133 %, 4K — 200 %) и умножается на ползунок «UI scale» в Настройках (на 4K: 75 % = 150, 150 % = 300). Главное меню и лобби не меняются.",
+      "es": "Agranda la interfaz de la partida (minimapa, panel de unidad, habilidades, recursos, retratos) en resoluciones altas: el juego nunca la hace más grande que su tamaño propio, así que su escala de interfaz no hace nada por encima del 100 % en 1440p y 4K. Con la casilla marcada, el tamaño sigue la altura de pantalla (1080p 100 %, 1440p 133 %, 4K 200 %) multiplicada por el control UI scale de Ajustes (en 4K: 75 % = 150, 150 % = 300). El menú principal y el lobby no cambian.",
+      "fr": "Agrandit l'interface en partie (minicarte, panneau d'unité, capacités, ressources, portraits) en haute résolution : le jeu ne la rend jamais plus grande que sa taille propre, donc son échelle d'interface ne change rien au-delà de 100 % en 1440p et 4K. Case cochée, la taille suit la hauteur d'écran (1080p 100 %, 1440p 133 %, 4K 200 %) multipliée par le curseur UI scale des Paramètres (en 4K : 75 % = 150, 150 % = 300). Le menu principal et le salon ne changent pas.",
+      "de": "Vergrößert die Oberfläche im Match (Minikarte, Einheitenleiste, Fähigkeiten, Ressourcen, Porträts) bei hohen Auflösungen: das Spiel macht sie nie größer als ihre eigene Größe, daher ändert seine UI-Skalierung über 100 % bei 1440p und 4K nichts. Mit Häkchen folgt die Größe der Bildschirmhöhe (1080p 100 %, 1440p 133 %, 4K 200 %) mal dem Regler UI scale in den Einstellungen (bei 4K: 75 % = 150, 150 % = 300). Hauptmenü und Lobby bleiben, wie sie sind."
+    }
   }
 }
