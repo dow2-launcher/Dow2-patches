@@ -1,0 +1,137 @@
+if EliteAI_VANILLA then
+import('personality/base_standard.ai')
+import('personality/orks/buildorder_lib.ai')
+
+-- randomly choose a build order from the given list defined in the buildorders lib 
+s_personality.buildorder = RandomlyChooseBuildorder( orks_buildorder )
+
+s_personality.securing_structures = 
+{
+	{pbg = EBP.ORK_SECURE, buildstyle = BS_Secure, demand_type = DEMAND_Building, limit = 3},
+}
+
+s_personality.resource_structures = 
+{
+	{pbg = EBP.ORK_GENERATOR, demand_type = DEMAND_Building, limit = 4},
+}
+
+s_personality.tech_tier_upgrades = 
+{
+	{pbg = UPG.ORK_TIER2,},
+}
+
+else
+
+-- create global race modifier
+raceFact=1.25
+
+import('personality/base_standard.ai')
+import('personality/orks/buildorder_lib.ai')
+
+-- randomly choose a build order from the given list defined in the buildorders lib 
+s_personality.buildorder = RandomlyChooseBuildorder( orks_buildorder )
+
+--kk add a value here we can use in the state_analysis code
+GEN_BUILDING = ORK_GENERATOR
+
+s_personality.securing_structures = 
+{
+	{pbg = EBP.ORK_SECURE, buildstyle = BS_Secure, demand_type = DEMAND_Building, limit = build_max},
+	{pbg = EBP.ORK_TURRET, buildstyle = BS_Defend, demand_type = DEMAND_Building, limit = 1},
+	{pbg = EBP.ORK_REINFORCEPOINT, buildstyle = BS_Defend, demand_type = DEMAND_Building, limit = 1},	
+}
+
+s_personality.resource_structures = 
+{
+	{pbg = EBP.ORK_GENERATOR, demand_type = DEMAND_Building, limit = build_max+1},
+}
+
+s_personality.tech_tier_upgrades = 
+{
+	{pbg = UPG.ORK_TIER2,},
+	{pbg = UPG.ORK_TIER3,},
+}
+
+UPG.ORK_BIG_SHOOTA 		= PBG_Get("upgrade/pvp/race_ork/troops/ork_big_shoota")
+UPG.ORK_SHOOTA_NOB 		= PBG_Get("upgrade/pvp/race_ork/troops/ork_nob_leader_shoota")
+UPG.ORK_SLUGGA_NOB 		= PBG_Get("upgrade/pvp/race_ork/troops/ork_nob_leader")
+UPG.ORK_SLUGGA_FLAMER 	= PBG_Get("upgrade/pvp/race_ork/troops/ork_burna")
+UPG.ORK_STORM_NOB 		= PBG_Get("upgrade/pvp/race_ork/troops/ork_nob_leader_stormboy")
+UPG.ORK_NOB_FRENZY 		= PBG_Get("upgrade/pvp/race_ork/troops/ork_nob_kit")
+
+UPG.ORK_KNOB_STIKKZ 		= PBG_Get("upgrade/pvp/race_ork/wargear/acc_kommando_grenade")
+UPG.ORK_KNOB_TRAP 		= PBG_Get("upgrade/pvp/race_ork/wargear/acc_kommando_booby_trap")
+UPG.ORK_KNOB_KABOOM		= PBG_Get("upgrade/pvp/race_ork/wargear/acc_kommando_kaboom")
+UPG.ORK_KNOB_EXTRA		= PBG_Get("upgrade/pvp/race_ork/wargear/arm_kommando_extra_equipment")
+UPG.ORK_KNOB_CAMO		= PBG_Get("upgrade/pvp/race_ork/wargear/arm_kommando_camo_armor")
+UPG.ORK_KNOB_BOOM		= PBG_Get("upgrade/pvp/race_ork/wargear/arm_kommando_boom_time")
+UPG.ORK_KNOB_KNIFE 		= PBG_Get("upgrade/pvp/race_ork/wargear/wp1_ork_kommando_hero_assassin_knife")
+UPG.ORK_KNOB_SHOOTA 		= PBG_Get("upgrade/pvp/race_ork/wargear/wp1_kommando_spechul_shoota")
+UPG.ORK_KNOB_ROKKIT 		= PBG_Get("upgrade/pvp/race_ork/wargear/wp1_kommando_rokkit_launcha")
+
+UPG.ORK_MEK_MINES 		= PBG_Get("upgrade/pvp/race_ork/wargear/acc_mekboy_prox_mines")
+UPG.ORK_MEK_FORCEFIELD	= PBG_Get("upgrade/pvp/race_ork/wargear/acc_mekboy_force_field")
+UPG.ORK_MEK_TUFFBEAM 	= PBG_Get("upgrade/pvp/race_ork/wargear/acc_mekboy_uber_generator")
+UPG.ORK_MEK_BATTERY		= PBG_Get("upgrade/pvp/race_ork/wargear/arm_mekboy_battery_pack")
+UPG.ORK_MEK_ELECTRIC		= PBG_Get("upgrade/pvp/race_ork/wargear/arm_mekboy_electric_armor")
+UPG.ORK_MEK_RUMBLAH		= PBG_Get("upgrade/pvp/race_ork/wargear/arm_mekboy_earthquake_machine")
+UPG.ORK_MEK_DAKKA		= PBG_Get("upgrade/pvp/race_ork/wargear/wp1_mekboy_big_shoota")
+UPG.ORK_MEK_DEFFGUN		= PBG_Get("upgrade/pvp/race_ork/wargear/wp1_mekboy_deffgun")
+UPG.ORK_MEK_BEAMY		= PBG_Get("upgrade/pvp/race_ork/wargear/wp1_ork_mekboy_beamy_deffgun")
+
+UPG.ORK_BOSS_SHOOTA 		= PBG_Get("upgrade/pvp/race_ork/wargear/wp1_ork_kustom_shoota")
+UPG.ORK_BOSS_HAMMER 		= PBG_Get("upgrade/pvp/race_ork/wargear/wp1_ork_bang_bang_hammer")
+UPG.ORK_BOSS_KLAW 		= PBG_Get("upgrade/pvp/race_ork/wargear/wp1_ork_warboss_power_claw")
+UPG.ORK_BOSS_STOMP 		= PBG_Get("upgrade/pvp/race_ork/wargear/arm_ork_warboss_cybork_bits")
+UPG.ORK_BOSS_SPIKY 		= PBG_Get("upgrade/pvp/race_ork/wargear/arm_ork_warboss_spiky_armor")
+UPG.ORK_BOSS_HEAVY 		= PBG_Get("upgrade/pvp/race_ork/wargear/arm_ork_warboss_mega_armor")
+UPG.ORK_BOSS_ANGRY 		= PBG_Get("upgrade/pvp/race_ork/wargear/acc_warboss_angry_bits")
+UPG.ORK_BOSS_TROPHY 		= PBG_Get("upgrade/pvp/race_ork/wargear/acc_warboss_trophy_rack")
+UPG.ORK_BOSS_POLE		= PBG_Get("upgrade/pvp/race_ork/wargear/acc_warboss_boss_pole")
+
+-- kk this line creates a nil value so we can use this in the table. This means we can have a tier multiplier but can allow game engine to create demand for an upgrade
+nilvalue= -99
+
+s_personality.essential_upgrades = 	{
+
+				{  UPG.ORK_BIG_SHOOTA, 150,1, 1, 1, anti_melee =true, anti_veh = false, anti_HI = false,},
+				{  UPG.ORK_SHOOTA_NOB,40, 0.8, 2, 3, anti_melee = false, anti_veh = false, anti_HI = false,},
+				{  UPG.ORK_SLUGGA_NOB,50,1, 1, 3, anti_melee = false, anti_veh = false, anti_HI = true,},
+				 {  UPG.ORK_SLUGGA_FLAMER, 50,1, 2, 3, anti_melee = false, anti_veh = false, anti_HI = true,},
+				{  UPG.ORK_STORM_NOB,50,1, 1, 1, anti_melee = false, anti_veh = false, anti_HI = false,},
+				{  UPG.ORK_NOB_FRENZY,500,1, 1, 1, anti_melee = false, anti_veh = false, anti_HI = false,},
+
+				{  UPG.ORK_KNOB_TRAP, 1,1, 1, 1, anti_melee = false, anti_veh = false, anti_HI = false, hero_gear = true,},
+				{  UPG.ORK_KNOB_STIKKZ, 3,1, 1, 1, anti_melee = false, anti_veh = false, anti_HI = true, hero_gear = true,},
+				{  UPG.ORK_KNOB_KABOOM, 3,1, 1, 1, anti_melee = false, anti_veh = false, anti_HI = false, hero_gear = true,},
+				{  UPG.ORK_KNOB_EXTRA, 5,1, 1, 0.5, anti_melee = false, anti_veh = false, anti_HI = false, hero_gear = true,},
+				{  UPG.ORK_KNOB_CAMO, 8,1, 1, 1, anti_melee = false, anti_veh = false, anti_HI = false, hero_gear = true,},	
+				{  UPG.ORK_KNOB_CAMO, 5,1, 1, 1, anti_melee = false, anti_veh = false, anti_HI = false, hero_gear = true,},				
+				{  UPG.ORK_KNOB_KNIFE, 5,1, 0.75, 0.5, anti_melee = false, anti_veh = false, anti_HI = false, hero_gear = true,},
+				{  UPG.ORK_KNOB_SHOOTA, 8,1, 1, 1, anti_melee = true, anti_veh = false, anti_HI = false, hero_gear = true,},
+				{  UPG.ORK_KNOB_ROKKIT, 3,1, 1, 1, anti_melee = false, anti_veh = true, anti_HI = false, hero_gear = true,},
+
+				{  UPG.ORK_MEK_MINES, 1,1, 0.5, 0.5, anti_melee = false, anti_veh = false, anti_HI = false, hero_gear = true,},
+				{  UPG.ORK_MEK_FORCEFIELD, 5,1, 1, 1, anti_melee = false, anti_veh = false, anti_HI = false, hero_gear = true,},
+				{  UPG.ORK_MEK_TUFFBEAM, 3,1, 1, 1, anti_melee = false, anti_veh = false, anti_HI = false, hero_gear = true,},
+				{  UPG.ORK_MEK_BATTERY, 5,1, 1, 1, anti_melee = false, anti_veh = false, anti_HI = false, hero_gear = true,},
+				{  UPG.ORK_MEK_ELECTRIC, 5,0.5, 1, 1, anti_melee = true, anti_veh = false, anti_HI = false, hero_gear = true,},
+				{  UPG.ORK_MEK_RUMBLAH, 8,1, 1, 1, anti_melee = true, anti_veh = false, anti_HI = true, hero_gear = true,},
+				{  UPG.ORK_MEK_DAKKA, 3,1, 1, 1, anti_melee = false, anti_veh = false, anti_HI = true, hero_gear = true,},
+				{  UPG.ORK_MEK_DEFFGUN, 5,1, 1, 1, anti_melee = true, anti_veh = false, anti_HI = false, hero_gear = true,},
+				{  UPG.ORK_MEK_BEAMY, 5,1, 1, 1, anti_melee = false, anti_veh = true, anti_HI = false, hero_gear = true,},
+
+				{  UPG.ORK_BOSS_SHOOTA, 3, 1, 0.5, 0.5, anti_melee = true, anti_veh = false, anti_HI = false, hero_gear = true,},
+				{  UPG.ORK_BOSS_HAMMER, 5,1, 0.5, 0.5, anti_melee = true, anti_veh = false, anti_HI = false, hero_gear = true,},
+				{  UPG.ORK_BOSS_KLAW, 5,1, 2, 2, anti_melee = false, anti_veh = true, anti_HI = true, hero_gear = true,},
+				{  UPG.ORK_BOSS_STOMP, 6,1, 1, 0.2, anti_melee = true, anti_veh = false, anti_HI = false, hero_gear = true,},
+				{  UPG.ORK_BOSS_SPIKY, 5,1, 0.5, 0.2, anti_melee = true, anti_veh = false, anti_HI = false, hero_gear = true,},
+				{  UPG.ORK_BOSS_MEGA, 8,1, 1, 2, anti_melee = true, anti_veh = false, anti_HI = true, hero_gear = true,},
+				{  UPG.ORK_BOSS_ANGRY, 3,1, 0.5, 0.5, anti_melee = false, anti_veh = false, anti_HI = true, hero_gear = true,},
+				{  UPG.ORK_BOSS_TROPHY, 1, 1, 0.5, 0.5, anti_melee = false, anti_veh = false, anti_HI = false, hero_gear = true,},
+				{  UPG.ORK_BOSS_POLE, 5,  1, 1, 1, anti_melee = false, anti_veh = false, anti_HI = false, hero_gear = true, },
+
+
+			          	}
+
+end

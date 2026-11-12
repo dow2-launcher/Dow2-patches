@@ -1,0 +1,200 @@
+if EliteAI_VANILLA then
+import('personality/base_standard.ai')
+import('personality/space_marines/buildorder_lib.ai')
+
+-- randomly choose a build order from the given list defined in the buildorders lib 
+s_personality.buildorder = RandomlyChooseBuildorder( space_marines_buildorder )
+
+s_personality.securing_structures = 
+{
+	{pbg = EBP.SM_SECURE, buildstyle = BS_Secure, demand_type = DEMAND_Building, limit = 3},
+}
+
+s_personality.resource_structures = 
+{
+	{pbg = EBP.SM_GENERATOR, demand_type = DEMAND_Building, limit = 4},
+}
+
+s_personality.tech_tier_upgrades = 
+{
+	{pbg = UPG.SM_TIER2,},
+}
+
+else
+
+-- create global race modifier
+raceFact=0.9
+
+import('personality/base_standard.ai')
+import('personality/space_marines/buildorder_lib.ai')
+
+-- randomly choose a build order from the given list defined in the buildorders lib 
+s_personality.buildorder = RandomlyChooseBuildorder( space_marines_buildorder )
+
+--kk add a value here we can use in the state_analysis code
+GEN_BUILDING = SM_GENERATOR
+
+s_personality.securing_structures = 
+{
+	{pbg = EBP.SM_SECURE, buildstyle = BS_Secure, demand_type = DEMAND_Building, limit = build_max},
+	{pbg = EBP.SM_TURRET, buildstyle = BS_Defend, demand_type = DEMAND_Building, limit = 1},
+	{pbg = EBP.SM_REINFORCEPOINT, buildstyle = BS_Defend, demand_type = DEMAND_Building, limit = 0},
+}
+
+s_personality.resource_structures = 
+{
+	{pbg = EBP.SM_GENERATOR, demand_type = DEMAND_Building, limit = build_max + 2},
+}
+
+s_personality.tech_tier_upgrades = 
+{
+	{pbg = UPG.SM_TIER2,},
+	{pbg = UPG.SM_TIER3,},
+}
+
+
+-- INSTRUCTIONS FOR MODDERS FOR USING ESSENTIAL UPGRADE TABLE
+-- the following data is used in strategy_addon_purchase.ai in the function Update_SquadDemand()
+
+-- FIRST add any important upgrades here. Copy the format exactly
+-- for example UPG.TYR_ANY_NAME_ULIKE = PBG_Get("upgrade/pvp/race_tyranid/troops/tyr_hormagaunt_adrenal_glands")
+
+-- SECOND add the upgrade to the essential upgrade table, again copying the format exactly. Make sure to include all the correct commas
+-- the number value is the priority of the upgrade. Tier 1 upgrades need a higher priority than other upgrades due to a tier multiplier used in the function Upgrade_SquadDemand
+
+UPG.SM_SCOUT_SARGE = PBG_Get("upgrade/pvp/race_marine/troops/sm_scout_squad_sergeant")
+UPG.SM_SCOUT_SHOT = PBG_Get("upgrade/pvp/race_marine/troops/sm_shotgun")
+UPG.SM_SCOUT_SNIPER = PBG_Get("upgrade/pvp/race_marine/troops/sm_sniper_rifle")
+UPG.SM_TAC_SARGE = PBG_Get("upgrade/pvp/race_marine/troops/sm_tactical_squad_sergeant")
+UPG.SM_TAC_FLAMER = PBG_Get("upgrade/pvp/race_marine/troops/sm_flamer")
+UPG.SM_TAC_PLASMA = PBG_Get("upgrade/pvp/race_marine/troops/sm_plasma_gun")
+UPG.SM_TAC_MISSILE = PBG_Get("upgrade/pvp/race_marine/troops/sm_missile_launcher")
+UPG.SM_ASM_SARGE = PBG_Get("upgrade/pvp/race_marine/troops/sm_assault_squad_sergeant")
+UPG.SM_ASM_MELTA = PBG_Get("upgrade/pvp/race_marine/troops/melta_bombs")
+UPG.SM_DEV_CANNON = PBG_Get("upgrade/pvp/race_marine/troops/heavy_bolter_rounds")
+UPG.SM_DEV_LASER = PBG_Get("upgrade/pvp/race_marine/troops/sm_devastator_lascannon")
+
+
+UPG.SM_SCOUT_INF = PBG_Get("upgrade/pvp/race_marine/troops/sm_scout_infiltration")
+
+UPG.SM_APO_SWORD= PBG_Get("upgrade/pvp/race_marine/wargear/wp_apoth_sanguine_chainsword")
+UPG.SM_APO_MASTERBOLTER= PBG_Get("upgrade/pvp/race_marine/wargear/wp_apoth_master_crafted_bolter")
+UPG.SM_APO_AXE= PBG_Get("upgrade/pvp/race_marine/wargear/wp_apoth_anointed_power_axe")
+UPG.SM_APO_APOTH= PBG_Get("upgrade/pvp/race_marine/wargear/arm_apoth_armour_of_the_apothecarion")
+UPG.SM_APO_PURITY= PBG_Get("upgrade/pvp/race_marine/wargear/arm_apoth_gyro_stabilized_armour")
+UPG.SM_APO_STIMS= PBG_Get("upgrade/pvp/race_marine/wargear/arm_apoth_combat_stimulant_equipment")
+UPG.SM_APO_RITES= PBG_Get("upgrade/pvp/race_marine/wargear/acc_apoth_purification_rites")
+UPG.SM_APO_EQUIP= PBG_Get("upgrade/pvp/race_marine/wargear/acc_apoth_improved_medical_equipment")
+UPG.SM_APO_VIAL= PBG_Get("upgrade/pvp/race_marine/wargear/acc_apoth_toxin_grenades")
+
+UPG.SM_FORCE_SWORD= PBG_Get("upgrade/pvp/race_marine/wargear/wp_force_power_sword")
+UPG.SM_FORCE_HAMMER= PBG_Get("upgrade/pvp/race_marine/wargear/wp_force_two_handed_hammer")
+UPG.SM_FORCE_SHIELD= PBG_Get("upgrade/pvp/race_marine/wargear/wp_force_sword_and_storm_shield")
+UPG.SM_FORCE_FIST= PBG_Get("upgrade/pvp/race_marine/wargear/wp_force_power_sword")
+UPG.SM_FORCE_CANNON= PBG_Get("upgrade/pvp/race_marine/wargear/wp_force_assault_cannon")
+UPG.SM_FORCE_FLAMER= PBG_Get("upgrade/pvp/race_marine/wargear/wp_force_heavy_flamer")
+UPG.SM_FORCE_CLAWS= PBG_Get("upgrade/pvp/race_marine/wargear/wp_force_lightning_claws")
+UPG.SM_FORCE_ARTIFICER= PBG_Get("upgrade/pvp/race_marine/wargear/arm_force_artificer_armour")
+UPG.SM_FORCE_ALACRITY= PBG_Get("upgrade/pvp/race_marine/wargear/arm_force_pneumatically_enhanced_armour")
+UPG.SM_FORCE_TERMINATOR= PBG_Get("upgrade/pvp/race_marine/wargear/arm_force_terminator_armour")
+UPG.SM_FORCE_HALO= PBG_Get("upgrade/pvp/race_marine/wargear/acc_force_iron_halo")
+UPG.SM_FORCE_STANDARD= PBG_Get("upgrade/pvp/race_marine/wargear/acc_force_sacred_standard")
+UPG.SM_FORCE_TELEPORT= PBG_Get("upgrade/pvp/race_marine/wargear/acc_force_teleporter_pack")
+
+UPG.SM_TECH_PLASMA= PBG_Get("upgrade/pvp/race_marine/wargear/wp_tech_plasma_gun")
+UPG.SM_TECH_MELTA= PBG_Get("upgrade/pvp/race_marine/wargear/wp_tech_meltagun")
+UPG.SM_TECH_MCB= PBG_Get("upgrade/pvp/race_marine/wargear/wp_tech_master_crafted_bolter")
+UPG.SM_TECH_CONSECRATED= PBG_Get("upgrade/pvp/race_marine/wargear/wp_tech_consecrated_bolter")
+UPG.SM_TECH_ARTIFICER= PBG_Get("upgrade/pvp/race_marine/wargear/arm_tech_artificer_armour")
+UPG.SM_TECH_BIONIC= PBG_Get("upgrade/pvp/race_marine/wargear/arm_tech_bionics")
+UPG.SM_TECH_SIGNUM= PBG_Get("upgrade/pvp/race_marine/wargear/arm_signum_armor")
+UPG.SM_TECH_ORBS= PBG_Get("upgrade/pvp/race_marine/wargear/acc_tech_orbs_of_omnissiah")
+UPG.SM_TECH_FIELD= PBG_Get("upgrade/pvp/race_marine/wargear/acc_tech_refractor_field")
+
+UPG.GK_ASSASSIN_HEALTH = PBG_Get("upgrade/pvp/race_grey_knights/troops/gk_vindicare_health")
+UPG.GK_INTERCEPT_JUSTICAR = PBG_Get("upgrade/pvp/race_grey_knights/troops/gk_interceptor_squad_justicar")
+UPG.GK_LIB_HAMMER = PBG_Get("upgrade/pvp/race_grey_knights/troops/gk_lib_hammerhand")
+UPG.GK_PURG_PSYCANNON = PBG_Get("upgrade/pvp/race_grey_knights/troops/gk_purgation_psycannons")
+UPG.GK_STORM_SARGE= PBG_Get("upgrade/pvp/race_grey_knights/troops/gk_storm_trooper_sergeant")
+UPG.GK_STORM_PLASMA= PBG_Get("upgrade/pvp/race_grey_knights/troops/gk_plasma_gun")
+UPG.GK_OPERATIVE_LEADER= PBG_Get("upgrade/pvp/race_grey_knights/troops/gk_operative_leader")
+UPG.GK_OPERATIVE_FALLBACK= PBG_Get("upgrade/pvp/race_grey_knights/troops/gk_operative_fallback")
+UPG.GK_STRIKE_JUSTICAR = PBG_Get("upgrade/pvp/race_grey_knights/troops/gk_strike_squad_justicar")
+
+UPG.GK_CAPT_PURGE = PBG_Get("upgrade/pvp/race_grey_knights/wargear/acc_captaim_purge")
+UPG.GK_CAPT_BLESSED = PBG_Get("upgrade/pvp/race_grey_knights/wargear/arm_captain_blessed_aegis")
+UPG.GK_CAPT_MANTLE = PBG_Get("upgrade/pvp/race_grey_knights/wargear/arm_captain_mantle")
+UPG.GK_CAPT_SWORD= PBG_Get("upgrade/pvp/race_grey_knights/wargear/wp_captain_nemesis_sword")
+UPG.GK_CAPT_HALBERD= PBG_Get("upgrade/pvp/race_grey_knights/wargear/wp_captain_nemesis_halberd")
+
+
+-- kk this line creates a nil value so we can use this in the table. This means we can have a tier multiplier but can allow game engine to create demand for an upgrade
+nilvalue= -99
+
+s_personality.essential_upgrades = 	{
+					{  UPG.SM_SCOUT_SARGE, 15,1, 2, 3, anti_melee = true, anti_veh = false, anti_HI = true,},
+					{  UPG.SM_SCOUT_SHOT, 15,1, 1, 0.5, anti_melee = true, anti_veh = false, anti_HI = false,},
+					{  UPG.SM_SCOUT_SNIPER, 10,1, 1, 1.5, anti_melee = false, anti_veh = false, anti_HI = true,},
+					{  UPG.SM_TAC_PLASMA, 5,1, 1, 1, anti_melee = false, anti_veh = false, anti_HI = true,},
+					{  UPG.SM_TAC_MISSILE, 3,1, 1, 1, anti_melee = false, anti_veh = true, anti_HI = false,},
+					{  UPG.SM_TAC_SARGE,50,1, 1, 3, anti_melee = false, anti_veh = false, anti_HI = false,},
+					{  UPG.SM_TAC_FLAMER, 1, 1, 0.5, 0.5, anti_melee = true, anti_veh = false, anti_HI = false,},
+					{  UPG.SM_ASM_SARGE, 50,1, 1, 2, anti_melee = false, anti_veh = false, anti_HI = false,},
+					{  UPG.SM_ASM_MELTA, 15,1, 1, 3, anti_melee = false, anti_veh = true, anti_HI = false,},
+					{  UPG.SM_DEV_LASER, 1,1, 1, 3, anti_melee = false, anti_veh = true, anti_HI = false,},
+					{  UPG.SM_DEV_CANNON, 3, 1, 0.5, 0.5, anti_melee = false, anti_veh = true, anti_HI = true,},
+
+					{  UPG.SM_SCOUT_INF, 3,1, 1, 1, anti_melee = false, anti_veh = false, anti_HI = false,},
+
+					{  UPG.SM_APO_SWORD, 6,1, 1, 0.2, anti_melee = true, anti_veh = false, anti_HI = false, hero_gear = true, },
+					{  UPG.SM_APO_MASTERBOLTER, 5,1, 0.5, 0.2, anti_melee = false, anti_veh = false, anti_HI = false, hero_gear = true, },
+					{  UPG.SM_APO_AXE, 5,1, 1, 1, anti_melee = false, anti_veh = false, anti_HI = true, hero_gear = true, },
+					{  UPG.SM_APO_APOTH, 8, 1, 1, 1, anti_melee = false, anti_veh = false, anti_HI = false, hero_gear = true, },
+					{  UPG.SM_APO_STIMS, 5, 1, 1, 1, anti_melee = false, anti_veh = false, anti_HI = false, hero_gear = true, },
+					{  UPG.SM_APO_PURITY, 5, 2, 0.5, 0.2, anti_melee = false, anti_veh = false, anti_HI = false, hero_gear = true, },
+					{  UPG.SM_APO_RITES, 8, 1, 0.5, 0.2, anti_melee = false, anti_veh = false, anti_HI = false, hero_gear = true, },
+					{  UPG.SM_APO_EQUIP, 5, 1, 0.5, 0.2, anti_melee = false, anti_veh = false, anti_HI = false, hero_gear = true, },
+					{  UPG.SM_APO_VIAL, 8, 1, 1, 0.2, anti_melee = true, anti_veh = false, anti_HI = false, hero_gear = true, },
+
+					{  UPG.SM_FORCE_HAMMER, 8,1, 1, 1, anti_melee = true, anti_veh = false, anti_HI = false, hero_gear = true, },
+					{  UPG.SM_FORCE_SWORD, 5,1, 0.5, 0.2, anti_melee = false, anti_veh = false, anti_HI = false, hero_gear = true, },
+					{  UPG.SM_FORCE_SHIELD, 5,1, 0.5, 0.2, anti_melee = false, anti_veh = false, anti_HI = false, hero_gear = true, },
+					{  UPG.SM_FORCE_FIST, 9,1, 1, 1, anti_melee = false, anti_veh = true, anti_HI = false, hero_gear = true, },
+					{  UPG.SM_FORCE_CANNON, 8, 0.1, 0.1, 1, anti_melee = false, anti_veh = true, anti_HI = false, hero_gear = true, },
+					{  UPG.SM_FORCE_FLAMER, 5, 0.1, 0.1, 1, anti_melee = true, anti_veh = true, anti_HI = false, hero_gear = true, },
+					{  UPG.SM_FORCE_CLAWS, 9, 0.1, 0.1, 1, anti_melee = false, anti_veh = true, anti_HI = false, hero_gear = true, },
+					{  UPG.SM_FORCE_ARTIFICER, 5, 1, 1, 0.2, anti_melee = false, anti_veh = false, anti_HI = false, hero_gear = true, },
+					{  UPG.SM_FORCE_ALACRITY, 8, 1, 1, 0.2, anti_melee = true, anti_veh = false, anti_HI = false, hero_gear = true, },
+					{  UPG.SM_FORCE_TERMINATOR, 9, 0.2, 0.2, 1, anti_melee = true, anti_veh = false, anti_HI = true, hero_gear = true, },
+					{  UPG.SM_FORCE_HALO, 8, 1, 1, 0.5, anti_melee = true, anti_veh = false, anti_HI = false, hero_gear = true, },
+					{  UPG.SM_FORCE_STANDARD, 5, 1, 1, 0.5, anti_melee = false, anti_veh = false, anti_HI = false, hero_gear = true, },
+					{  UPG.SM_FORCE_TELEPORT, 5, 1, 1, 0.5, anti_melee = false, anti_veh = true, anti_HI = false, hero_gear = true, },
+
+					{  UPG.SM_TECH_PLASMA, 6,1, 1, 1, anti_melee = false, anti_veh = false, anti_HI = true, hero_gear = true, },
+					{  UPG.SM_TECH_MELTA, 8,1, 1, 1, anti_melee = false, anti_veh = true, anti_HI = true, hero_gear = true, },
+					{  UPG.SM_TECH_MCB, 8,1, 0.5, 0.2, anti_melee = true, anti_veh = false, anti_HI = false, hero_gear = true, },
+					{  UPG.SM_TECH_CONSECRATED, 5,1, 1, 1, anti_melee = false, anti_veh = false, anti_HI = false, hero_gear = true, },
+					{  UPG.SM_TECH_ARTIFICER, 6,1, 1, 0.2, anti_melee = false, anti_veh = false, anti_HI = false, hero_gear = true, },
+					{  UPG.SM_TECH_BIONIC, 5, 1, 0.5, 0.2, anti_melee = true, anti_veh = false, anti_HI = false, hero_gear = true, },
+					{  UPG.SM_TECH_SIGNUM, 8, 1, 1,1, anti_melee = false, anti_veh = false, anti_HI = false, hero_gear = true, },
+					{  UPG.SM_TECH_ORBS, 8,1, 1, 1, anti_melee = false, anti_veh = true, anti_HI = false, hero_gear = true, },
+					{  UPG.SM_TECH_FIELD, 5,1, 1, 1, anti_melee = false, anti_veh = false, anti_HI = false, hero_gear = true, },
+	
+					{  UPG.GK_ASSASSIN_HEALTH ,20,1, 1, 1, anti_melee = false, anti_veh = false, anti_HI = false,},
+					{  UPG.GK_INTERCEPT_JUSTICAR ,8,1, 1, 1, anti_melee = false, anti_veh = false, anti_HI = false,},
+					{  UPG.GK_LIB_HAMMER ,18,1, 1, 1, anti_melee = false, anti_veh = false, anti_HI = false,},
+					{  UPG.GK_PURG_PSYCANNON  ,8,1, 1, 1, anti_melee = false, anti_veh = true, anti_HI = true,},
+					{  UPG.GK_STORM_SARGE  ,150,1, 1, 1, anti_melee = true, anti_veh = false, anti_HI = false,},
+					{  UPG.GK_STORM_PLASMA  ,25,1, 1, 1, anti_melee = false, anti_veh = false, anti_HI = true,},
+					{  UPG.GK_OPERATIVE_LEADER  ,20,1, 1, 2, anti_melee = true, anti_veh = false, anti_HI = false,},
+					{  UPG.GK_OPERATIVE_FALLBACK  ,25,1, 2, 3, anti_melee = false, anti_veh = false, anti_HI = false,},
+					{  UPG.GK_STRIKE_JUSTICAR ,20,1, 1, 1, anti_melee = false, anti_veh = false, anti_HI = false,},
+					
+					{  UPG.GK_CAPT_PURGE , 8,1, 1, 0.5, anti_melee = false, anti_veh = false, anti_HI = false, hero_gear = true, },
+					{  UPG.GK_CAPT_BLESSED, 5,1, 1, 0.5, anti_melee = false, anti_veh = false, anti_HI = false, hero_gear = true, },
+					{  UPG.GK_CAPT_MANTLE, 5,1, 1, 0.5, anti_melee = false, anti_veh = false, anti_HI = false, hero_gear = true, },
+					{  UPG.GK_CAPT_SWORD, 5,1, 0.5, 0.5, anti_melee = false, anti_veh = false, anti_HI = false, hero_gear = true, },
+					{  UPG.GK_CAPT_HALBERD, 6,1, 1, 1, anti_melee = true, anti_veh = false, anti_HI = false, hero_gear = true, },
+					
+			          	}
+end

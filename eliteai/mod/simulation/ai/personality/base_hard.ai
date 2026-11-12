@@ -1,0 +1,36 @@
+if EliteAI_VANILLA then
+
+
+-- overrides of the defaults
+s_personality.start_attack_time = 0
+s_personality.start_attack_time_variance = 0
+s_personality.military_strength_modifier = 1.0
+s_personality.ability_avoidance_percentage = 0.80
+s_personality.demand_variance = 0.20
+s_personality.min_captured_pts_before_securing = 4
+s_personality.max_secured_pts = 6
+s_personality.vp_aggressiveness = 0.7
+s_personality.prefer_power_percentage = 0.6
+
+else
+
+
+-- overrides of the defaults
+s_personality.start_attack_time = 0
+s_personality.start_attack_time_variance = 0
+s_personality.military_strength_modifier = 1.0
+s_personality.ability_avoidance_percentage = 1
+s_personality.demand_variance = 0.15
+s_personality.min_captured_pts_before_securing = 1
+s_personality.max_secured_pts = 25
+s_personality.vp_aggressiveness = 0.6
+s_personality.prefer_power_percentage = 0.75
+s_personality.min_military_value_start = -1
+s_personality.min_military_value_increment_per_minute = 0
+s_personality.defensiveness = 0.2
+s_personality.min_percentage_pts_captured_for_vp = 0
+s_personality.demand_cost = 1.5
+s_personality.demand_variance_tier2_start = 0.05					-- how much variance in the demand when tier 2 just started
+s_personality.demand_variance_tier3_start = 0.05					-- how much variance in the demand when tier 3 just started
+
+end

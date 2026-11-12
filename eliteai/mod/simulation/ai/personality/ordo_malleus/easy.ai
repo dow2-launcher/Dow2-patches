@@ -1,0 +1,44 @@
+if EliteAI_VANILLA then
+-- elite-compat: generated from personality/space_marines/easy.ai (vanilla has no ordo_malleus)
+import('personality/base_easy.ai')
+import('personality/ordo_malleus/buildorder_lib.ai')
+
+-- randomly choose a build order from the given list defined in the buildorders lib 
+s_personality.buildorder = RandomlyChooseBuildorder( ordo_malleus_buildorder )
+
+s_personality.securing_structures = 
+{
+	{pbg = EBP.GK_SECURE, buildstyle = BS_Secure, demand_type = DEMAND_Building, limit = 1},
+}
+
+s_personality.resource_structures = 
+{
+	{pbg = EBP.GK_GENERATOR, demand_type = DEMAND_Building, limit = 1},
+}
+
+s_personality.tech_tier_upgrades = 
+{
+}
+
+else
+import('personality/base_easy.ai')
+import('personality/ordo_malleus/buildorder_lib.ai')
+
+-- randomly choose a build order from the given list defined in the buildorders lib 
+s_personality.buildorder = RandomlyChooseBuildorder( ordo_malleus_buildorder )
+
+s_personality.securing_structures = 
+{
+	{pbg = EBP.GK_SECURE, buildstyle = BS_Secure, demand_type = DEMAND_Building, limit = 1},
+}
+
+s_personality.resource_structures = 
+{
+	{pbg = EBP.GK_GENERATOR, demand_type = DEMAND_Building, limit = 1},
+}
+
+s_personality.tech_tier_upgrades = 
+{
+}
+
+end

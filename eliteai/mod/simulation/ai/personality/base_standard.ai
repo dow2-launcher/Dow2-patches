@@ -1,0 +1,134 @@
+if EliteAI_VANILLA then
+
+
+-- overrides of the defaults
+s_personality.start_attack_time = 5*60
+s_personality.start_attack_time_variance = 2*60
+s_personality.military_strength_modifier = 0.9
+s_personality.default_attack_percentage = 0.4
+s_personality.ability_avoidance_percentage = 0.4
+s_personality.demand_variance = 0.30
+s_personality.min_military_value_start = 60
+s_personality.min_military_value_increment_per_minute = 5
+s_personality.glue_military_percentage = 0.10
+
+s_personality.attack_percentage_increment_per_minute = 0.15
+s_personality.max_attack_percentage = 0.85
+
+s_personality.defensiveness = 0.5
+s_personality.vp_aggressiveness = 0.5
+s_personality.max_secured_pts = 3
+s_personality.default_percentage_to_capture = 0.55
+s_personality.max_percentage_to_capture = 0.8
+s_personality.max_percentage_vp_wanted = 0.75
+s_personality.vp_ticker_warning_level = 225
+s_personality.capture_percentage_growth_start_time = 3*60
+s_personality.capture_percentage_growth_per_min = 0.05
+
+s_personality.max_num_capturers = 4
+
+s_personality.purchase_delay_pace = 5 -- slower purchasing
+else
+
+
+-- overrides of the defaults
+
+-- all this text deleted
+
+-- replacement text
+
+
+-- replace entire table
+
+	s_personality.defensiveness = 0.1*math.floor(4*diffFact)
+	s_personality.vp_aggressiveness = 0.6*diffFact				
+	s_personality.start_attack_time = 30/(diffFact*diffFact)			-- when the AI will attack for the first time (minimum), used as a start time for lots of increments
+	s_personality.start_attack_time_variance = 15/diffFact			
+	s_personality.military_strength_modifier = 1.1*raceFact/diffFact	-- how many times more powerful should the AI military be before attacking a target
+	
+	s_personality.advance_percentage = 0.35/(diffFact*diffFact*diffFact)
+	s_personality.default_attack_percentage = 0.75*raceFact*diffFact*diffFact		-- when attacking what is the default percentage
+	s_personality.max_attack_percentage = 0.9*diffFact*diffFact		
+	s_personality.attack_percentage_increment_per_minute = 0.05*diffFact 	-- attack percentage increase each minute
+
+
+	-- kk lines pasted in from COH
+
+	s_personality.fallback_percentage = 0.45/raceFact-- how much less military we need to fallback from an enemy 
+							-- (this is a maybe, depending on a random factor)
+	s_personality.fallback_health_percentage = 0.65*raceFact*diffFact	-- how little health we need for vehicles to fallback (this is a maybe, depending on a random factor)
+	s_personality.fallback_capacity_percentage = 0.55*raceFact*diffFact	
+				-- how little squad capacity we need for soldiers to fallback (this is a maybe, depending on a random factor)
+	s_personality.fallback_chance = 0.75*diffFact		-- the chance of falling back within a certain time frame once the above fallback conditions are met
+	s_personality.fallback_chance_reevaluate_ticks = 10/diffFact -- how long to wait before reevaluating whether to fallback
+	s_personality.fallback_health_percentage_always = 0.45*raceFact*diffFact	-- below this health, the vehicle will ALWAYS fallback
+	
+	-- kk more lines from COH
+	s_personality.retreat_capacity_percentage = 0.4*raceFact*diffFact	  -- the capacity percentage below which soldier squads will retreat
+	s_personality.retreat_suppressed_percentage = 0.51*raceFact*diffFact	  -- if this percent or more of squads in the area are suppressed, the squad will retreat
+	s_personality.retreat_chance = 0.8*raceFact*diffFact
+	s_personality.retreat_chance_reevaluate_ticks = 10/diffFact 		-- reduced from 40 ticks
+
+	-- kk new values here for my new kiting functions which are not yet implemented
+	s_personality.kite_chance = 0.7*diffFact
+	s_personality.kite_ratio  = 0.8*diffFact*raceFact						-- ratio at which to avoid a fight
+	s_personality.kite_overwhelm_ratio = 0.5/(diffFact*raceFact)					-- ratio at which to really flee
+	
+	s_personality.defend_prefer_threat = true
+	s_personality.attack_prefer_threat = true
+	
+	--------------------------------
+	-- unit purchasing
+	s_personality.demand_variance = 0.2/(diffFact*diffFact)					
+	-- how much variance in the demand this personality will overlook (eg. units with a demand of 10 and 12 will both be considered in variances are greater than 0.2)
+
+	s_personality.min_military_value_start = 40*diffFact*raceFact*modFactor			
+				-- used to cap the military_value of the AI, this is the military value the AI is allowed to have without constraint (this grows over time)
+	s_personality.min_military_value_increment_per_minute = 3*diffFact*raceFact*modFactor	
+				-- this is the amount the allowed military_value the AI will increase by every minute (starts at start_attack_time)
+	s_personality.glue_military_percentage = 5*diffFact*raceFact*modFactor	
+	
+	--------------------------------
+	-- resourcing/securing
+	min_captured_pts_before_securing = 1	
+	s_personality.min_percentage_pts_captured_for_vp = 0.2/diffFact	 -- percentage of map to control before demanding victory points
+	s_personality.max_secured_pts = 12*diffFact*diffFact			-- how many points max should the AI secure
+	s_personality.default_percentage_to_capture = 0.7*diffFact*diffFact	-- [0,1] capture percentage to start with (which can then grow if an increment is defined)
+	s_personality.max_percentage_to_capture = 0.75*diffFact*diffFact		-- [0-1], how much of the map we will stop at capturing
+	s_personality.max_percentage_vp_wanted =0.85*diffFact*diffFact			-- [0-1], how many VP points the AI will want to grab
+	s_personality.vp_ticker_warning_level = 220/(diffFact*diffFact*diffFact)
+				-- how many tickers should be left before we start really worrying about them (increasing their priority)
+	
+	s_personality.max_num_capturers = math.ceil(8*diffFact*raceFact*modFactor*diffFact)				
+	-- the max number of capturers we will ever have (used to slow AI pace)
+	-- s_personality.purchase_delay_pace =  2*(1-1*(diffMax*diffMax)/(diffFact*diffFact))			 -- slower purchasing factor DISABLED
+	s_personality.prefer_power_percentage = 0.65*diffFact
+	s_personality.capture_percentage_growth_start_time = 30/(diffFact*diffFact)	-- the time at which we start to apply the capture percentage growth
+	s_personality.capture_percentage_growth_per_min = 0.05*diffFact		 
+						-- the increase in capture percentage we apply every minute after growth timer expires
+	
+	--------------------------------
+	-- tactics info
+	s_personality.ability_avoidance_percentage = 0.75*diffFact			-- what percentage of the time will the AI try to avoid avoidable abilities (artillery)
+	s_personality.tankmove_tactic_enabled = true				-- is the tankmove tactic enabled
+	
+	
+	-- combat state update
+	s_personality.clump_scan_params =						-- currently this clump data is used by tactics for targeting
+		{
+			clump_scan_ticks = 10/diffFact,			-- how often the player updates cached clumps for combat tactics
+			threat_weighting=1.0*diffFact, 
+			importance_weighting=0.5,
+			must_be_seen=false,
+			min_threat = 1,
+		}
+
+
+	s_personality.demand_variance_tier2_start = 0.15*raceFact/(diffFact*diffFact)	-- how much variance in the demand when tier 2 just started
+	s_personality.demand_variance_tier3_start = 0.10*raceFact/(diffFact*diffFact)	-- how much variance in the demand when tier 3 just started
+	--------------------------------
+	-- squad/ entity limits (could be seperate calls)
+
+
+
+end

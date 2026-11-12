@@ -4,6 +4,21 @@ Every version gets an entry here before it reaches `main`. CI then tags `vX.Y.Z`
 version (`X.Y.0`) it also publishes a GitHub Release with the DLLs and the entries since the previous `X.Y.0`.
 The version of the set lives only in `VERSION`; each DLL still writes its own version to its log.
 
+## 0.2.63 — 2026-11-12
+New AI 22 (store newai-22, experiment, off by default, Elite only): the new AI moves to the vanilla base ("vanilla + ours", eliteai
+branch vanilla-ours 53cfa69 = be78608 + the default below; EliteAI.dll 0.11 unchanged).
+- Package: EliteAI/simulation/ai = 53 generated dispatchers (tools/vanilla_dispatch.py): `if EliteAI_VANILLA then <vanilla 3.19 AI + Elite
+  data compatibility + our SPEND / TECH / ENERGY> else <Elite 3.2.1 / the released purchase files> end`. The served default.ai carries the
+  decision, the people's plan (data/human_plan.ai: tier windows and openings from 1v1 replays of strong players), main.ai 0.23 and
+  mechanics.ai 1.5 (the DLL serves it as it is and appends nothing). main.ai, mechanics.ai and data/ are shipped as the source of what
+  is inlined; append/scar/elite/elite.scar - World_Pos only for move / attack-move orders.
+- Mode: [Lua] NewAI of EliteAI.ini (the launcher neither ships nor touches it). No key and the old forms (normal | all | ids) now play
+  vanilla+ours on the Easy / Normal / Hard slots = NEW AI A / B / C; Insane stays Elite's AI. elite+ours[:who] = the newai-21 base, for tests.
+  The vanilla base sees Hard (VanillaDiff), the variant comes from the slot as before.
+- Stand check of the base (reports/ai_doctrine/VANILLA_BASE_RU.md section 15): 7 matches ~22 min, no hang, no Lua error; mirrors against
+  newai-21 played both ways round: army at 12:00 ~1.0, 40 % fewer squads lost, tier-3 units bought, vehicles lost in the army's retreat 6 vs 23.
+  Install check as a player (files laid out by this addons.json, main menu skirmish, NEW AI B): see the PR.
+
 ## 0.2.62 — 2026-11-12
 Ctrl attack ground 2 (store ctrlattack-2, experiment, Elite and vanilla): CtrlAttack.dll 2.
 - Owner: Ctrl + right-click is Reverse's (backing off) - attack ground goes to Ctrl + LEFT click on the ground. The right click

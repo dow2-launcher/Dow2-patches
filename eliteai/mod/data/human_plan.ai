@@ -1,0 +1,369 @@
+-- human_plan.ai - tier timings and purchase order of HUMAN players from 1v1 Elite replays. GENERATED, do not edit by hand.
+-- Generator: /var/www/media/dow2_archive/reports/ai_doctrine/replay_timings/aggregate.py (+ extract.py);
+-- report: /var/www/media/dow2_archive/reports/ai_doctrine/REPLAY_TIMINGS_RU.md
+-- Elite 3.0-3.2.1 1v1, 522 matches (>= 5 min), strong = Relic rating >= 2437 (median), built 2026-11-11
+-- Times are game seconds from the match start.
+-- t2/t3: target = median START of the research (the click in the HQ), lo/hi = p25/p75, n = players who started it;
+--   basis "strong" = upper half by Relic rating (fallback "all" when strong samples < 8 for T2 / < 10 for T3);
+--   done = target + 75 s (research time of every race in 3.2.1; later if the HQ queue was busy).
+--   share = part of the players of the race that started the tier (matches >= 5 min); share15 = among matches >= 15 min.
+-- opening = the most frequent chain of first orders (greedy by prefix, support >= 3; the comment = picked/reached that step).
+-- after_t2 / after_t3 = new squad types ordered first after the tier finished (most frequent first).
+-- army / army_avg / army_hi = squads ordered (0x03, gross, re-buys included) by minute 5/8/10/12/15: median / mean / p75.
+-- first8 = { name, mean count among the first 8 orders }.  gens = generators built by minute 5 / 10 (median).
+-- vs[enemy race] = { n = player-matches, t2, t3 = median start, all ratings }, only when n >= 5.
+-- Names as PBG_GetName gives them (backslashes); the AI side lower-cases and may swap to "/".
+HumanPlan = {
+	source = "Elite 3.0-3.2.1 1v1, 522 matches (>= 5 min), strong = Relic rating >= 2437 (median), built 2026-11-11",
+	tier_time = 75,
+	races = {
+		space_marines = {
+			basis = "strong", n_players = 275, n_strong = 126,
+			t2 = { target = 456, lo = 400, hi = 490, done = 531, n = 96, share = 0.76 },
+			t3 = { target = 788, lo = 693, hi = 877, done = 863, n = 23, share = 0.18, share15 = 0.44, basis = "strong" },
+			opening = {
+				"sbps\\pvp\\race_marine\\troops\\sm_tactical_marine",	-- 120/126
+				"sbps\\pvp\\race_marine\\troops\\sm_scout_marine",	-- 61/120
+				"sbps\\pvp\\race_marine\\troops\\sm_assault_marine",	-- 33/61
+				"sbps\\pvp\\race_marine\\vehicles\\sm_rhino",	-- 11/23
+			},
+			after_t2 = {	-- n=90
+				"sbps\\pvp\\race_marine\\vehicles\\sm_dreadnought",	-- 29
+				"sbps\\pvp\\race_marine\\vehicles\\sm_rhino",	-- 21
+				"sbps\\pvp\\race_marine\\troops\\sm_devastator",	-- 11
+			},
+			after_t3 = {	-- n=23
+				"sbps\\pvp\\race_marine\\vehicles\\sm_predator",	-- 10
+				"sbps\\pvp\\race_marine\\troops\\sm_devastator",	-- 1
+				"sbps\\pvp\\race_marine\\vehicles\\sm_landraider",	-- 1
+			},
+			army = { m5 = 3, m8 = 3, m10 = 4, m12 = 4, m15 = 4 },
+			army_avg = { m5 = 3.0, m8 = 3.4, m10 = 3.9, m12 = 4.3, m15 = 4.5 },
+			first8 = {
+				{ "sbps\\pvp\\race_marine\\troops\\sm_tactical_marine", 1.25 },
+				{ "sbps\\pvp\\race_marine\\troops\\sm_devastator", 0.87 },
+				{ "sbps\\pvp\\race_marine\\troops\\sm_scout_marine", 0.76 },
+				{ "sbps\\pvp\\race_marine\\troops\\sm_assault_marine", 0.67 },
+				{ "sbps\\pvp\\race_marine\\vehicles\\sm_rhino", 0.29 },
+				{ "sbps\\pvp\\race_marine\\vehicles\\sm_dreadnought", 0.27 },
+				{ "sbps\\pvp\\race_marine\\troops\\sm_librarian", 0.11 },
+				{ "sbps\\pvp\\race_marine\\vehicles\\sm_predator", 0.10 },
+			},
+			army_hi = { m5 = 3, m8 = 4, m10 = 4, m12 = 5, m15 = 5 },
+			gens = { m5 = 2, m10 = 3 },
+			vs = {
+				space_marines = { n = 38, t2 = 428, t3 = 812 },
+				chaos_marines = { n = 20, t2 = 400, t3 = 696 },
+				eldar = { n = 65, t2 = 448, t3 = 831 },
+				orks = { n = 67, t2 = 461, t3 = 816 },
+				imperial_guard = { n = 16, t2 = 426, t3 = 810 },
+				tyranids = { n = 23, t2 = 428, t3 = 1000 },
+				ordo_malleus = { n = 21, t2 = 438, t3 = 858 },
+				t_tau = { n = 25, t2 = 460, t3 = 876 },
+			},
+		},
+		chaos_marines = {
+			basis = "strong", n_players = 99, n_strong = 37,
+			t2 = { target = 478, lo = 433, hi = 556, done = 553, n = 30, share = 0.81 },
+			t3 = { target = 749, lo = 634, hi = 919, done = 824, n = 20, share = 0.20, share15 = 0.35, basis = "all" },
+			opening = {
+				"sbps\\pvp\\race_chaos\\troops\\csm_tactical_marine",	-- 36/37
+				"sbps\\pvp\\race_chaos\\troops\\csm_cultist",	-- 29/36
+				"sbps\\pvp\\race_chaos\\troops\\csm_havoc",	-- 15/29
+				"sbps\\pvp\\race_chaos\\troops\\csm_noise_marines",	-- 4/13
+			},
+			after_t2 = {	-- n=29
+				"sbps\\pvp\\race_chaos\\vehicles\\csm_dreadnought",	-- 13
+				"sbps\\pvp\\race_chaos\\troops\\csm_bloodletters",	-- 9
+				"sbps\\pvp\\race_chaos\\troops\\csm_plague_marines",	-- 7
+			},
+			after_t3 = {	-- n=5
+				"sbps\\pvp\\race_chaos\\vehicles\\csm_predator",	-- 2
+				"sbps\\pvp\\race_chaos\\vehicles\\csm_landraider",	-- 1
+			},
+			army = { m5 = 3, m8 = 4, m10 = 5, m12 = 6, m15 = 6 },
+			army_avg = { m5 = 3.6, m8 = 4.0, m10 = 4.6, m12 = 5.3, m15 = 5.7 },
+			first8 = {
+				{ "sbps\\pvp\\race_chaos\\troops\\csm_tactical_marine", 1.51 },
+				{ "sbps\\pvp\\race_chaos\\troops\\csm_cultist", 1.35 },
+				{ "sbps\\pvp\\race_chaos\\troops\\csm_havoc", 0.84 },
+				{ "sbps\\pvp\\race_chaos\\vehicles\\csm_dreadnought", 0.49 },
+				{ "sbps\\pvp\\race_chaos\\troops\\csm_noise_marines", 0.30 },
+				{ "sbps\\pvp\\race_chaos\\troops\\csm_bloodletters", 0.27 },
+				{ "sbps\\pvp\\race_chaos\\troops\\csm_juggernaut", 0.22 },
+				{ "sbps\\pvp\\race_chaos\\troops\\csm_plague_marines", 0.19 },
+			},
+			army_hi = { m5 = 4, m8 = 5, m10 = 5, m12 = 6, m15 = 7 },
+			gens = { m5 = 2, m10 = 3 },
+			vs = {
+				space_marines = { n = 20, t2 = 385, t3 = 556 },
+				eldar = { n = 14, t2 = 435, t3 = 843 },
+				orks = { n = 34, t2 = 416, t3 = 960 },
+				imperial_guard = { n = 6, t2 = 330, t3 = 638 },
+				tyranids = { n = 6, t2 = 512, t3 = 876 },
+				ordo_malleus = { n = 7, t2 = 436, t3 = 661 },
+				t_tau = { n = 10, t2 = 434, t3 = 728 },
+			},
+		},
+		eldar = {
+			basis = "strong", n_players = 173, n_strong = 61,
+			t2 = { target = 385, lo = 361, hi = 427, done = 460, n = 48, share = 0.79 },
+			t3 = { target = 810, lo = 781, hi = 1072, done = 885, n = 12, share = 0.20, share15 = 0.50, basis = "strong" },
+			opening = {
+				"sbps\\pvp\\race_eldar\\troops\\eld_banshee",	-- 42/61
+				"sbps\\pvp\\race_eldar\\troops\\eld_guardian",	-- 23/42
+				"sbps\\pvp\\race_eldar\\troops\\eld_guardian_shuriken_cannon",	-- 17/23
+				"sbps\\pvp\\race_eldar\\troops\\eld_guardian_shuriken_cannon",	-- 6/15
+			},
+			after_t2 = {	-- n=47
+				"sbps\\pvp\\race_eldar\\vehicles\\eld_falcon",	-- 21
+				"sbps\\pvp\\race_eldar\\troops\\eld_warp_spider",	-- 13
+				"sbps\\pvp\\race_eldar\\vehicles\\eld_wraithlord",	-- 11
+			},
+			after_t3 = {	-- n=11
+				"sbps\\pvp\\race_eldar\\troops\\eld_seer_council",	-- 6
+				"sbps\\pvp\\race_eldar\\vehicles\\eld_fire_prism",	-- 4
+				"sbps\\pvp\\race_eldar\\troops\\eld_dark_reaper",	-- 2
+			},
+			army = { m5 = 3, m8 = 4, m10 = 4, m12 = 5, m15 = 5 },
+			army_avg = { m5 = 3.3, m8 = 3.9, m10 = 4.4, m12 = 5.0, m15 = 5.3 },
+			first8 = {
+				{ "sbps\\pvp\\race_eldar\\troops\\eld_banshee", 1.13 },
+				{ "sbps\\pvp\\race_eldar\\troops\\eld_guardian_shuriken_cannon", 1.11 },
+				{ "sbps\\pvp\\race_eldar\\troops\\eld_guardian", 0.80 },
+				{ "sbps\\pvp\\race_eldar\\troops\\eld_ranger", 0.61 },
+				{ "sbps\\pvp\\race_eldar\\vehicles\\eld_falcon", 0.41 },
+				{ "sbps\\pvp\\race_eldar\\troops\\eld_warp_spider", 0.26 },
+				{ "sbps\\pvp\\race_eldar\\vehicles\\eld_wraithlord", 0.25 },
+				{ "sbps\\pvp\\race_eldar\\troops\\eld_wraithguard", 0.18 },
+			},
+			army_hi = { m5 = 4, m8 = 4, m10 = 5, m12 = 6, m15 = 6 },
+			gens = { m5 = 3, m10 = 3 },
+			vs = {
+				space_marines = { n = 65, t2 = 374, t3 = 864 },
+				chaos_marines = { n = 14, t2 = 364, t3 = 952 },
+				eldar = { n = 8, t2 = 417, t3 = nil },
+				orks = { n = 31, t2 = 388, t3 = 825 },
+				imperial_guard = { n = 24, t2 = 379, t3 = 838 },
+				tyranids = { n = 8, t2 = 408, t3 = 767 },
+				ordo_malleus = { n = 10, t2 = 374, t3 = 855 },
+				t_tau = { n = 13, t2 = 352, t3 = 846 },
+			},
+		},
+		orks = {
+			basis = "strong", n_players = 202, n_strong = 133,
+			t2 = { target = 435, lo = 372, hi = 500, done = 510, n = 95, share = 0.71 },
+			t3 = { target = 770, lo = 682, hi = 901, done = 845, n = 30, share = 0.23, share15 = 0.61, basis = "strong" },
+			opening = {
+				"sbps\\pvp\\race_ork\\troops\\ork_shoota",	-- 125/133
+				"sbps\\pvp\\race_ork\\troops\\ork_shoota",	-- 120/125
+				"sbps\\pvp\\race_ork\\troops\\ork_lootas",	-- 49/119
+				"sbps\\pvp\\race_ork\\troops\\ork_stormboy",	-- 12/38
+			},
+			after_t2 = {	-- n=86
+				"sbps\\pvp\\race_ork\\vehicles\\ork_deff_dread",	-- 22
+				"sbps\\pvp\\race_ork\\vehicles\\ork_wartrukk",	-- 15
+				"sbps\\pvp\\race_ork\\troops\\ork_weirdboy",	-- 13
+			},
+			after_t3 = {	-- n=26
+				"sbps\\pvp\\race_ork\\vehicles\\ork_looted_tank",	-- 11
+				"sbps\\pvp\\race_ork\\troops\\ork_nob_squad",	-- 9
+				"sbps\\pvp\\race_ork\\troops\\ork_kommandos",	-- 6
+			},
+			army = { m5 = 3, m8 = 4, m10 = 4, m12 = 5, m15 = 6 },
+			army_avg = { m5 = 3.3, m8 = 3.9, m10 = 4.3, m12 = 4.9, m15 = 5.9 },
+			first8 = {
+				{ "sbps\\pvp\\race_ork\\troops\\ork_shoota", 2.01 },
+				{ "sbps\\pvp\\race_ork\\troops\\ork_stormboy", 0.62 },
+				{ "sbps\\pvp\\race_ork\\troops\\ork_lootas", 0.52 },
+				{ "sbps\\pvp\\race_ork\\troops\\ork_slugga", 0.36 },
+				{ "sbps\\pvp\\race_ork\\vehicles\\ork_deff_dread", 0.27 },
+				{ "sbps\\pvp\\race_ork\\vehicles\\ork_wartrukk", 0.26 },
+				{ "sbps\\pvp\\race_ork\\troops\\ork_painboy", 0.17 },
+				{ "sbps\\pvp\\race_ork\\troops\\ork_tankbustas", 0.16 },
+			},
+			army_hi = { m5 = 4, m8 = 4, m10 = 5, m12 = 6, m15 = 7 },
+			gens = { m5 = 3, m10 = 3 },
+			vs = {
+				space_marines = { n = 67, t2 = 398, t3 = 761 },
+				chaos_marines = { n = 34, t2 = 489, t3 = 810 },
+				eldar = { n = 31, t2 = 432, t3 = 696 },
+				orks = { n = 6, t2 = 422, t3 = nil },
+				imperial_guard = { n = 8, t2 = 399, t3 = 846 },
+				tyranids = { n = 9, t2 = 471, t3 = 728 },
+				ordo_malleus = { n = 17, t2 = 444, t3 = 833 },
+				t_tau = { n = 30, t2 = 427, t3 = 819 },
+			},
+		},
+		imperial_guard = {
+			basis = "strong", n_players = 78, n_strong = 36,
+			t2 = { target = 384, lo = 349, hi = 430, done = 459, n = 29, share = 0.81 },
+			t3 = { target = 778, lo = 703, hi = 885, done = 853, n = 10, share = 0.28, share15 = 0.78, basis = "strong" },
+			opening = {
+				"sbps\\pvp\\race_imperial_guard\\vehicles\\ig_sentinel",	-- 55/78
+				"sbps\\pvp\\race_imperial_guard\\troops\\ig_guardsmen_squad",	-- 48/55
+				"sbps\\pvp\\race_imperial_guard\\troops\\ig_devils",	-- 17/48
+				"sbps\\pvp\\race_imperial_guard\\troops\\ig_stormtrooper_squad",	-- 3/15
+			},
+			after_t2 = {	-- n=29
+				"sbps\\pvp\\race_imperial_guard\\vehicles\\ig_chimera",	-- 13
+				"sbps\\pvp\\race_imperial_guard\\troops\\ig_stormtrooper_squad",	-- 8
+				"sbps\\pvp\\race_imperial_guard\\troops\\ig_ogryn_squad",	-- 5
+			},
+			after_t3 = {	-- n=8
+				"sbps\\pvp\\race_imperial_guard\\troops\\ig_kasrkin_squad",	-- 3
+				"sbps\\pvp\\race_imperial_guard\\vehicles\\ig_leman_russ",	-- 2
+				"sbps\\pvp\\race_imperial_guard\\vehicles\\ig_stormblade",	-- 2
+			},
+			army = { m5 = 3, m8 = 4, m10 = 5, m12 = 5, m15 = 7 },
+			army_avg = { m5 = 3.6, m8 = 4.3, m10 = 5.1, m12 = 5.4, m15 = 6.6 },
+			first8 = {
+				{ "sbps\\pvp\\race_imperial_guard\\troops\\ig_guardsmen_squad", 1.31 },
+				{ "sbps\\pvp\\race_imperial_guard\\vehicles\\ig_sentinel", 1.28 },
+				{ "sbps\\pvp\\race_imperial_guard\\troops\\ig_devils", 0.72 },
+				{ "sbps\\pvp\\race_imperial_guard\\vehicles\\ig_chimera", 0.53 },
+				{ "sbps\\pvp\\race_imperial_guard\\troops\\ig_heavy_weapon_squad", 0.47 },
+				{ "sbps\\pvp\\race_imperial_guard\\troops\\ig_spotter_squad", 0.42 },
+				{ "sbps\\pvp\\race_imperial_guard\\troops\\ig_stormtrooper_squad", 0.31 },
+				{ "sbps\\pvp\\race_imperial_guard\\troops\\ig_ogryn_squad", 0.14 },
+			},
+			army_hi = { m5 = 4, m8 = 5, m10 = 6, m12 = 6, m15 = 7 },
+			gens = { m5 = 3, m10 = 3 },
+			vs = {
+				space_marines = { n = 16, t2 = 397, t3 = 781 },
+				chaos_marines = { n = 6, t2 = 377, t3 = 729 },
+				eldar = { n = 24, t2 = 386, t3 = 819 },
+				orks = { n = 8, t2 = 424, t3 = 768 },
+				imperial_guard = { n = 10, t2 = 402, t3 = 822 },
+				tyranids = { n = 5, t2 = 365, t3 = 988 },
+				t_tau = { n = 6, t2 = 418, t3 = 776 },
+			},
+		},
+		tyranids = {
+			basis = "strong", n_players = 60, n_strong = 26,
+			t2 = { target = 454, lo = 388, hi = 525, done = 529, n = 22, share = 0.85 },
+			t3 = { target = 887, lo = 755, hi = 970, done = 962, n = 16, share = 0.27, share15 = 0.73, basis = "all" },
+			opening = {
+				"sbps\\pvp\\race_tyranid\\troops\\tyr_termagaunt",	-- 24/26
+				"sbps\\pvp\\race_tyranid\\troops\\tyr_termagaunt",	-- 24/24
+				"sbps\\pvp\\race_tyranid\\troops\\tyr_warrior",	-- 13/24
+				"sbps\\pvp\\race_tyranid\\troops\\tyr_ravener",	-- 5/13
+			},
+			after_t2 = {	-- n=20
+				"sbps\\pvp\\race_tyranid\\troops\\tyr_warrior_venom_cannon",	-- 11
+				"sbps\\pvp\\race_tyranid\\troops\\tyr_tyrant_guard",	-- 6
+				"sbps\\pvp\\race_tyranid\\troops\\tyr_genestealer",	-- 5
+			},
+			after_t3 = {	-- n=6
+				"sbps\\pvp\\race_tyranid\\troops\\tyr_zoanthrope_doom",	-- 3
+				"sbps\\pvp\\race_tyranid\\troops\\tyr_carnifex",	-- 2
+				"sbps\\pvp\\race_tyranid\\troops\\tyr_lictor",	-- 2
+			},
+			army = { m5 = 4, m8 = 4, m10 = 4, m12 = 5, m15 = 6 },
+			army_avg = { m5 = 3.7, m8 = 3.9, m10 = 4.4, m12 = 5.1, m15 = 5.5 },
+			first8 = {
+				{ "sbps\\pvp\\race_tyranid\\troops\\tyr_termagaunt", 1.85 },
+				{ "sbps\\pvp\\race_tyranid\\troops\\tyr_warrior", 0.96 },
+				{ "sbps\\pvp\\race_tyranid\\troops\\tyr_ravener", 0.62 },
+				{ "sbps\\pvp\\race_tyranid\\troops\\tyr_warrior_venom_cannon", 0.54 },
+				{ "sbps\\pvp\\race_tyranid\\troops\\tyr_spore_mines", 0.42 },
+				{ "sbps\\pvp\\race_tyranid\\troops\\tyr_tyrant_guard", 0.42 },
+				{ "sbps\\pvp\\race_tyranid\\troops\\tyr_hormagaunt", 0.23 },
+				{ "sbps\\pvp\\race_tyranid\\troops\\tyr_zoanthrope", 0.19 },
+			},
+			army_hi = { m5 = 4, m8 = 4, m10 = 5, m12 = 5, m15 = 6 },
+			gens = { m5 = 2, m10 = 3 },
+			vs = {
+				space_marines = { n = 23, t2 = 454, t3 = 762 },
+				chaos_marines = { n = 6, t2 = 536, t3 = 1234 },
+				eldar = { n = 8, t2 = 451, t3 = 950 },
+				orks = { n = 9, t2 = 439, t3 = 808 },
+				imperial_guard = { n = 5, t2 = 488, t3 = 673 },
+			},
+		},
+		ordo_malleus = {
+			basis = "strong", n_players = 65, n_strong = 33,
+			t2 = { target = 437, lo = 379, hi = 500, done = 512, n = 29, share = 0.88 },
+			t3 = { target = 835, lo = 707, hi = 972, done = 910, n = 15, share = 0.23, share15 = 0.56, basis = "all" },
+			opening = {
+				"sbps\\pvp\\race_grey_knights\\troops\\gk_strike_squad",	-- 29/33
+				"sbps\\pvp\\race_grey_knights\\troops\\gk_storm_troopers",	-- 17/29
+				"sbps\\pvp\\race_grey_knights\\troops\\gk_purgation_squad",	-- 7/17
+				"sbps\\pvp\\race_grey_knights\\troops\\gk_purgation_squad",	-- 4/7
+			},
+			after_t2 = {	-- n=29
+				"sbps\\pvp\\race_grey_knights\\vehicles\\gk_rhino",	-- 9
+				"sbps\\pvp\\race_grey_knights\\troops\\gk_purifiers",	-- 7
+				"sbps\\pvp\\race_grey_knights\\troops\\gk_librarian",	-- 6
+			},
+			after_t3 = {	-- n=7
+				"sbps\\pvp\\race_grey_knights\\vehicles\\gk_vortimer_razorback",	-- 5
+				"sbps\\pvp\\race_grey_knights\\troops\\gk_terminators",	-- 2
+				"sbps\\pvp\\race_grey_knights\\vehicles\\gk_landraider",	-- 1
+			},
+			army = { m5 = 3, m8 = 4, m10 = 4, m12 = 5, m15 = 5 },
+			army_avg = { m5 = 3.2, m8 = 3.8, m10 = 4.5, m12 = 5.2, m15 = 5.6 },
+			first8 = {
+				{ "sbps\\pvp\\race_grey_knights\\troops\\gk_storm_troopers", 1.03 },
+				{ "sbps\\pvp\\race_grey_knights\\troops\\gk_purgation_squad", 1.00 },
+				{ "sbps\\pvp\\race_grey_knights\\troops\\gk_strike_squad", 0.97 },
+				{ "sbps\\pvp\\race_grey_knights\\troops\\gk_operatives", 0.73 },
+				{ "sbps\\pvp\\race_grey_knights\\vehicles\\gk_rhino", 0.61 },
+				{ "sbps\\pvp\\race_grey_knights\\troops\\gk_purifiers", 0.30 },
+				{ "sbps\\pvp\\race_grey_knights\\troops\\gk_interceptor_squad", 0.27 },
+				{ "sbps\\pvp\\race_grey_knights\\vehicles\\gk_dreadnought", 0.18 },
+			},
+			army_hi = { m5 = 3, m8 = 4, m10 = 5, m12 = 6, m15 = 6 },
+			gens = { m5 = 2, m10 = 3 },
+			vs = {
+				space_marines = { n = 21, t2 = 393, t3 = 746 },
+				chaos_marines = { n = 7, t2 = 425, t3 = 891 },
+				eldar = { n = 10, t2 = 414, t3 = 697 },
+				orks = { n = 17, t2 = 459, t3 = 914 },
+			},
+		},
+		t_tau = {
+			basis = "strong", n_players = 92, n_strong = 64,
+			t2 = { target = 442, lo = 394, hi = 509, done = 517, n = 54, share = 0.84 },
+			t3 = { target = 794, lo = 700, hi = 905, done = 869, n = 17, share = 0.18, share15 = 0.47, basis = "all" },
+			opening = {
+				"sbps\\pvp\\race_tau\\troops\\tau_fire_warriors",	-- 59/64
+				"sbps\\pvp\\race_tau\\troops\\tau_fire_warriors",	-- 35/59
+				"sbps\\pvp\\race_tau\\troops\\tau_heavy_weapon_drones",	-- 16/35
+				"sbps\\pvp\\race_tau\\troops\\tau_heavy_weapon_drones",	-- 9/14
+				"sbps\\pvp\\race_tau\\troops\\tau_vespid_squad",	-- 3/7
+			},
+			after_t2 = {	-- n=49
+				"sbps\\pvp\\race_tau\\troops\\tau_stealth_suits",	-- 17
+				"sbps\\pvp\\race_tau\\vehicles\\tau_knarloc",	-- 11
+				"sbps\\pvp\\race_tau\\vehicles\\tau_devilfish",	-- 8
+			},
+			after_t3 = {	-- n=8
+				"sbps\\pvp\\race_tau\\troops\\tau_riptide",	-- 5
+				"sbps\\pvp\\race_tau\\troops\\tau_crisis",	-- 4
+				"sbps\\pvp\\race_tau\\troops\\tau_krootox",	-- 3
+			},
+			army = { m5 = 4, m8 = 4, m10 = 4, m12 = 5, m15 = 6 },
+			army_avg = { m5 = 3.6, m8 = 3.9, m10 = 4.5, m12 = 5.1, m15 = 5.7 },
+			first8 = {
+				{ "sbps\\pvp\\race_tau\\troops\\tau_fire_warriors", 1.69 },
+				{ "sbps\\pvp\\race_tau\\troops\\tau_kroot_squad", 1.03 },
+				{ "sbps\\pvp\\race_tau\\troops\\tau_heavy_weapon_drones", 0.81 },
+				{ "sbps\\pvp\\race_tau\\troops\\tau_stealth_suits", 0.42 },
+				{ "sbps\\pvp\\race_tau\\troops\\tau_vespid_squad", 0.38 },
+				{ "sbps\\pvp\\race_tau\\vehicles\\tau_knarloc", 0.22 },
+				{ "sbps\\pvp\\race_tau\\vehicles\\tau_devilfish", 0.20 },
+				{ "sbps\\pvp\\race_tau\\troops\\tau_pathfinders", 0.12 },
+			},
+			army_hi = { m5 = 4, m8 = 4, m10 = 5, m12 = 5, m15 = 6 },
+			gens = { m5 = 2, m10 = 3 },
+			vs = {
+				space_marines = { n = 25, t2 = 415, t3 = 822 },
+				chaos_marines = { n = 10, t2 = 429, t3 = 685 },
+				eldar = { n = 13, t2 = 433, t3 = 905 },
+				orks = { n = 30, t2 = 512, t3 = 768 },
+				imperial_guard = { n = 6, t2 = 429, t3 = 921 },
+			},
+		},
+	},
+}
