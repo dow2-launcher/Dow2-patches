@@ -1,0 +1,1 @@
+- New: Documents fix (experiment, off by default, Elite and vanilla): for when the game forgets its settings (volume) and saves no replays because Windows does not let it write to Documents\My Games - the game then keeps them in %LOCALAPPDATA%\EliteLauncher\Documents. It also checks this at every start and after every match for "Send logs". In Elite it needs Automatch on.

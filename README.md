@@ -49,6 +49,7 @@ are client-side, and the other players in the match don't need them.
 | **Speech streak fix** (new, staging, experiment) | Fixes a rare crash of the game when a unit gets a kill: the unit speech about kill streaks read past its list for a unit's first kill. Elite and vanilla. | `speechstreakfix` → `speechstreakfix-1` (staging) | `speechstreakfix/` | no (speech only) |
 | **LangSwitch** (new, staging, experiment) | Alt+Shift, Ctrl+Shift and Win+Space switch the keyboard language inside the game window (for the chat), no alt-tab. Elite and vanilla. | `langswitch` → `langswitch-1` (staging) | `langswitch/` | no (window messages only) |
 | **NoHints** (new, staging, experiment) | No beginner hints in matches (select a squad, build a generator, capture victory points, lots of resources, population cap, WAAAGH/faith bar): the skirmish quick tips are not started; the player's own setting is not changed. Elite and vanilla. | `nohints` → `nohints-1` (staging) | `nohints/` | no (local hints only; the data checksum stays) |
+| **Documents fix** (new, staging, experiment) | For players whose game forgets its settings and saves no replays because Windows does not let the game process write to Documents\My Games (Controlled folder access, permissions, read-only): the check runs from the game process at the start and after every match (DocsFix.log, one line in the log summary); when the game may not write there, its Documents becomes %LOCALAPPDATA%\EliteLauncher\Documents (the old folder copied there the first time, never overwritten); our add-ons and the launcher (1.5.9) follow it. Nothing changes when Documents is writable. Must be loaded at the game start: vanilla - the launcher's loader; Elite - Automatch's early winmm.dll with DocsFix.dll in its EARLY list (this version's build/early/winmm.dll). Elite and vanilla. | `docsfix` → `docsfix-1` (staging) | `docsfix/`, `common/docscheck.h` | no (file paths only) |
 | **Ctrl attack ground** (new, staging, experiment) | Hold Ctrl and LEFT-click the ground: the selected squads that can attack the ground (wraithguard, D-cannon, predators, tankbustas, zoanthropes...) fire at that point - the game's own Attack ground (core action G) without pressing G; Shift queues it. Ctrl + right-click is not touched (Reverse). Ctrl + left click on a unit, or with no squad that can: the game's own click. Elite and vanilla. | `ctrlattack` → `ctrlattack-2` (staging) | `ctrlattack/` | no (the game's own SCMD_Attack order, the same as G + click) |
 | **Observer lag fix (experimental)** | Spectating a live game no longer stutters. | `obsfix_r2` → `obsfix-1` | `obsfix/` | no |
 | **Join a lobby from the launcher (test)** | Experiment by siritos: a Join button on the launcher's Lobbies tab (and elite:// links of the ladder site); the game starts and walks into the room by itself. | `roomjoin` → `roomjoin-4` (staging; live: `roomjoin-3`) | `roomjoin/` | no |
@@ -263,6 +264,33 @@ nohints/ - **NoHints.dll** (NoHints 1)
     0x00AFE940 = SystemConfig "ShowQuicktips" (configuration.lua showquicktips; the in-game Options radio), a per-player setting.
     NoHints writes "xor eax,eax; ret" over its first 3 bytes (26 bytes and the registration at 0x00B023F9 checked first): the tips
     are never started; the setting and the archives are not touched. NoHints.ini: Enabled.
+
+docsfix/ - **DocsFix.dll** (DocsFix 1) and common/docscheck.h
+    How the game gets its user folder: Platform.dll Plat::File::Setup (0x10002335) SHGetFolderPathA(NULL, CSIDL_PERSONAL, NULL, 0)
+    + PathAppendA "My Games" + CreateDirectoryA + PathAppendA "Dawn of War II - Retribution" + CreateDirectoryA, then
+    dbCrash::SetWorkingFolder; the path stays in Platform.dll's buffer 0x10015708 (Plat::File::GetPathUserStorage). DOW2.exe calls
+    GetPathUserStorage through its import (0x00F87D08) to build the Logfiles\ Screenshots\ Settings\ Playback\ Settings\Stats\
+    Cache\ "Saved Games\" Badges\ aliases (0x0041453A, mounted once at the start) and Settings/Local.ini (0x00413569).
+    docscheck.h (the proof): from the game process - the folder in Platform.dll's buffer, Documents (wide; %USERPROFILE%\Documents?
+    OneDrive? ANSI round trip), attributes of Documents / Settings / Playback, when configuration.lua and temp.rec were written,
+    configuration.lua opened for writing (nothing written), a test file created + written + closed + deleted in Settings and in
+    Playback with GetLastError of the failing step, Controlled folder access from the registry and DOW2.exe among its allowed apps;
+    the exe's signature (WinVerifyTrust, cache only), integrity level, parent. Lines "docs check (...)" + "DOCSCHECK k=v" / "DOCSEXE".
+    The early winmm loaders (build/early/winmm.dll of Automatch, build/launcher/winmm.dll) load DocsFix.dll first and, when it is
+    there, already in their DllMain (before the game's own code) point DOW2.exe's GetPathUserStorage import at a hold that waits
+    (max 15 s) until DocsFix.dll is loaded - so the game cannot build its paths before DocsFix has decided, however late the
+    loader's thread runs (stand: DocsFix in at ~0.06 s, the game's first question at ~0.2 s). Event Local\dow2_docsfix_hold_<pid>.
+    DocsFix: DllMain holds DOW2.exe's GetPathUserStorage import and Platform.dll's SHGetFolderPathA import behind its own gate
+    (max 20 s) until the worker has decided:
+    redirect when the write test fails (or DocsFix.txt in the new place says it redirected before; DocsFix.ini Mode=always/never for
+    tests). Redirect: %LOCALAPPDATA%\EliteLauncher\Documents (short name when not ANSI-safe; write-tested first), the old folder copied
+    the first time (never overwriting; Settings and the rest before the game goes on, Playback/Screenshots after; Logfiles not),
+    Platform.dll's buffer and dbCrash's folder set when Setup ran already, SHGetFolderPathA/W(CSIDL_PERSONAL) answer the new place to
+    callers in the game folder's modules (shell32's export table for later modules, the imports of the loaded ones) - EliteAI, MMFind,
+    LiveReplay find temp.rec there without a change. DocsFix.redirect next to the DLL tells the launcher (1.5.9); removed when not
+    redirecting. Loaded without the hold and after Platform's Setup (Elite's injector ~9 s after the start - Elite without
+    Automatch or with its older winmm.dll; an older vanilla loader): only the check and a log line ("NOT redirected ... too late").
+    After every match (in-game state [*(0x01335A78)+0x114] for 20 s or more, then 0): the check again and "temp.rec WRITTEN / NOT written".
 
 obsfix/ - **ObsFix.dll** (ObsFix v1)
     When you spectate a live game the client asks "which slot am I in" dozens of times per frame and rebuilds the whole match

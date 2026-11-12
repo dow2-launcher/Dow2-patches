@@ -232,6 +232,59 @@ static void vlog(const wchar_t *dir, const wchar_t *line) {
     CloseHandle(h);
 }
 #endif
+#if defined(EARLY_ONLY) || defined(LAUNCHER_LOADER)
+// 12.11.2026, Documents fix (DocsFix.dll): the game builds its Documents paths (Settings\ Playback\ ...) from
+// Plat::File::GetPathUserStorage early in its start - maybe before this loader's thread has loaded DocsFix.dll. When DocsFix.dll
+// is there, DllMain (before the game's own code runs) points DOW2.exe's import of that function at hold_gpus: the game's first
+// question waits (at most 15 s) until DocsFix.dll is loaded and has its own gate in place; the named event tells DocsFix that the
+// game has not asked yet. Without DocsFix.dll nothing is touched.
+#define GPUS_NAME "?GetPathUserStorage@File@Plat@@YGPBDXZ"
+static HANDLE g_hold; static void **g_holdSlot; static void *g_holdOrig;
+static const char *g_holdWhy = "no DocsFix.dll";                 // for Loader.log (vanilla)
+static void **imp_slot(HMODULE m, const char *dll, const char *fn) {
+    BYTE *b = (BYTE *)m; IMAGE_NT_HEADERS *nt = (IMAGE_NT_HEADERS *)(b + ((IMAGE_DOS_HEADER *)b)->e_lfanew);
+    IMAGE_DATA_DIRECTORY *dd = &nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT];
+    if (!dd->VirtualAddress) return NULL;
+    for (IMAGE_IMPORT_DESCRIPTOR *d = (IMAGE_IMPORT_DESCRIPTOR *)(b + dd->VirtualAddress); d->Name; d++) {
+        if (_stricmp((char *)(b + d->Name), dll) || !d->OriginalFirstThunk) continue;
+        IMAGE_THUNK_DATA *o = (IMAGE_THUNK_DATA *)(b + d->OriginalFirstThunk), *f = (IMAGE_THUNK_DATA *)(b + d->FirstThunk);
+        for (; o->u1.AddressOfData; o++, f++)
+            if (!(o->u1.Ordinal & IMAGE_ORDINAL_FLAG) && !strcmp((char *)((IMAGE_IMPORT_BY_NAME *)(b + o->u1.AddressOfData))->Name, fn))
+                return (void **)&f->u1.Function;
+    }
+    return NULL;
+}
+static const char *__stdcall hold_gpus(void) {
+    WaitForSingleObject(g_hold, 15000);
+    void *f = *(void *volatile *)g_holdSlot;                     // DocsFix's own gate by now (or still us: it did not load)
+    if (f == (void *)hold_gpus) f = g_holdOrig;
+    return ((const char *(__stdcall *)(void))f)();
+}
+static void hold_install(void) {                                  // DllMain: only when DocsFix.dll will be loaded
+    wchar_t dir[MAX_PATH], p[MAX_PATH]; GetModuleFileNameW(NULL, dir, MAX_PATH);
+    wchar_t *sl = wcsrchr(dir, L'\\'); if (!sl || _wcsicmp(sl + 1, L"DOW2.exe")) return; sl[1] = 0;
+    const wchar_t *sub = L"Elite_DLLs";
+#ifdef LAUNCHER_LOADER
+    if (!started_as_mod()) sub = L"dow2-patches";
+#endif
+    _snwprintf(p, MAX_PATH, L"%ls%ls\\DocsFix.dll", dir, sub); p[MAX_PATH - 1] = 0;
+    if (GetFileAttributesW(p) == INVALID_FILE_ATTRIBUTES) return;
+    HMODULE pl = GetModuleHandleA("Platform.dll"); void *orig = pl ? (void *)GetProcAddress(pl, GPUS_NAME) : NULL;
+    void **slot = imp_slot(GetModuleHandleW(NULL), "Platform.dll", GPUS_NAME);
+    if (!orig) { g_holdWhy = "no hold: no Platform.dll export"; return; }
+    if (!slot) { g_holdWhy = "no hold: DOW2.exe has no such import"; return; }
+    if (*slot != orig) { g_holdWhy = "no hold: the import is not bound yet / another build"; return; }
+    char n[64]; wsprintfA(n, "Local\\dow2_docsfix_hold_%lu", GetCurrentProcessId());
+    if (!(g_hold = CreateEventA(NULL, TRUE, FALSE, n))) { g_holdWhy = "no hold: no event"; return; }
+    DWORD old; if (!VirtualProtect(slot, sizeof *slot, PAGE_READWRITE, &old)) { CloseHandle(g_hold); g_hold = NULL; g_holdWhy = "no hold: VirtualProtect"; return; }
+    g_holdOrig = orig; g_holdSlot = slot; InterlockedExchangePointer(slot, (void *)hold_gpus);
+    VirtualProtect(slot, sizeof *slot, old, &old);
+    g_holdWhy = "the game's first folder question held until DocsFix.dll is in";
+}
+static void hold_release(void) { if (g_hold) SetEvent(g_hold); }
+#else
+static void hold_release(void) {}
+#endif
 static DWORD WINAPI load_stats(LPVOID _) {
     wchar_t dir[MAX_PATH]; GetModuleFileNameW(NULL, dir, MAX_PATH);
     wchar_t *sl = wcsrchr(dir, L'\\'); if (!sl) return 0;
@@ -248,18 +301,23 @@ static DWORD WINAPI load_stats(LPVOID _) {
         DeleteFileW(wcscat(wcscpy(p, pd), L"Loader.log"));
         wchar_t line[600];
         vlog(pd, L"launcher loader 1: vanilla (no -modname) - loading every DLL of this folder");
-        // OwnLobby.dll first: it has to be in before RLink starts; the others in the folder's order
-        _snwprintf(p, MAX_PATH, L"%lsOwnLobby.dll", pd); p[MAX_PATH - 1] = 0;
-        if (GetFileAttributesW(p) != INVALID_FILE_ATTRIBUTES) {
+        // DocsFix.dll first (12.11.2026: it holds the game before it builds its Documents paths), then OwnLobby.dll (it has
+        // to be in before RLink starts); the others in the folder's order
+        static const wchar_t *FIRST[] = {L"DocsFix.dll", L"OwnLobby.dll"};
+        for (int i = 0; i < 2; i++) {
+            _snwprintf(p, MAX_PATH, L"%ls%ls", pd, FIRST[i]); p[MAX_PATH - 1] = 0;
+            if (GetFileAttributesW(p) == INVALID_FILE_ATTRIBUTES) continue;
             HMODULE m = LoadLibraryW(p);
-            if (m) _snwprintf(line, 600, L"loaded OwnLobby.dll (first)"); else _snwprintf(line, 600, L"NOT loaded OwnLobby.dll (error %lu)", GetLastError());
+            if (m) _snwprintf(line, 600, L"loaded %ls (first)", FIRST[i]); else _snwprintf(line, 600, L"NOT loaded %ls (error %lu)", FIRST[i], GetLastError());
             line[599] = 0; vlog(pd, line);
+            if (i == 0) { hold_release(); _snwprintf(line, 600, L"DocsFix.dll: %hs", g_holdWhy); line[599] = 0; vlog(pd, line); }
         }
+        hold_release();
         _snwprintf(pat, MAX_PATH, L"%ls*.dll", pd);
         HANDLE h = FindFirstFileW(pat, &fd);
         if (h != INVALID_HANDLE_VALUE) {
             do {
-                if ((fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) || !ends_with_dll(fd.cFileName) || !_wcsicmp(fd.cFileName, L"OwnLobby.dll")) continue;
+                if ((fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) || !ends_with_dll(fd.cFileName) || !_wcsicmp(fd.cFileName, L"OwnLobby.dll") || !_wcsicmp(fd.cFileName, L"DocsFix.dll")) continue;
                 _snwprintf(p, MAX_PATH, L"%ls%ls", pd, fd.cFileName); p[MAX_PATH - 1] = 0;
                 HMODULE m = LoadLibraryW(p);
                 if (m) _snwprintf(line, 600, L"loaded %ls", fd.cFileName);
@@ -274,11 +332,13 @@ static DWORD WINAPI load_stats(LPVOID _) {
 #endif
     // early launcher add-ons in Elite_DLLs: they must be in before the game starts its network (Elite's injector loads
     // Elite_DLLs ~9 s after the start - too late for them). The launcher keeps such a DLL there only while its tick is on.
-    // 02.11.2026: our lobby server (experiment); 09.11.2026: DXVK and FPS unlock (before the game creates Direct3D)
-    static const wchar_t *EARLY[] = {L"OwnLobby.dll", L"DXVK.dll", L"FpsUnlock.dll"};
+    // 02.11.2026: our lobby server (experiment); 09.11.2026: DXVK and FPS unlock (before the game creates Direct3D);
+    // 12.11.2026: Documents fix first (before the game builds its Documents paths: it holds the game until it has decided)
+    static const wchar_t *EARLY[] = {L"DocsFix.dll", L"OwnLobby.dll", L"DXVK.dll", L"FpsUnlock.dll"};
     for (int i = 0; i < (int)(sizeof EARLY / sizeof *EARLY); i++) {
         wchar_t e[MAX_PATH]; _snwprintf(e, MAX_PATH, L"%lsElite_DLLs\\%ls", dir, EARLY[i]);
         if (GetFileAttributesW(e) != INVALID_FILE_ATTRIBUTES) LoadLibraryW(e);
+        if (i == 0) hold_release();                                   // DocsFix.dll is in (or not there): the game goes on
     }
 #if !defined(EARLY_ONLY) && !defined(LAUNCHER_LOADER)
     // (EARLY_ONLY, 03.11.2026: the launcher add-on ownlobby's copy - only Elite_DLLs' early add-ons. The launcher puts aside
@@ -307,6 +367,10 @@ BOOL WINAPI DllMain(HINSTANCE h, DWORD reason, LPVOID _) {
     char sys[MAX_PATH]; GetSystemDirectoryA(sys, MAX_PATH); strcat(sys, "\\winmm.dll");
     HMODULE real = LoadLibraryA(sys); if (!real) return FALSE;
     for (int i = 0; i < N; i++) g_fn[i] = (void *)GetProcAddress(real, NAMES[i]);
-    CloseHandle(CreateThread(NULL, 0, load_stats, NULL, 0, NULL));   // vanilla and Elite; each patch refuses to load twice
+#if defined(EARLY_ONLY) || defined(LAUNCHER_LOADER)
+    hold_install();
+#endif
+    HANDLE t = CreateThread(NULL, 0, load_stats, NULL, 0, NULL);   // vanilla and Elite; each patch refuses to load twice
+    if (t) CloseHandle(t); else hold_release();
     return TRUE;
 }
