@@ -32,6 +32,7 @@ all: $(OUT)/DocsFix.dll
 all: $(OUT)/LangSwitch.dll
 all: $(OUT)/NoHints.dll
 all: $(OUT)/UIScale.dll
+all: $(OUT)/MatchSpeed.dll
 
 $(OUT):
 	mkdir -p $(OUT)
@@ -155,6 +156,10 @@ $(OUT)/PerfLog.dll: perflog/perflog.c | $(OUT)
 
 # 09.11.2026: hide incoming player chat - a button by the minimap and Ctrl+Shift+C
 $(OUT)/ChatHide.dll: chathide/chathide.c common/gfxui.h | $(OUT)
+	$(CC) $(CFLAGS) -shared -o $@ $< -static-libgcc
+
+# 12.11.2026: speed x2 / x4 and a pause for a live match without other people (buttons by the minimap, Ctrl+= / Ctrl+- / Ctrl+P)
+$(OUT)/MatchSpeed.dll: matchspeed/matchspeed.c common/gfxui.h | $(OUT)
 	$(CC) $(CFLAGS) -shared -o $@ $< -static-libgcc
 
 # 03.11.2026: the game's own Continue after a custom game (host -> everyone back in the same room)
