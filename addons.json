@@ -1409,7 +1409,7 @@
     }
   },
   "matchspeed": {
-    "version": "2",
+    "version": "3",
     "dll": "MatchSpeed.dll",
     "default": false,
     "games": [
