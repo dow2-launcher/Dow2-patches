@@ -4,6 +4,35 @@ Every version gets an entry here before it reaches `main`. CI then tags `vX.Y.Z`
 version (`X.Y.0`) it also publishes a GitHub Release with the DLLs and the entries since the previous `X.Y.0`.
 The version of the set lives only in `VERSION`; each DLL still writes its own version to its log.
 
+## 0.2.72 — 2026-11-13
+Melee freeze fix (store moveloopfix-1, new, experiment order 1110, off by default, games elite + vanilla): MoveLoopFix.dll. Found
+on the headless bench (fastbench_1113, repro hang_s5_12da6e): the game froze for good at 5:32 of a match and its memory grew
+~15 MB/s until it died.
+- The bug (DOW2.exe 3.19.10320, Relic's): the per-unit movement step 0x009141A0 loops while the tick's time left ([esp+0x54]) is
+  > 0. An ork slugga's last melee step landed bit-exactly on a banshee's centre (x/z equal to the bit) with 0.00057 s left: state 2
+  (path end, no time spent) -> 4 (EntityUtil::IsWithinDistShifted(self, target, 0) false at equal centres) -> 0 (PathHigh::FindPath
+  from cell (127,134) to itself "succeeds") -> 2 ... for ever. Any melee unit can hit it (players and computers); whole human
+  games never came closer than 0.57 m to a target's centre, so it is very rare.
+- MoveLoopFix 1: the exit test 0x009144F3 (xorps / comiss [esp+0x54] / jae 0x0091451A) goes through a stub that counts the passes
+  of one call whose time left is bit-equal to the previous pass; at 256 it writes 0 there and the loop leaves by its own exit. The
+  count (per mover, 256-slot table by address) is reset at every entry of 0x009141A0 (its first 6 bytes moved into a stub), unlike
+  the EliteAI prototype (fastbench fix/moveloop_guard.h), whose count could add up across calls. 24 + 56 bytes checked first,
+  otherwise "NOT installed" with the bytes in MoveLoopFix.log; each patch one cmpxchg8b write. The game's thread makes no calls:
+  a fire notes its tick, a side thread logs "fired (N): game m:ss (tick T)". The bytes are the same for vanilla and Elite: both run
+  the one DOW2.exe (md5 488b18c4..., stands 1-3 and the Feral bundle's copy; Elite ships no DOW2.exe).
+- Tests (MoveLoopFix.dll loaded as an add-on, without the EliteAI prototype):
+  - repro hang_s5_12da6e on fastbench: without it the watchdog stops the game at tick 3323 (hang); with it the guard fires once
+    ("game 5:32 (tick 3323) ... 0.000574 s of the tick left") and the sim goes on to tick 7889 (where the bench's missing RLink
+    stops it, 0x457487, the same as in runs without any guard); CRC equal to the prototype's run up to its end (4001 ticks).
+  - 10 whole human 1v1 replays (3.2.1 x4, 3.2 x6; orks, SM, CSM, IG, eldar, tyranids) on fastbench: every tick equal to the replay's
+    own hashes (tick 0 of 2 replays differs with and without the DLL - the bench's known tick-0 case) and bit-identical to the
+    runs without the DLL (127k ticks); the guard never fired. Vanilla replay (b2_vanilla_live, 3190 ticks): own hashes and the
+    live game's CrcTrace equal, never fired.
+  - Stand 1 (dow2-patches, -sync_high + CrcTrace, md5 restored): Elite, replay ae388df8 (orks x orks) 4022 ticks: own hashes 0 differ,
+    the bench's CrcTrace 0 differ, "installed". Vanilla
+    (no -modname, the launcher's loader), replay b2_vanilla_live 2966 ticks: own hashes and the live game's CrcTrace 0 differ,
+    "installed". The CI-style build (make on rts) gave the same repro result (fires once at 3323, CRC equal).
+
 ## 0.2.71 — 2026-11-13
 Match speed 3 (store matchspeed-3): the buttons were gone in a tester's observer match against computers (launcher 1.6.3, Elite
 3.2.1.0.0): MatchSpeed.log showed slots 2, 3, 5, 6, 7 as type 8 (player id 0), unknown to MatchSpeed 2, which counted them as

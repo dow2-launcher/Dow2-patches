@@ -34,6 +34,7 @@ all: $(OUT)/NoHints.dll
 all: $(OUT)/UIScale.dll
 all: $(OUT)/MatchSpeed.dll
 all: $(OUT)/Marks.dll
+all: $(OUT)/MoveLoopFix.dll
 
 $(OUT):
 	mkdir -p $(OUT)
@@ -165,6 +166,11 @@ $(OUT)/MatchSpeed.dll: matchspeed/matchspeed.c common/gfxui.h common/topbar.h | 
 
 # 13.11.2026: Match marks - a button / Ctrl+M notes the moment of a match or a replay in Marks.log (AI testers)
 $(OUT)/Marks.dll: marks/marks.c common/gfxui.h common/topbar.h | $(OUT)
+	$(CC) $(CFLAGS) -shared -o $@ $< -static-libgcc
+
+# 13.11.2026: the game froze for good when a melee unit's last step landed exactly on its target's centre (the movement loop
+# 0x009141A0 never spent the tick's time); cut after 256 passes with no time spent
+$(OUT)/MoveLoopFix.dll: moveloopfix/moveloopfix.c | $(OUT)
 	$(CC) $(CFLAGS) -shared -o $@ $< -static-libgcc
 
 # 03.11.2026: the game's own Continue after a custom game (host -> everyone back in the same room)
