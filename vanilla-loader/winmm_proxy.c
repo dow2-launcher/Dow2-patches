@@ -7,7 +7,8 @@
 // by the game's command line: started as a mod (Elite.exe starts DOW2.exe -modname Elite; the public test and old Elite the
 // same) - only the early add-ons in Elite_DLLs, exactly like -DEARLY_ONLY; plain DOW2.exe (vanilla) - only the patch folder
 // that the launcher fills with the add-ons that work in vanilla, never Elite_DLLs. So one file is right for both games and a
-// game started past the launcher (Steam, Elite.exe) still gets the right set. The folder name is put together at run time:
+// game started past the launcher (Steam, Elite.exe) still gets the right set. Loader 3 (vloader-3, 13.11.2026): only -modname Elite... is
+// Elite; another mod (IG Rework: -modname IgRework) gets the patch folder like vanilla (see started_as_elite). The folder name is put together at run time:
 // launchers up to 1.4.10 take a winmm.dll naming it for the old stand-alone package and put it aside before a start.
 #include <windows.h>
 #include <string.h>
@@ -216,10 +217,19 @@ static int ends_with_dll(const wchar_t *n) {              // the real extension,
     size_t l = wcslen(n); return l > 4 && !_wcsicmp(n + l - 4, L".dll");
 }
 #ifdef LAUNCHER_LOADER
-// "-modname" (or "/modname") anywhere in the command line: the game runs a mod (Elite)
-static int started_as_mod(void) {
-    for (const wchar_t *c = GetCommandLineW(); c && *c; c++)
-        if ((*c == L'-' || *c == L'/') && !_wcsnicmp(c + 1, L"modname", 7)) return 1;
+// "-modname Elite..." (or "/modname", any case; Elite, ELITE, Elite_Test) in the command line: the game runs Elite, whose
+// add-ons are Elite_DLLs' (Elite.exe injects them). Loader 3 (vloader-3, 13.11.2026): another mod - grantovich's IG Rework, IgRework.exe
+// starts DOW2.exe -modname IgRework - gets the patch folder like vanilla: the launcher (1.6.4+) fills it with the copies of
+// the add-ons made for that version (launcher.json channel "game", component "games"); its own injector loads only
+// IgRework_DLLs, and IgRework.exe refuses to start when its launch config names a DLL that is not there. Loaders 1-2 took any
+// -modname for Elite.
+static int started_as_elite(void) {
+    for (const wchar_t *c = GetCommandLineW(); c && *c; c++) {
+        if ((*c != L'-' && *c != L'/') || _wcsnicmp(c + 1, L"modname", 7)) continue;
+        const wchar_t *n = c + 8;
+        while (*n == L' ' || *n == L'\t' || *n == L'"' || *n == L'=') n++;
+        return !_wcsnicmp(n, L"Elite", 5);
+    }
     return 0;
 }
 // one line to <folder>\Loader.log (written new at every start of vanilla): what was loaded, for "Send logs"
@@ -265,7 +275,7 @@ static void hold_install(void) {                                  // DllMain: on
     wchar_t *sl = wcsrchr(dir, L'\\'); if (!sl || _wcsicmp(sl + 1, L"DOW2.exe")) return; sl[1] = 0;
     const wchar_t *sub = L"Elite_DLLs";
 #ifdef LAUNCHER_LOADER
-    if (!started_as_mod()) sub = L"dow2-patches";
+    if (!started_as_elite()) sub = L"dow2-patches";
 #endif
     _snwprintf(p, MAX_PATH, L"%ls%ls\\DocsFix.dll", dir, sub); p[MAX_PATH - 1] = 0;
     if (GetFileAttributesW(p) == INVALID_FILE_ATTRIBUTES) return;
@@ -291,8 +301,8 @@ static DWORD WINAPI load_stats(LPVOID _) {
     if (_wcsicmp(sl + 1, L"DOW2.exe")) return 0;                     // only the game itself
     sl[1] = 0;
 #ifdef LAUNCHER_LOADER
-    if (!started_as_mod()) {
-        // vanilla: every *.dll in the launcher's patch folder, nothing from Elite_DLLs (the launcher puts the vanilla copies of
+    if (!started_as_elite()) {
+        // vanilla or another mod (IG Rework): every *.dll in the launcher's patch folder, nothing from Elite_DLLs (the launcher puts the vanilla copies of
         // the early add-ons there too; this thread runs ~50-90 ms after the start, before the game starts its network)
         static const wchar_t A[] = L"dow2", B[] = L"patches";
         wchar_t pd[MAX_PATH], pat[MAX_PATH], p[MAX_PATH]; WIN32_FIND_DATAW fd;
@@ -300,7 +310,8 @@ static DWORD WINAPI load_stats(LPVOID _) {
         if (GetFileAttributesW(pd) == INVALID_FILE_ATTRIBUTES) return 0;
         DeleteFileW(wcscat(wcscpy(p, pd), L"Loader.log"));
         wchar_t line[600];
-        vlog(pd, L"launcher loader 1: vanilla (no -modname) - loading every DLL of this folder");
+        vlog(pd, wcsstr(GetCommandLineW(), L"modname") ? L"launcher loader 3: a mod other than Elite (-modname) - loading every DLL of this folder"
+                                                     : L"launcher loader 3: vanilla (no -modname) - loading every DLL of this folder");
         // DocsFix.dll first (12.11.2026: it holds the game before it builds its Documents paths), then OwnLobby.dll (it has
         // to be in before RLink starts); the others in the folder's order
         static const wchar_t *FIRST[] = {L"DocsFix.dll", L"OwnLobby.dll"};
@@ -328,7 +339,7 @@ static DWORD WINAPI load_stats(LPVOID _) {
         }
         return 0;
     }
-    // a mod (Elite): the early add-ons below, as -DEARLY_ONLY
+    // Elite: the early add-ons below, as -DEARLY_ONLY
 #endif
     // early launcher add-ons in Elite_DLLs: they must be in before the game starts its network (Elite's injector loads
     // Elite_DLLs ~9 s after the start - too late for them). The launcher keeps such a DLL there only while its tick is on.

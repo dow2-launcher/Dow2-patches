@@ -413,7 +413,8 @@ vanilla-loader/ - **winmm.dll**
     never Elite_DLLs, and writes dow2-patches\Loader.log. The launcher fills dow2-patches\ with the copies of the add-ons whose
     store entry has "games": [..., "vanilla"] and puts this loader next to DOW2.exe only for vanilla; for Elite it goes and
     Automatch's early one is back. The folder name is put together at run time (launchers up to 1.4.10 put aside a winmm.dll that
-    names it).
+    names it). vloader-3 (13.11.2026): only "-modname Elite..." counts as Elite; another mod (IG Rework: -modname IgRework) gets
+    dow2-patches\ like vanilla - launcher 1.6.4 fills it with the add-ons whose entry names "igrework" (docs/ADDON_RULES.md).
 
 continue/ - Continue.dll (Continue 1) - research, not released
     The game's own Continue after a Custom Games match (the host presses it, everyone is back in the same room): canContinue

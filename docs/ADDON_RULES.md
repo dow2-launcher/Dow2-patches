@@ -35,6 +35,16 @@ rusifikator...) is never copied there. Its ini is read next to the DLL, so optio
 vanilla game's loader is `build/launcher/winmm.dll` (store `vloader-<n>`, launcher.json `"vanilla": {"loader": ...}`). A new
 add-on: test it in vanilla 3.19 on the stand before its entry gets "vanilla".
 
+IG Rework (launcher 1.6.4, owner 13.11.2026): grantovich's mod is a version of its own in the launcher (channel `igrework`,
+IgRework.exe -> DOW2.exe -modname IgRework, its DLLs in IgRework_DLLs). Its channel has `"game": "igrework"`; the launcher
+copies the add-ons whose entry names "igrework" into `dow2-patches\` exactly as for vanilla, and the loader (vloader-3+) loads
+that folder for any `-modname` that is not Elite. Our DLLs never go into IgRework.launchconfig: IgRework.exe refuses to start
+the game ("Failed to find a specific injected file required by this mod") when a DLL named there is not in IgRework_DLLs.
+Not for IG Rework: the add-ons tied to our servers' Elite/vanilla games (automatch - MMFind puts any non-Elite -modname into
+the vanilla queue -, roomjoin, livereplay, replaytakeover), the ones that change Elite's own files or need Elite (elitefix_wmic,
+rusifikator, elitetext_lang, shellfix, newai/eliteai_off, frameprobe, soundbugtest) and the vanilla-only elitemaps. A new
+add-on: test it on the IG Rework channel's folder on the stand (dev/igrework_addons_1113/session.sh) before it gets "igrework".
+
 Launcher 1.5.2: an entry may also have `"requires": [<store id>, ...]` (the tick works only with those ticked; fpsunlock
 requires dxvk) and `"excludes": [<store id>, ...]` (never together). `games`, `requires` and `excludes` written in addons.json
 go to the store with a deploy; an add-on without them there keeps what the store has.

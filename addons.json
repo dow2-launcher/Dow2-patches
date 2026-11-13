@@ -928,7 +928,8 @@
     "default": false,
     "games": [
       "elite",
-      "vanilla"
+      "vanilla",
+      "igrework"
     ],
     "category": "performance",
     "order": 60,
@@ -1079,7 +1080,8 @@
     "default": false,
     "games": [
       "elite",
-      "vanilla"
+      "vanilla",
+      "igrework"
     ],
     "category": "performance",
     "order": 10,
@@ -1104,7 +1106,8 @@
     "default": false,
     "games": [
       "elite",
-      "vanilla"
+      "vanilla",
+      "igrework"
     ],
     "requires": [
       "dxvk"
@@ -1239,7 +1242,8 @@
     "default": false,
     "games": [
       "elite",
-      "vanilla"
+      "vanilla",
+      "igrework"
     ],
     "category": "experiment",
     "order": 1020,
@@ -1264,7 +1268,8 @@
     "default": false,
     "games": [
       "elite",
-      "vanilla"
+      "vanilla",
+      "igrework"
     ],
     "category": "experiment",
     "order": 1030,
@@ -1289,7 +1294,8 @@
     "default": false,
     "games": [
       "elite",
-      "vanilla"
+      "vanilla",
+      "igrework"
     ],
     "category": "experiment",
     "order": 1040,
@@ -1314,7 +1320,8 @@
     "default": false,
     "games": [
       "elite",
-      "vanilla"
+      "vanilla",
+      "igrework"
     ],
     "category": "experiment",
     "order": 1050,
@@ -1339,7 +1346,8 @@
     "default": false,
     "games": [
       "elite",
-      "vanilla"
+      "vanilla",
+      "igrework"
     ],
     "category": "experiment",
     "order": 1060,
@@ -1364,7 +1372,8 @@
     "default": false,
     "games": [
       "elite",
-      "vanilla"
+      "vanilla",
+      "igrework"
     ],
     "category": "experiment",
     "order": 1070,
@@ -1389,7 +1398,8 @@
     "default": false,
     "games": [
       "elite",
-      "vanilla"
+      "vanilla",
+      "igrework"
     ],
     "category": "experiment",
     "order": 1080,
@@ -1414,7 +1424,8 @@
     "default": false,
     "games": [
       "elite",
-      "vanilla"
+      "vanilla",
+      "igrework"
     ],
     "category": "experiment",
     "order": 1090,
@@ -1439,7 +1450,8 @@
     "default": false,
     "games": [
       "elite",
-      "vanilla"
+      "vanilla",
+      "igrework"
     ],
     "category": "experiment",
     "order": 1100,
@@ -1464,7 +1476,8 @@
     "default": false,
     "games": [
       "elite",
-      "vanilla"
+      "vanilla",
+      "igrework"
     ],
     "category": "experiment",
     "order": 1110,
