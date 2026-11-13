@@ -23,8 +23,15 @@
 //   - the game is live (game type settings+0x118 not 0, not 0x800 = replay: replays have ReplaySpeed);
 //   - every slot of the match's GameInfo (settings+0x118+0x810, 0xA8 each, +0 type, +0x9C player id) is the local human
 //     (0), a computer (1), the local observer (2) or an empty slot (6 open, 7 closed; seen: the closed observer slots and the
-//     unused team slots of a custom game) - a remote human (3), remote computer (4), remote observer (5) or any other type
-//     means another person's game is in it;
+//     unused team slots of a custom game; 8 "nobody there", see below) - a remote human (3), remote computer (4), remote
+//     observer (5) or any other type means another person's game is in it;
+//   - type 8 (MatchSpeed 3, 13.11.2026: a tester's observer bot match, launcher 1.6.3 / Elite 3.2.1.0.0, slots 2, 3, 5, 6, 7 =
+//     8 with player id 0, so MatchSpeed 2 stayed out): the match start (0x0044618C, the GameInfo slots from the session's
+//     members) writes 8 at 0x00446703 for a member slot of a person kind (0 / 3 / 4 / 5, not the local observer) that has NO
+//     peer - nobody connected behind it. The engine then treats it exactly as a closed slot 7: no Player is made for it
+//     (0x004269D5: 7 or 8 -> NULL), its name is "missing player" (0x0044EAF8), its race is not loaded (0x00434F3E: skips
+//     7, 8, 2, 5). So 8 is an empty slot too - counted with 6 / 7 only with player id 0 (as seen); with any other id it stays
+//     "other". A person really in the match keeps the session connected, which is checked on its own below.
 //   - online (session flags *(*0x01335678+4) & 0x558): the match session is no longer connected. The game itself cuts the
 //     session at the start of a match with one person in it (0x46FE8E: members == 1 -> Disconnect), so a solo custom game
 //     runs on this machine alone; a connected session = somebody else is there.
@@ -52,7 +59,7 @@
 #include "../common/gfxui.h"
 #include "../common/topbar.h"
 
-#define VERSION "2"
+#define VERSION "3"
 
 #define G_SETTINGS   0x01335A78u   // +0x118 game type (0x800 playback), +0x118+0x810 slots, +0x814 count
 #define G_SESSION    0x01335678u   // *(*G_SESSION + 4) & 0x558: online
@@ -124,7 +131,7 @@ static int match_connected(void) {
 }
 
 // ---- "nobody else here": 1 = yes; why[] says what was seen
-static const char *TYPE_NAME[] = { "local human", "computer", "local observer", "remote human", "remote computer", "remote observer", "open", "closed" };
+static const char *TYPE_NAME[] = { "local human", "computer", "local observer", "remote human", "remote computer", "remote observer", "open", "closed", "nobody there" };
 static int solo_check(char *why, int wn, int logSlots) {
     char *st = settings(); if (!st) { snprintf(why, wn, "no game settings"); return 0; }
     DWORD type = (DWORD)I32(st, 0x118), sf = session_flags();
@@ -134,17 +141,20 @@ static int solo_check(char *why, int wn, int logSlots) {
 #endif
     char *arr = P32(st, 0x118 + 0x810); int n = I32(st, 0x118 + 0x814);
     if (n <= 0 || n > 16 || !okp(arr, n * 0xA8)) { snprintf(why, wn, "no player list (%d)", n); return 0; }
-    int c[8] = {0}, other = 0;
+    int c[9] = {0}, other = 0;
     for (int i = 0; i < n; i++) {
         char *s = arr + i * 0xA8; int t = I32(s, 0);
-        if (t >= 0 && t < 8) c[t]++; else other++;
-        if (logSlots) logmsg("  slot %d: type %d (%s), player id %d, AI difficulty %d", i, t, t >= 0 && t <= 7 ? TYPE_NAME[t] : "?", I32(s, 0x9C), I32(s, 0x2C));
+#ifdef MS_TEST8   // stands only: a closed slot (7) judged as the "nobody there" 8 of the launcher's rooms
+        if (t == 7) t = 8;
+#endif
+        if (t >= 0 && t < 8) c[t]++; else if (t == 8 && I32(s, 0x9C) == 0) c[8]++; else other++;
+        if (logSlots) logmsg("  slot %d: type %d (%s), player id %d, AI difficulty %d", i, t, t >= 0 && t <= 8 ? TYPE_NAME[t] : "?", I32(s, 0x9C), I32(s, 0x2C));
     }
-    int people = c[3] + c[5] + other;        // 6 / 7: open / closed slot (seen: closed observer slots and unused team slots = 7)
+    int people = c[3] + c[5] + other;        // 6 / 7 / 8: open / closed / nobody there (seen: closed observer slots and unused team slots = 7 or 8)
     int online = (sf & ONLINE_MASK) != 0, conn = online ? match_connected() : 0;
     snprintf(why, wn, "game type %lX, %s%s, %d slots: %d local human, %d computer, %d local observer, %d remote human, %d remote computer, %d remote observer, %d empty, %d other",
              type, online ? "network session" : "no network session", online ? (conn ? " (match session CONNECTED)" : ", match session not connected") : "",
-             n, c[0], c[1], c[2], c[3], c[4], c[5], c[6] + c[7], other);
+             n, c[0], c[1], c[2], c[3], c[4], c[5], c[6] + c[7] + c[8], other);
 #ifdef MS_TEST   // stands only: the verdict of a replay's slot table logged as if it were live, never acted on
     if (type & T_PLAYBACK) { int v = !(people || c[4]) && c[0] + c[2] == 1 && !conn; snprintf(why + strlen(why), wn - strlen(why), " [TEST: a replay - as live it would be %s]", v ? "ALONE" : "NOT alone"); return 0; }
 #endif

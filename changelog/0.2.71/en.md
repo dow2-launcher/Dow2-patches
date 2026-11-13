@@ -1,0 +1,1 @@
+- Match speed 3: the pause and speed buttons show again in an observer's match against computers where the game marked the unused slots in another way (they were taken for other people).

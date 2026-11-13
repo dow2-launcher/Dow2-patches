@@ -4,6 +4,20 @@ Every version gets an entry here before it reaches `main`. CI then tags `vX.Y.Z`
 version (`X.Y.0`) it also publishes a GitHub Release with the DLLs and the entries since the previous `X.Y.0`.
 The version of the set lives only in `VERSION`; each DLL still writes its own version to its log.
 
+## 0.2.71 — 2026-11-13
+Match speed 3 (store matchspeed-3): the buttons were gone in a tester's observer match against computers (launcher 1.6.3, Elite
+3.2.1.0.0): MatchSpeed.log showed slots 2, 3, 5, 6, 7 as type 8 (player id 0), unknown to MatchSpeed 2, which counted them as
+other people and stayed out.
+- What 8 is (DOW2.exe 3.19): the match start 0x0044618C builds the GameInfo slots from the session's members; a member slot of a
+  person kind (0 / 3 / 4 / 5, not the local observer) whose peer is none (0xFFFFFFFF) gets type 8 (0x00446703) - nobody is
+  connected behind it. Everything after treats 8 like the closed 7: no Player is made (0x004269D5: 7 or 8 -> NULL), its name
+  is "missing player" (0x0044EAF8), its race is not loaded (0x00434F3E skips 7, 8, 2, 5).
+- MatchSpeed 3 counts type 8 with player id 0 as an empty slot (with 6 / 7); with another id it stays "other" (no change). The
+  separate check that the match session is no longer connected stays, so a real person in the match still turns it off.
+- Stand 1: an observer custom game NEW AI A vs B with a stand build (-DMS_TEST8: the closed slots judged as 8) - slots 2, 3,
+  5, 6, 7 = 8 exactly as in the tester's log, "ONLY THIS PLAYER", buttons at the top, x2 / x4 and a mark by its button; Elite
+  player vs Elite AI with the real build: buttons, keys, marks, live vs replay sim CRC 0 differ (1540 ticks).
+
 ## 0.2.70 — 2026-11-13
 Match marks (store marks-1, new, experiment, order 1100, off by default, games elite + vanilla): Marks.dll, and Match speed 2
 (store matchspeed-2). AI testers 13.11: "15:26 bot 1 retreats for no reason" - one press should note such a moment so that it can be
