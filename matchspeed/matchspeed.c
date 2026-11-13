@@ -31,23 +31,28 @@
 //   Otherwise nothing is shown, no key does anything, and if the rate was ours it goes back to 10.
 //
 // Controls: two copies of the replay panel's own buttons (its textures hud/playback_panel/large_btn*, the same up / over /
-//   down / toggled_on frames and icons) on the left edge of the minimap frame, made with the minimap movie's own
-//   Receive_LoadMovie: pause / play (|| while running, > and the gold frame while paused) and the speed (the game's 1x /
-//   2x / 4x icons; a click steps 1x -> 2x -> 4x -> 1x; gold frame above x1). Hotkeys: Ctrl+= / Ctrl+NumPad+ faster,
-//   Ctrl+- / Ctrl+NumPad- slower, Ctrl+P pause / resume (none of them is bound in the game's keydefaults.lua). Clicks and
-//   keys are read like ChatHide / ReplaySpeed: GetAsyncKeyState with the game window in front, the clip's _xmouse/_ymouse.
-//   The clip has the movie's default mouse callbacks, so a click on it does not reach the world.
-// Hooks: the minimap panel's per-frame update (form vtable 0x011160D8 slot +0x10, chained with ChatHide / APM /
-//   MatchTimer) and, for the keys when there is no minimap, the Menu button's per-frame update (0x0110C55C, chained).
+//   down / toggled_on frames and icons, the same size) at the top left of the screen, where a replay has its pause / speed
+//   buttons (common/topbar.h: in the game's full-screen HUD movie resource_notifications): pause / play (|| while running, >
+//   and the gold frame while paused) and the speed (the game's 1x / 2x / 4x icons; a click steps 1x -> 2x -> 4x -> 1x; gold
+//   frame above x1). Hotkeys: Ctrl+= / Ctrl+NumPad+ faster, Ctrl+- / Ctrl+NumPad- slower, Ctrl+P pause / resume (none of them
+//   is bound in the game's keydefaults.lua). Clicks and keys are read like ChatHide / ReplaySpeed: GetAsyncKeyState with the
+//   game window in front, the clip's _xmouse/_ymouse; a click over a button is handled in the movie form's input slot, so it
+//   does not reach the world.
+//   MatchSpeed 2 (13.11.2026, AI testers): the buttons were on the left edge of the minimap frame (MatchSpeed 1) - awkward
+//   there, and every click on them also went to the minimap and moved the camera to the map's corner.
+// Hooks: the top movie's per-frame update and input (form vtable 0x01116478 slots +0x10 / +0x0C, chained with Marks) and, for
+//   the keys when that movie stands, the Menu button's per-frame update (0x0110C55C, chained).
 // Rules: docs/UI_RULES.md (only the game's own movie, nothing touches Direct3D), docs/ADDON_RULES.md.
-// MatchSpeed.ini [MatchSpeed]: Enabled, Button, Hotkeys, Scale (button size, % of the 40 x 40 texture), OffsetX / OffsetY.
+// MatchSpeed.ini [MatchSpeed]: Enabled, Button, Hotkeys, Scale (button size, % of the 40 x 40 texture: 100 = the replay
+//   panel's), OffsetX / OffsetY (movie units, 1.5 a pixel at 800 lines).
 #include <windows.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include "../common/gfxui.h"
+#include "../common/topbar.h"
 
-#define VERSION "1"
+#define VERSION "2"
 
 #define G_SETTINGS   0x01335A78u   // +0x118 game type (0x800 playback), +0x118+0x810 slots, +0x814 count
 #define G_SESSION    0x01335678u   // *(*G_SESSION + 4) & 0x558: online
@@ -59,8 +64,6 @@
 #define VT_SIMRATE   0x0108DFACu
 #define FN_SETRATE   0x0043ECE9u
 #define FN_GETRATE   0x0043ECCBu
-#define MM_VT_UPD    0x011160E8u   // minimap panel form, per-frame update
-#define MM_UPD_FN    0x00B3F6E0u
 #define MENU_VT_UPD  0x0110C55Cu   // Menu button form, per-frame update (ret 4)
 #define NULLSUB_RET4 0x009AB7D0u
 #define T_PLAYBACK   0x800
@@ -68,7 +71,6 @@
 
 #define RATE_1X      10.0f
 #define RATE_PAUSE   0.0001f
-#define TEX "img://data:UI/textures/space_marines/hud/playback_panel/"
 
 static wchar_t g_log[MAX_PATH], g_ini[MAX_PATH];
 static int g_logLines;
@@ -84,7 +86,7 @@ static int okp(const void *p, UINT n) { return p && (DWORD)p >= 0x10000 && !IsBa
 static LONGLONG g_qf;
 static LONGLONG qpc(void) { LARGE_INTEGER t; QueryPerformanceCounter(&t); return t.QuadPart; }
 
-static int g_button = 1, g_hotkeys = 1; static double g_scale = 85, g_offX, g_offY;
+static int g_button = 1, g_hotkeys = 1; static double g_scale = 100, g_offX, g_offY;
 static char g_testSeq[256]; static int g_testPos;   // stands only (MatchSpeed.ini TestSeq): "<s>:<1|2|4|p|r> ..." after the match start
 
 // ---- the sim rate
@@ -155,7 +157,7 @@ static int solo_check(char *why, int wn, int logSlots) {
 // ---- state (all on the game's main thread)
 static int g_speed = 1, g_paused, g_solo = -1;   // g_solo: -1 not decided yet in this match, 0 no, 1 yes
 static float g_setRate;                         // what we last set (0 = nothing in this match)
-static char *g_world; static LONGLONG g_frameAt, g_matchAt, g_checkAt, g_mmAt;
+static char *g_world; static LONGLONG g_frameAt, g_matchAt, g_checkAt;
 static int g_winTick = -1; static LONGLONG g_winAt; static LONG g_frames;
 static int g_lastLoggedSolo = -2, g_lastTick = -1;
 static int g_ctlTick = -1; static LONGLONG g_ctlAt;   // the x2 / x4 rate regulator
@@ -256,104 +258,55 @@ static void frame(int front) {
     }
 }
 
-// ---- the two buttons in the minimap movie
+// ---- the two buttons at the top of the screen (common/topbar.h: the full-screen HUD movie, a row at the top left)
 typedef void (__thiscall *Upd_t)(char *form, float dt);
-typedef char (__thiscall *GfxGetVar_t)(void *movie, GfxVal *v, const char *path);
-static Upd_t o_mm, o_menu;
-static void *g_mv; static int g_made, g_tries, g_lbWas, g_press = -1, g_shown = -1;
+static Upd_t o_top, o_menu; static TbInput_t o_input;
+static void *g_mv; static int g_made, g_tries, g_lbWas, g_press = -1, g_shown = -1, g_overAny;
 static int g_hover[2] = {-1, -1}, g_down[2] = {-1, -1}, g_on[2] = {-1, -1}, g_icon[2] = {-1, -1};
-static LONGLONG g_madeAt, g_refreshAt;
-static const char *BTN[2] = { "ms_pause", "ms_speed" };
-static int getnum(void *mv, const char *path, double *out) {
-    GfxVal v; memset(&v, 0, sizeof v);
-    if (!(*(GfxGetVar_t *)(*(char **)mv + 0x30))(mv, &v, path) || v.type != GV_NUMBER) return 0;
-    *out = v.v.num; return 1;
-}
-static int getbool(void *mv, const char *path) {
-    GfxVal v; memset(&v, 0, sizeof v);
-    return (*(GfxGetVar_t *)(*(char **)mv + 0x30))(mv, &v, path) && v.type == GV_BOOL && v.v.b;
-}
-static void vis(void *mv, int b, const char *child, int on) {
-    char p[96]; snprintf(p, sizeof p, "_root.ms_btn.%s.%s._visible", BTN[b], child); gfx_setvar(mv, p, gv_bool(on));
-}
-static void loadimg(void *mv, const char *clip, const char *tex) {
-    char t[160]; snprintf(t, sizeof t, TEX "%s.dds", tex);
-    GfxVal a[2] = { gv_str(clip), gv_str(t) }; gfx_invoke(mv, "Receive_LoadMovie", NULL, a, 2);
-}
-// each button: frames up / over / down / toggled_on and its icons, the replay panel's own 40 x 40 textures
-static const char *FRAMES[4] = { "large_btn", "large_btn_over", "large_btn_down", "large_btn_toggled_on" };
-static const char *FRAME_CLIP[4] = { "up", "over", "down", "on" };
-static const char *ICONS[2][3] = { { "large_btn_pause", "large_btn_play", NULL }, { "large_btn_ff", "large_btn_ff_4x", "large_btn_ff_4" } };   // ff_4x is the game's "2x", ff_4 its "4x"
+static LONGLONG g_madeAt, g_refreshAt, g_topAt;
+static const char *BTN[2] = { "_root.ms_btn.ms_pause", "_root.ms_btn.ms_speed" };
+static const char *const ICONS[2][4] = { { "large_btn_pause", "large_btn_play", NULL }, { "large_btn_ff", "large_btn_ff_4x", "large_btn_ff_4", NULL } };   // ff_4x is the game's "2x", ff_4 its "4x"
 static void make_buttons(void *mv) {
     if (!gfx_exists(mv, "ms_btn")) { GfxVal a[2] = { gv_str("ms_btn"), gv_num(15910) }; gfx_invoke(mv, "_root.createEmptyMovieClip", NULL, a, 2); }
-    if (!gfx_exists(mv, "ms_btn")) { logmsg("minimap %p: could not make the button clip", mv); g_made = -1; return; }
+    if (!gfx_exists(mv, "ms_btn")) { logmsg("top movie %p: could not make the button clip", mv); g_made = -1; return; }
     for (int b = 0; b < 2; b++) {
-        char p[96], c[96];
-        { GfxVal a[2] = { gv_str(BTN[b]), gv_num(b + 1) }; gfx_invoke(mv, "_root.ms_btn.createEmptyMovieClip", NULL, a, 2); }
-        int k = 1;
-        snprintf(p, sizeof p, "_root.ms_btn.%s.createEmptyMovieClip", BTN[b]);
-        // each picture is loaded into an "img" clip inside its own holder: loading replaces the target clip (its _visible
-        // too), so the holder is what gets shown / hidden
-        for (int f = 0; f < 7; f++) {
-            const char *nm = f < 4 ? FRAME_CLIP[f] : (const char *[]){ "ic0", "ic1", "ic2" }[f - 4], *tex = f < 4 ? FRAMES[f] : ICONS[b][f - 4];
-            if (!tex) continue;
-            GfxVal a[2] = { gv_str(nm), gv_num(k++) }; gfx_invoke(mv, p, NULL, a, 2);
-            char pi[96]; snprintf(pi, sizeof pi, "_root.ms_btn.%s.%s.createEmptyMovieClip", BTN[b], nm);
-            GfxVal a2[2] = { gv_str("img"), gv_num(1) }; gfx_invoke(mv, pi, NULL, a2, 2);
-            snprintf(c, sizeof c, "_root.ms_btn.%s.%s.img", BTN[b], nm); loadimg(mv, c, tex);
-        }
+        if (!tb_make_button(mv, "_root.ms_btn", BTN[b] + 13, b + 1, ICONS[b], 100)) { logmsg("top movie %p: button %s not made", mv, BTN[b]); g_made = -1; return; }
         g_hover[b] = g_down[b] = g_on[b] = g_icon[b] = -1;   // the first update sets every holder's _visible
     }
+    gfx_setvar(mv, "_root.ms_btn.ms_speed._x", gv_num(TB_BTN * (1 + TB_GAP)));
     { GfxVal a = gv_str("_root.ms_btn"), r; memset(&r, 0, sizeof r); gfx_invoke(mv, "Receive_RegisterDefaultCallbacks", &r, &a, 1);
-      if (!(r.type == GV_BOOL && r.v.b)) logmsg("mouse callbacks on the buttons NOT registered (a click may reach the world)"); }
-    // place: the left edge of the minimap frame (the corner buttons' bounds), middle, pause above the speed
-    double x0 = 1e9, y0 = 1e9, x1 = -1e9, y1 = -1e9; int n = 0;
-    static const char *B[4] = { "chat_btn", "ping_btn", "defend_btn", "objectives_btn" };
-    for (int i = 0; i < 4; i++) {
-        char p[64]; double x, y, w, h;
-        snprintf(p, sizeof p, "_root.%s._x", B[i]); if (!getnum(mv, p, &x)) continue; snprintf(p, sizeof p, "_root.%s._y", B[i]); if (!getnum(mv, p, &y)) continue;
-        snprintf(p, sizeof p, "_root.%s._width", B[i]); if (!getnum(mv, p, &w)) continue; snprintf(p, sizeof p, "_root.%s._height", B[i]); if (!getnum(mv, p, &h)) continue;
-        if (x < x0) x0 = x; if (y < y0) y0 = y; if (x + w > x1) x1 = x + w; if (y + h > y1) y1 = y + h; n++;
-    }
-    double sz = 40 * g_scale / 100, gap = sz * 0.08, px, py;
-    if (n >= 2) { px = x0 - 4; py = (y0 + y1) / 2 - sz - gap / 2; } else { px = 0; py = 140; }
-    if (px < 0) px = 0;
-    px += g_offX; py += g_offY;
-    gfx_setvar(mv, "_root.ms_btn.ms_speed._y", gv_num(40 + 40 * 0.08));
-    gfx_setvar(mv, "_root.ms_btn._xscale", gv_num(g_scale)); gfx_setvar(mv, "_root.ms_btn._yscale", gv_num(g_scale));
+      if (!(r.type == GV_BOOL && r.v.b)) logmsg("mouse callbacks on the buttons NOT registered"); }
+    double px, py, sz; tb_place(mv, g_scale, 0, g_offX, g_offY, &px, &py, &sz);
+    gfx_setvar(mv, "_root.ms_btn._xscale", gv_num(sz / TB_BTN * 100)); gfx_setvar(mv, "_root.ms_btn._yscale", gv_num(sz / TB_BTN * 100));
     gfx_setvar(mv, "_root.ms_btn._x", gv_num(px)); gfx_setvar(mv, "_root.ms_btn._y", gv_num(py));
-    logmsg("minimap %p: buttons at %.1f,%.1f (%.1f each; frame from %d corner buttons %.1f,%.1f - %.1f,%.1f; offset %g,%g)", mv, px, py, sz, n, x0, y0, x1, y1, g_offX, g_offY);
+    logmsg("top movie %p: buttons at %.1f,%.1f (%.1f each; offset %g,%g)", mv, px, py, sz, g_offX, g_offY);
     g_made = 1; g_shown = -1;
-}
-static int mouse_over(void *mv, int b) {
-    char p[96]; double x, y;
-    snprintf(p, sizeof p, "_root.ms_btn.%s._xmouse", BTN[b]); if (!getnum(mv, p, &x)) return 0;
-    snprintf(p, sizeof p, "_root.ms_btn.%s._ymouse", BTN[b]); if (!getnum(mv, p, &y)) return 0;
-    return x >= 0 && y >= 0 && x < 40 && y < 40;
 }
 static void set_icon(void *mv, int b, int i) {
     if (g_icon[b] == i) return;
-    for (int k = 0; k < 3 && ICONS[b][k]; k++) { char nm[8]; snprintf(nm, sizeof nm, "ic%d", k); vis(mv, b, nm, k == i); }
+    for (int k = 0; ICONS[b][k]; k++) { char nm[8]; snprintf(nm, sizeof nm, "ic%d", k); tb_vis(mv, BTN[b], nm, k == i); }
     g_icon[b] = i;
 }
 static void buttons(void *mv, int front) {
     LONGLONG now = qpc();
     if (mv != g_mv) { g_mv = mv; g_made = 0; g_tries = 0; }
+    g_overAny = 0;
     if (g_solo != 1) { if (g_made == 1 && g_shown != 0) { gfx_setvar(mv, "_root.ms_btn._visible", gv_bool(0)); g_shown = 0; } return; }
     if (g_made == -1 && g_tries < 10 && now - g_madeAt > g_qf * 2) g_made = 0;
     if (g_made == 0 || (g_made == 1 && !gfx_exists(mv, "ms_btn"))) { g_tries++; g_madeAt = now; make_buttons(mv); }
     if (g_made != 1) return;
     if (g_shown != 1) { gfx_setvar(mv, "_root.ms_btn._visible", gv_bool(1)); g_shown = 1; }
     if (now - g_refreshAt > g_qf) { g_refreshAt = now; for (int b = 0; b < 2; b++) g_hover[b] = g_down[b] = g_on[b] = g_icon[b] = -1; }
-    int shown = front && getbool(mv, "_root._visible");
+    int shown = front && tb_getbool(mv, "_root._visible");
     int lb = shown && key(GetSystemMetrics(SM_SWAPBUTTON) ? VK_RBUTTON : VK_LBUTTON);
     for (int b = 0; b < 2; b++) {
-        int over = shown && mouse_over(mv, b);
+        int over = shown && tb_mouse_over(mv, BTN[b]);
+        g_overAny |= over;
         if (lb && !g_lbWas && over) g_press = b;
         int down = lb && over && g_press == b, on = b ? g_speed > 1 : g_paused;
-        if (over != g_hover[b]) { vis(mv, b, "over", over); g_hover[b] = over; }
-        if (down != g_down[b]) { vis(mv, b, "down", down); g_down[b] = down; }
-        if (on != g_on[b]) { vis(mv, b, "on", on); g_on[b] = on; }
+        if (over != g_hover[b]) { tb_vis(mv, BTN[b], "over", over); g_hover[b] = over; }
+        if (down != g_down[b]) { tb_vis(mv, BTN[b], "down", down); g_down[b] = down; }
+        if (on != g_on[b]) { tb_vis(mv, BTN[b], "on", on); g_on[b] = on; }
         set_icon(mv, b, b ? (g_speed == 4 ? 2 : g_speed == 2 ? 1 : 0) : g_paused);
         if (!lb && g_lbWas && over && g_press == b) act(b ? 'c' : 'p', b ? "speed button" : "pause button");
     }
@@ -361,16 +314,21 @@ static void buttons(void *mv, int front) {
     g_lbWas = lb;
 }
 static int front_window(void) { DWORD fpid = 0; GetWindowThreadProcessId(GetForegroundWindow(), &fpid); return fpid == GetCurrentProcessId(); }
-static void __thiscall hk_mm(char *form, float dt) {
-    o_mm(form, dt);
+static void __thiscall hk_top(char *form, float dt) {
+    o_top(form, dt);
     void *mv = gfx_movie_of_form(form);
     int front = front_window();
-    frame(front); g_mmAt = qpc();
+    frame(front); g_topAt = qpc();
     if (mv && g_button) buttons(mv, front);
+}
+// a click over our buttons is the movie's: handled here, so it never reaches the world (units stay selected, no camera move)
+static char __thiscall hk_input(char *form, void *a, void *b) {
+    if (g_overAny && g_shown == 1) return 1;
+    return o_input(form, a, b);
 }
 static void __thiscall hk_menu(char *form, float dt) {
     o_menu(form, dt);
-    if (qpc() - g_mmAt > g_qf / 2) frame(front_window());   // no minimap (or its update stands): the keys still work
+    if (qpc() - g_topAt > g_qf / 2) frame(front_window());   // no top movie (or its update stands): the keys still work
 }
 
 // ---- install
@@ -380,11 +338,12 @@ static void install(void) {
     if (IsBadReadPtr(vt, 0x30) || vt[0x28 / 4] != FN_SETRATE || vt[0x2C / 4] != FN_GETRATE || memcmp((void *)FN_SETRATE, set_code, sizeof set_code)) {
         logmsg("DOW2.exe is not 3.19 (no match at the sim rate code) - not patching"); return;
     }
-    int m = gfx_hook_slot(MM_VT_UPD, MM_UPD_FN, (void *)hk_mm, (void **)&o_mm);
+    int m = gfx_hook_slot(TB_SLOT_UPD, TB_UPD_FN, (void *)hk_top, (void **)&o_top);
+    int in = m && gfx_hook_slot(TB_SLOT_INPUT, TB_INPUT_FN, (void *)hk_input, (void **)&o_input);
     int k = gfx_hook_slot(MENU_VT_UPD, NULLSUB_RET4, (void *)hk_menu, (void **)&o_menu);
     logmsg("MatchSpeed %s: x1 / x2 / x4 and pause in matches without other people; buttons %s, hotkeys %s%s%s", VERSION,
-           !m ? "NOT hooked (minimap slot differs)" : g_button ? "by the minimap" : "off",
-           g_hotkeys ? "Ctrl+= / Ctrl+- / Ctrl+P" : "off", !k ? " (Menu button slot differs: keys only with the minimap)" : "",
+           !m ? "NOT hooked (top movie slot differs)" : !g_button ? "off" : in ? "at the top" : "at the top (input slot differs: a click may reach the world)",
+           g_hotkeys ? "Ctrl+= / Ctrl+- / Ctrl+P" : "off", !k ? " (Menu button slot differs: keys only with the top movie)" : "",
            g_testSeq[0] ? " - TEST sequence set" : "");
 }
 static int already_loaded(const char *name) {
@@ -403,7 +362,7 @@ BOOL WINAPI DllMain(HINSTANCE h, DWORD reason, LPVOID _) {
     LARGE_INTEGER f; QueryPerformanceFrequency(&f); g_qf = f.QuadPart ? f.QuadPart : 1000;
     g_button = GetPrivateProfileIntW(L"MatchSpeed", L"Button", 1, g_ini) != 0;
     g_hotkeys = GetPrivateProfileIntW(L"MatchSpeed", L"Hotkeys", 1, g_ini) != 0;
-    g_scale = ini_num(L"Scale", L"85"); if (g_scale < 30) g_scale = 30; if (g_scale > 200) g_scale = 200;
+    g_scale = ini_num(L"Scale", L"100"); if (g_scale < 30) g_scale = 30; if (g_scale > 200) g_scale = 200;
     g_offX = ini_num(L"OffsetX", L"0"); g_offY = ini_num(L"OffsetY", L"0");
     { char a[MAX_PATH]; WideCharToMultiByte(CP_ACP, 0, g_ini, -1, a, MAX_PATH, NULL, NULL); GetPrivateProfileStringA("MatchSpeed", "TestSeq", "", g_testSeq, sizeof g_testSeq, a); }
     install();

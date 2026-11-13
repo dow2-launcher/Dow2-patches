@@ -1409,7 +1409,7 @@
     }
   },
   "matchspeed": {
-    "version": "1",
+    "version": "2",
     "dll": "MatchSpeed.dll",
     "default": false,
     "games": [
@@ -1426,11 +1426,36 @@
       "de": "Match speed"
     },
     "description": {
-      "en": "Speed x2 / x4 and a pause for a match where you are the only person: against computers, or watching computers fight from an observer slot. Buttons by the minimap, Ctrl+= / Ctrl+- / Ctrl+P.",
-      "ru": "Скорость x2 / x4 и пауза в матче, где вы единственный человек: против компьютеров или наблюдателем за битвой компьютеров. Кнопки у миникарты, Ctrl+= / Ctrl+- / Ctrl+P.",
-      "es": "Velocidad x2 / x4 y pausa en una partida donde eres la única persona: contra la IA o mirando a la IA como observador. Botones junto al minimapa, Ctrl+= / Ctrl+- / Ctrl+P.",
-      "fr": "Vitesse x2 / x4 et pause dans une partie où vous êtes la seule personne : contre l'IA ou en observateur d'un combat d'IA. Boutons près de la minicarte, Ctrl+= / Ctrl+- / Ctrl+P.",
-      "de": "Tempo x2 / x4 und Pause in einem Spiel, in dem du der einzige Mensch bist: gegen die KI oder als Beobachter eines KI-Kampfs. Knöpfe an der Minikarte, Strg+= / Strg+- / Strg+P."
+      "en": "Speed x2 / x4 and a pause for a match where you are the only person: against computers, or watching computers fight from an observer slot. Buttons at the top left, Ctrl+= / Ctrl+- / Ctrl+P.",
+      "ru": "Скорость x2 / x4 и пауза в матче, где вы единственный человек: против компьютеров или наблюдателем за битвой компьютеров. Кнопки слева вверху, Ctrl+= / Ctrl+- / Ctrl+P.",
+      "es": "Velocidad x2 / x4 y pausa en una partida donde eres la única persona: contra la IA o mirando a la IA como observador. Botones arriba a la izquierda, Ctrl+= / Ctrl+- / Ctrl+P.",
+      "fr": "Vitesse x2 / x4 et pause dans une partie où vous êtes la seule personne : contre l'IA ou en observateur d'un combat d'IA. Boutons en haut à gauche, Ctrl+= / Ctrl+- / Ctrl+P.",
+      "de": "Tempo x2 / x4 und Pause in einem Spiel, in dem du der einzige Mensch bist: gegen die KI oder als Beobachter eines KI-Kampfs. Knöpfe oben links, Strg+= / Strg+- / Strg+P."
+    }
+  },
+  "marks": {
+    "version": "1",
+    "dll": "Marks.dll",
+    "default": false,
+    "games": [
+      "elite",
+      "vanilla"
+    ],
+    "category": "experiment",
+    "order": 1100,
+    "name": {
+      "en": "Match marks",
+      "ru": "Match marks",
+      "es": "Match marks",
+      "fr": "Match marks",
+      "de": "Match marks"
+    },
+    "description": {
+      "en": "For testers: a button (top left, or in the replay panel) and Ctrl+M note the moment of a match or replay - game time, map, players, camera - in Marks.log for the developers.",
+      "ru": "Для тестеров: кнопка (слева вверху или в панели реплея) и Ctrl+M записывают момент матча или реплея — время игры, карту, игроков, камеру — в Marks.log для разработчиков.",
+      "es": "Para testers: un botón (arriba a la izquierda o en el panel del replay) y Ctrl+M anotan el momento de la partida o del replay - tiempo, mapa, jugadores, cámara - en Marks.log.",
+      "fr": "Pour les testeurs : un bouton (en haut à gauche ou dans le panneau du replay) et Ctrl+M notent le moment d'une partie ou d'un replay - temps, carte, joueurs, caméra - dans Marks.log.",
+      "de": "Für Tester: ein Knopf (oben links oder in der Replay-Leiste) und Strg+M notieren den Moment eines Spiels oder Replays - Spielzeit, Karte, Spieler, Kamera - in Marks.log."
     }
   }
 }

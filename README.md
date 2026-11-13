@@ -51,7 +51,8 @@ are client-side, and the other players in the match don't need them.
 | **NoHints** (new, staging, experiment) | No beginner hints in matches (select a squad, build a generator, capture victory points, lots of resources, population cap, WAAAGH/faith bar): the skirmish quick tips are not started; the player's own setting is not changed. Elite and vanilla. | `nohints` → `nohints-1` (staging) | `nohints/` | no (local hints only; the data checksum stays) |
 | **Documents fix** (new, staging, experiment) | For players whose game forgets its settings and saves no replays because Windows does not let the game process write to Documents\My Games (Controlled folder access, permissions, read-only): the check runs from the game process at the start and after every match (DocsFix.log, one line in the log summary); when the game may not write there, its Documents becomes %LOCALAPPDATA%\EliteLauncher\Documents (the old folder copied there the first time, never overwritten); our add-ons and the launcher (1.5.9) follow it. Nothing changes when Documents is writable. Must be loaded at the game start: vanilla - the launcher's loader; Elite - Automatch's early winmm.dll with DocsFix.dll in its EARLY list (this version's build/early/winmm.dll). Elite and vanilla. | `docsfix` → `docsfix-1` (staging) | `docsfix/`, `common/docscheck.h` | no (file paths only) |
 | **UI Scale** (new, staging, experiment) | The in-match interface (minimap, unit panel, abilities, resources, hero portraits, objectives, Menu button) bigger than the game allows: its own `uiscale` can only shrink it (DOW2.exe caps the scale at the movies' own pixel size, so from 1200 lines up - 1440p, 4K - anything above 100 % does nothing, vanilla and Elite alike). Tick on: screen height / 1080 (1440p 133 %, 4K 200 %) times the game's own `uiscale` (the launcher's Settings slider, 75-200 %: at 4K 300 % max), or a fixed percent in UIScale.ini. No launcher change. The main menu and the lobby are not the game's scaled interface and stay as they are. Elite and vanilla. | `uiscale` → `uiscale-1` (staging) | `uiscale/` | no (interface layout only) |
-| **Match speed** (new, staging, experiment) | Speed x2 / x4 and a pause for a match where the player is the only person: against computers, or computers against computers watched from an observer slot of a custom game (host it, move to an observer slot, put computers in the team slots). Two buttons by the minimap (the replay panel's own pause and 1x / 2x / 4x buttons) and Ctrl+= / Ctrl+- / Ctrl+P. Nothing happens in a match with another person (player or observer). Elite and vanilla. | `matchspeed` → `matchspeed-1` (staging) | `matchspeed/` | no (one machine only; same simulation, a replay of it plays as usual) |
+| **Match speed** (new, staging, experiment) | Speed x2 / x4 and a pause for a match where the player is the only person: against computers, or computers against computers watched from an observer slot of a custom game (host it, move to an observer slot, put computers in the team slots). Two buttons at the top left (the replay panel's own pause and 1x / 2x / 4x buttons, where a replay has them; v2 - before by the minimap, where a click also moved the camera) and Ctrl+= / Ctrl+- / Ctrl+P. Nothing happens in a match with another person (player or observer). Elite and vanilla. | `matchspeed` → `matchspeed-2` (staging) | `matchspeed/` | no (one machine only; same simulation, a replay of it plays as usual) |
+| **Match marks** (new, staging, experiment) | For testers: a button (top left in a match, by the replay panel's pause in a replay) and Ctrl+M write the moment - game time, live / replay file, map, players, camera - into Marks.log (and EliteAI.log when the new AI plays), for the developers to find it in the AI log and replay it. Elite and vanilla. | `marks` → `marks-1` (staging) | `marks/` | no (only reads; writes a log) |
 | **Ctrl attack ground** (new, staging, experiment) | Hold Ctrl and LEFT-click the ground: the selected squads that can attack the ground (wraithguard, D-cannon, predators, tankbustas, zoanthropes...) fire at that point - the game's own Attack ground (core action G) without pressing G; Shift queues it. Ctrl + right-click is not touched (Reverse). Ctrl + left click on a unit, or with no squad that can: the game's own click. Elite and vanilla. | `ctrlattack` → `ctrlattack-2` (staging) | `ctrlattack/` | no (the game's own SCMD_Attack order, the same as G + click) |
 | **Observer lag fix (experimental)** | Spectating a live game no longer stutters. | `obsfix_r2` → `obsfix-1` | `obsfix/` | no |
 | **Join a lobby from the launcher (test)** | Experiment by siritos: a Join button on the launcher's Lobbies tab (and elite:// links of the ladder site); the game starts and walks into the room by itself. | `roomjoin` → `roomjoin-4` (staging; live: `roomjoin-3`) | `roomjoin/` | no |
@@ -208,7 +209,7 @@ elitemaps/ - **EliteMaps.dll** (EliteMaps 1, vanilla only)
     the new room's first map) becomes the previous / first vanilla map. Names of Elite's maps from the archives' tables.
     EliteMaps 3: that guard only with EliteMaps.ini BlockPublic=1 (owner: public rooms too); by default no hook.
 
-matchspeed/ - **MatchSpeed.dll** (MatchSpeed 1)
+matchspeed/ - **MatchSpeed.dll** (MatchSpeed 2)
     Speed of a live match = sim ticks per second through the sim rate interface *(*(0x01335720)+8)+0x68 (vtable 0x0108DFAC +0x28
     set / +0x2C get, as ReplaySpeed): 10 = x1, 20 = x2, 40 = x4 (nudged up to +15 % while a small shortfall remains: each drawn frame
     drops the rest of an interval), 0.0001 = paused (the simulation and the AI stand; camera, minimap, selection work).
@@ -216,13 +217,29 @@ matchspeed/ - **MatchSpeed.dll** (MatchSpeed 1)
     the game is live (settings+0x118 not 0 / 0x800), every slot of the match's GameInfo (settings+0x118+0x810, 0xA8 each, +0 type)
     is the local human (0), a computer (1), the local observer (2) or empty (6 / 7), and the match session is not connected (the
     game cuts it for a match with one person, 0x46FE8E); checked at the start and every 2 s, otherwise nothing is shown and the rate
-    goes back to 10. Buttons: an empty clip in the minimap movie with the replay panel's own textures (hud/playback_panel/large_btn,
-    _over, _down, _toggled_on; icons pause / play, ff = 1x, ff_4x = 2x, ff_4 = 4x), each picture in a holder clip (a load resets
-    the target's _visible), left edge of the minimap frame; clicks by GetAsyncKeyState + the clip's _xmouse/_ymouse, the movie's
-    default mouse callbacks on it. Keys: Ctrl+= / Ctrl+NumPad+ faster, Ctrl+- / Ctrl+NumPad- slower, Ctrl+P pause. Hooks: the
-    minimap form's per-frame update (0x011160E8, chained) and the Menu button's (0x0110C55C, the keys when there is no minimap).
-    MatchSpeed.ini: Enabled, Button, Hotkeys, Scale (85), OffsetX / OffsetY. -DMS_TEST (stands only): a replay's slot table is
-    judged and logged as if live, never acted on.
+    goes back to 10. Buttons (MatchSpeed 2, 13.11.2026): at the top left of the screen, where a replay's panel has its pause / speed
+    buttons and at their size - common/topbar.h: the full-screen HUD movie resource_notifications (form vtable 0x01116478, slot 4 =
+    per-frame update, slot 3 = input), an empty clip with the replay panel's own textures (hud/playback_panel/large_btn, _over,
+    _down, _toggled_on; icons pause / play, ff = 1x, ff_4x = 2x, ff_4 = 4x), each picture in a holder clip (a load resets the
+    target's _visible); clicks by GetAsyncKeyState + the clip's _xmouse/_ymouse, the movie's default mouse callbacks on it, and a
+    click over a button is handled in the form's input slot. MatchSpeed 1 had them on the minimap frame, where every click also
+    went to the minimap and moved the camera to the map's corner. Keys: Ctrl+= / Ctrl+NumPad+ faster, Ctrl+- / Ctrl+NumPad- slower,
+    Ctrl+P pause. Hooks: that movie's per-frame update and input (chained with Marks) and the Menu button's per-frame update
+    (0x0110C55C, the keys when that movie stands). MatchSpeed.ini: Enabled, Button, Hotkeys, Scale (100 = the replay panel's
+    size), OffsetX / OffsetY. -DMS_TEST (stands only): a replay's slot table is judged and logged as if live, never acted on.
+
+marks/ - **Marks.dll** (Marks 1, "Match marks")
+    For the AI testers: a button and Ctrl+M (Marks.ini Hotkey=) write the current moment of a live match (player or observer,
+    with other people too - nothing in the game changes) or of a replay into Marks.log next to the DLL: real time, game time
+    (World+0x178 tick, 0.1 s each: m:ss, seconds, tick), live / replay and the .rec played (*(settings+0xEC4) "PLAYBACK:x.rec"),
+    the map (settings+0x3FC, its name *(settings+0x1AC)), the players (GameInfo slots: +4/+8 name, +0x10/+0x14 race, +0x2C AI
+    difficulty, +0x58 team, +0x9C player id = the AI log's "p1000"), the camera (top of GameObj's camera stack as
+    Misc_GetCameraPos: eye at +0x34, forward at +0x24; the point it looks at on the plane y = 0). In a live match with EliteAI.dll
+    loaded the mark also goes into EliteAI.log (appended next to EliteAI.dll as its own lines: same real clock). Button: live -
+    common/topbar.h, after MatchSpeed's two buttons when they are shown; replay - in the replay panel movie (form vtable
+    0x011119F4, slot 4, chained with ReplaySpeed), left of its pause button. Feedback: the button turns gold and "Mark N m:ss"
+    shows next to it for 3 s, in the game's own movie. Marks.ini: Enabled, Button, ReplayButton, Hotkey, Scale, OffsetX /
+    OffsetY, EliteAILog, Debug.
 
 uiscale/ - **UIScale.dll** (UIScale 1)
     The 12 in-match interface movies (minimap 0x00B3F860, unit panel, abilities, resources, portraits, objectives, Menu button...)

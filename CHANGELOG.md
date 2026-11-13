@@ -4,6 +4,38 @@ Every version gets an entry here before it reaches `main`. CI then tags `vX.Y.Z`
 version (`X.Y.0`) it also publishes a GitHub Release with the DLLs and the entries since the previous `X.Y.0`.
 The version of the set lives only in `VERSION`; each DLL still writes its own version to its log.
 
+## 0.2.70 — 2026-11-13
+Match marks (store marks-1, new, experiment, order 1100, off by default, games elite + vanilla): Marks.dll, and Match speed 2
+(store matchspeed-2). AI testers 13.11: "15:26 bot 1 retreats for no reason" - one press should note such a moment so that it can be
+found in EliteAI.log and in the replay (and later on the headless replay bench: replay + time); the Match speed buttons on the
+minimap frame were awkward and every click on them moved the camera to the map's corner.
+- Marks: a button and Ctrl+M (free in Elite's and vanilla's keydefaults.lua; Marks.ini Hotkey=) append one line to Marks.log
+  next to the DLL: real time, game time (World+0x178 tick: m:ss, seconds, tick), live / replay and the .rec played
+  (*(settings+0xEC4) "PLAYBACK:x.rec"; live: the game records into Playback\temp.rec), map (settings+0x3FC, its name
+  *(settings+0x1AC)), players (GameInfo slots +4/+8 name, +0x10/+0x14 race, +0x2C AI difficulty, +0x58 team, +0x9C player id =
+  "p1000" of the AI log; difficulty 0-2 = NEW AI A-C when EliteAI plays), camera (top of GameObj's camera stack as SCAR's
+  Misc_GetCameraPos: eye +0x34, forward +0x24, the point it looks at on y = 0). Live, any match (player or observer, other people
+  too: it only reads); in a live game with EliteAI.dll the mark also goes into <game>\Elite_DLLs\EliteAI.log (appended as EliteAI
+  does, same real clock - no call into EliteAI). Feedback in the game's own movie: the button turns gold, "Mark N m:ss" for 3 s.
+  "Send logs" of the launcher takes it (Elite_DLLs / dow2-patches *.log, launcher main.rs).
+- Buttons at the top: common/topbar.h - the full-screen HUD movie resource_notifications (form vtable 0x01116478: slot 4 per-frame
+  update, slot 3 input, both the game's no-ops), 1600 x 1200 with showAll (1280 x 800: 1.5 units a pixel, left edge at -160;
+  the movie draws only inside its stage), a row where a replay's panel has its pause / speed buttons (that movie's 211, 58 from
+  the window's top left) at their size. A click over a button is handled in the form's input slot (seen called for press /
+  release over the clip), so it reaches neither the world nor the minimap: selection stays, the camera stays. Marks goes after
+  Match speed's two buttons when those are shown. In a replay Marks' button sits left of the replay panel's pause button
+  (playback_panel_v2 form slot 4, chained with ReplaySpeed; right of the panel the movie's stage ends).
+- MatchSpeed 2: the same two buttons (replay panel textures) moved from the minimap movie to the top row (Scale default 100 = the
+  replay panel's size); keys, the "nobody else" rule and the rate code unchanged.
+- Stand 1 (1280 x 800): Elite 3.2.1 player vs Elite AI and vanilla player vs AI, live + replay: buttons at the top, x2 / x4 /
+  pause by click, Ctrl+M and the button mark (also paused), camera the same before / after the clicks (it moves with the arrow
+  keys, so the reading is live), a selected hero stays selected; sim CRC of every tick, live vs its replay (x2, x4, pause in it):
+  Elite 1585 ticks 0 differ, vanilla 1597 ticks 0 differ. Replays: Ctrl+M and the panel button, the .rec name, 8x with
+  ReplaySpeed. Observer custom game with NEW AI A vs NEW AI B: buttons right under the observer panel, x4 / pause / marks,
+  MARK lines in EliteAI.log between the AI's lines. The final DLLs again (Elite): CRC 1635 ticks, 0 differ. A new AI match with
+  the local slot handed to the AI replays with differences from tick 700 on the stand - the same without Marks / MatchSpeed (control
+  run: 1079 of 1779 ticks differ from 700): the replay runs without EliteAI, not a thing of these add-ons.
+
 ## 0.2.69 — 2026-11-12
 New AI 23.1 (newai-23.1): an observer's match with the new AI no longer stops in its first second - elite.scar variant_show called
 Player_GetSquads(Game_GetLocalPlayer()) and an observer has no player of its own (found by the Match speed checks); now it skips.
