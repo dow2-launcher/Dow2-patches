@@ -431,6 +431,8 @@ frameprobe/ - FrameProbe.dll (off), eliteai/ - EliteAI.dll (store id newai since
     dispatchers in simulation/ai, default.ai with the people's plan + main.ai + mechanics.ai inside; [Lua] NewAI default vanilla+ours.
     newai-23 (0.2.66): the same layout from vanilla-ours a3a378a (main.ai 0.27, mechanics.ai 1.9): generators and nodes on people's
     clock, the first T3 unit right after the tier, the dear unit, hurt walkers to the rear / home first.
+    newai-24 (0.2.73): the brain for orks - default.ai also carries the 13 modules of eliteai mod/brain (branch newai-24) and the
+    dispatcher's [Lua] Brain (default 1 = ork new-AI slots, 0 = off); main.ai / mechanics.ai as newai-23.1 for every other race.
 
 ## Building
 
