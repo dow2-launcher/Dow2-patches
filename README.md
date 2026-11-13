@@ -78,7 +78,7 @@ The full texts in five languages are in the store; `addons.json` repeats them fo
 - **LobbyStats options** (match timer, cooldowns, loading ratings, join sound inside LobbyStats.dll, up to 0.10) - each is its own
   add-on since 30.10 / 02.11 (docs/ADDON_RULES.md).
 - `linux-native/` - fixes for the native Feral Linux port, work in progress, not in the launcher.
-- `mac/` - Mac (Feral) <-> Windows crossplay, vanilla only, standalone (no launcher): see `mac/README.md`.
+- Mac (Feral) <-> Windows crossplay (vanilla, standalone): [dow2-launcher/Dow2-mac-crossplay](https://github.com/dow2-launcher/Dow2-mac-crossplay).
 
 ## The folders
 
