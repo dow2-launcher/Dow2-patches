@@ -795,5 +795,23 @@
       "fr": "Pour les testeurs : un bouton (en haut à gauche ou dans le panneau du replay) et Ctrl+M notent le moment d'une partie ou d'un replay - temps, carte, joueurs, caméra - dans Marks.log.",
       "de": "Für Tester: ein Knopf (oben links oder in der Replay-Leiste) und Strg+M notieren den Moment eines Spiels oder Replays - Spielzeit, Karte, Spieler, Kamera - in Marks.log."
     }
+  },
+  "moveloopfix": {
+    "category": "experiment",
+    "order": 1110,
+    "name": {
+      "en": "Melee freeze fix",
+      "ru": "Melee freeze fix",
+      "es": "Melee freeze fix",
+      "fr": "Melee freeze fix",
+      "de": "Melee freeze fix"
+    },
+    "description": {
+      "en": "The game could freeze for good when a melee unit ended up exactly inside an enemy unit; with this it carries on.",
+      "ru": "Игра могла намертво зависнуть, когда боец ближнего боя оказывался ровно внутри вражеского бойца; с этим она идёт дальше.",
+      "es": "El juego podía congelarse para siempre cuando una unidad cuerpo a cuerpo quedaba justo dentro de una unidad enemiga; con esto sigue.",
+      "fr": "Le jeu pouvait se figer pour de bon quand une unité de corps à corps se retrouvait pile dans une unité ennemie ; avec ceci, il continue.",
+      "de": "Das Spiel konnte endgültig einfrieren, wenn eine Nahkampfeinheit genau in einer feindlichen Einheit landete; damit läuft es weiter."
+    }
   }
 }

@@ -1,0 +1,1 @@
+- New: Melee freeze fix: the game no longer freezes for good when a melee unit ends up exactly inside an enemy unit (very rare; players and computers alike). Experiment, off by default.
