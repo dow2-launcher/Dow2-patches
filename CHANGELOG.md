@@ -4,6 +4,28 @@ Every version gets an entry here before it reaches `main`. CI then tags `vX.Y.Z`
 version (`X.Y.0`) it also publishes a GitHub Release with the DLLs and the entries since the previous `X.Y.0`.
 The version of the set lives only in `VERSION`; each DLL still writes its own version to its log.
 
+## 0.2.73 — 2026-11-13
+New AI 24 (store newai-24, experiment, off by default, Elite only): the new AI "brain" for orks. eliteai branch newai-24 eceeed9 =
+brain a647d94 (step 5 d4969a0 + "release default Brain=1": [Lua] Brain defaults to 1, Brain=0 turns it off) with main.ai,
+mechanics.ai and the vanilla-base sources of strategy_tech_purchase.ai / strategy_unit_purchase.ai of a3a378a (newai-23 / 23.1),
+so every non-ork slot plays newai-23.1 (the unreleased steps 9-11 of vanilla-s9 are not in it). EliteAI.dll 0.11 unchanged.
+Against newai-23.1 only two served files change: default.ai (the dispatcher's Brain block + the 13 brain modules mod/brain/*.ai
+as chunks) and elite.scar (the brain's orders: melee attack 8, self-casts 300+k, the player's purse 13 and the cast / retreat
+watches - read only for everybody else).
+- Brain = 1 (default): a new-AI slot (A / B / C) whose race is orks plays the vanilla base with our old layer off and the brain's
+  own rules at Hard (one brain for A, B and C); any other race takes the newai-23.1 path unchanged. Brain = 0: newai-23.1 for all.
+- What the brain does: hero wargear and squad upgrades early, T2 ~7 min / T3 ~13 min, Waaagh into a fight in the balance or a
+  stall (not into a fight won 2 : 1), lootas hold a point, the walker charges, single squads retreat instead of the whole army,
+  1 squad a capture, the race for the victory points, honest fog of war.
+- Known weak spots: long games against space marines mostly lost, nobz rarely bought, no targeted abilities yet (grenades, hero
+  abilities), the late push is weak; a generator waits too long after an enemy leaves its post.
+- Check (reports/ai_doctrine/BRAIN_DESIGN_RU.md "Проверка шага 5", independent): 229 runs of d4969a0 with the brain on the
+  headless bench - lib..lib7, test scenes, 63 live games, 29 multithreaded - 0 hangs, 0 Lua / SCAR errors; Brain=0 = vanilla-s9
+  in 27 scenes. The one known hang (tick 3323) is the engine's melee move loop, fixed by the Melee freeze fix add-on (0.2.72) -
+  recommended together. Release build on the bench (fastbench_1113, no ini Brain key, the store's EliteAI.dll): ork scenes
+  r1_ork_mekboy_0676f5 / waaagh_ork_273d1f - brain on, 0 squad-seconds differ from d4969a0 with Brain=1; eldar r33_af63a8 /
+  space marines r37_71f5f0 - brain off, 0 squad-seconds differ from newai-23.1; Brain=0 on the ork scene - no brain lines.
+
 ## 0.2.72 — 2026-11-13
 Melee freeze fix (store moveloopfix-1, new, experiment order 1110, off by default, games elite + vanilla): MoveLoopFix.dll. Found
 on the headless bench (fastbench_1113, repro hang_s5_12da6e): the game froze for good at 5:32 of a match and its memory grew

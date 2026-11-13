@@ -1,0 +1,2 @@
+- New AI 24: computer orks get a new AI "brain" written from scratch - they buy hero wargear and squad upgrades early, reach tier 2 around minute 7 and tier 3 around minute 13, call Waaagh! into even fights, keep lootas on a point, pull back single squads instead of the whole army, capture with one squad and play by honest fog of war. Every other race plays as in New AI 23.1. Best together with the "Melee freeze fix" add-on.
+- Known weak spots of the ork brain: long games against space marines, few nobz, no grenades or hero abilities yet, a weak late push.

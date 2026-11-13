@@ -74,6 +74,11 @@ EliteAI_MECH_ABILITIES = {
 	[26] = "ability/pvp/race_tyranid/hive_tyrant/tyr_damage_aoe_bioplasma",
 	[27] = "ability/pvp/race_tyranid/lictor/tyr_jump_target_leap",
 	[28] = "ability/pvp/race_tyranid/lictor_hero/tyr_damage_target_fleshhook",
+	-- 29-31 (branch brain, mod/brain/60_roles.ai R.ABIL): what an ork squad casts on itself when it charges (mode 300+k):
+	-- the shout every ork squad has, the nobz' frenzy (needs their kit), the sluggas' suppression break (needs the nob leader)
+	[29] = "ability/pvp/race_ork/ork_waaagh_shout",
+	[30] = "ability/pvp/race_ork/nobs/ork_buff_self_frenzy",
+	[31] = "ability/pvp/race_ork/sluggas/ork_buff_self_suppressionbreak",
 }
 EliteAI_MechAbilityIDs = {}
 local function mech_ability(k)
@@ -109,6 +114,25 @@ local function mech_point(player, pos)
 	return eg
 end
 local function mech_order(sg, sq, m, x, y, z)
+	-- branch brain (mod/brain/00_core.ai Brain.ORD): 300+k = ability k cast by the squad on itself (Cmd_SquadAbility,
+	-- command.scar:1908); 8 = a melee attack on the squad x (Cmd_AttackMeleeSGroup, command.scar:808). Only the brain sends them.
+	if m >= 300 then
+		local abid = mech_ability(m - 300)
+		if abid then
+			Cmd_SquadAbility(sg, abid, false)
+			if EliteAI_CastWatch ~= nil then EliteAI_CastWatch(sq, m - 300, abid, "self") end   -- (after the real order, in its own guard)
+		end
+		return
+	end
+	if m == 8 then
+		local tid = tonumber(x)
+		local tsq = Squad_IsValid and Squad_IsValid(tid) and Squad_FromWorldID(tid)
+		if not tsq or Squad_Count(tsq) == 0 then return end
+		local tg = SGroup_CreateIfNotFound("eliteai_mech_target")
+		SGroup_Clear(tg); SGroup_Add(tg, tsq)
+		Cmd_AttackMeleeSGroup(sg, tg, false)
+		return
+	end
 	if m == 4 or m >= 200 then
 		local tid = tonumber(x)
 		local tsq = Squad_IsValid and Squad_IsValid(tid) and Squad_FromWorldID(tid)
@@ -131,6 +155,7 @@ local function mech_order(sg, sq, m, x, y, z)
 		else
 			local abid = mech_ability(m - 200)
 			if abid then Cmd_Ability(sg, abid, tsq, false) end              -- command.scar:1863 (squad target -> Cmd_SquadAbilitySquad)
+			if abid and EliteAI_CastWatch ~= nil then EliteAI_CastWatch(sq, m - 200, abid, "squad", tsq) end
 		end
 	elseif m == 5 then
 		local pos = World_Pos(tonumber(x), tonumber(y), tonumber(z))
@@ -187,6 +212,7 @@ local function mech_order(sg, sq, m, x, y, z)
 	elseif m >= 100 then
 		local abid = mech_ability(m - 100)
 		if abid then Cmd_SquadAbilityPos(sg, abid, World_Pos(tonumber(x), tonumber(y), tonumber(z)), false) end   -- command.scar:1930, autarch.scar:38
+		if abid and EliteAI_CastWatch ~= nil then EliteAI_CastWatch(sq, m - 100, abid, "pos") end
 	end
 end
 
@@ -636,9 +662,94 @@ local function bp_tell(D)
 		end
 	end
 end
+-- main.ai 0.28 (step 9 of the vanilla base; VANILLA_BASE_RU.md 24; the player WarGood: "the new AI presses X all the time"): EVERY
+-- RETREAT IS SEEN HERE, whoever ordered it. Twice a second the squads of the players that sent mode 10 (every new-AI player,
+-- whatever its dodge policy) are read: a squad whose active command becomes SQUADSTATEID_Retreat (what dodge_stays reads) is
+-- one retreat - "by order" when an order of mode 3 for it went through EliteAI_ExecuteOrders within the last 3 s, else "by
+-- engine": Relic's own squad tasks sent it (the AI scripts cannot see those). Read only: nothing is ordered, nothing is
+-- told to the AI. Lines "p<id> RETREAT seen <squad> <unit> by order|engine models N at X Z t T n K" (the first 400 of a
+-- player) and once a minute "p<id> RETREAT stats t T seen N by_order N by_engine N orders N now N" (orders = the orders
+-- of mode 3 that were executed, now = squads retreating at this moment). Mech_RetreatWatch=0 = off.
+EliteAI_Ret = { sq = {}, ord = {}, new = {}, st = {}, tick = 0 }
+function EliteAI_RetreatWatch(D)
+	local R = EliteAI_Ret
+	if R.api == nil then
+		R.api = (type(Squad_HasActiveCommand) == "function" and type(Squad_GetActiveCommand) == "function" and SQUADSTATEID_Retreat ~= nil
+			and type(Player_FromId) == "function" and type(Player_GetSquads) == "function" and type(SGroup_CountSpawned) == "function"
+			and type(SGroup_GetSpawnedSquadAt) == "function" and type(Squad_Count) == "function" and type(Squad_GetGameID) == "function"
+			and type(World_GetGameTime) == "function") and dnum("RetreatWatch", 1) >= 1
+		R.name, R.pos = (type(Squad_GetBlueprintName) == "function"), (type(Squad_GetPosition) == "function")
+		_log("RETREAT", "watch", R.api and 1 or 0, "SQUADSTATEID_Retreat", type(SQUADSTATEID_Retreat), "Squad_GetActiveCommand", type(Squad_GetActiveCommand))
+	end
+	if not R.api then return end
+	R.tick = R.tick + 1
+	if R.tick - math.floor(R.tick / 2) * 2 ~= 0 then return end              -- twice a second
+	local now = World_GetGameTime()
+	local alive = {}
+	for _, pid in ipairs(D.pids) do
+		local st = R.st[pid]
+		local first_look = (st == nil)                                         -- (branch brain: a squad that is running already when the player is first looked at - a bench scene taken over mid-game - is "by before": nobody's decision here)
+		if st == nil then st = { seen = 0, order = 0, engine = 0, orders = 0, before = 0, said = now }; R.st[pid] = st end
+		local pl = Player_FromId(pid)
+		local sg = (pl ~= nil) and Player_GetSquads(pl) or nil
+		local cnt = (sg ~= nil) and SGroup_CountSpawned(sg) or 0
+		local nowret = 0
+		for i = 1, cnt do
+			local sq = SGroup_GetSpawnedSquadAt(sg, i)
+			if sq ~= nil and Squad_Count(sq) > 0 then
+				local id = Squad_GetGameID(sq)
+				if id ~= nil then
+					alive[id] = true
+					if R.new[id] then R.new[id] = nil; st.orders = st.orders + 1 end
+					local ret = (Squad_HasActiveCommand(sq) == true and Squad_GetActiveCommand(sq) == SQUADSTATEID_Retreat)
+					if EliteAI_RetLock ~= nil and EliteAI_RetLock.any then EliteAI_RetLockLook(pid, sq, id, ret, now) end
+					if ret then
+						nowret = nowret + 1
+						if not R.sq[id] then
+							R.sq[id] = true
+							local ot = R.ord[id]
+							local by = (ot ~= nil and now - ot <= 3) and "order" or (first_look and "before" or "engine")
+							st.seen, st[by] = st.seen + 1, st[by] + 1
+							if st.seen <= 400 then
+								local nm, x, z = "?", 0, 0
+								if R.name then nm = tostring(Squad_GetBlueprintName(sq)) end
+								if R.pos then
+									local p = Squad_GetPosition(sq)
+									if p ~= nil and p.x ~= nil then x, z = p.x, p.z end
+								end
+								_log("p" .. tostring(pid), "RETREAT", "seen", id, nm, "by", by, "models", Squad_Count(sq), string.format("at %.0f %.0f", x, z), "t", math.floor(now), "n", st.seen)
+							end
+						end
+					elseif R.sq[id] then R.sq[id] = nil end
+				end
+			end
+		end
+		if now - st.said >= 60 then
+			st.said = now
+			_log("p" .. tostring(pid), "RETREAT", "stats", "t", math.floor(now), "seen", st.seen, "by_order", st.order, "by_engine", st.engine, "orders", st.orders, "now", nowret)
+		end
+	end
+	if R.tick - math.floor(R.tick / 240) * 240 == 0 then                      -- once a minute: the squads that are gone
+		local gone = {}
+		for id in pairs(R.sq) do if not alive[id] then table.insert(gone, id) end end
+		for _, id in ipairs(gone) do R.sq[id] = nil end
+		gone = {}
+		for id, t in pairs(R.ord) do if now - t > 60 then table.insert(gone, id) end end
+		for _, id in ipairs(gone) do R.ord[id] = nil; R.new[id] = nil end
+	end
+end
+-- an order of mode 3 was executed for the squad id (EliteAI_ExecuteOrders)
+function EliteAI_RetreatOrdered(id)
+	local R = EliteAI_Ret
+	if R == nil or R.api == false then return end                            -- (nil = the watch has not looked yet: the first second of a brain player)
+	R.ord[id] = World_GetGameTime()
+	R.new[id] = true                                                          -- (counted for its player at the next look)
+end
 function EliteAI_DodgeTick()
 	local D = EliteAI_Dodge
 	D.bp_tick = (D.bp_tick or 0) + 1
+	if table.getn(D.pids) > 0 then EliteAI_RetreatWatch(D) end               -- main.ai 0.28: every retreat, whoever ordered it
+	if EliteAI_Cast ~= nil and EliteAI_Cast.any then EliteAI_CastTick() end   -- branch brain: did a cast take?
 	if table.getn(D.pids) > 0 and D.bp_tick - math.floor(D.bp_tick / 8) * 8 == 1 then bp_tell(D) end   -- 1.0: every 2 s, whatever the dodge policy
 	if not D.any then return end
 	if D.api == nil then dodge_api() end
@@ -781,6 +892,238 @@ function EliteAI_DodgeOrder(id, x, y, z, m)
 end
 end -- (the dodge block)
 
+-- branch brain, step 2 (BRAIN_DESIGN_RU.md "Шаг 2"): DID A CAST TAKE? The brain's cast orders (100+k, 200+k, 300+k) leave no
+-- trace when the engine ignores them (no kit, on recharge, out of range). For the players that sent the pseudo-order of mode
+-- 11 (only the brain does) every cast order is watched for CastSecs: what the engine says about the ability just before the
+-- order and after it (can it be cast - a recharge that started = the cast took), and the squad's states in between.
+-- Read only. Lines: "CAST seen <squad> <unit> k <k> <ability> <self|pos|squad> can <before> > <after> states <a>b>c> took 0|1|?".
+-- No top-level local here (this chunk's main function is near Lua's 200-locals limit).
+-- Step 3 (the verifier's findings): the watch is for the squads of the players that asked for it ONLY (C.pids; it used
+-- to be on for every player's cast orders once one brain player asked); it runs AFTER the real order and in a guard of
+-- its own (EliteAI_CastWatch: an error in the watch cannot cancel the order); it makes no engine call that does not
+-- exist here (Squad_CanCastAbilityOn* are not in this engine: 'can' is always '?') and none under pcall - a hang
+-- inside an engine call is not stopped by pcall, so the arguments and the function are checked first.
+EliteAI_Cast = { any = false, pids = {}, list = {}, n = 0, st = { seen = 0, took = 0, failed = 0, unknown = 0 } }
+function EliteAI_CastWatch(sq, k, abid, kind, target)
+	local C = EliteAI_Cast
+	if C == nil or not C.any or C.api == nil or sq == nil or abid == nil then return end
+	-- Step 5 (the verifier, 13.11): no pcall here either - the functions are checked, the squad is the one the order has
+	-- just been given to (not nil) and is counted first: an empty squad is not asked anything.
+	if type(Player_GetID) ~= "function" or type(Squad_GetPlayerOwner) ~= "function" or type(Squad_GetGameID) ~= "function" or type(Squad_Count) ~= "function" then return end
+	if Squad_Count(sq) <= 0 then return end
+	local pl = Squad_GetPlayerOwner(sq)
+	if pl == nil or not C.pids[Player_GetID(pl)] then return end
+	if kind == "squad" and target ~= nil and Squad_Count(target) <= 0 then target = nil end
+	EliteAI_CastNote(sq, k, abid, kind, target)
+end
+function EliteAI_CastCfg(pid, on, dump)
+	local C = EliteAI_Cast
+	C.pids[pid] = ((on or 0) >= 1)
+	C.any = C.any or ((on or 0) >= 1)
+	if C.api == nil then
+		C.api = { state = (type(Squad_HasActiveCommand) == "function" and type(Squad_GetActiveCommand) == "function"),
+			can_sq = (type(Squad_CanCastAbilityOnSquad) == "function"), can_pos = (type(Squad_CanCastAbilityOnPosition) == "function"),
+			name = (type(Squad_GetBlueprintName) == "function"), doing = (type(Squad_IsDoingAbility) == "function"),
+			uses = (type(Squad_GetAbilityAvailableUses) == "function") }
+		C.names = {}
+		for k, v in pairs(_G) do
+			if type(k) == "string" and type(v) == "number" and string.sub(k, 1, 13) == "SQUADSTATEID_" then C.names[v] = string.sub(k, 14) end
+		end
+		_log("CAST", "watch", C.any and 1 or 0, "Squad_CanCastAbilityOnSquad", type(Squad_CanCastAbilityOnSquad), "Squad_CanCastAbilityOnPosition",
+			type(Squad_CanCastAbilityOnPosition), "Squad_GetActiveCommand", type(Squad_GetActiveCommand))
+	end
+	if (dump or 0) >= 1 and not C.dumped then
+		-- the names of the engine's SCAR functions about abilities / modifiers / capture (once, for the developer: Brain_ApiDump=1)
+		C.dumped = true
+		local found = {}
+		for k, v in pairs(_G) do
+			if type(k) == "string" and type(v) == "function" and (string.find(k, "bilit", 1, true) or string.find(k, "odifier", 1, true)
+				or string.find(k, "ooldown", 1, true) or string.find(k, "Capture", 1, true) or string.find(k, "Retreat", 1, true)
+				or string.find(k, "Suppress", 1, true) or string.find(k, "Aggress", 1, true)) then table.insert(found, k) end
+		end
+		table.sort(found)
+		local line, cnt = {}, 0
+		for _, k in ipairs(found) do
+			table.insert(line, k); cnt = cnt + 1
+			if cnt >= 12 then _log("CAST", "api", table.concat(line, " ")); line, cnt = {}, 0 end
+		end
+		if cnt > 0 then _log("CAST", "api", table.concat(line, " ")) end
+	end
+end
+function EliteAI_CastCan(e, sq)
+	return "?"                                                           -- (Squad_CanCastAbilityOn* do not exist in this engine: nothing is called)
+end
+function EliteAI_CastNote(sq, k, abid, kind, target)
+	local C = EliteAI_Cast
+	if not C.any or C.api == nil or sq == nil then return end
+	local e = { id = Squad_GetGameID(sq), k = k, abid = abid, kind = kind, left = math.floor(4 * ((_cfg and tonumber(_cfg("Brain_CastSecs"))) or 2.5)), st = {} }
+	if kind == "squad" and target ~= nil then e.tid = Squad_GetGameID(target) end
+	e.can0 = EliteAI_CastCan(e, sq)
+	if C.api.state then e.st[1] = (Squad_HasActiveCommand(sq) == true) and (C.names[Squad_GetActiveCommand(sq)] or "?") or "-" end
+	table.insert(C.list, e)
+end
+function EliteAI_CastTick()
+	local C = EliteAI_Cast
+	local n = table.getn(C.list)
+	if n == 0 then return end
+	local keep = {}
+	for i = 1, n do
+		local e = C.list[i]
+		local sq = (Squad_IsValid and Squad_IsValid(e.id)) and Squad_FromWorldID(e.id) or nil
+		if sq == nil or Squad_Count(sq) == 0 then e.left, e.dead = 0, true
+		else
+			e.left = e.left - 1
+			if C.api.state then
+				local s = (Squad_HasActiveCommand(sq) == true) and (C.names[Squad_GetActiveCommand(sq)] or "?") or "-"
+				if e.st[table.getn(e.st)] ~= s then table.insert(e.st, s) end
+			end
+			-- the recharge has started = the cast took (asked half a second after the order and at the end of the watch)
+			if e.can1 == nil or e.can1 == "1" then e.can1 = EliteAI_CastCan(e, sq) end
+			-- the engine's own word: the squad is doing this ability now (a shout has no squad state of its own)
+			if C.api.doing and not e.doing and e.abid ~= nil then
+				if Squad_IsDoingAbility(sq, e.abid) == true then e.doing = true end   -- (a checked read: the squad is valid and alive, the ability is a blueprint)
+			end
+		end
+		if e.left > 0 then table.insert(keep, e)
+		else
+			local did = (e.doing == true)
+			for _, s in ipairs(e.st) do if s == "Ability" or s == "Jump" then did = true end end
+			local took = "?"
+			if e.dead then took = "?"
+			elseif (e.can0 == "1" and e.can1 == "0") or did then took = "1"
+			elseif e.can0 == "0" or (e.can0 == "1" and e.can1 == "1") or (C.api.doing and not e.doing_err) then took = "0" end
+			C.st.seen = C.st.seen + 1
+			if took == "1" then C.st.took = C.st.took + 1 elseif took == "0" then C.st.failed = C.st.failed + 1 else C.st.unknown = C.st.unknown + 1 end
+			local nm = "?"
+			if sq ~= nil and C.api.name then nm = string.gsub(string.gsub(string.lower(tostring(Squad_GetBlueprintName(sq))), "\\", "/"), "^.*/", "") end
+			_log("CAST", "seen", e.id, nm, "k", e.k, string.gsub(EliteAI_MECH_ABILITIES[e.k] or "?", "^.*/", ""), e.kind, "can", e.can0 or "?", ">", e.can1 or "?",
+				"states", table.concat(e.st, ">"), "doing", e.doing_err and "err" or (e.doing and 1 or 0), "took", took, "sum", C.st.seen, C.st.took, C.st.failed, C.st.unknown)
+		end
+	end
+	C.list = keep
+end
+
+-- branch brain, step 2 ([Lua] Brain_RetreatLock, default 1; pseudo-order 12, only the brain sends it): ONLY THE BRAIN SENDS
+-- A SQUAD HOME. The engine's squad logic retreats squads by itself even at aggression 1.0 (bench 13.11: 10 retreats "by
+-- engine" in 15 scenes, squads at 0.5-0.9 of their health among them). For the squads of a brain player the retreat is
+-- switched off (Squad_EnableRetreat false, at the watch's look twice a second) and opened for the brain's own order of
+-- mode 3 (closed again 6 s later, when the squad is not running). With the lock: 0 "by engine", 16 "by order".
+EliteAI_RetLock = { pids = {}, sq = {}, open = {}, n = 0, any = false }
+function EliteAI_RetLockCfg(pid, on)
+	local L = EliteAI_RetLock
+	L.pids[pid] = ((on or 0) >= 1) and type(Squad_EnableRetreat) == "function"
+	L.any = false
+	for _, v in pairs(L.pids) do if v then L.any = true end end
+	_log("p" .. tostring(pid), "RETREAT", "lock", L.pids[pid] and 1 or 0, "Squad_EnableRetreat", type(Squad_EnableRetreat))
+end
+function EliteAI_RetLockLook(pid, sq, id, ret, now)
+	local L = EliteAI_RetLock
+	if not L.pids[pid] or ret or L.sq[id] then return end
+	if L.open[id] ~= nil and now - L.open[id] < 6 then return end
+	if sq == nil or type(Squad_EnableRetreat) ~= "function" then return end
+	Squad_EnableRetreat(sq, false)                                      -- (no pcall: the function and the squad are checked; L.pids is true only when it exists)
+	L.sq[id], L.open[id] = true, nil
+	L.n = L.n + 1
+	if L.n <= 3 then _log("p" .. tostring(pid), "RETREAT", "locked", id, "ok") end
+end
+function EliteAI_RetLockOpen(sq, id)
+	local L = EliteAI_RetLock
+	if not L.any or not L.sq[id] or sq == nil or type(Squad_EnableRetreat) ~= "function" then return end
+	Squad_EnableRetreat(sq, true)
+	L.sq[id], L.open[id] = nil, World_GetGameTime()
+end
+
+-- branch brain, step 4 (pseudo-orders 13 and 400+k / 500+k; only the brain sends them): THE PLAYER'S OWN ABILITY BY THE
+-- GAME'S COMMAND, and the player's purse as the game counts it. Bench 13.11: Relic's Request_PlayerAbility never cast the
+-- orks' 'Waaagh!' - it costs 200 requisition AND 200 of the red resource (Elite 3.2.1 ability/pvp/race_ork/globals/
+-- ork_waaagh), and the AI state has no reading of the red resource at all.
+--   13: this player is told its purse once a second - AI_DoString -> string.eliteai_in[pid](4, <red>, <requisition>, <power>);
+--   400+k: ability k of EliteAI_PLAYER_ABILITIES cast by the player (Cmd_PlayerAbility, command.scar:2203);
+--   500+k: the same at the position x z (Cmd_PlayerAbilityPos, command.scar:2226).
+-- Every cast is looked at 2 s later: 'p<id> GLOBAL seen <k> <name> took 0|1 red A > B req C > D' (took = the resource went
+-- down by half the cost or more), and the AI is told (5, k, took, red now). Numbers only (keep in sync with 60_roles.ai).
+EliteAI_PLAYER_ABILITIES = {
+	[1] = "ability/pvp/race_ork/globals/ork_waaagh",
+}
+EliteAI_Glob = { pids = {}, order = {}, ids = {}, watch = {}, n = 0 }
+function EliteAI_GlobApi()
+	local G = EliteAI_Glob
+	if G.api == nil then
+		G.api = (type(Player_FromId) == "function" and type(Player_GetResource) == "function" and type(Player_IsAlive) == "function"
+			and type(AI_DoString) == "function" and type(World_GetPropertyBagGroupID) == "function" and type(Cmd_PlayerAbility) == "function"
+			and RT_Waaagh ~= nil and RT_Requisition ~= nil and RT_Power ~= nil)
+		_log("GLOBAL", "api", G.api and 1 or 0, "Player_GetResource", type(Player_GetResource), "Cmd_PlayerAbility", type(Cmd_PlayerAbility),
+			"Cmd_PlayerAbilityPos", type(Cmd_PlayerAbilityPos), "AI_DoString", type(AI_DoString), "RT_Waaagh", tostring(RT_Waaagh))
+	end
+	return G.api
+end
+function EliteAI_GlobCfg(pid, on)
+	local G = EliteAI_Glob
+	if not EliteAI_GlobApi() then return end
+	if G.pids[pid] == nil then table.insert(G.order, pid) end
+	G.pids[pid] = ((on or 0) >= 1)
+	_log("p" .. tostring(pid), "GLOBAL", "purse told", G.pids[pid] and 1 or 0)
+end
+function EliteAI_GlobCast(pid, m, x, y, z)
+	local G = EliteAI_Glob
+	if not EliteAI_GlobApi() or not G.pids[pid] then return end
+	local at_pos = (m >= 500)
+	local k = at_pos and (m - 500) or (m - 400)
+	local name = EliteAI_PLAYER_ABILITIES[k]
+	if name == nil then return end
+	local abid = G.ids[k]
+	if abid == nil then
+		-- Step 5 (the verifier, 13.11): no pcall. The function is checked (EliteAI_GlobApi), the name is a constant of this
+		-- file, and the brain sends 400+k only after it has found this blueprint in the engine's own list of the player's
+		-- abilities (70_abilities.ai B.global_known) - a name the engine does not know never gets here.
+		local v = World_GetPropertyBagGroupID(name)
+		abid = (v ~= nil) and v or false
+		G.ids[k] = abid
+		_log("GLOBAL", "ability", k, name, abid and "ok" or "NOT FOUND")
+	end
+	if not abid then return end
+	local pl = Player_FromId(pid)
+	if pl == nil or not Player_IsAlive(pl) then return end
+	local red, req = Player_GetResource(pl, RT_Waaagh), Player_GetResource(pl, RT_Requisition)
+	if at_pos and type(Cmd_PlayerAbilityPos) == "function" then Cmd_PlayerAbilityPos(pl, abid, World_Pos(x, y, z), false)
+	else Cmd_PlayerAbility(pl, abid, false) end
+	G.n = G.n + 1
+	table.insert(G.watch, { pid = pid, k = k, red = red, req = req, left = 2 })
+	_log("p" .. tostring(pid), "GLOBAL", "sent", k, string.gsub(name, "^.*/", ""), at_pos and string.format("at %.0f %.0f", x, z) or "self", "red", string.format("%.0f", red or 0),
+		"req", string.format("%.0f", req or 0), "n", G.n)
+end
+function EliteAI_GlobTick()
+	local G = EliteAI_Glob
+	if not G.api then return end
+	for _, pid in ipairs(G.order) do
+		if G.pids[pid] then
+			local pl = Player_FromId(pid)
+			if pl ~= nil and Player_IsAlive(pl) then
+				local red, req, pow = Player_GetResource(pl, RT_Waaagh), Player_GetResource(pl, RT_Requisition), Player_GetResource(pl, RT_Power)
+				if type(red) == "number" and type(req) == "number" and type(pow) == "number" then
+					AI_DoString(pl, string.format("local s = string local t = s and s.eliteai_in local f = t and t[%d] if f then f(4, %.1f, %.1f, %.1f) end", pid, red, req, pow))
+				end
+			end
+		end
+	end
+	local keep = {}
+	for _, e in ipairs(G.watch) do
+		e.left = e.left - 1
+		if e.left > 0 then table.insert(keep, e)
+		else
+			local pl = Player_FromId(e.pid)
+			if pl ~= nil and Player_IsAlive(pl) then
+				local red, req = Player_GetResource(pl, RT_Waaagh), Player_GetResource(pl, RT_Requisition)
+				local took = ((e.red or 0) - (red or 0) >= 50) and 1 or 0
+				_log("p" .. tostring(e.pid), "GLOBAL", "seen", e.k, string.gsub(EliteAI_PLAYER_ABILITIES[e.k] or "?", "^.*/", ""), "took", took,
+					"red", string.format("%.0f > %.0f", e.red or 0, red or 0), "req", string.format("%.0f > %.0f", e.req or 0, req or 0))
+				AI_DoString(pl, string.format("local s = string local t = s and s.eliteai_in local f = t and t[%d] if f then f(5, %d, %d, %.1f) end", e.pid, e.k, took, red or 0))
+			end
+		end
+	end
+	G.watch = keep
+end
+
 function EliteAI_ExecuteOrders()
 	if not _take then return end
 	local q = _take()
@@ -793,6 +1136,10 @@ function EliteAI_ExecuteOrders()
 		local wid = tonumber(id)
 		if mode == "9" then variant_note(wid, tonumber(x))
 		elseif mode == "10" then EliteAI_DodgeCfg(wid, tonumber(x), tonumber(y), tonumber(z))   -- mechanics.ai 0.8: the dodge policy of player wid
+		elseif mode == "12" then EliteAI_RetLockCfg(wid, tonumber(x))                             -- branch brain (experiment): the engine's retreat off per squad
+		elseif mode == "11" then EliteAI_CastCfg(wid, tonumber(x), tonumber(y))                   -- branch brain: watch this player's casts
+		elseif mode == "13" then EliteAI_GlobCfg(wid, tonumber(x))                               -- branch brain, step 4: the purse is told to this player
+		elseif tonumber(mode) >= 400 and tonumber(mode) < 600 then EliteAI_GlobCast(wid, tonumber(mode), tonumber(x), tonumber(y), tonumber(z))   -- its own ability
 		else
 		-- a squad that died since the AI queued the order: Squad_FromWorldID on it is an engine assert (in -dev a modal
 		-- dialog that stops the game) - check first
@@ -811,7 +1158,7 @@ function EliteAI_ExecuteOrders()
 			local m = tonumber(mode)
 			if m == 1 then Cmd_MoveToPos(sg, World_Pos(tonumber(x), tonumber(y), tonumber(z)))
 			elseif m == 2 then Cmd_AttackMovePos(sg, World_Pos(tonumber(x), tonumber(y), tonumber(z)))
-			elseif m == 3 then Cmd_Retreat(sg)
+			elseif m == 3 then if EliteAI_RetLock ~= nil and EliteAI_RetLock.any then EliteAI_RetLockOpen(sq, wid) end; Cmd_Retreat(sg); if EliteAI_RetreatOrdered then EliteAI_RetreatOrdered(wid) end   -- main.ai 0.28
 			else mech_order(sg, sq, m, x, y, z)                                 -- 4, 5, 100+k, 200+k: mechanics.ai
 			end
 		end) end
@@ -824,5 +1171,6 @@ function EliteAI_ExecuteOrders()
 end
 
 if _take and Rule_AddInterval then Rule_AddInterval(EliteAI_ExecuteOrders, 1) end
+if _take and Rule_AddInterval then Rule_AddInterval(EliteAI_GlobTick, 1) end   -- branch brain, step 4 (returns at once until a brain player sent mode 13)
 -- 0.8: the dodge reflex, four times a second (it returns at once until a new AI has sent its policy - mode 10)
 if _take and Rule_AddInterval then Rule_AddInterval(EliteAI_DodgeTick, 0.25) end
