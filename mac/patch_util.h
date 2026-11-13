@@ -1,4 +1,4 @@
-// patch_util.h - shared by the v9 parts: log line to /tmp/elitefix.log and "jmp qword [rip+0]; .quad to" over a function entry
+// patch_util.h - shared by the v9 parts: log line to /tmp/crossplay_fix.log and "jmp qword [rip+0]; .quad to" over a function entry
 #include <mach-o/dyld.h>
 #include <mach/mach.h>
 #include <stdio.h>
@@ -6,7 +6,7 @@
 #include <string.h>
 #include <stdint.h>
 static void pu_log(const char *s, unsigned long a, unsigned long b) {
-    FILE *f = fopen("/tmp/elitefix.log", "a"); if (f) { fprintf(f, s, a, b); fputc('\n', f); fclose(f); }
+    FILE *f = fopen("/tmp/crossplay_fix.log", "a"); if (f) { fprintf(f, s, a, b); fputc('\n', f); fclose(f); }
 }
 static int pu_jump(unsigned char *p, void *to) {
     unsigned char code[14] = { 0xFF, 0x25, 0, 0, 0, 0 };

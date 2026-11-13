@@ -77,7 +77,8 @@ The full texts in five languages are in the store; `addons.json` repeats them fo
   relay closes the match session 61 s after the match, so the game's own Continue can't bring everyone back. The code stays here.
 - **LobbyStats options** (match timer, cooldowns, loading ratings, join sound inside LobbyStats.dll, up to 0.10) - each is its own
   add-on since 30.10 / 02.11 (docs/ADDON_RULES.md).
-- `linux-native/`, `mac/` - fixes for the native Feral ports (Linux, Mac crossplay), work in progress, not in the launcher.
+- `linux-native/` - fixes for the native Feral Linux port, work in progress, not in the launcher.
+- `mac/` - Mac (Feral) <-> Windows crossplay, vanilla only, standalone (no launcher): see `mac/README.md`.
 
 ## The folders
 

@@ -5,7 +5,7 @@
 // What: every trig/exp/log/pow entry of the game jumps to msmath.c - msvcr80's own code translated instruction by instruction
 // (mathcmp/lift/lift.py), bit-exact with the real DLL over 5M inputs per function. Float versions = (float)f((double)x),
 // which is what MSVC's <cmath> float overloads compile to. Lua's math.asin/atan/atan2 get the _CI* flavour Windows Lua uses.
-// A self-test with msvcr80's own outputs runs at load; the result goes to /tmp/elitefix.log. DOW2_NOMATHFIX=1 turns it off.
+// A self-test with msvcr80's own outputs runs at load; the result goes to /tmp/crossplay_fix.log. DOW2_NOMATHFIX=1 turns it off.
 #include <mach-o/dyld.h>
 #include <mach/mach.h>
 #include <sys/sysctl.h>
@@ -49,7 +49,7 @@ __attribute__((noinline)) static double h_atan2(double y, double x) {
     return from_lua(LUA_ATAN2, (uintptr_t)__builtin_return_address(0)) ? msci_atan2(y, x) : ms_atan2(y, x); }
 
 static void mlog(const char *fmt, ...) {
-    FILE *f = fopen("/tmp/elitefix.log", "a"); if (!f) return;
+    FILE *f = fopen("/tmp/crossplay_fix.log", "a"); if (!f) return;
     va_list ap; va_start(ap, fmt); vfprintf(f, fmt, ap); va_end(ap); fputc('\n', f); fclose(f);
 }
 
