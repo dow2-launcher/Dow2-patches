@@ -33,6 +33,7 @@ all: $(OUT)/LangSwitch.dll
 all: $(OUT)/NoHints.dll
 all: $(OUT)/UIScale.dll
 all: $(OUT)/MatchSpeed.dll
+all: $(OUT)/Marks.dll
 
 $(OUT):
 	mkdir -p $(OUT)
@@ -158,8 +159,12 @@ $(OUT)/PerfLog.dll: perflog/perflog.c | $(OUT)
 $(OUT)/ChatHide.dll: chathide/chathide.c common/gfxui.h | $(OUT)
 	$(CC) $(CFLAGS) -shared -o $@ $< -static-libgcc
 
-# 12.11.2026: speed x2 / x4 and a pause for a live match without other people (buttons by the minimap, Ctrl+= / Ctrl+- / Ctrl+P)
-$(OUT)/MatchSpeed.dll: matchspeed/matchspeed.c common/gfxui.h | $(OUT)
+# 12.11.2026: speed x2 / x4 and a pause for a live match without other people (13.11 v2: buttons at the top left, Ctrl+= / Ctrl+- / Ctrl+P)
+$(OUT)/MatchSpeed.dll: matchspeed/matchspeed.c common/gfxui.h common/topbar.h | $(OUT)
+	$(CC) $(CFLAGS) -shared -o $@ $< -static-libgcc
+
+# 13.11.2026: Match marks - a button / Ctrl+M notes the moment of a match or a replay in Marks.log (AI testers)
+$(OUT)/Marks.dll: marks/marks.c common/gfxui.h common/topbar.h | $(OUT)
 	$(CC) $(CFLAGS) -shared -o $@ $< -static-libgcc
 
 # 03.11.2026: the game's own Continue after a custom game (host -> everyone back in the same room)

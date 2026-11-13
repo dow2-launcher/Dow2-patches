@@ -1,0 +1,2 @@
+- Match speed 2: the pause and speed buttons are now at the top left, where a replay has them, and a click on them no longer moves the camera to the corner of the map.
+- New: Match marks (for testers): a button at the top left (in a replay - next to the replay panel) and Ctrl+M note the moment of a match or a replay - game time, map, players, camera - in Marks.log, so the developers can find it in the AI log and in the replay. Experiment, off by default.

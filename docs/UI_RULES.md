@@ -36,4 +36,5 @@ Owner's decision, 02.11.2026: "встроиться в существующие 
 through `Invoke` (vtable + 0x48) or `SetVariable` (vtable + 0x2C) — on the game's UI thread only (inside the engine's own
 per-frame calls). Examples: `matchtimer/matchtimer.c` ("the clock": a text field created in the Menu button movie),
 `cooldowns/cooldowns.c` ("the number": the button's own count clip), `lobbystats/lobbystats.c` (the slot tooltip, the
-menu tooltip). If the game has no element for something, ask the owner first — a Direct3D overlay is not the fallback.
+menu tooltip), `common/topbar.h` (buttons of our own at the top of the screen in the game's full-screen HUD movie, styled as
+the replay panel's: MatchSpeed, Marks). If the game has no element for something, ask the owner first — a Direct3D overlay is not the fallback.
