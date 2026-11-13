@@ -41,7 +41,7 @@ __asm__(
 void randfix_stub_getrand(void), randfix_stub_range(void);
 
 static void rlog(const char *s, unsigned long a) {
-    FILE *f = fopen("/tmp/elitefix.log", "a"); if (f) { fprintf(f, s, a); fputc('\n', f); fclose(f); }
+    FILE *f = fopen("/tmp/crossplay_fix.log", "a"); if (f) { fprintf(f, s, a); fputc('\n', f); fclose(f); }
 }
 static const struct site { const char *name; uint64_t addr, back; unsigned char want[44]; int len; void (*stub)(void); uint64_t *backvar; } SITES[] = {
     {"SimManager::GetRand", 0x10216d89fULL, 0x10216d8b2ULL,

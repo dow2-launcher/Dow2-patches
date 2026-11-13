@@ -1,6 +1,7 @@
 name: mac-crossplay
-# Builds the Mac crossplay dylib (mac/<latest v*>/build_ci.sh) on a macOS runner (macos-latest; macos-14 is retired).
-# Every push / PR: artifact. Push to main: GitHub Release "mac-crossplay-<ver>" with the player zip (asset replaced on rebuild).
+# Builds the Mac crossplay dylib (mac/build.sh, vanilla) on a macOS runner (macos-latest; macos-14 is retired).
+# Every push / PR: artifact. Push to main: GitHub Release "mac-crossplay-<VER>" with the player zip (asset replaced on rebuild).
+# New release: bump VER below.
 on:
   push:
     paths: ["mac/**", ".github/workflows/mac.yml"]
@@ -10,6 +11,9 @@ on:
 
 permissions:
   contents: read
+
+env:
+  VER: v26-vanilla
 
 jobs:
   build:
@@ -23,34 +27,37 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - id: ver
-        run: echo "ver=$(ls -d mac/v[0-9]* | sed 's#mac/##' | sort -V | tail -1)" >> "$GITHUB_OUTPUT"
+        run: echo "ver=$VER" >> "$GITHUB_OUTPUT"
       - name: clang 19 (same as the osxcross build)
         run: brew install llvm@19
       - name: Build
         env:
           CC: /opt/homebrew/opt/llvm@19/bin/clang
-        run: mac/${{ steps.ver.outputs.ver }}/build_ci.sh
+        run: mac/build.sh
       - name: Check
         run: |
-          d=mac/${{ steps.ver.outputs.ver }}/out/crossplay_fix.dylib
+          d=mac/out/crossplay_fix.dylib
+          if nm "$d" | grep -Ei "rngtrace|crctrace"; then echo "diagnostics in the release build"; exit 1; fi
+          if unzip -l mac/out/*.zip | grep -Ei "elite|\.tgz|\.tar"; then echo "unexpected files in the zip"; exit 1; fi
+          unzip -l mac/out/*.zip
           file "$d"; otool -l "$d" | grep -A3 LC_BUILD_VERSION -m1 || otool -l "$d" | grep -A3 LC_VERSION_MIN -m1
           nm -gU "$d" | head -5
-          { echo "### crossplay_fix ${{ steps.ver.outputs.ver }}"; echo '```'; cat mac/${{ steps.ver.outputs.ver }}/out/SHA256SUMS.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          { echo "### crossplay_fix ${{ steps.ver.outputs.ver }}"; echo '```'; cat mac/out/SHA256SUMS.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
       # check a download with: gh attestation verify <file> -R dow2-launcher/Dow2-patches
       - name: Build provenance
         if: github.event_name != 'pull_request'
         uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2
         with:
           subject-path: |
-            mac/${{ steps.ver.outputs.ver }}/out/*.zip
-            mac/${{ steps.ver.outputs.ver }}/out/crossplay_fix.dylib
+            mac/out/*.zip
+            mac/out/crossplay_fix.dylib
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: dow2mac_crossplay_${{ steps.ver.outputs.ver }}
           path: |
-            mac/${{ steps.ver.outputs.ver }}/out/*.zip
-            mac/${{ steps.ver.outputs.ver }}/out/crossplay_fix.dylib
-            mac/${{ steps.ver.outputs.ver }}/out/SHA256SUMS.txt
+            mac/out/*.zip
+            mac/out/crossplay_fix.dylib
+            mac/out/SHA256SUMS.txt
           retention-days: 30
 
   release:
@@ -73,9 +80,10 @@ jobs:
           TAG="mac-crossplay-$VER"
           ls -la dist
           if gh release view "$TAG" >/dev/null 2>&1; then
-            gh release upload "$TAG" dist/*.zip dist/SHA256SUMS.txt --clobber
+            gh release upload "$TAG" dist/*.zip --clobber
           else
-            gh release create "$TAG" dist/*.zip dist/SHA256SUMS.txt --target "$GITHUB_SHA" --prerelease \
-              --title "Mac crossplay $VER (test build)" \
-              --notes "DoW2 Retribution: native Mac (Feral) <-> Windows crossplay patch, $VER. Test build, not for general players yet. Sources: mac/$VER, install: README_RU.txt in the zip."
+            SUM=$(cut -d' ' -f1 < <(grep '\.zip$' dist/SHA256SUMS.txt))
+            gh release create "$TAG" dist/*.zip --target "$GITHUB_SHA" --latest=false \
+              --title "Mac crossplay $VER" \
+              --notes "Dawn of War II: Retribution - the native Mac (Feral, Steam) version plays multiplayer with Windows players. Vanilla only (Elite is not supported yet), no launcher needed. Unzip, run run_vanilla.command; uninstall = delete the folder. Sources: mac/ at $GITHUB_SHA. SHA-256 of the zip: $SUM. Verify: gh attestation verify <zip> -R $GITHUB_REPOSITORY"
           fi
