@@ -4,6 +4,21 @@ Every version gets an entry here before it reaches `main`. CI then tags `vX.Y.Z`
 version (`X.Y.0`) it also publishes a GitHub Release with the DLLs and the entries since the previous `X.Y.0`.
 The version of the set lives only in `VERSION`; each DLL still writes its own version to its log.
 
+## 0.2.76 — 2026-11-14
+Computer army fix (store armybadgefix-1, new, experiment order 1120, off by default, games elite + vanilla) - pink badges in the
+testers' observer bot matches (Malum 13.11, Orca 14.11; research/pink_badges_1114).
+- The cause is DOW2.exe 3.19 itself (reproduced in vanilla without any DLL): a team slot keeps the race and hero of the human who
+  leaves it (host -> observers, or to another team slot), but its army is empty; a computer added there gets an army only when its
+  race is Random (picked at the start) or when its hero screen is confirmed in the lobby. TeamColourManager then has
+  "chapterName : , paintIndex : (0, 0, 0, 0), badge : " for that player: colour 0 and the missing-texture badge on all his units.
+  Not Windows' Controlled Folder Access, not Elite's DoW2_ArmyPainterFix.dll.
+- ArmyBadgeFix.dll: the call 0x0080716E (find-or-insert of the player's chapter in FUN_00806F80) goes through a stub; an empty
+  chapter is replaced with the game's own fallback for a player not in the list (GetPlayerChapter 0x00805F80: the first default army
+  of his race), copied with the game's assignment 0x004893FB. 33 bytes checked first. Drawing only.
+- Stand 1: host -> Observers 1, Expert into the vacated slot 1 and slot 2: without the DLL player of slot 1 empty (Elite and vanilla);
+  with it ork_bad_moonz_clan (Elite and vanilla), match runs. The temp.rec of that match: empty again without the DLL (the replay
+  keeps the lobby data), default army with it; both playbacks identical. Normal chapters (humans, random-race computers) untouched.
+
 ## 0.2.75 — 2026-11-14
 New AI 26 (store newai-26, experiment, off by default, Elite only): step 7 of the ork brain (brain 0.7) and EliteAI.dll 0.12 with
 the engine's melee freeze guarded inside it. eliteai branch newai-26 3802e3b = brain dd217b8 (step 7 6794233 + the guard) with

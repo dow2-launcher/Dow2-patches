@@ -813,5 +813,23 @@
       "fr": "Le jeu pouvait se figer pour de bon quand une unité de corps à corps se retrouvait pile dans une unité ennemie ; avec ceci, il continue.",
       "de": "Das Spiel konnte endgültig einfrieren, wenn eine Nahkampfeinheit genau in einer feindlichen Einheit landete; damit läuft es weiter."
     }
+  },
+  "armybadgefix": {
+    "category": "experiment",
+    "order": 1120,
+    "name": {
+      "en": "Computer army fix",
+      "ru": "Computer army fix",
+      "es": "Computer army fix",
+      "fr": "Computer army fix",
+      "de": "Computer army fix"
+    },
+    "description": {
+      "en": "A computer put into a slot a human left (e.g. the host moved to observers) had no army: pink squares instead of its badge. It now gets the default army of its race.",
+      "ru": "Компьютер, поставленный в слот, который освободил человек (например, хост ушёл в наблюдатели), оставался без армии: розовые квадраты вместо эмблемы. Теперь он получает армию своей расы по умолчанию.",
+      "es": "Un ordenador puesto en el hueco que dejó un humano (p. ej. el anfitrión pasó a observador) no tenía ejército: cuadros rosas en lugar de su emblema. Ahora recibe el ejército por defecto de su raza.",
+      "fr": "Un ordinateur placé dans l'emplacement libéré par un humain (p. ex. l'hôte passé en observateur) n'avait pas d'armée : des carrés roses au lieu de son emblème. Il reçoit maintenant l'armée par défaut de sa race.",
+      "de": "Ein Computer in einem Platz, den ein Mensch verlassen hat (z. B. der Host ging zu den Zuschauern), hatte keine Armee: rosa Quadrate statt seines Abzeichens. Jetzt bekommt er die Standardarmee seiner Rasse."
+    }
   }
 }

@@ -1,0 +1,1 @@
+- New: Computer army fix (experiment, off by default, Elite and vanilla): a computer put into a slot a human left (e.g. the host moved to observers) no longer has pink squares instead of its army badge; it gets the default army of its race.
