@@ -1,6 +1,20 @@
 -- EliteAI combat director, SCAR side: appended by EliteAI.dll to Elite's elite.scar (loaded in every game).
 -- The AI scripts can't give orders themselves (no Command_* in the AI state); the new AI queues them in EliteAI.dll,
 -- this rule takes the queue once a second and issues them. No new AI in the game = empty queue = nothing happens.
+-- STEP 9 (14.11.2026): NOTHING HERE ORDERS A UNIT ANY MORE, unless a key of the old path is set. The orders of the new AI go
+-- out of its own AI state as network commands of its player (mod/netorder.ai + EliteAI.dll 0.15 eliteai_cmd): in the game's
+-- command stream, in the .rec, the same on every machine. What this file still does by default is READ and tell:
+--   * the queue brings every order here a second time with mode + 1000 ("it is sent - watch it"): the observers below run
+--     (did the cast take, who ordered the retreat, what the Waaagh cost) and no Cmd_* / Command_* is called;
+--   * mode + 2000 = "the squad is stepping out of a blast, this marching order waits" (kept for the reflex's way back);
+--     mode + 3000 = an order the AI state sent on the reflex's word (nothing to do);
+--   * the dodge reflex still sees the grenades here (the AI state has no reading of them); its step and the order the
+--     squad gets back are handed to the squad's AI state (AI_DoString -> string.eliteai_net[player]) and sent from there;
+--   * mode 15 (id = player, x = 1): this player's orders go by the network (EliteAI_NetPlayers).
+-- The Cmd_* / Command_* / Squad_EnableRetreat calls that are left run only for an order that arrives WITHOUT the mark: a
+-- player with [Lua] Net_Orders=0 (or Net_Move / Net_Retreat / Net_Attack / Net_Capture / Net_Reinforce / Net_Unload /
+-- Net_Cast / Net_Global / Net_RetLock = 0, or Brain_GlobalPosScar=1) - the comparison path of step 8.1, single player only.
+EliteAI_NetPlayers = {}
 local _take = eliteai_take_orders or (string and string.eliteai_take_orders)
 local _log = eliteai_log or (string and string.eliteai_log) or function() end
 
@@ -165,13 +179,15 @@ local function mech_point(player, pos)
 	EGroup_Clear(eg); EGroup_Add(eg, best)
 	return eg
 end
-local function mech_order(sg, sq, m, x, y, z)
+local function mech_order(sg, sq, m, x, y, z, sent)
+	-- (step 9) sent = the AI state has sent this order as a network command: only the cast watch runs, no command is given here
+	if sent and m < 100 and m ~= 6 then return end
 	-- branch brain (mod/brain/00_core.ai Brain.ORD): 300+k = ability k cast by the squad on itself (Cmd_SquadAbility,
 	-- command.scar:1908); 8 = a melee attack on the squad x (Cmd_AttackMeleeSGroup, command.scar:808). Only the brain sends them.
 	if m >= 300 then
 		local abid = mech_ability(m - 300)
 		if abid then
-			Cmd_SquadAbility(sg, abid, false)
+			if not sent then Cmd_SquadAbility(sg, abid, false) end
 			if EliteAI_CastWatch ~= nil then EliteAI_CastWatch(sq, m - 300, abid, "self") end   -- (after the real order, in its own guard)
 		end
 		return
@@ -206,7 +222,7 @@ local function mech_order(sg, sq, m, x, y, z)
 			end
 		else
 			local abid = mech_ability(m - 200)
-			if abid then Cmd_Ability(sg, abid, tsq, false) end              -- command.scar:1863 (squad target -> Cmd_SquadAbilitySquad)
+			if abid and not sent then Cmd_Ability(sg, abid, tsq, false) end              -- command.scar:1863 (squad target -> Cmd_SquadAbilitySquad)
 			if abid and EliteAI_CastWatch ~= nil then EliteAI_CastWatch(sq, m - 200, abid, "squad", tsq) end
 		end
 	elseif m == 5 then
@@ -253,7 +269,7 @@ local function mech_order(sg, sq, m, x, y, z)
 			local k = math.floor(tonumber(x) or 1)
 			if k < 1 then k = 1 elseif k > 4 then k = 4 end
 			local owner = Squad_GetPlayerOwner(sq)
-			for i = 1, k do Command_Squad(owner, sg, SCMD_ReinforceUnit, false) end
+			if not sent then for i = 1, k do Command_Squad(owner, sg, SCMD_ReinforceUnit, false) end end   -- (step 9: sent = the AI state's own network command; the count and the line below stay)
 			EliteAI_ReinfN = (EliteAI_ReinfN or 0) + k
 			EliteAI_ReinfLines = (EliteAI_ReinfLines or 0) + 1
 			if EliteAI_ReinfLines <= 6 then _log("REINF dir scar order", EliteAI_ReinfN, "x" .. k, "models", Squad_Count(sq)) end
@@ -288,7 +304,7 @@ local function mech_order(sg, sq, m, x, y, z)
 		end
 	elseif m >= 100 then
 		local abid = mech_ability(m - 100)
-		if abid then Cmd_SquadAbilityPos(sg, abid, World_Pos(tonumber(x), tonumber(y), tonumber(z)), false) end   -- command.scar:1930, autarch.scar:38
+		if abid and not sent then Cmd_SquadAbilityPos(sg, abid, World_Pos(tonumber(x), tonumber(y), tonumber(z)), false) end   -- command.scar:1930, autarch.scar:38
 		if abid and EliteAI_CastWatch ~= nil then EliteAI_CastWatch(sq, m - 100, abid, "pos") end
 	end
 end
@@ -569,6 +585,25 @@ local function dodge_sg(sq)
 	SGroup_Clear(sg); SGroup_Add(sg, sq)
 	return sg
 end
+-- (step 9) an order of the reflex for the squad s: mode m (1 move, 2 attack-move, 5 capture ... as the AI's orders) at
+-- x y z. For a player whose orders go by the network (mode 15) it is handed to the squad's AI state, which sends it as a
+-- network command (mod/netorder.ai, string.eliteai_net) and keeps the squad's marching orders back for 'hold' seconds;
+-- nothing is ordered here. Without AI_DoString such a player's squads do not step. The old path (Net_Orders=0): Cmd_*.
+-- (DLL 0.16) a network match: eliteai_cfg("MP") is "1" and NO command is given from here whatever the player declared -
+-- a SCAR command runs on this machine only. (The DLL hands this script no order to execute then either: lua_take.)
+local function dodge_cmd(D, s, m, x, y, z, hold)
+	if EliteAI_NetPlayers[s.pid] or (_cfg ~= nil and _cfg("MP") == "1") then
+		if type(AI_DoString) == "function" then
+			AI_DoString(s.pl, string.format("local s = string local t = s and s.eliteai_net local f = t and t[%d] if f then f(%d, %d, %.2f, %.2f, %.2f, %.2f) end",
+				s.pid, s.id, m, x or 0, y or 0, z or 0, hold or 0))
+		end
+		return
+	end
+	local sg = dodge_sg(s.sq)
+	if m == 1 then Cmd_MoveToPos(sg, World_Pos(x, y, z))
+	elseif m == 2 then Cmd_AttackMovePos(sg, World_Pos(x, y, z))
+	else mech_order(sg, s.sq, m, x, y, z) end
+end
 -- the step: just out of the radius. s = this tick's squad entry, e = its dodge record
 local function dodge_step(D, s, e, pr, now)
 	local cx, cz, eta, flying, ux, uz = dodge_threat(D, pr, s, now)
@@ -596,11 +631,11 @@ local function dodge_step(D, s, e, pr, now)
 	local step = R - d
 	if step < 1 then return false end
 	local tx, tz = s.x + dx * step, s.z + dz * step
-	Cmd_MoveToPos(dodge_sg(s.sq), World_Pos(tx, s.y, tz))
 	local dur = eta + 0.75 + (pr.def.linger or 0) + (pr.def.salvo and 1.5 or 0)
 	local walk = step / D.speed + 0.5
 	if dur < walk then dur = walk end
 	if dur > 8 then dur = 8 end
+	dodge_cmd(D, s, 1, tx, s.y, tz, dur + 0.5)
 	e.t_until, e.ox, e.oy, e.oz, e.was, e.mine = now + dur, s.x, s.y, s.z, s.st, pr.mine
 	D.st.dodge = D.st.dodge + 1
 	_log("p" .. tostring(s.pid), "MECH", "Dodge", s.id, s.name or "-", "steps", string.format("%.1f m", step), "out of", pr.key, "pow", pr.def.pow,
@@ -613,20 +648,18 @@ local function dodge_back(D, s, e, now)
 	local h, l = e.held, D.last[s.id]
 	local what = "-"
 	if e.was ~= nil and SQUADSTATEID_Capture ~= nil and e.was == SQUADSTATEID_Capture and not e.mine then
-		mech_order(dodge_sg(s.sq), s.sq, 5, e.ox, e.oy, e.oz); what = "capture"
+		dodge_cmd(D, s, 5, e.ox, e.oy, e.oz, 0); what = "capture"
 	elseif h ~= nil then
-		local sg = dodge_sg(s.sq)
-		if h.m == 1 then Cmd_MoveToPos(sg, World_Pos(h.x, h.y, h.z))
-		elseif h.m == 2 then Cmd_AttackMovePos(sg, World_Pos(h.x, h.y, h.z))
-		else mech_order(sg, s.sq, h.m, h.x, h.y, h.z) end
+		dodge_cmd(D, s, h.m, h.x, h.y, h.z, 0)
 		what = "the order held " .. tostring(h.m)
-	elseif e.mine then what = "stays off the mine"
+	elseif e.mine then
+		what = "stays off the mine"
+		if EliteAI_NetPlayers[s.pid] then dodge_cmd(D, s, 0, 0, 0, 0, 0) end   -- (no order: mode 0 only ends the wait of its marching orders)
 	elseif l ~= nil and now - l.t <= 12 and (l.m == 1 or l.m == 2) then
-		local sg = dodge_sg(s.sq)
-		if l.m == 1 then Cmd_MoveToPos(sg, World_Pos(l.x, l.y, l.z)) else Cmd_AttackMovePos(sg, World_Pos(l.x, l.y, l.z)) end
+		dodge_cmd(D, s, l.m, l.x, l.y, l.z, 0)
 		what = "the last order " .. tostring(l.m)
 	else
-		Cmd_AttackMovePos(dodge_sg(s.sq), World_Pos(e.ox, e.oy, e.oz)); what = "where it stood"
+		dodge_cmd(D, s, 2, e.ox, e.oy, e.oz, 0); what = "where it stood"
 	end
 	D.st.back = D.st.back + 1
 	if D.st.back <= 20 then _log("p" .. tostring(s.pid), "MECH", "Dodge", s.id, "back:", what) end
@@ -782,10 +815,21 @@ function EliteAI_RetreatWatch(D)
 					if EliteAI_RetLock ~= nil and EliteAI_RetLock.any then EliteAI_RetLockLook(pid, sq, id, ret, now) end
 					if ret then
 						nowret = nowret + 1
-						if not R.sq[id] then
+						-- (step 9) an order sent by the AI state as a network command is carried out at once, its mark comes here
+						-- with the queue up to a second later: a retreat without a fresh order waits 1.5 s for the mark before it
+						-- is called the engine's
+						local ot = R.ord[id]
+						local fresh = (ot ~= nil and now - ot <= 3)
+						local wait = false
+						if not R.sq[id] and not fresh and not first_look and EliteAI_NetPlayers[pid] then
+							if R.pend == nil then R.pend = {} end
+							if R.pend[id] == nil then R.pend[id] = now end
+							wait = (now - R.pend[id] < 1.5)
+						end
+						if not R.sq[id] and not wait then
 							R.sq[id] = true
-							local ot = R.ord[id]
-							local by = (ot ~= nil and now - ot <= 3) and "order" or (first_look and "before" or "engine")
+							if R.pend ~= nil then R.pend[id] = nil end
+							local by = fresh and "order" or (first_look and "before" or "engine")
 							st.seen, st[by] = st.seen + 1, st[by] + 1
 							if st.seen <= 400 then
 								local nm, x, z = "?", 0, 0
@@ -797,7 +841,17 @@ function EliteAI_RetreatWatch(D)
 								_log("p" .. tostring(pid), "RETREAT", "seen", id, nm, "by", by, "models", Squad_Count(sq), string.format("at %.0f %.0f", x, z), "t", math.floor(now), "n", st.seen)
 							end
 						end
-					elseif R.sq[id] then R.sq[id] = nil end
+					else
+						if R.sq[id] then R.sq[id] = nil end
+						if R.pend ~= nil and R.pend[id] ~= nil then
+							-- (the retreat ended before the mark came: counted now, by the order if its mark is here)
+							R.pend[id] = nil
+							local ot = R.ord[id]
+							local by = (ot ~= nil and now - ot <= 3) and "order" or "engine"
+							st.seen, st[by] = st.seen + 1, st[by] + 1
+							if st.seen <= 400 then _log("p" .. tostring(pid), "RETREAT", "seen", id, "?", "by", by, "models", Squad_Count(sq), "at 0 0", "t", math.floor(now), "n", st.seen) end
+						end
+					end
 				end
 			end
 		end
@@ -1150,7 +1204,7 @@ function EliteAI_GlobCfg(pid, on)
 	G.pids[pid] = ((on or 0) >= 1)
 	_log("p" .. tostring(pid), "GLOBAL", "purse told", G.pids[pid] and 1 or 0)
 end
-function EliteAI_GlobCast(pid, m, x, y, z)
+function EliteAI_GlobCast(pid, m, x, y, z, sent)
 	local G = EliteAI_Glob
 	if not EliteAI_GlobApi() or not G.pids[pid] then return end
 	local at_pos = (m >= 500)
@@ -1171,11 +1225,17 @@ function EliteAI_GlobCast(pid, m, x, y, z)
 	local pl = Player_FromId(pid)
 	if pl == nil or not Player_IsAlive(pl) then return end
 	local red, req = Player_GetResource(pl, RT_Waaagh), Player_GetResource(pl, RT_Requisition)
-	if at_pos and type(Cmd_PlayerAbilityPos) == "function" then Cmd_PlayerAbilityPos(pl, abid, World_Pos(x, y, z), false)
+	-- (step 9) a command the AI state sent is carried out before its mark comes here: the purse 'before' is what the AI state
+	-- knew when it sent it (y, z of the mark: the red resource and the requisition; -1 = not known)
+	if sent and (y or -1) >= 0 then red = y end
+	if sent and (z or -1) >= 0 then req = z end
+	-- (step 9) sent = the AI state has sent it as a network command of the player (mod/netorder.ai): only the look 2 s later
+	if sent then
+	elseif at_pos and type(Cmd_PlayerAbilityPos) == "function" then Cmd_PlayerAbilityPos(pl, abid, World_Pos(x, y, z), false)
 	else Cmd_PlayerAbility(pl, abid, false) end
 	G.n = G.n + 1
 	table.insert(G.watch, { pid = pid, k = k, red = red, req = req, left = 2 })
-	_log("p" .. tostring(pid), "GLOBAL", "sent", k, string.gsub(name, "^.*/", ""), at_pos and string.format("at %.0f %.0f", x, z) or "self", "red", string.format("%.0f", red or 0),
+	_log("p" .. tostring(pid), "GLOBAL", sent and "sent by the AI's command" or "sent", k, string.gsub(name, "^.*/", ""), at_pos and string.format("at %.0f %.0f", x, z) or "self", "red", string.format("%.0f", red or 0),
 		"req", string.format("%.0f", req or 0), "n", G.n)
 end
 function EliteAI_GlobTick()
@@ -1210,29 +1270,50 @@ function EliteAI_GlobTick()
 	G.watch = keep
 end
 
+-- (step 9) the queue is taken once a second on the old path (as in step 8.1) and four times a second when a player's orders
+-- go by the network: its marks come here to be WATCHED, and a cast that is over within a second was 'not seen to take' when
+-- its mark came a second late (bench s9_l8b: 0.76 of the casts 'took' against 0.82)
+function EliteAI_ExecuteOrdersTick(fast)
+	local net = false
+	for _, v in pairs(EliteAI_NetPlayers) do if v then net = true end end
+	if net == (fast == true) then EliteAI_ExecFast = net; EliteAI_ExecuteOrders() end
+end
+function EliteAI_ExecuteOrdersSlow() EliteAI_ExecuteOrdersTick(false) end
+function EliteAI_ExecuteOrdersFast() EliteAI_ExecuteOrdersTick(true) end
 function EliteAI_ExecuteOrders()
 	if not _take then return end
 	local q = _take()
-	if EliteAI_VariantShows > 0 and (EliteAI_VariantTick or 0) <= 0 then variant_show(); EliteAI_VariantTick = 2 end
+	if EliteAI_VariantShows > 0 and (EliteAI_VariantTick or 0) <= 0 then variant_show(); EliteAI_VariantTick = EliteAI_ExecFast and 8 or 2 end   -- (every 2 s on either cadence)
 	EliteAI_VariantTick = (EliteAI_VariantTick or 0) - 1
 	if not q or q == "" then return end
 	local sg = SGroup_CreateIfNotFound("eliteai_director")
 	local done, bad = 0, 0
 	for id, x, y, z, mode in string.gmatch(q, "(%d+) (%-?[%d%.]+) (%-?[%d%.]+) (%-?[%d%.]+) (%d+);") do
 		local wid = tonumber(id)
-		if mode == "9" then variant_note(wid, tonumber(x))
+		-- (step 9) the marks of mod/netorder.ai: + 1000 the order is sent already (watch only), + 2000 it waits for a squad that
+		-- steps out of a blast, + 3000 sent on the reflex's word
+		local m0 = tonumber(mode)
+		local sent = false
+		if m0 >= 3000 then mode = "skip"
+		elseif m0 >= 2000 then mode = "skip"; EliteAI_DodgeOrder(wid, tonumber(x), tonumber(y), tonumber(z), m0 - 2000)
+		elseif m0 >= 1000 then sent = true; mode = tostring(m0 - 1000) end
+		if mode == "skip" then
+		elseif mode == "15" then
+			EliteAI_NetPlayers[wid] = ((tonumber(x) or 0) >= 1)
+			_log("p" .. tostring(wid), "NET", "this player's orders go by the network:", EliteAI_NetPlayers[wid] and 1 or 0, "(elite.scar watches, it orders nothing)")
+		elseif mode == "9" then variant_note(wid, tonumber(x))
 		elseif mode == "10" then EliteAI_DodgeCfg(wid, tonumber(x), tonumber(y), tonumber(z))   -- mechanics.ai 0.8: the dodge policy of player wid
 		elseif mode == "12" then EliteAI_RetLockCfg(wid, tonumber(x))                             -- branch brain (experiment): the engine's retreat off per squad
 		elseif mode == "11" then EliteAI_CastCfg(wid, tonumber(x), tonumber(y))                   -- branch brain: watch this player's casts
 		elseif mode == "13" then EliteAI_GlobCfg(wid, tonumber(x))                               -- branch brain, step 4: the purse is told to this player
-		elseif tonumber(mode) >= 400 and tonumber(mode) < 600 then EliteAI_GlobCast(wid, tonumber(mode), tonumber(x), tonumber(y), tonumber(z))   -- its own ability
+		elseif tonumber(mode) >= 400 and tonumber(mode) < 600 then EliteAI_GlobCast(wid, tonumber(mode), tonumber(x), tonumber(y), tonumber(z), sent)   -- its own ability
 		else
 		-- a squad that died since the AI queued the order: Squad_FromWorldID on it is an engine assert (in -dev a modal
 		-- dialog that stops the game) - check first
 		local alive = Squad_IsValid and Squad_IsValid(wid)
 		local ok, err = false, "dead"
 		-- 0.8: a squad that is stepping out of a blast - its marching orders wait (EliteAI_DodgeOrder keeps the last one)
-		if alive and EliteAI_DodgeOrder(wid, tonumber(x), tonumber(y), tonumber(z), tonumber(mode)) then ok, alive = true, false; done = done - 1 end
+		if alive and EliteAI_DodgeOrder(wid, tonumber(x), tonumber(y), tonumber(z), tonumber(mode)) and not sent then ok, alive = true, false; done = done - 1 end
 		if alive then ok, err = pcall(function()
 			local sq = Squad_FromWorldID(wid)
 			if not sq or Squad_Count(sq) == 0 then return end              -- nothing to order (all models dead)
@@ -1242,7 +1323,13 @@ function EliteAI_ExecuteOrders()
 			-- In 4 and 200+k x is the id of the target squad - World_Pos(50002, 0, 0) wrote "World_Pos has generated a position
 			-- outside the world and was clamped" into SCAR-trace ~800 times a match (harmless: the value was never used)
 			local m = tonumber(mode)
-			if m == 1 then Cmd_MoveToPos(sg, World_Pos(tonumber(x), tonumber(y), tonumber(z)))
+			if sent then
+				-- (step 9) the order went out of the AI state as a network command: here only what is watched
+				if m == 3 then
+					if EliteAI_RetLock ~= nil and EliteAI_RetLock.any then EliteAI_RetLockOpen(sq, wid) end   -- (only with Net_RetLock=0: the old lock of the simulation)
+					if EliteAI_RetreatOrdered then EliteAI_RetreatOrdered(wid) end
+				elseif m >= 100 or m == 6 then mech_order(sg, sq, m, x, y, z, true) end   -- (the cast watch; the count of the reinforcements)
+			elseif m == 1 then Cmd_MoveToPos(sg, World_Pos(tonumber(x), tonumber(y), tonumber(z)))
 			elseif m == 2 then Cmd_AttackMovePos(sg, World_Pos(tonumber(x), tonumber(y), tonumber(z)))
 			elseif m == 3 then if EliteAI_RetLock ~= nil and EliteAI_RetLock.any then EliteAI_RetLockOpen(sq, wid) end; Cmd_Retreat(sg); if EliteAI_RetreatOrdered then EliteAI_RetreatOrdered(wid) end   -- main.ai 0.28
 			else mech_order(sg, sq, m, x, y, z)                                 -- 4, 5, 100+k, 200+k: mechanics.ai
@@ -1256,7 +1343,8 @@ function EliteAI_ExecuteOrders()
 	if bad > 0 and not EliteAI_ExecWarned then EliteAI_ExecWarned = true; _log("director: some orders failed", bad, "of", done + bad, "last mode", tostring(EliteAI_LastBadMode)) end
 end
 
-if _take and Rule_AddInterval then Rule_AddInterval(EliteAI_ExecuteOrders, 1) end
+if _take and Rule_AddInterval then Rule_AddInterval(EliteAI_ExecuteOrdersSlow, 1) end
+if _take and Rule_AddInterval then Rule_AddInterval(EliteAI_ExecuteOrdersFast, 0.25) end
 if _take and Rule_AddInterval then Rule_AddInterval(EliteAI_GlobTick, 1) end   -- branch brain, step 4 (returns at once until a brain player sent mode 13)
 -- 0.8: the dodge reflex, four times a second (it returns at once until a new AI has sent its policy - mode 10)
 if _take and Rule_AddInterval then Rule_AddInterval(EliteAI_DodgeTick, 0.25) end

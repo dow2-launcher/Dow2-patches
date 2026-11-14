@@ -167,7 +167,14 @@ end
 EliteAI.on = new_logic_on()
 if EliteAI.on then
 	local d, v = EliteAI.real_diff, string.upper(cfg("Variant" .. tostring(s_selfplayerid), nil) or cfg("Variant", "") or "")  -- tests: [Lua] Variant1000=A or Variant=A
-	if not EliteAI_VARIANTS[v] then v = (d == AD_Easy and "A") or (d == AD_Hard and "C") or "B" end
+	-- step 9 (14.11, Orca fb 1095 'Hard always beats Easy / Normal'; the owner: one AI, the best one): EVERY SLOT LEVEL PLAYS
+	-- RULES C. Until now the level picked the rules of the disputed decisions (Easy = A, Normal = B, Hard = C; 0.9 of 10.11,
+	-- for testers to compare). [Lua] VariantByDiff=1 returns that; Variant / Variant<player id> = A | B | C still name one.
+	-- (What the level still changes is the ENGINE's: an AI player's income is x1.0 / x1.1 / x1.3 / x1.5 on Easy / Normal /
+	-- Hard / Expert - bench s9_diff0..3, HANDOFF step 9. The scripts cannot change that without writing into the simulation.)
+	if not EliteAI_VARIANTS[v] then
+		if tonumber(cfg("VariantByDiff", 0)) == 1 then v = (d == AD_Easy and "A") or (d == AD_Hard and "C") or "B" else v = "C" end
+	end
 	EliteAI.variant, EliteAI.vp = v, EliteAI_VARIANTS[v]
 	-- every variant plays the standard personality and build orders (Elite reads the level again in Reset/buildorder conditions)
 	-- 0.21: on the vanilla base every variant plays the level the dispatcher set (Hard, or VanillaDiff) - its wrapper of
