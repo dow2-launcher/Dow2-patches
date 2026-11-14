@@ -4,6 +4,18 @@ Every version gets an entry here before it reaches `main`. CI then tags `vX.Y.Z`
 version (`X.Y.0`) it also publishes a GitHub Release with the DLLs and the entries since the previous `X.Y.0`.
 The version of the set lives only in `VERSION`; each DLL still writes its own version to its log.
 
+## 0.2.77 — 2026-11-14
+MMFind 0.50 (Automatch v2.0, hand release mmfind-0.52 = mmfind-0.51 with this MMFind.dll): the game's "Connecting" box while a
+launcher room's match starts; an observer's ticket of a launcher room.
+- The box (common/connbox.h) from Start Searching to the loading screen; closed on every failure / cancel / server cancel and at the
+  loading screen, never in a match. Not from the launcher's command on: while a message box is up the game's menu ignores every
+  command - stand 14.11 with the box up from the command in the main menu, MMFind sent Find a Game 26 times, nothing opened,
+  walk_timeout after 60 s (the box then closed). [MMFind] ConnectingBox=0: no box.
+- {"cmd":"room","room":"<id>","mode":"..","watch":true} (the ladder's lroom observer ticket): no walk, no army; mm/join mode "watch"
+  with "lroom":"<id>", mm/poll every 2 s until the ladder made him a watcher of the room's match and the host's game room is up, then
+  that room joined by its id from the main menu (the game browser's join, RoomJoin's call); events accepted / searching / matched /
+  in_room / loading / failed (expired, server_cancelled, refused, in_lobby, left_screen, cancelled). Cancel = mm/leave.
+
 ## 0.2.76 — 2026-11-14
 LiveReplay 4 (store livereplay-4, experiment, off by default): Watch at any minute of a match, 8x up to the live edge, the game's
 "Connecting" box with the scout's line.

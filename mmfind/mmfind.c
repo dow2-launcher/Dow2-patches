@@ -31,6 +31,13 @@
 // 3 of the list when more were unchecked), shown again as saved when the dialog comes back; it lists only the maps of the ladder's
 // pool for the mode (mm/native answers "pool"); mm/native carries "bans" - the ladder takes them as a veto. DebugPipe fs "hook":1.
 //
+// 0.50 (14.11.2026, siritos): the game's own "Connecting" box (common/connbox.h, as RoomJoin) while a launcher room's match starts:
+// from Start Searching to the loading screen (not earlier: the menu ignores every command while a message box is up - stand 14.11,
+// the box from the launcher's command: the walk to Find a Game never got there, walk_timeout), [MMFind] ConnectingBox=0: none;
+// closed on every failure / cancel and at the loading screen, never in a match. An OBSERVER's ticket {"cmd":"room","room":"<id>","mode":"..","watch":true}: no walk, no army - the ladder's watch
+// search (mm/join mode "watch", "lroom":"<id>"), then mm/poll until it is a watcher of the room's match with the host's game room
+// up ("room"), then that room joined by its id from the main menu (the game browser's join, as RoomJoin); events as a player's
+// (accepted, searching, matched, in_room, loading, failed + reason).
 // Hooks: Invoke 0x45DB6C (engine -> Flash, to read lists and to show our status), fscommand handler 0x681AB0 (Flash -> engine, to
 // catch the button and to send menu commands), Shark.dll shark::update (main-thread tick).
 #ifndef _WIN32_WINNT
@@ -173,10 +180,13 @@ unsigned long long g_mySteam;
 static volatile int g_wantLeave, g_wantEnded, g_loading;
 static int g_maxDiff; static char g_group[32]; static char g_game[24] = "elite";
 // 0.47: a match from a launcher room (see "a match from a launcher room" below); declared here, the search body and the screen use it
-enum { RS_NONE, RS_STOP, RS_WALK, RS_ARMY, RS_SEARCH, RS_DONE };
-static const char *RSN[] = {"none", "stop", "walk", "army", "search", "done"};
+enum { RS_NONE, RS_STOP, RS_WALK, RS_ARMY, RS_SEARCH, RS_DONE, RS_WATCH };
+static const char *RSN[] = {"none", "stop", "walk", "army", "search", "done", "watch"};
 static volatile int g_rs; static char g_room[24]; static int g_rMode, g_rRace = -1, g_rHero = -1, g_rTries, g_rWalked;
 static DWORD g_rAt, g_rStepAt; static volatile int g_rEvMatched, g_rEvRoom;
+// 0.50 (siritos 14.11.2026): the game's own "Connecting" box (common/connbox.h) while a launcher room's match starts; an observer's ticket
+static int g_boxFrom = 1, g_rBoxTried;                // [MMFind] ConnectingBox=0: no box
+static volatile int g_wPosted, g_wState, g_wGone; static volatile unsigned long long g_wRoom; static char g_wWhy[120];   // the watch: see room_watch
 static CRITICAL_SECTION g_qlk; static HANDLE g_outEv;
 static int g_pipeCfg = 1, g_debugPipe;
 // 0.48 (06.11.2026, live: a player's room said Space Marines, his game searched as Eldar / Farseer - the army he had on Find a Game):
@@ -201,8 +211,8 @@ static char g_natLobby[48], g_natWhy[96], g_natLastCancel[32];
 // what to do, "MMFind 0.45", the queue and who is online. Shown from the moment the screen opens (a peek at mm/native: the ladder
 // answers as for Start Searching and changes nothing; again every 20 s and on a match type change while the screen is open), after
 // the click by what really happened. [MMFind] ShowMode=1 (default) / 0 = off, Lang=auto (the game's own text: Cyrillic = Russian) / ru / en.
-#define MMF_VER "0.49"
-#define MMF_VER_W L"0.49"
+#define MMF_VER "0.50"
+#define MMF_VER_W L"0.50"
 static int g_showMode = 1, g_langCfg = -1, g_lang = -1, g_modeProbe;
 static double g_mx = 1065, g_my = 590, g_msz = 30;           // panel units, see mode_make
 static volatile int g_peekWant, g_peekAns; static volatile DWORD g_peekLast; static char g_peekWhy[96];
@@ -528,6 +538,34 @@ static DWORD WINAPI net_worker(LPVOID _) {
             http_post(L"leave", body, res, sizeof res); logmsg("leave -> %s", res);
         }
         if (g_wantEnded) { g_wantEnded = 0; snprintf(body, sizeof body, "{\"steam\":\"%llu\"}", g_mySteam); http_post(L"ended", body, res, sizeof res); logmsg("ended -> %s", res); }
+        if (g_rs == RS_WATCH && !g_wGone) {                               // 0.50: an observer of a launcher room - the ladder's watch search
+            static DWORD lastW; char room[24], st[32] = "", role[16] = "", rm[24] = "", by[100] = "";
+            EnterCriticalSection(&g_qlk); strcpy(room, g_room); LeaveCriticalSection(&g_qlk);
+            if (!g_wPosted) {
+                detect_game();
+                char nm[80] = ""; { wchar_t w[40]; DWORD n = 40; if (GetEnvironmentVariableW(L"DOW2_PLAYER_NAME", w, n)) WideCharToMultiByte(CP_UTF8, 0, w, -1, nm, sizeof nm, NULL, NULL); }
+                for (char *q = nm; *q; q++) if (*q == '"' || *q == '\\' || (unsigned char)*q < 0x20) *q = ' ';
+                snprintf(body, sizeof body, "{\"steam\":\"%llu\",\"game\":\"%s\",\"mode\":\"watch\",\"lroom\":\"%s\",\"name\":\"%s\",\"mmf\":\"" MMF_VER "\"}", g_mySteam, g_game, room, nm);
+                if (http_post(L"join", body, res, sizeof res)) { g_wPosted = 1; lastW = GetTickCount(); logmsg("watch: mm/join (lroom %s) -> %.*s", room, log_cut(res), res); }
+                else { logmsg("watch: mm/join (lroom %s) - the ladder did not answer", room); }
+            } else if (GetTickCount() - lastW >= 2000) {
+                lastW = GetTickCount(); snprintf(body, sizeof body, "{\"steam\":\"%llu\"}", g_mySteam);
+                if (!http_quick(L"poll", body, res, sizeof res, 1500)) res[0] = 0;
+            } else res[0] = 0;
+            if (res[0]) {
+                jstr(res, "state", st, sizeof st); jstr(res, "role", role, sizeof role); jstr(res, "room", rm, sizeof rm);
+                static char lastSt[64]; char cur[64]; snprintf(cur, sizeof cur, "%s %s %s", st, role, rm);
+                if (strcmp(cur, lastSt)) { strcpy(lastSt, cur); logmsg("watch: the ladder says %.*s", log_cut(res), res); }
+                if (!strcmp(st, "searching") && g_wState < 1) g_wState = 1;
+                else if (!strcmp(st, "matched") && !strcmp(role, "watcher")) {
+                    if (rm[0] >= '1' && rm[0] <= '9') { if (g_wState < 3) { g_wRoom = _strtoui64(rm, NULL, 10); g_wState = 3; } }
+                    else if (g_wState < 2) g_wState = 2;
+                } else if (!strcmp(st, "cancelled") || (st[0] && strcmp(st, "searching") && strcmp(st, "matched") && strcmp(st, "playing"))) {
+                    if (!jstr(res, "by", by, sizeof by)) snprintf(by, sizeof by, "%s", st);
+                    snprintf(g_wWhy, sizeof g_wWhy, "%s", by[0] ? by : "the ladder ended the watch search");
+                }
+            }
+        }
         if (g_loading) {                                                  // in a match: "still playing" once a minute (the ladder closes a match nobody plays)
             static DWORD lastA; if (GetTickCount() - lastA > 60000) { lastA = GetTickCount();
                 snprintf(body, sizeof body, "{\"steam\":\"%llu\"}", g_mySteam); http_post(L"alive", body, res, sizeof res); }
@@ -1215,6 +1253,56 @@ static void stray_stop(DWORD now) {
     snprintf(g_runWhy, sizeof g_runWhy, "%s", GetModuleHandleW(L"OwnLobby.dll") ? "the native search was not ours" : "no OwnLobby.dll in the game");
     fs(".OnClickStart", "");
 }
+// ---------------- 0.50: the game's own Connecting box (common/connbox.h, as RoomJoin / LiveReplay / ReplayOpen) ----------------
+#define CONNBOX_LOG logmsg
+#include "../common/connbox.h"
+static void rbox_open(void) {                         // the game's thread, the front end only
+    if (!g_boxFrom || g_rBoxTried || connbox_is_open() || g_loading || !g_fsMovie) return;
+    g_rBoxTried = 1; connbox_open(0, "a launcher room's match starts");
+}
+// ---------------- 0.50: the game browser's join by room id (RoomJoin's dj_join) - an observer goes into the match's room ----------------
+#define DJ_PROFBUF_CTOR 0x00537D40
+#define DJ_PROFBUF_DTOR 0x00401DE9
+#define DJ_JOINER_CTOR  0x00455BA9
+#define DJ_VEC_PUSH     0x00458416
+typedef void (__stdcall *DjFn1)(void *);
+typedef void *(__fastcall *DjObjFn)(void *self, void *edx);
+typedef char (__stdcall *DjInfoFn)(void *self, void *info);
+typedef void (__stdcall *DjProfFn)(void *self, void *buf);
+typedef void (__stdcall *DjJoinFn)(void *self, unsigned midLo, unsigned midHi, void *joiners, unsigned frLo, unsigned frHi);
+static void *dj_mgr(int off) {
+    void **m = *(void ***)0x01335014; if (!m || IsBadReadPtr(m, 4)) return NULL;
+    void **vt = *(void ***)m; if (IsBadReadPtr(vt, off + 4)) return NULL;
+    return ((DjObjFn)vt[off / 4])(m, NULL);
+}
+static unsigned long long dj_room(void) {
+    unsigned long long room = 0;
+    void *m = dj_mgr(0x24); if (!m || IsBadReadPtr(m, 8)) return 0;
+    static __attribute__((aligned(16))) unsigned char info[0x2000];
+    memset(info, 0, sizeof info); ((DjFn1)0x0040172D)(info);
+    void **mvt = *(void ***)m;
+    if (!IsBadReadPtr(mvt, 8) && ((DjInfoFn)mvt[1])(m, info)) room = *(unsigned long long *)(info + 0x08);
+    ((DjFn1)0x00401794)(info);
+    return room;
+}
+static int dj_join(unsigned long long room) {         // 1 asked, 0 no join object, -1 not signed in yet
+    static __attribute__((aligned(16))) unsigned char prof[0x400], entry[0x40]; static unsigned vec[4];
+    memset(prof, 0, sizeof prof); ((DjFn1)DJ_PROFBUF_CTOR)(prof);
+    void *p4 = dj_mgr(0x4); if (!p4) { ((DjFn1)DJ_PROFBUF_DTOR)(prof); return 0; }
+    ((DjProfFn)(*(void ***)p4)[0x54 / 4])(p4, prof);
+    unsigned pidLo = *(unsigned *)prof, pidHi = *(unsigned *)(prof + 4);
+    if (!pidLo || pidLo == 0xFFFFFFFFu) { ((DjFn1)DJ_PROFBUF_DTOR)(prof); return -1; }
+    memset(entry, 0, sizeof entry); ((DjFn1)DJ_JOINER_CTOR)(entry);
+    *(unsigned *)entry = pidLo; *(unsigned *)(entry + 4) = pidHi; *(unsigned *)(entry + 0x10) = 0; *(unsigned *)(entry + 0x14) = 0;
+    memset(vec, 0, sizeof vec);
+    void *e = entry, *v = vec;
+    __asm__ volatile("push %1\n\tcall *%2" : "+D"(v) : "r"(e), "r"((void *)DJ_VEC_PUSH) : "eax", "ecx", "edx", "memory");
+    void *j = dj_mgr(0x20); if (!j) { ((DjFn1)DJ_PROFBUF_DTOR)(prof); return 0; }
+    ((DjJoinFn)(*(void ***)j)[0x34 / 4])(j, (unsigned)room, (unsigned)(room >> 32), vec, 0xffffffff, 0xffffffff);
+    ((DjFn1)DJ_PROFBUF_DTOR)(prof);
+    return 1;
+}
+
 // ---------------- 0.47: a match from a launcher room, ordered over the launcher's pipe ----------------
 // Owner 05.11.2026: "a lobby in the launcher like the game's own - the map, who plays where with which army, everybody Ready, a
 // 10 s countdown, then the game starts for everyone and they all land in one match". The room lives on the ladder (lroom.py);
@@ -1234,7 +1322,7 @@ static void stray_stop(DWORD now) {
 // stopped first. Never from a Custom Games lobby (the player is in one - his call), a match, or another screen.
 // The pipe thread never touches the engine: commands go into a queue the game's thread takes in its tick (shark::update).
 enum { QC_ROOM = 1, QC_CANCEL, QC_FS };
-typedef struct { int what, mode, race, hero, opt[4], ttl, hook; char room[24]; char path[160], args[400]; } QCmd;
+typedef struct { int what, mode, race, hero, opt[4], ttl, hook, watch; char room[24]; char path[160], args[400]; } QCmd;
 typedef struct { char s[600]; } QOut;
 static QCmd g_cq[8]; static int g_cqH, g_cqN; static QOut g_oq[32]; static int g_oqH, g_oqN;
 static void out_push(const char *s) {
@@ -1250,7 +1338,8 @@ static void emitf(const char *fmt, ...) {                             // an even
     if (n < 0 || n > (int)sizeof b - 2) return;
     b[n] = 0; logmsg("room: event %s", b); strcat(b, "\n"); out_push(b);
 }
-static void room_set(int rs) { if (rs != g_rs) logmsg("room %s: step %s -> %s", g_room, RSN[g_rs], RSN[rs]); g_rs = rs; g_rStepAt = GetTickCount(); if (rs != RS_WALK && rs != RS_STOP) g_rWantMenu = 0; }
+static void room_set(int rs) { if (rs != g_rs) logmsg("room %s: step %s -> %s", g_room, RSN[g_rs], RSN[rs]); g_rs = rs; g_rStepAt = GetTickCount(); if (rs != RS_WALK && rs != RS_STOP && rs != RS_WATCH) g_rWantMenu = 0;
+    if (rs == RS_NONE || rs == RS_DONE) connbox_close(rs == RS_DONE ? "the match loads" : "the room's start is over"); }
 static void room_fail(const char *reason, const char *text) {
     char t[160] = ""; for (int i = 0; text && text[i] && i < 150; i++) t[i] = text[i] == '"' || text[i] == '\\' || (unsigned char)text[i] < 0x20 ? ' ' : text[i];
     emitf("{\"ev\":\"failed\",\"room\":\"%s\",\"reason\":\"%s\",\"text\":\"%s\"}", g_room, reason, t);
@@ -1266,6 +1355,15 @@ static void room_start(const QCmd *c, DWORD now) {
     for (int i = 0; i < 4; i++) g_rOpt[i] = c->opt[i];
     g_rMMFresh = 0; g_rAcceptAt = 0; g_rWalks = 0; g_rDeadline = c->ttl > 0 ? now + (DWORD)c->ttl * 1000 : 0;
     g_rMode = c->mode; g_rRace = c->race; g_rHero = c->hero; g_rAt = now; g_rTries = 0; g_rWalked = 0; g_rEvMatched = g_rEvRoom = 0; g_rMenuOk = 0; g_rWantMenu = 1;
+    g_rBoxTried = 0; g_wPosted = 0; g_wState = 0; g_wGone = 0; g_wRoom = 0; g_wWhy[0] = 0;
+    if (c->watch) {                                                       // 0.50: an observer of the room - his own watch search
+        logmsg("room %s: the launcher's match as an OBSERVER - %s (screen %d, state %s)", g_room, MODE_KEY[g_rMode], g_screen, SN[g_state]);
+        room_ev("accepted");
+        if (g_loading) { room_fail("busy_match", "the game is in a match"); return; }
+        if (!GetModuleHandleW(L"OwnLobby.dll")) { room_fail("no_ownlobby", "no OwnLobby.dll in the game (Automatch v2.0 off?)"); return; }
+        if (g_state == S_NATIVE || g_state == S_NASK) { set_state(S_IDLE); g_wantLeave = 1; SetEvent(g_wake); if (g_engSearch == 1) fs(".OnClickStart", ""); }
+        room_set(RS_WATCH); SetEvent(g_wake); return;
+    }
     logmsg("room %s: the launcher's match - %s, race %d, hero %d, options win %d vptk %d sloc %d rsst %d (screen %d, state %s)", g_room, MODE_KEY[g_rMode], g_rRace, g_rHero,
            g_rOpt[0], g_rOpt[1], g_rOpt[2], g_rOpt[3], g_screen, SN[g_state]);
     room_ev("accepted");
@@ -1276,6 +1374,7 @@ static void room_start(const QCmd *c, DWORD now) {
 static void room_cancel(const char *room) {
     if (g_rs == RS_NONE || (room[0] && strcmp(room, g_room))) { logmsg("room: cancel for %s - not the launch that runs", room[0] ? room : "-"); return; }
     logmsg("room %s: cancelled by the launcher (step %s, state %s)", g_room, RSN[g_rs], SN[g_state]);
+    if (g_rs == RS_WATCH) { g_wGone = 1; g_wantLeave = 1; SetEvent(g_wake); room_fail("cancelled", ""); return; }   // 0.50: out of the watch search
     if (g_rs == RS_SEARCH || g_rs == RS_DONE) {
         if (g_state == S_NATIVE) { set_state(S_IDLE); g_wantLeave = 1; SetEvent(g_wake); if (g_engSearch == 1 && !g_loading) fs(".OnClickStart", ""); }   // Stop Searching
         else if (g_state == S_NASK) set_state(S_IDLE);
@@ -1307,7 +1406,13 @@ static int army_check(void) {
     if (g_rHero >= 0 && g_rHero < 3 && HERO_XS[r][g_rHero]) { snprintf(want, sizeof want, "hero_xs_%s", HERO_XS[r][g_rHero]); if (!strstr(g_partyImg, want)) return 0; }
     return 1;
 }
+static void room_watch(DWORD now);
 static void room_step(DWORD now) {
+    if (g_rs == RS_WATCH) { room_watch(now); return; }
+    // 0.50: the Connecting box from Start Searching to the loading screen - not earlier: while a message box is up the menu ignores
+    // every command (the stand 14.11: the box up from the launcher's command = Multiplayer / Find a Game sent 26 times, nothing opened,
+    // "walk_timeout"), so the walk to Find a Game and the army there run without it
+    if (g_rs == RS_SEARCH) rbox_open();
     if (g_rEvMatched == 1) { g_rEvMatched = 2; room_ev("matched"); }
     if (g_rEvRoom == 1) { g_rEvRoom = 2; room_ev("in_room"); }
     if (g_rDeadline && (g_rs == RS_STOP || g_rs == RS_WALK || g_rs == RS_ARMY) && (int)(now - g_rDeadline) > 0) {   // 0.48: the room's start is over
@@ -1373,6 +1478,46 @@ static void room_step(DWORD now) {
         break;
     }
 }
+// 0.50: an observer's ticket ({"cmd":"room",...,"watch":true}): the ladder's watch search for this room (mm/join mode "watch" with
+// "lroom" = the launcher room's id - "room" there is the game room's number), then, once the ladder has put him into the room's
+// match and the host's game room is up (mm/poll: state matched, role watcher, "room"), the game browser's join of that room by its
+// id from the main menu (as RoomJoin), then the match loads as for any observer. The network thread asks, this thread walks.
+// g_wState: 0 asking, 1 searching (the ladder took the watch), 2 matched (no room yet), 3 the room known, 4 join asked, 5 in the room
+static void room_watch(DWORD now) {
+    static DWORD lastJoin; static int joins;
+    if (g_loading) { room_ev("loading"); room_set(RS_DONE); return; }
+    if (g_rDeadline && g_wState < 4 && (int)(now - g_rDeadline) > 0) { g_wGone = 1; g_wantLeave = 1; SetEvent(g_wake); room_fail("expired", "the room's start is over (its time ran out)"); return; }
+    if (g_wWhy[0]) { char w[120]; strcpy(w, g_wWhy); g_wGone = 1; room_fail("server_cancelled", w); return; }
+    if (g_boxFrom) rbox_open();
+    if (g_wState == 1 && !g_rEvMatched) { g_rEvMatched = 3; room_ev("searching"); }
+    if (g_wState >= 2 && g_rEvMatched != 2) { g_rEvMatched = 2; room_ev("matched"); }
+    if (g_wState == 3) {
+        unsigned long long in = dj_room();
+        if (in == g_wRoom) { g_wState = 5; room_ev("in_room"); logmsg("room %s: in the match's room %llu as an observer", g_room, in); return; }
+        if (g_screen == SC_MM && now - g_rStepAt > 1500) { g_rStepAt = now; fs(".OnClickBack", ""); return; }   // the join only from the main menu
+        if (g_screen == SC_LIST && now - g_rStepAt > 1500) { g_rStepAt = now; fs(".OnClickBack", ""); return; }
+        if (g_screen == SC_SETUP) { g_wGone = 1; g_wantLeave = 1; SetEvent(g_wake); room_fail("in_lobby", "the game is in a Custom Games lobby - leave it first"); return; }
+        if (g_screen != SC_MAIN || now - lastJoin < 4000) return;
+        if (joins >= 3) { g_wGone = 1; g_wantLeave = 1; SetEvent(g_wake); room_fail("refused", "the match's room did not let the observer in (3 joins)"); joins = 0; return; }
+        int r = dj_join(g_wRoom); lastJoin = now;
+        if (r > 0) { joins++; g_wState = 4; logmsg("room %s: joining the match's room %llu as an observer (try %d)", g_room, g_wRoom, joins); }
+        else logmsg("room %s: the join of room %llu could not start yet (%s)", g_room, g_wRoom, r < 0 ? "not signed in to the lobby service" : "no join object");
+        return;
+    }
+    if (g_wState == 4) {
+        unsigned long long in = dj_room();
+        if (in == g_wRoom) { g_wState = 5; joins = 0; room_ev("in_room"); logmsg("room %s: in the match's room %llu as an observer", g_room, in); return; }
+        if (now - lastJoin > 12000) { logmsg("room %s: no answer from room %llu in 12 s - again", g_room, g_wRoom); g_wState = 3; }
+        return;
+    }
+    if (g_wState == 5) {
+        unsigned long long in = dj_room();
+        if (!in && now - g_rStepAt > 3000) { g_wGone = 1; g_wantLeave = 1; SetEvent(g_wake); room_fail("left_screen", "out of the match's room before it started"); }
+        else if (in) g_rStepAt = now;
+        return;
+    }
+    if (now - g_rAt > 300000) { g_wGone = 1; g_wantLeave = 1; SetEvent(g_wake); room_fail("expired", "no match for the observer in 5 minutes"); }
+}
 static void room_take(DWORD now) {
     for (;;) {
         QCmd c; int have = 0;
@@ -1435,6 +1580,7 @@ static void cli_line(Cli *c, char *s) {
         static const char *OK[4] = {"win", "vptk", "sloc", "rsst"};
         for (int i = 0; i < 4; i++) { q.opt[i] = jint(s, OK[i], -1); if (q.opt[i] < -1 || q.opt[i] > 20) q.opt[i] = -1; }
         q.ttl = jint(s, "ttl", 0); if (q.ttl < 0 || q.ttl > 600) q.ttl = 0;          // 0.48: seconds the room's start lasts (0 = no limit)
+        q.watch = jtrue(s, "watch");                                         // 0.50: an observer's ticket (no army, no host)
         q.what = QC_ROOM; strcpy(q.room, room);
     } else if (!strcmp(cmd, "cancel")) { q.what = QC_CANCEL; strcpy(q.room, room); }
     else if (!strcmp(cmd, "fs") && g_debugPipe) {           // [MMFind] DebugPipe=1 (stands only): a menu command as its button sends it
@@ -1721,6 +1867,7 @@ BOOL WINAPI DllMain(HINSTANCE h, DWORD r, LPVOID _) {
       if (t[0] && c && _wtoi(c + 1) > 0 && _wtoi(c + 1) < 65536) { *c = 0; wcsncpy(g_tlHost, t, 63); g_tlPort = (INTERNET_PORT)_wtoi(c + 1); } }
     g_verbose = GetPrivateProfileIntW(L"MMFind", L"Verbose", 0, ini);
     g_pipeCfg = GetPrivateProfileIntW(L"MMFind", L"Pipe", 1, ini) != 0;
+    g_boxFrom = GetPrivateProfileIntW(L"MMFind", L"ConnectingBox", 1, ini) != 0;   // 0.50
     g_debugPipe = GetPrivateProfileIntW(L"MMFind", L"DebugPipe", 0, ini) != 0;   // stands only: menu commands over the pipe   // 0.47: the launcher rooms' pipe (0 = none)
     g_logInvoke = GetPrivateProfileIntW(L"MMFind", L"LogInvoke", 0, ini);   // debug: every engine -> Flash call
     { wchar_t g[32]; GetPrivateProfileStringW(L"MMFind", L"TestGroup", L"", g, 32, ini); WideCharToMultiByte(CP_UTF8, 0, g, -1, g_group, sizeof g_group, NULL, NULL); }
