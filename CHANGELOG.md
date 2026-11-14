@@ -4,6 +4,33 @@ Every version gets an entry here before it reaches `main`. CI then tags `vX.Y.Z`
 version (`X.Y.0`) it also publishes a GitHub Release with the DLLs and the entries since the previous `X.Y.0`.
 The version of the set lives only in `VERSION`; each DLL still writes its own version to its log.
 
+## 0.2.80 — 2026-11-14
+MMFind 0.51 (Automatch v2.0; hand release, as 0.50): a launcher room's start faster and earlier, observers through the native
+automatch behind a switch (siritos fb 1062; report siritos_1114c).
+- Faster walk: no ~3 s wait for "the screen answered" when the menu's own handler is known already (a walk after the first one);
+  the army step is short when Find a Game shows the room's army committed (Your Party row): the hero panel's Ready at once and Start
+  Searching 0.5 s later (no race / hero change, no 1.8 s pause, no wait for the next Your Party row). Stand 14.11: ticket -> Start
+  Searching 2.9 s from the main menu (0.50: 8.7 s); 5.2-5.6 s when the army has to change; the first walk after the game's start
+  still waits up to 3 s for the menu's handler.
+- "go_at": <unix ms> in the room ticket: the launcher sends the ticket at the start of its 10 s countdown (the ladder's lroom verb
+  ticket gives a pre-ticket during the countdown: go_at = its end, go_in_ms, the hero already rolled); the walk runs at once, then
+  step "hold" with the event {"ev":"armed","room":id,"go_in_ms":n}; at go_at Start Searching and the Connecting box (stand: 119-139 ms
+  after go_at). A walk not done by go_at searches as soon as it is. The ladder's countdown not over yet ("not starting a match now",
+  another clock): asked again every 1.5 s for 6 s. A ticket again for the same room updates it (options, ttl, obs, go_at; another
+  race / hero before the search: the army again); with go_at the ticket's ttl counts from go_at.
+- "cancel" at any step before the loading screen: the search stopped if it runs, the game's own notice it then shows ("The Countdown
+  was stopped because ... left the game!") closed, Back to the main menu. A box the game left up (no button of it known) is closed
+  by its id when the main menu ignored 2 Find a Game commands of a walk (common/connbox.h connbox_active / connbox_close_id: the
+  MessageBoxManager's list) - before, such a notice made the menu deaf and the walk ended in walk_timeout.
+- [MMFind] RoomObservers=1 (default 0 = the 0.50 watch): an observer's ticket ("watch":true) walks as a player does (Find a Game,
+  the room's mode, the army as it is, Ready), searches at go_at with "watch" in mm/native; the ladder (data/lroom_obs_native.on) makes
+  him a watcher of the room's match with team = number of teams; a host whose ticket says "obs": K builds the AUTOMATCH room with K
+  observer seats of that team (the slot builder call 0x5FC922, as MatchOpts ObsSlots/ObsOwnTeam, research 04.11 lm7/lm8). In the
+  match's room 40 s without the start: the observer leaves by himself. Stand 14.11 (one account): the host room 2 x 1 + 1 observer
+  seat came up on the test lobby; the observer's game took the push with team 2 of 2 and joined with team 2 and the automatch
+  password; a failed observer join put only him out, the players' match went on. NOT verified: the observer seated and the match
+  started with him (needs 2-3 accounts). [MMFind] ObsSlotsTest=K (stands only): K observer seats in every AUTOMATCH room hosted.
+
 ## 0.2.79 — 2026-11-14
 RoomJoin 15 (store roomjoin-9, experiment, off by default): into a lobby as an observer without seeing a player's seat (siritos fb 1062).
 - {"cmd":"join",...,"as":"obs"}: the seat change is a straight call of the game's own "Move to this slot" (0x492EF1, the observer
