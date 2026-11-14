@@ -1,0 +1,1 @@
+- Replay from the launcher (new, experiment): press Play on a replay in the launcher - the game starts (or, if it is open, shows its "Connecting" window) and opens the replay. A replay recorded with another build of Elite's data now opens too (the launcher warns that it may go out of sync) instead of silently doing nothing.

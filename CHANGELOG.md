@@ -4,6 +4,20 @@ Every version gets an entry here before it reaches `main`. CI then tags `vX.Y.Z`
 version (`X.Y.0`) it also publishes a GitHub Release with the DLLs and the entries since the previous `X.Y.0`.
 The version of the set lives only in `VERSION`; each DLL still writes its own version to its log.
 
+## 0.2.78 — 2026-11-14
+ReplayOpen 1 (new add-on, store replayopen-1, experiment, off by default, Elite): "Play" of a replay from the launcher (siritos
+14.11.2026). Pipe \\.\pipe\EliteReplayOpen-<pid> (robridge.exe for a launcher outside Wine), protocol in replayopen/replayopen.c:
+{"cmd":"play","file":"<path or name in Playback>"} / status / cancel; events accepted, data_mismatch, loading, playing, over, failed.
+- A running game shows the game's own "Connecting" box (common/connbox.h) at once, then starts the replay as Game History -> Load
+  Replay does (0x40F526) from a copy Playback\launcher_replay.rec; a game the launcher just started gets the command once the pipe is
+  up and starts the replay when its menu is there.
+- "Replays of another micro-patch of the same game do not start": the header check 0x42B259 wants build 10320, a zero word, "DOW2_REC"
+  and the game data's checksum 0x7A0A30() - every Elite build with other attrib archives has its own (3.2 D6805B7D, 3.2.1 819567F8)
+  and the game's own Load Replay of such a file silently does nothing. ReplayOpen checks the header first: another game build or no
+  replay = failed "version" / "bad_file" with the reason; another data checksum = the copy gets this game's checksum and the replay
+  starts, the launcher gets {"ev":"data_mismatch","replay":"..","game":".."} (it may go out of sync where the builds' data differ);
+  ReplayOpen.ini Mismatch=refuse fails it instead.
+
 ## 0.2.77 — 2026-11-14
 MMFind 0.50 (Automatch v2.0, hand release mmfind-0.52 = mmfind-0.51 with this MMFind.dll): the game's "Connecting" box while a
 launcher room's match starts; an observer's ticket of a launcher room.

@@ -13,6 +13,7 @@ all: $(OUT)/RelayForward.dll $(OUT)/OwnLobby.dll $(OUT)/CrashLog.dll $(OUT)/NetP
 all: $(OUT)/rjbridge.exe
 all: $(OUT)/ShellFix.dll
 all: $(OUT)/LiveReplay.dll $(OUT)/lrbridge.exe
+all: $(OUT)/ReplayOpen.dll $(OUT)/robridge.exe
 all: $(OUT)/UnitStats.dll
 all: $(OUT)/ReplayTakeover.dll
 all: $(OUT)/SoundFix.dll
@@ -214,6 +215,9 @@ $(OUT)/mmbridge.exe: roomjoin/rjbridge.c | $(OUT)
 # the test client of MMFind's pipe (not shipped): make build/mmpipe.exe
 $(OUT)/mmpipe.exe: roomjoin/rjpipe.c | $(OUT)
 	$(CC) $(CFLAGS) -DPIPE_PREFIX='"EliteMMFind"' -o $@ $< -static-libgcc
+# the test client of ReplayOpen's pipe (not shipped): make build/ropipe.exe
+$(OUT)/ropipe.exe: roomjoin/rjpipe.c | $(OUT)
+	$(CC) $(CFLAGS) -DPIPE_PREFIX='"EliteReplayOpen"' -o $@ $< -static-libgcc
 # the test client of LiveReplay's pipe (not shipped): make build/lrpipe.exe
 $(OUT)/lrpipe.exe: roomjoin/rjpipe.c | $(OUT)
 	$(CC) $(CFLAGS) -DPIPE_PREFIX='"EliteLiveReplay"' -o $@ $< -static-libgcc
@@ -232,6 +236,11 @@ $(OUT)/LiveReplay.dll: livereplay/livereplay.c common/connbox.h | $(OUT)
 # its pipe for a launcher outside Wine (Linux), shipped with the add-on as Elite_DLLs/lrbridge.exe
 $(OUT)/lrbridge.exe: roomjoin/rjbridge.c | $(OUT)
 	$(CC) $(CFLAGS) -DPIPE_PREFIX='L"EliteLiveReplay"' -o $@ $< -static-libgcc
+# 14.11.2026 (siritos): "Play" of a replay from the launcher - the game's Connecting box, then the replay (its own add-on)
+$(OUT)/ReplayOpen.dll: replayopen/replayopen.c common/connbox.h | $(OUT)
+	$(CC) $(CFLAGS) -shared -o $@ $< -lshell32 -static-libgcc -Wl,--exclude-all-symbols
+$(OUT)/robridge.exe: roomjoin/rjbridge.c | $(OUT)
+	$(CC) $(CFLAGS) -DPIPE_PREFIX='L"EliteReplayOpen"' -o $@ $< -static-libgcc
 # 09.11.2026 (performance): the game's Direct3D 9 through DXVK 2.7.1 (dxvk/DXVK_d3d9.bin = the official x32 d3d9.dll, zlib licence
 # dxvk/DXVK_LICENSE.txt): only Spooge's Direct3DCreate9 import is pointed at it; nothing when the game's d3d9.dll is DXVK already
 $(OUT)/DXVK.dll: dxvk/dxvk.c | $(OUT)
