@@ -1,0 +1,1 @@
+- Automatch (MMFind 0.51): a launcher room's match starts faster - the game gets ready on Find a Game during the launcher's countdown and starts searching the moment it ends; a cancel takes the game back to the main menu.

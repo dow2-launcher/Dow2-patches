@@ -38,6 +38,21 @@
 // search (mm/join mode "watch", "lroom":"<id>"), then mm/poll until it is a watcher of the room's match with the host's game room
 // up ("room"), then that room joined by its id from the main menu (the game browser's join, as RoomJoin); events as a player's
 // (accepted, searching, matched, in_room, loading, failed + reason).
+//
+// 0.51 (14.11.2026, siritos fb 1062): a launcher room's start, faster and earlier.
+// - The walk does not wait ~3 s for "the screen answered" when the menu's handler is known already (it waited even then), and the
+//   army step is short when Find a Game already shows the room's army committed (its Your Party row): the hero panel's Ready at
+//   once, Start Searching right after it (no race / hero change, no 1.8 s pause, no wait for the next Your Party row).
+// - "go_at": <unix ms> in the ticket: the launcher sends the ticket at the START of its own countdown; the walk (Find a Game,
+//   mode, race, hero, Ready) runs at once in the background, then MMFind waits (event "armed", step "hold") and presses Start
+//   Searching at go_at (the Connecting box with it, as 0.50); a walk not done by go_at searches as soon as it is done. A ticket
+//   again for the same room updates it (options, ttl, obs, go_at; another race / hero before the search: the army again).
+//   "cancel" at any step before the match loads: the search stopped if it runs, then Back to the main menu.
+// - Launcher-room observers through the native automatch ([MMFind] RoomObservers=1, default 0 = the 0.50 way): the observer's game
+//   searches as a player does (Find a Game with the room's mode, its army as it is) with "watch" in mm/native, the ladder puts him
+//   into the room's match as a watcher of team = number of teams; the host's MMFind ("obs": K in its ticket) builds the AUTOMATCH
+//   room with K observer seats of their own team (the slot builder call 0x5FC922, research 04.11 lm7/lm8). Not verified with
+//   2-3 accounts - see the report siritos_1114c.
 // Hooks: Invoke 0x45DB6C (engine -> Flash, to read lists and to show our status), fscommand handler 0x681AB0 (Flash -> engine, to
 // catch the button and to send menu commands), Shark.dll shark::update (main-thread tick).
 #ifndef _WIN32_WINNT
@@ -180,8 +195,11 @@ unsigned long long g_mySteam;
 static volatile int g_wantLeave, g_wantEnded, g_loading;
 static int g_maxDiff; static char g_group[32]; static char g_game[24] = "elite";
 // 0.47: a match from a launcher room (see "a match from a launcher room" below); declared here, the search body and the screen use it
-enum { RS_NONE, RS_STOP, RS_WALK, RS_ARMY, RS_SEARCH, RS_DONE, RS_WATCH };
-static const char *RSN[] = {"none", "stop", "walk", "army", "search", "done", "watch"};
+enum { RS_NONE, RS_STOP, RS_WALK, RS_ARMY, RS_SEARCH, RS_DONE, RS_WATCH, RS_HOLD };
+static const char *RSN[] = {"none", "stop", "walk", "army", "search", "done", "watch", "hold"};
+// 0.51: go_at (the tick it means, 0 = none), the fast army, a cancel's way back to the main menu, observers through the native automatch
+static int g_rRetry; static DWORD g_rGoTick; static int g_rGoSet, g_rFast, g_rWatchN, g_rObs, g_obsCfg, g_obsTest; static DWORD g_rBackAt; static int g_rBacks;
+static volatile DWORD g_menuOkMovie; static int go_due(DWORD now);          // the menu movie whose own handler the engine's calls confirmed (no wait for it again)
 static volatile int g_rs; static char g_room[24]; static int g_rMode, g_rRace = -1, g_rHero = -1, g_rTries, g_rWalked;
 static DWORD g_rAt, g_rStepAt; static volatile int g_rEvMatched, g_rEvRoom;
 // 0.50 (siritos 14.11.2026): the game's own "Connecting" box (common/connbox.h) while a launcher room's match starts; an observer's ticket
@@ -211,8 +229,8 @@ static char g_natLobby[48], g_natWhy[96], g_natLastCancel[32];
 // what to do, "MMFind 0.45", the queue and who is online. Shown from the moment the screen opens (a peek at mm/native: the ladder
 // answers as for Start Searching and changes nothing; again every 20 s and on a match type change while the screen is open), after
 // the click by what really happened. [MMFind] ShowMode=1 (default) / 0 = off, Lang=auto (the game's own text: Cyrillic = Russian) / ru / en.
-#define MMF_VER "0.50"
-#define MMF_VER_W L"0.50"
+#define MMF_VER "0.51"
+#define MMF_VER_W L"0.51"
 static int g_showMode = 1, g_langCfg = -1, g_lang = -1, g_modeProbe;
 static double g_mx = 1065, g_my = 590, g_msz = 30;           // panel units, see mode_make
 static volatile int g_peekWant, g_peekAns; static volatile DWORD g_peekLast; static char g_peekWhy[96];
@@ -467,6 +485,15 @@ static int jint(const char *j, const char *key, int def) {
     char k[64]; snprintf(k, sizeof k, "\"%s\":", key); const char *p = strstr(j, k); if (!p) return def;
     return atoi(p + strlen(k));
 }
+static long long jint64(const char *j, const char *key, long long def) {   // 0.51: go_at (unix ms)
+    char k[64]; snprintf(k, sizeof k, "\"%s\":", key); const char *p = strstr(j, k); if (!p) return def;
+    p += strlen(k); while (*p == ' ') p++;
+    return (*p == '-' || (*p >= '0' && *p <= '9')) ? _strtoi64(p, NULL, 10) : def;
+}
+static long long unix_ms(void) {                                          // the launcher's clock is this PC's clock
+    FILETIME f; GetSystemTimeAsFileTime(&f);
+    return (long long)((((unsigned long long)f.dwHighDateTime << 32) | f.dwLowDateTime) - 116444736000000000ULL) / 10000;
+}
 static void name_utf8(char *o, int cap) { WideCharToMultiByte(CP_UTF8, 0, g_myName, -1, o, cap, NULL, NULL); }
 // 0.49: the maps a native match of each mode can get - the ladder names them in every mm/native answer ("pool", the names as the
 // game lists them); Map Preferences lists only those (bans of maps no match gets were wasted). Unknown (an older ladder) = all.
@@ -524,7 +551,7 @@ static void join_body(char *body, int cap) {
         rl += snprintf(rp + rl, sizeof rp - rl, "}");
     }
     detect_game();
-    char rm[48] = ""; if (g_rs != RS_NONE && g_rs != RS_DONE && g_room[0]) snprintf(rm, sizeof rm, ",\"room\":\"%s\"", g_room);   // 0.47: a launcher room's search
+    char rm[64] = ""; if (g_rs != RS_NONE && g_rs != RS_DONE && g_room[0]) snprintf(rm, sizeof rm, ",\"room\":\"%s\"%s", g_room, g_rWatchN ? ",\"watch\":true" : "");   // 0.47: a launcher room's search (0.51: an observer's)
     snprintf(body, cap, "{\"steam\":\"%llu\",\"game\":\"%s\",\"mode\":\"%s\",\"name\":\"%s\",\"race\":\"%s\",\"hero\":\"%d\",\"maps\":[%s],\"bans\":[%s],\"max_diff\":%d%s%s,\"group\":\"%s\",\"mmf\":\"" MMF_VER "\"%s}",
              g_mySteam, g_game, MODE_KEY[g_mode], nm, (g_random ? "random" : g_race >= 0 && g_race < 9 ? RACES[g_race] : ""), g_hero, maps, bans, g_maxDiff,
              own ? (compat ? ",\"own_server\":true,\"relay_compat\":true" : ",\"own_server\":true") : "", rp, g_group, rm);
@@ -541,7 +568,8 @@ static DWORD WINAPI net_worker(LPVOID _) {
         if (g_rs == RS_WATCH && !g_wGone) {                               // 0.50: an observer of a launcher room - the ladder's watch search
             static DWORD lastW; char room[24], st[32] = "", role[16] = "", rm[24] = "", by[100] = "";
             EnterCriticalSection(&g_qlk); strcpy(room, g_room); LeaveCriticalSection(&g_qlk);
-            if (!g_wPosted) {
+            if (!g_wPosted && !go_due(GetTickCount())) res[0] = 0;          // 0.51: a pre-ticket (go_at): the watch search at go_at, not in the countdown
+            else if (!g_wPosted) {
                 detect_game();
                 char nm[80] = ""; { wchar_t w[40]; DWORD n = 40; if (GetEnvironmentVariableW(L"DOW2_PLAYER_NAME", w, n)) WideCharToMultiByte(CP_UTF8, 0, w, -1, nm, sizeof nm, NULL, NULL); }
                 for (char *q = nm; *q; q++) if (*q == '"' || *q == '\\' || (unsigned char)*q < 0x20) *q = ' ';
@@ -966,12 +994,12 @@ static void menu_from_call(void *self) {
     void *mv = *(void **)((char *)self + 4), *h = *(void **)((char *)self + 0x18);
     // the menu movie known already (from a panel's OnLoadComplete): the handler its own buttons use is this one - the one taken
     // with the intro's OnLoadComplete was not (stand 2, 06.11: every Multiplayer / Find a Game command of the walk did nothing)
-    if (g_fsMovie && mv == g_fsMovie) { if (h && h != g_fsSelf && !IsBadReadPtr(h, 0x20)) { logmsg("room: the menu's own handler %p (was %p) from the engine's calls", h, g_fsSelf); g_fsSelf = h; } g_rMenuOk = 1; return; }
+    if (g_fsMovie && mv == g_fsMovie) { if (h && h != g_fsSelf && !IsBadReadPtr(h, 0x20)) { logmsg("room: the menu's own handler %p (was %p) from the engine's calls", h, g_fsSelf); g_fsSelf = h; } g_rMenuOk = 1; g_menuOkMovie = (DWORD)g_fsMovie; return; }
     if (g_fsMovie) return;
     for (int i = 0; i < g_ntInv; i++) if (g_triedInv[i] == mv) return;
     if (g_ntInv >= 16) return;
     g_triedInv[g_ntInv++] = mv;
-    if (is_menu_movie(mv) && h && !IsBadReadPtr(h, 0x20)) { g_fsMovie = mv; g_fsSelf = h; g_rMenuOk = 1; logmsg("room: the menu movie %p (handler %p) from the engine's calls", mv, h); }
+    if (is_menu_movie(mv) && h && !IsBadReadPtr(h, 0x20)) { g_fsMovie = mv; g_fsSelf = h; g_rMenuOk = 1; g_menuOkMovie = (DWORD)mv; logmsg("room: the menu movie %p (handler %p) from the engine's calls", mv, h); }
 }
 // which full-screen panel is up, from the menu movie itself (the panel clips' _url) - the screen a walk starts on
 static int probe_screen(void) {
@@ -1106,6 +1134,7 @@ static void __fastcall fs_hook(void *self, void *edx, void *movie, const char *c
             if (movie != g_fsMovie && (g_state == S_DONE || g_loading)) { g_state = S_IDLE; g_stateTick = GetTickCount(); g_loading = 0; g_wantEnded = 1; replay_after_match(); SetEvent(g_wake); logmsg("back in the menu after the match");
                 if (g_rs == RS_DONE) room_set(RS_NONE); }
             g_fsSelf = self; g_fsMovie = movie;
+            if (!strncmp(cmd, "_level0.display_item", 20)) g_menuOkMovie = (DWORD)movie;   // 0.51: a command of the menu's own buttons - its handler
         }
         if (!strncmp(cmd, "OnButton", 8) && args && !IsBadReadPtr(args, 1) && strstr(args, "message_box")) { g_mbFsSelf = self; g_mbMovie = movie;
             logmsg("message box button: movie %s (%p), handler %p (menu %p), wrapper %p", movie == g_fsMovie ? "= menu" : "other", movie, self, g_fsSelf, g_msgWrap); }
@@ -1256,6 +1285,12 @@ static void stray_stop(DWORD now) {
 // ---------------- 0.50: the game's own Connecting box (common/connbox.h, as RoomJoin / LiveReplay / ReplayOpen) ----------------
 #define CONNBOX_LOG logmsg
 #include "../common/connbox.h"
+// 0.51: the game's own boxes that are up (not our Connecting box): a notice left over from a cancelled start makes the menu deaf
+static int game_boxes(int close, const char *why) {
+    int ids[8], n = connbox_active(ids, 8), k = 0;
+    for (int i = 0; i < n && i < 8; i++) if (ids[i] != connbox_id) { k++; if (close) connbox_close_id(ids[i], why); }
+    return k;
+}
 static void rbox_open(void) {                         // the game's thread, the front end only
     if (!g_boxFrom || g_rBoxTried || connbox_is_open() || g_loading || !g_fsMovie) return;
     g_rBoxTried = 1; connbox_open(0, "a launcher room's match starts");
@@ -1322,7 +1357,7 @@ static int dj_join(unsigned long long room) {         // 1 asked, 0 no join obje
 // stopped first. Never from a Custom Games lobby (the player is in one - his call), a match, or another screen.
 // The pipe thread never touches the engine: commands go into a queue the game's thread takes in its tick (shark::update).
 enum { QC_ROOM = 1, QC_CANCEL, QC_FS };
-typedef struct { int what, mode, race, hero, opt[4], ttl, hook, watch; char room[24]; char path[160], args[400]; } QCmd;
+typedef struct { int what, mode, race, hero, opt[4], ttl, hook, watch, obs, hasRace, hasHero, hasTtl; long long goAt; char room[24]; char path[160], args[400]; } QCmd;
 typedef struct { char s[600]; } QOut;
 static QCmd g_cq[8]; static int g_cqH, g_cqN; static QOut g_oq[32]; static int g_oqH, g_oqN;
 static void out_push(const char *s) {
@@ -1346,17 +1381,49 @@ static void room_fail(const char *reason, const char *text) {
     room_set(RS_NONE);
 }
 static void room_ev(const char *ev) { emitf("{\"ev\":\"%s\",\"room\":\"%s\"}", ev, g_room); }
+static void room_choice(void);
+// 0.51: go_at (unix ms of the launcher's countdown end) -> the tick Start Searching is pressed at; at most 2 min ahead
+static void room_goat(const QCmd *c, DWORD now) {
+    if (!c->goAt) return;
+    long long d = c->goAt - unix_ms();
+    if (d > 120000) { logmsg("room %s: go_at %lld is %lld ms ahead - more than 2 min, taken as 2 min", g_room, c->goAt, d); d = 120000; }
+    g_rGoTick = now + (DWORD)(d > 0 ? d : 0); g_rGoSet = 1;
+    logmsg("room %s: go_at %lld - Start Searching in %lld ms (%s)", g_room, c->goAt, d > 0 ? d : 0, d > 0 ? "the walk runs now, then waits" : "already due: as soon as the walk is done");
+    if (c->hasTtl || c->ttl > 0) g_rDeadline = c->ttl > 0 ? g_rGoTick + (DWORD)c->ttl * 1000 : 0;   // with go_at the room's ttl counts from go_at
+}
+static int go_due(DWORD now) { return !g_rGoSet || (int)(now - g_rGoTick) >= 0; }
+// 0.51: the same room's ticket again (the launcher's final ticket after its countdown, or a launcher restarted): what it changes
+static void room_update(const QCmd *c, DWORD now) {
+    int ch = 0;
+    for (int i = 0; i < 4; i++) if (c->opt[i] >= 0 && c->opt[i] != g_rOpt[i]) { g_rOpt[i] = c->opt[i]; ch = 1; }
+    if (c->obs >= 0 && c->obs != g_rObs) { g_rObs = c->obs; ch = 1; }
+    if (c->hasTtl && !c->goAt) { g_rDeadline = c->ttl > 0 ? now + (DWORD)c->ttl * 1000 : 0; ch = 1; }
+    if (c->goAt) { room_goat(c, now); ch = 1; }
+    if (!c->watch && !g_rWatchN && ((c->hasRace && c->race != g_rRace) || (c->hasHero && c->hero != g_rHero))) {
+        if (g_rs == RS_WALK || g_rs == RS_STOP || g_rs == RS_ARMY || g_rs == RS_HOLD) {
+            logmsg("room %s: the ticket again with another army (race %d hero %d, was %d %d) - the army again", g_room, c->race, c->hero, g_rRace, g_rHero);
+            g_rRace = c->hasRace ? c->race : g_rRace; g_rHero = c->hasHero ? c->hero : g_rHero; g_rTries = 0; g_rAcceptAt = 0; g_rFast = 0;
+            if (g_rs == RS_ARMY || g_rs == RS_HOLD) { room_choice(); if (g_screen == SC_MM) { g_applyMM = 1; g_mmApplied = 1; room_set(RS_ARMY); } else room_set(RS_WALK); }
+            ch = 1;
+        } else logmsg("room %s: the ticket again with another army (race %d hero %d) - too late, the search runs", g_room, c->race, c->hero);
+    }
+    logmsg("room %s: the ticket again (step %s)%s - options win %d vptk %d sloc %d rsst %d, obs %d", g_room, RSN[g_rs], ch ? ", updated" : "", g_rOpt[0], g_rOpt[1], g_rOpt[2], g_rOpt[3], g_rObs);
+}
 static void room_start(const QCmd *c, DWORD now) {
     if (g_rs != RS_NONE && g_rs != RS_DONE && strcmp(c->room, g_room)) {      // another room's launch runs: that one goes on
         emitf("{\"ev\":\"failed\",\"room\":\"%s\",\"reason\":\"busy_room\",\"text\":\"%s\"}", c->room, g_room); return; }
-    if (g_rs != RS_NONE && g_rs != RS_DONE) { room_ev("accepted"); return; }      // the same room again: it goes on
+    if (g_rs != RS_NONE && g_rs != RS_DONE) { room_update(c, now); room_ev("accepted"); return; }      // the same room again: it goes on (0.51: updated)
     if (g_rs == RS_DONE && !strcmp(c->room, g_room)) { room_ev("loading"); return; }  // its match loads / runs already (a launcher restarted)
     EnterCriticalSection(&g_qlk); strcpy(g_room, c->room); LeaveCriticalSection(&g_qlk);
     for (int i = 0; i < 4; i++) g_rOpt[i] = c->opt[i];
     g_rMMFresh = 0; g_rAcceptAt = 0; g_rWalks = 0; g_rDeadline = c->ttl > 0 ? now + (DWORD)c->ttl * 1000 : 0;
-    g_rMode = c->mode; g_rRace = c->race; g_rHero = c->hero; g_rAt = now; g_rTries = 0; g_rWalked = 0; g_rEvMatched = g_rEvRoom = 0; g_rMenuOk = 0; g_rWantMenu = 1;
+    g_rMode = c->mode; g_rRace = c->race; g_rHero = c->hero; g_rAt = now; g_rTries = 0; g_rWalked = 0; g_rEvMatched = g_rEvRoom = 0; g_rWantMenu = 1;
+    g_rMenuOk = g_fsMovie && g_menuOkMovie == (DWORD)g_fsMovie;          // 0.51: the menu's own handler known already - no wait for the engine's calls
     g_rBoxTried = 0; g_wPosted = 0; g_wState = 0; g_wGone = 0; g_wRoom = 0; g_wWhy[0] = 0;
-    if (c->watch) {                                                       // 0.50: an observer of the room - his own watch search
+    g_rGoSet = 0; g_rGoTick = 0; g_rFast = 0; g_rBackAt = 0; g_rBacks = 0; g_rRetry = 0; g_rObs = c->obs > 0 ? c->obs : 0;
+    g_rWatchN = c->watch && g_obsCfg;                                     // 0.51: an observer through the native automatch (RoomObservers=1)
+    room_goat(c, now);
+    if (c->watch && !g_rWatchN) {                                         // 0.50: an observer of the room - his own watch search
         logmsg("room %s: the launcher's match as an OBSERVER - %s (screen %d, state %s)", g_room, MODE_KEY[g_rMode], g_screen, SN[g_state]);
         room_ev("accepted");
         if (g_loading) { room_fail("busy_match", "the game is in a match"); return; }
@@ -1364,12 +1431,29 @@ static void room_start(const QCmd *c, DWORD now) {
         if (g_state == S_NATIVE || g_state == S_NASK) { set_state(S_IDLE); g_wantLeave = 1; SetEvent(g_wake); if (g_engSearch == 1) fs(".OnClickStart", ""); }
         room_set(RS_WATCH); SetEvent(g_wake); return;
     }
-    logmsg("room %s: the launcher's match - %s, race %d, hero %d, options win %d vptk %d sloc %d rsst %d (screen %d, state %s)", g_room, MODE_KEY[g_rMode], g_rRace, g_rHero,
-           g_rOpt[0], g_rOpt[1], g_rOpt[2], g_rOpt[3], g_screen, SN[g_state]);
+    if (g_rWatchN) { g_rRace = -2; g_rHero = -1; }                        // an observer searches with the army the game has (it never plays it)
+    logmsg("room %s: the launcher's match%s - %s, race %d, hero %d, options win %d vptk %d sloc %d rsst %d, obs %d (screen %d, state %s, menu handler %s)", g_room,
+           g_rWatchN ? " as an OBSERVER (native automatch)" : "", MODE_KEY[g_rMode], g_rRace, g_rHero, g_rOpt[0], g_rOpt[1], g_rOpt[2], g_rOpt[3], g_rObs, g_screen, SN[g_state],
+           g_rMenuOk ? "known" : "not confirmed yet");
     room_ev("accepted");
     if (g_loading) { room_fail("busy_match", "the game is in a match"); return; }
     if (!GetModuleHandleW(L"OwnLobby.dll")) { room_fail("no_ownlobby", "no OwnLobby.dll in the game (Automatch v2.0 off?)"); return; }
+    if (!g_rWatchN) room_choice();                                        // 0.51: Find a Game's own apply of the saved army takes the room's at once
     room_set(g_state == S_NATIVE || g_state == S_NASK ? RS_STOP : RS_WALK);
+}
+// 0.51: after a cancel (or a failure) before the match: the search stopped if it runs, then Back to the main menu (Find a Game left)
+static void room_back_main(DWORD now) { g_rBackAt = now + 300; g_rBacks = 0; }
+static void back_step(DWORD now) {
+    if (!g_rBackAt || (int)(now - g_rBackAt) < 0) return;
+    if (g_rs == RS_NONE && !g_loading && g_screen == SC_MAIN && g_rBacks < 4 && game_boxes(1, "a cancelled launcher room's start: the game's notice away")) { g_rBackAt = now + 500; return; }
+    if (g_rs != RS_NONE || g_loading || g_screen != SC_MM || g_rBacks >= 4) {
+        if (g_rBacks >= 4 && g_screen == SC_MM) logmsg("room: still on Find a Game after %d Backs - left there", g_rBacks);
+        g_rBackAt = 0; return; }
+    if (g_engSearch == 1 || g_state == S_NATIVE || g_state == S_NASK) { g_rBackAt = now + 700; return; }   // the search ends first
+    if (game_boxes(1, "a cancelled launcher room's start: the game's notice away")) { g_rBackAt = now + 500; return; }
+    g_rBacks++; g_rBackAt = now + 1500;
+    if (g_heroUp && g_rBacks == 2) { logmsg("room: the hero panel is up - its Ready, then Back"); fs(".hero_selection_mc.OnClickAccept", ""); g_heroUp = 0; g_rBackAt = now + 600; return; }
+    logmsg("room: Back to the main menu (%d)", g_rBacks); fs(".OnClickBack", "");
 }
 static void room_cancel(const char *room) {
     if (g_rs == RS_NONE || (room[0] && strcmp(room, g_room))) { logmsg("room: cancel for %s - not the launch that runs", room[0] ? room : "-"); return; }
@@ -1379,7 +1463,8 @@ static void room_cancel(const char *room) {
         if (g_state == S_NATIVE) { set_state(S_IDLE); g_wantLeave = 1; SetEvent(g_wake); if (g_engSearch == 1 && !g_loading) fs(".OnClickStart", ""); }   // Stop Searching
         else if (g_state == S_NASK) set_state(S_IDLE);
     }
-    if (g_rs != RS_DONE) room_fail("cancelled", "");
+    g_applyMM = 0; g_heroAt = 0;                                          // 0.51: nothing of the room's army is applied after the cancel
+    if (g_rs != RS_DONE) { room_fail("cancelled", ""); if (!g_loading) room_back_main(GetTickCount()); }
 }
 // the room's army into the saved choice the Find a Game code applies (apply_race / apply_hero / Random)
 static void room_choice(void) {
@@ -1406,16 +1491,17 @@ static int army_check(void) {
     if (g_rHero >= 0 && g_rHero < 3 && HERO_XS[r][g_rHero]) { snprintf(want, sizeof want, "hero_xs_%s", HERO_XS[r][g_rHero]); if (!strstr(g_partyImg, want)) return 0; }
     return 1;
 }
-static void room_watch(DWORD now);
+static void room_watch(DWORD now); static DWORD g_rRoomAt;
 static void room_step(DWORD now) {
+    back_step(now);                                                           // 0.51: a cancel's way back to the main menu
     if (g_rs == RS_WATCH) { room_watch(now); return; }
     // 0.50: the Connecting box from Start Searching to the loading screen - not earlier: while a message box is up the menu ignores
     // every command (the stand 14.11: the box up from the launcher's command = Multiplayer / Find a Game sent 26 times, nothing opened,
     // "walk_timeout"), so the walk to Find a Game and the army there run without it
     if (g_rs == RS_SEARCH) rbox_open();
     if (g_rEvMatched == 1) { g_rEvMatched = 2; room_ev("matched"); }
-    if (g_rEvRoom == 1) { g_rEvRoom = 2; room_ev("in_room"); }
-    if (g_rDeadline && (g_rs == RS_STOP || g_rs == RS_WALK || g_rs == RS_ARMY) && (int)(now - g_rDeadline) > 0) {   // 0.48: the room's start is over
+    if (g_rEvRoom == 1) { g_rEvRoom = 2; room_ev("in_room"); g_rRoomAt = now; }
+    if (g_rDeadline && (g_rs == RS_STOP || g_rs == RS_WALK || g_rs == RS_ARMY || g_rs == RS_HOLD) && (int)(now - g_rDeadline) > 0) {   // 0.48: the room's start is over
         room_fail("expired", "the room's start is over (its time ran out)"); return; }
     switch (g_rs) {
     case RS_STOP:                                                             // a normal search first: Stop Searching
@@ -1436,10 +1522,17 @@ static void room_step(DWORD now) {
         if (g_screen == SC_MM && !g_rMMFresh && now - g_scrTick > 500 && now - g_rStepAt > 1500) {
             g_rStepAt = now; logmsg("room %s: Find a Game was open already - Back, then in again", g_room); fs(".OnClickBack", ""); break; }
         if (g_screen == SC_MM && g_rMMFresh && now - g_scrTick > 800) {
-            g_rWantMenu = 0; room_choice(); g_applyMM = 1; g_mmApplied = 1; room_set(RS_ARMY); room_ev("army"); break; }
+            // 0.51: the room's army is the saved choice since the ticket (room_start): Find a Game's own apply took it when the hero panel
+            // came up - only when that did not happen, applied here; an observer (native) keeps the army the game has
+            g_rWantMenu = 0;
+            if (!g_rWatchN && !g_mmApplied) { room_choice(); g_applyMM = 1; g_mmApplied = 1; }
+            room_set(RS_ARMY); room_ev("army"); break; }
         // the game's question on the first Multiplayer of an account ("Play against CPU? ... an offline game against the CPU?"):
         // its menu ignores every command while a box is up (stand 2, 06.11) - No (OnButton2), then Multiplayer again
         if (g_screen == SC_MAIN && g_rWalked && now - g_rStepAt > 700 && msgbox_up()) { g_rStepAt = now; msgbox_scan(2); break; }
+        // 0.51: a box the game left up (its message box movie not known to us - no button to press): closed by its id, then the walk
+        if ((g_screen == SC_MAIN || g_screen == SC_MM) && now - g_rStepAt > 700 && game_boxes(0, NULL) && !msgbox_up()) {
+            g_rStepAt = now; game_boxes(1, "a launcher room's walk: the menu ignores commands under it"); break; }
         if (g_screen == SC_MAIN && now - g_scrTick > 1000 && now - g_rStepAt > 1500) {
             if (!g_rWalked) room_ev("walking");
             // Find a Game straight from the main menu (MainMenuForm::OnClickMatchMaking): Multiplayer first asks an account that never
@@ -1452,7 +1545,19 @@ static void room_step(DWORD now) {
         break;
     case RS_ARMY:                                                             // the choice applied (upd_hook: race, then hero 0.8 s on)
         if (g_screen != SC_MM) { room_fail("left_screen", "Find a Game was left"); break; }
-        if (g_applyMM || g_heroAt || now - g_rStepAt < 1800) break;
+        if (g_applyMM || g_heroAt) break;
+        if (g_rWatchN) {                                                      // 0.51: an observer - the hero panel's Ready only (the army he has)
+            if (!g_rAcceptAt) { logmsg("room %s: observer - the hero panel's Ready (army as it is: race %d hero %d)", g_room, g_curRace, g_curHero);
+                fs(".hero_selection_mc.OnClickAccept", ""); g_heroUp = 0; g_rAcceptAt = now; g_rStepAt = now; }
+            if (now - g_rAcceptAt < 400) break;
+            goto search;
+        }
+        if (!g_rAcceptAt && !g_rFast) {                                       // 0.51: the room's army committed already (Your Party since this screen came)
+            int fresh = (int)(g_partyTick - g_scrTick) >= 0 && g_partyTick;
+            if (g_rRace >= 0 && g_curRace == g_rRace && (g_rHero < 0 || g_curHero == g_rHero) && fresh && army_check() == 1) {
+                g_rFast = 1; logmsg("room %s: Find a Game shows the room's army committed already (%s) - fast: Ready and Start Searching", g_room, g_partyImg); }
+        }
+        if (!g_rFast && now - g_rStepAt < 1800) break;
         if (g_rRace >= 0 && g_curRace != g_rRace) {
             if (g_rTries++ < 2) { logmsg("room %s: race shown %d, wanted %d - again", g_room, g_curRace, g_rRace); room_choice(); g_applyMM = 1; g_rStepAt = now; break; }
             room_fail("race", "the race could not be set on Find a Game"); break; }
@@ -1461,6 +1566,7 @@ static void room_step(DWORD now) {
         if (!g_rAcceptAt) {                                                   // the hero panel's own Ready commits the army (0.48: always)
             logmsg("room %s: army set (race %d hero %d shown) - the hero panel's Ready", g_room, g_curRace, g_curHero);
             fs(".hero_selection_mc.OnClickAccept", ""); g_heroUp = 0; g_rAcceptAt = now; g_rStepAt = now; break; }
+        if (g_rFast) { if (now - g_rAcceptAt < 300) break; goto search; }     // 0.51: nothing changed - no wait for the next Your Party row
         {   // 0.48: what the game will search with - its Your Party row after the Ready (it comes every 2 s), 6 s at most
             int ok = army_check(); int fresh = (int)(g_partyTick - g_rAcceptAt) > 0;
             if ((!fresh || ok == 0) && now - g_rAcceptAt < 6000) break;
@@ -1470,11 +1576,35 @@ static void room_step(DWORD now) {
                 room_fail("army", "the room's race / hero could not be set on Find a Game"); break; }
             logmsg("room %s: Your Party %s (%s) - Start Searching", g_room, g_partyImg[0] ? g_partyImg : "-", ok == 1 ? "the room's army" : fresh ? "not checked" : "no row");
         }
+    search:
+        if (!go_due(now)) {                                                   // 0.51: walked before go_at - waits on Find a Game
+            logmsg("room %s: the walk is done %lu ms after the ticket - Start Searching at go_at, in %ld ms", g_room, now - g_rAt, (long)(g_rGoTick - now));
+            room_set(RS_HOLD); emitf("{\"ev\":\"armed\",\"room\":\"%s\",\"go_in_ms\":%ld}", g_room, (long)(g_rGoTick - now)); break; }
+        if (g_rGoSet) logmsg("room %s: the walk is done %lu ms after the ticket, %ld ms after go_at - Start Searching now", g_room, now - g_rAt, (long)(now - g_rGoTick));
+        else logmsg("room %s: the walk is done %lu ms after the ticket - Start Searching", g_room, now - g_rAt);
+        g_reWant = 0; g_reRow = 0; search_click(); room_set(RS_SEARCH); room_ev("searching");
+        break;
+    case RS_HOLD:                                                             // 0.51: the army committed, Start Searching at go_at
+        if (g_loading) { room_fail("busy_match", "the game is in a match"); break; }
+        if (g_screen != SC_MM) { room_fail("left_screen", "Find a Game was left while waiting for go_at"); break; }
+        if (!go_due(now)) break;
+        logmsg("room %s: go_at - Start Searching (%ld ms after go_at, %lu ms after the ticket)", g_room, (long)(now - g_rGoTick), now - g_rAt);
         g_reWant = 0; g_reRow = 0; search_click(); room_set(RS_SEARCH); room_ev("searching");
         break;
     case RS_SEARCH:
         if (g_loading) break;
-        if (g_state == S_IDLE && now - g_rStepAt > 1500) room_fail(g_runWhy[0] ? "refused" : "stopped", g_runWhy);
+        if (g_state == S_IDLE && now - g_rStepAt > 1500) {
+            // 0.51: Start Searching at go_at by this PC's clock, a little before the ladder's countdown ended (another clock, its 0.5 s
+            // tick): "not starting a match now" - asked again every 1.5 s for 6 s after go_at (stand 14.11: refused 70 ms early)
+            if (g_rGoSet && g_rRetry < 4 && strstr(g_runWhy, "not starting a match now") && (int)(now - g_rGoTick) < 6000) {
+                g_rRetry++; logmsg("room %s: the ladder's countdown is not over yet - Start Searching again (%d)", g_room, g_rRetry);
+                search_click(); g_rStepAt = now; break; }
+            room_fail(g_runWhy[0] ? "refused" : "stopped", g_runWhy); break; }
+        // 0.51: an observer (native) never holds the players up: in the match's room 40 s without the match loading - out (Stop Searching)
+        if (g_rWatchN && g_rEvRoom == 2 && now - g_rRoomAt > 40000 && g_state == S_NATIVE) {
+            logmsg("room %s: observer - 40 s in the match's room and no start - out, the players go on", g_room);
+            set_state(S_IDLE); g_wantLeave = 1; SetEvent(g_wake); if (g_engSearch == 1) fs(".OnClickStart", "");
+            room_fail("late", "the match did not start with this observer in 40 s"); room_back_main(now); }
         break;
     }
 }
@@ -1574,6 +1704,7 @@ static void cli_line(Cli *c, char *s) {
     QCmd q; memset(&q, 0, sizeof q);
     if (!strcmp(cmd, "room") && room[0]) {
         jstr(s, "mode", mode, sizeof mode); q.mode = !strcmp(mode, "3v3") ? 2 : !strcmp(mode, "2v2") ? 1 : 0;
+        q.hasRace = jint(s, "race", -99) != -99; q.hasHero = jint(s, "hero", -99) != -99; q.hasTtl = jint(s, "ttl", -99) != -99;   // 0.51: what a ticket again changes
         q.race = jint(s, "race", -1); q.hero = jint(s, "hero", -1);
         if (q.race < -1 || q.race > 8) q.race = -1;
         if (q.hero < -1 || q.hero > 2) q.hero = -1;
@@ -1581,6 +1712,8 @@ static void cli_line(Cli *c, char *s) {
         for (int i = 0; i < 4; i++) { q.opt[i] = jint(s, OK[i], -1); if (q.opt[i] < -1 || q.opt[i] > 20) q.opt[i] = -1; }
         q.ttl = jint(s, "ttl", 0); if (q.ttl < 0 || q.ttl > 600) q.ttl = 0;          // 0.48: seconds the room's start lasts (0 = no limit)
         q.watch = jtrue(s, "watch");                                         // 0.50: an observer's ticket (no army, no host)
+        q.goAt = jint64(s, "go_at", 0); if (q.goAt < 0) q.goAt = 0;           // 0.51: Start Searching at this unix ms (the launcher's countdown end)
+        q.obs = jint(s, "obs", -1); if (q.obs > 4) q.obs = 4;                // 0.51: the host's observer seats (RoomObservers=1)
         q.what = QC_ROOM; strcpy(q.room, room);
     } else if (!strcmp(cmd, "cancel")) { q.what = QC_CANCEL; strcpy(q.room, room); }
     else if (!strcmp(cmd, "fs") && g_debugPipe) {           // [MMFind] DebugPipe=1 (stands only): a menu command as its button sends it
@@ -1814,6 +1947,37 @@ static DWORD WINAPI installer(LPVOID _) {
     }
     logmsg("frame hook NOT installed"); return 0;
 }
+// 0.51: observer seats in the AUTOMATCH room a launcher room's host builds (research 04.11.2026 lm7/lm8, MatchOpts ObsSlots / ObsOwnTeam).
+// The host builds the room's slots with the function at service+0x188 (default 0x5F94B0, stdcall (teams, size, ?, vector{data, ?,
+// count, cap}): teams x size slots of 200 bytes, slot i -> team i % teams, +0 type 0 = open). The call site 0x5FC922 `mov edx,
+// [esi+0x188]` becomes `mov edx, obs_build`: with observers wanted the original with size + ceil(K / teams), then the extra slots get
+// type 5 (an open observer seat) - K of them, the rest type 1 (closed) - and their own team = teams (+0x68): a guest's RequestCorrectSlot
+// takes the first free slot of its team and never looks at the type, so players never land there and an observer of team "teams"
+// (the ladder says so) does. Without observers wanted: the original as it was, unchanged. Patched only with RoomObservers=1 (or the
+// stand's ObsSlotsTest).
+typedef void (__stdcall *ObsBuildFn)(int teams, int size, int a3, int *vec);
+static void __stdcall obs_build(int teams, int size, int a3, int *vec) {
+    int k = g_obsTest > 0 ? g_obsTest : (g_obsCfg && g_rObs > 0 && g_rs == RS_SEARCH && !g_rWatchN) ? g_rObs : 0;
+    if (k <= 0 || teams <= 0 || teams > 8 || size <= 0 || size > 4 || !vec || IsBadReadPtr(vec, 16)) { ((ObsBuildFn)0x005F94B0)(teams, size, a3, vec); return; }
+    int n = teams * size, extra = (k + teams - 1) / teams;
+    ((ObsBuildFn)0x005F94B0)(teams, size + extra, a3, vec);
+    unsigned cnt = (unsigned)vec[2]; char *base = (char *)vec[0];
+    if (!base || cnt > 32 || IsBadWritePtr(base, cnt * 200)) { logmsg("observer seats: the slot vector is not as expected (%u) - left as built", cnt); return; }
+    for (unsigned i = (unsigned)n; i < cnt; i++) { *(int *)(base + i * 200) = i < (unsigned)(n + k) ? 5 : 1; *(int *)(base + i * 200 + 0x68) = teams; }
+    char b[300]; int o = 0;
+    for (unsigned i = 0; i < cnt && o < 260; i++) o += _snprintf(b + o, sizeof b - o, " [%u t%d team%d]", i, *(int *)(base + i * 200), *(int *)(base + i * 200 + 0x68));
+    logmsg("observer seats: the AUTOMATCH room of teams %d x %d gets %d observer seat(s) - %u slots:%s", teams, size, k, cnt, b);
+}
+static void obs_install(void) {
+    unsigned char *a = (unsigned char *)0x005FC922; DWORD old; SIZE_T w = 0;
+    static const unsigned char want[6] = {0x8B, 0x96, 0x88, 0x01, 0x00, 0x00};
+    if (IsBadReadPtr(a, 6) || memcmp(a, want, 6)) { logmsg("observer seats: 0x5FC922 is not 3.19's (or another add-on has it) - no observer seats"); return; }
+    unsigned char b[6]; b[0] = 0xBA; *(DWORD *)(b + 1) = (DWORD)obs_build; b[5] = 0x90;
+    HANDLE mx = patch_lock(); int ok = 0;
+    if (!memcmp(a, want, 6) && VirtualProtect(a, 6, PAGE_EXECUTE_READWRITE, &old)) { ok = WriteProcessMemory(GetCurrentProcess(), a, b, 6, &w) && w == 6; VirtualProtect(a, 6, old, &old); }
+    FlushInstructionCache(GetCurrentProcess(), a, 6); patch_unlock(mx);
+    logmsg(ok ? "observer seats: the AUTOMATCH slot builder call 0x5FC922 -> ours (RoomObservers %d, ObsSlotsTest %d)" : "observer seats: 0x5FC922 could not be patched (RoomObservers %d, ObsSlotsTest %d)", g_obsCfg, g_obsTest);
+}
 static void install(void) {
     unsigned char *t = (unsigned char *)HOOK_ADDR;
     int chained = !IsBadReadPtr(t, 5) && t[0] == 0xE9;                // another add-on (LobbyStats) already hooked Invoke: wrap it
@@ -1830,6 +1994,7 @@ static void install(void) {
     FlushInstructionCache(GetCurrentProcess(), NULL, 0);
     logmsg("hooked Invoke + fscommand");
     install_sfm_hook();
+    if (g_obsCfg || g_obsTest > 0) obs_install();                    // 0.51: observer seats of a launcher room's AUTOMATCH room (host)
     CloseHandle(CreateThread(NULL, 0, installer, NULL, 0, NULL));
     CloseHandle(CreateThread(NULL, 0, net_worker, NULL, 0, NULL));
 }
@@ -1868,6 +2033,8 @@ BOOL WINAPI DllMain(HINSTANCE h, DWORD r, LPVOID _) {
     g_verbose = GetPrivateProfileIntW(L"MMFind", L"Verbose", 0, ini);
     g_pipeCfg = GetPrivateProfileIntW(L"MMFind", L"Pipe", 1, ini) != 0;
     g_boxFrom = GetPrivateProfileIntW(L"MMFind", L"ConnectingBox", 1, ini) != 0;   // 0.50
+    g_obsCfg = GetPrivateProfileIntW(L"MMFind", L"RoomObservers", 0, ini) != 0;   // 0.51: launcher-room observers through the native automatch (unverified: default off)
+    g_obsTest = GetPrivateProfileIntW(L"MMFind", L"ObsSlotsTest", 0, ini); if (g_obsTest < 0 || g_obsTest > 4) g_obsTest = 0;   // stands only: K observer seats in every AUTOMATCH room hosted
     g_debugPipe = GetPrivateProfileIntW(L"MMFind", L"DebugPipe", 0, ini) != 0;   // stands only: menu commands over the pipe   // 0.47: the launcher rooms' pipe (0 = none)
     g_logInvoke = GetPrivateProfileIntW(L"MMFind", L"LogInvoke", 0, ini);   // debug: every engine -> Flash call
     { wchar_t g[32]; GetPrivateProfileStringW(L"MMFind", L"TestGroup", L"", g, 32, ini); WideCharToMultiByte(CP_UTF8, 0, g, -1, g_group, sizeof g_group, NULL, NULL); }

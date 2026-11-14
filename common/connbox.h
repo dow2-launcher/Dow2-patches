@@ -106,4 +106,33 @@ static void connbox_close(const char *why) {
         : "+a"(m), "+d"(id), "+c"(fn) : : "memory");
     CONNBOX_LOG("the game's Connecting box closed (%s)", why ? why : "");
 }
+// MMFind 0.51 (stand 14.11.2026): the boxes that are up. DeactivateMessageBox 0xAD6200 looks the id up in the manager's list: manager+4
+// -> the list's head node, node+0 next, node+8 the box's id (std::list; the head is no box). A box of the game itself (as its notice
+// "The Countdown was stopped because ... left the game!" after a launcher room's start was cancelled in the match's room) makes the
+// menu ignore every command - a walk of MMFind closes such a box first. Returns how many, their ids in ids[] (at most max).
+static int connbox_active(int *ids, int max) {
+    if (connbox_ok < 0) connbox_check();
+    if (connbox_ok != 1) return 0;
+    unsigned char *m = (unsigned char *)connbox_mgr(); if (!m || IsBadReadPtr(m, 8)) return 0;
+    unsigned char *head = *(unsigned char **)(m + 4); if (!head || IsBadReadPtr(head, 12)) return 0;
+    int n = 0; unsigned char *node = *(unsigned char **)head;
+    for (int guard = 0; node && node != head && guard < 64; guard++) {
+        if (IsBadReadPtr(node, 12)) break;
+        if (n < max) ids[n] = *(int *)(node + 8);
+        n++; node = *(unsigned char **)node;
+    }
+    return n;
+}
+// a box of the game closed by its id (as the game closes its own; never ours - that is connbox_close)
+static void connbox_close_id(int id, const char *why) {
+    if (connbox_ok != 1 || id == connbox_id) return;
+    void *fn = (void *)CONNBOX_FN_CLOSE; void *m = connbox_mgr();
+    if (!m) return;
+    __asm__ volatile(
+        "push %%ebx\n\tmov %%esp, %%ebx\n\t"
+        "call *%%ecx\n\t"
+        "mov %%ebx, %%esp\n\tpop %%ebx"
+        : "+a"(m), "+d"(id), "+c"(fn) : : "memory");
+    CONNBOX_LOG("the game's message box %d closed (%s)", id, why ? why : "");
+}
 #endif
