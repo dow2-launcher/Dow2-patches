@@ -4,6 +4,23 @@ Every version gets an entry here before it reaches `main`. CI then tags `vX.Y.Z`
 version (`X.Y.0`) it also publishes a GitHub Release with the DLLs and the entries since the previous `X.Y.0`.
 The version of the set lives only in `VERSION`; each DLL still writes its own version to its log.
 
+## 0.2.75 — 2026-11-14
+RoomJoin 14 (store roomjoin-8, experiment, off by default) and common/connbox.h (siritos 14.11.2026).
+- common/connbox.h: the game's own "Connecting" box of RoomJoin 13 (MessageBoxManager 0x45A3CD / 0xAD5FE0 / 0xAD6200, title
+  550001, text 550002 or a DOW2.ucs id of the caller, no buttons) as shared source, so RoomJoin, MMFind, LiveReplay and ReplayOpen
+  show the same box. Its three code places are checked for 3.19 before the first use (else: logged, never shown); a text id the
+  game's language does not have falls back to 550002. Only from the game's thread, only in the front end.
+- RoomJoin 14: the box from common/connbox.h (as before: from the start of the join to the lobby screen). New: into a lobby as an
+  observer - {"cmd":"join","room":id,"name":"...","as":"obs"}: the join as always, then on the lobby screen a free observer seat
+  with the screen's own command for a click on that seat (fscommand player_list_panel_mc.OnObserverItemClick "<position>" ->
+  0x491D51, its menu item "Move to this slot" 0x492EF1 run at once - MMFind 0.12-0.44's watchers did it the same way); observer
+  seats = each team's positions from max_players/2 on (the lobby's Receive_SetMaxPlayers, as 0x491D51 decides), free = GameInfo slot
+  type 0 without a person; my seat from the player list's own row. Answers {"ev":"in_lobby","room":id,"as":"obs"}; no free observer
+  seat (or 6 changes that did not take) -> {"ev":"failed","room":id,"reason":"no_obs_slot"} and Back out of the lobby. The seat menu
+  hook is installed only on 3.19's prologue under the shared patch lock; without it a join "as obs" fails at once ("error").
+  Status "version":"14" (the launcher sends "as" to 14+ only). _WIN32_WINNT for older mingw headers (CancelIoEx), as MMFind.
+- Stand (stand 1, Elite 3.2.1, one Steam account - the only stand with a working Steam login on 14.11): see the PR.
+
 ## 0.2.74 — 2026-11-14
 New AI 25 (store newai-25, experiment, off by default, Elite only): step 6 of the ork brain (brain 0.6). eliteai branch newai-25
 e7b1802 = brain 6c6fd43 with main.ai, mechanics.ai and the vanilla-base sources of strategy_tech_purchase.ai /
