@@ -4,6 +4,28 @@ Every version gets an entry here before it reaches `main`. CI then tags `vX.Y.Z`
 version (`X.Y.0`) it also publishes a GitHub Release with the DLLs and the entries since the previous `X.Y.0`.
 The version of the set lives only in `VERSION`; each DLL still writes its own version to its log.
 
+## 0.2.77 — 2026-11-14
+New AI 27 (store newai-27, experiment, off by default, Elite only): step 8 / 8.1 of the ork brain (brain 0.8.1) and EliteAI.dll 0.14 (log
+per match). eliteai branch newai-27 1a9fac3 = brain 7c8fe94 with main.ai, mechanics.ai and the vanilla-base sources of
+strategy_tech_purchase.ai / strategy_unit_purchase.ai of a3a378a (newai-23 / 23.1), exactly as newai-24 .. 26, so every non-ork slot
+still plays newai-23.1. Against newai-26 three served files change: default.ai (the brain chunks 0.7 -> 0.8.1),
+strategy_defence_purchase.ai (EliteAI_GrotBuildBan, ork-only names, returns false at once for every other race's buildings) and
+append/scar/elite/elite.scar (new ability slots 39-73 for the orks' fight kit and the roks, the space marines' profile - not in the
+default Brain_Races -, and the Cmd_Ungarrison unload order), plus the DLL.
+- The brain (ork new-AI slots; Brain=0 = newai-23.1 for all): a game without victory points ends by the HQ in 14-20 minutes (turrets
+  placed, the assault from about minute 10); no retreats at the enemy base edge at full health (109 -> 19 orders on 48 games); the
+  red resource is spent - Waaagh! in fights, a gretchin squad called in for idle money (the AI's own request, one squad from 2:30),
+  kommandos for the kommando nob, the roks ability; it never builds with gretchin; the lootas' camo.
+- EliteAI.dll 0.14: one log per match of the new AI - EliteAI.log is rotated to EliteAI.prev.log only when a match with the new AI
+  starts, never by a replay or another game, and is capped at 250 KB (the rest in EliteAI.more.log) so the launcher's "send logs"
+  tail holds the whole match. Version strings (log line, WinHTTP user agent) 0.14. Integers only, nothing reaches the scripts.
+- Check (independent verifier, READY WITH NOTES, VERIFY_81_RU): the five defects of the step-8 verifier fixed; lib8 48 live games on
+  7c8fe94 - 0 HANG, 0 errors, brain on in 48 of 48, 45 won with a game end, 2 ahead, 1 behind; 6 of 6 games without victory points
+  end by the HQ (13.9-14.8 min, the brain mirror 34.1 min); gretchin asked 48, came 48, never build; Brain=0 sim-CRC byte-identical
+  to the previous release on 9 scenes; EliteAI_GrotBuildBan cannot trigger for other races (17 PASS); stub 121 PASS.
+- Notes: a squad in post mode can sit in a building far from its post for minutes; no games against people, in team games or against
+  other races were run; the ban never fired on the bench (tested on Lua only).
+
 ## 0.2.76 — 2026-11-14
 Computer army fix (store armybadgefix-1, new, experiment order 1120, off by default, games elite + vanilla) - pink badges in the
 testers' observer bot matches (Malum 13.11, Orca 14.11; research/pink_badges_1114).

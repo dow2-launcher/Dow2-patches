@@ -448,6 +448,9 @@ frameprobe/ - FrameProbe.dll (off), eliteai/ - EliteAI.dll (store id newai since
     newai-26 (0.2.75): brain step 7 (0.7, branch newai-26): nobz at tier 3 and the population kept for them, late upgrades, the
     push from 13:00, the stage at the edge of the enemy's reach, turret rules; EliteAI.dll 0.12 carries the move-loop guard
     (eliteai/moveloop_guard.h = MoveLoopFix 1, idle when MoveLoopFix.dll is loaded). Non-ork slots still newai-23.1.
+    newai-27 (0.2.77): brain 0.8.1 (steps 8 / 8.1, branch newai-27): a game without victory points ends by the HQ, no retreats at full
+      health, the red resource is spent (Waaagh!, gretchin / kommandos call-ins, roks), no building with gretchin; EliteAI.dll 0.14
+      keeps the log of the last match of the new AI (EliteAI.log / EliteAI.prev.log / EliteAI.more.log). Non-ork slots still newai-23.1.
 
 ## Building
 

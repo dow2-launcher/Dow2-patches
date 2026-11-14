@@ -5,6 +5,32 @@ if EliteAI_VANILLA then
 
 strategy_defence_purchase = {}
 
+-- (brain step 8.1; the owner's rule of 14.11.2026: 'never build with gretchin'.) Request_Construction lets the engine pick
+-- the builder among our engineers. By the attributes of Elite 3.2.1 the gretchin's build list is the boyz hut, the Waaagh
+-- banner and the gretchin's turret; the banner is also the mek's, the sluggas' and the nob leader's, the mek's turret is
+-- the mek's only. While a gretchin squad of ours stands, a building a gretchin could be given is NOT asked for (the
+-- script cannot name the builder). Posts and generators are built by the point itself, no squad is involved.
+function EliteAI_GrotBuildBan(pbg)
+	if pbg == nil or type(PBG_GetName) ~= "function" or type(Military_SquadTotalCount) ~= "function" or type(Military_GetAISquadAtIndex) ~= "function"
+		or type(AISquad_ConvertToPBG) ~= "function" then return false end
+	local nm = string.lower(tostring(PBG_GetName(pbg)))
+	if string.find(nm, "ork_waaagh_banner", 1, true) == nil and string.find(nm, "ork_da_boyz_hut", 1, true) == nil and string.find(nm, "ork_orky_turret_gretchin", 1, true) == nil then return false end
+	for i = 0, Military_SquadTotalCount(s_selfplayer) - 1 do
+		local aisq = Military_GetAISquadAtIndex(s_selfplayer, i)
+		local sp = aisq and AISquad_ConvertToPBG(aisq) or nil
+		local sn = sp and PBG_GetName(sp) or nil
+		if sn ~= nil and string.find(string.lower(sn), "ork_gretchin", 1, true) ~= nil then
+			if not EliteAI_GrotBanSaid then
+				EliteAI_GrotBanSaid = true
+				local lg = eliteai_log or (string and string.eliteai_log)
+				if lg then lg("BUILD", "not asked:", nm, "why", "a gretchin squad of ours stands and the engine picks the builder - the owner's rule: never build with gretchin") end
+			end
+			return true
+		end
+	end
+	return false
+end
+
 
 function HasInfantry()
 	return (cache.infantry_count and cache.infantry_count > 3)
@@ -258,6 +284,7 @@ function strategy_defence_purchase.do_purchase( availableResources )
 	DefenceStructureDemand()
 	
 	local pbg, demandTbl = HighestDefenceDemand()
+	if pbg and demandTbl.buildstyle ~= BS_Secure and EliteAI_GrotBuildBan(pbg) then pbg = nil end   -- (never build with gretchin)
 		
 	if (pbg) then
 
