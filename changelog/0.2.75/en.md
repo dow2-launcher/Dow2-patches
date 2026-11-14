@@ -1,0 +1,1 @@
+- Lobby join (RoomJoin 14): the launcher can now join a lobby as an observer - the game goes in and takes a free observer seat by itself; with no free observer seat it leaves the lobby again and the launcher says why.

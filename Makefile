@@ -203,7 +203,7 @@ $(OUT)/JumpRetry.dll: jumpretry/jumpretry.c | $(OUT)
 	$(CC) $(CFLAGS) -shared -o $@ $< -static-libgcc
 
 # 03.11.2026 experiment: joining a room from the launcher (the Lobbies tab), its own add-on next to MMFind; RoomJoin 9 (05.11): the pipe
-$(OUT)/RoomJoin.dll: roomjoin/roomjoin.c | $(OUT)
+$(OUT)/RoomJoin.dll: roomjoin/roomjoin.c common/connbox.h | $(OUT)
 	$(CC) $(CFLAGS) -shared -o $@ $< -lpsapi -static-libgcc -Wl,--exclude-all-symbols
 # RoomJoin's pipe for a launcher outside Wine (Linux): shipped with the add-on as Elite_DLLs/rjbridge.exe
 $(OUT)/rjbridge.exe: roomjoin/rjbridge.c | $(OUT)
