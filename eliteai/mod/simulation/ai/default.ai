@@ -1599,6 +1599,433 @@ HumanPlan = {
 	if type(EliteAI_HUMAN_PLAN) ~= "table" then EliteAI_HUMAN_PLAN = (type(HumanPlan) == "table" and HumanPlan) or (type(HUMAN_PLAN) == "table" and HUMAN_PLAN) or (type(human_plan) == "table" and human_plan) or nil end
 end
 
+-- ===== EliteAI netorder.ai =====
+do
+	local function eliteai_netorder()
+-- NETORDER (brain step 9, 14.11.2026): EVERY ORDER OF THE NEW AI IS A NETWORK COMMAND OF ITS OWN PLAYER.
+--
+-- Until step 8.1 the orders of main.ai / mechanics.ai / the brain went through the DLL's queue (eliteai_order) into SCAR,
+-- where elite.scar issued them with Cmd_* / Command_*: straight into the simulation of this machine. Such an order is not in
+-- the game's command stream - the replay of the match desyncs at the first of them (bench s9: tick 60, the first CAPTURE
+-- and AMOVE of the brain) and in a network game only the host would have it. The engine's own AI sends its orders another
+-- way: a WorldCommand handed to the AI player's CommandProxy (DOW2.exe AICommand_*::SendCommand), which numbers it, records
+-- it and sends it like a human's click. EliteAI.dll 0.15 gives that path to the scripts: eliteai_cmd (three engine calls,
+-- no arithmetic - dll/eliteai.c). THIS FILE decides what goes into it: the command type and the bytes of its data, the
+-- same the game's own SCAR bindings build for the same order (read with the DLL's probe, [Lua] CmdProbe=1, bench s9_probe):
+--
+--   mode  order                       command   data type : bytes
+--   1     move                        0x2C      01 : 02 x y z                 (position: three IEEE floats, little endian)
+--   2     attack-move                 0x34      01 : 02 x y z
+--   3     retreat                     0x3D      none
+--   4     attack a squad              0x30      02 : 04 id16 00               (its building when it sits in one: 03 id32 00)
+--   5     capture the point at x z    0x2F      01 : 03 id32                  (the point's entity, found near the place)
+--   6     reinforce (x models)        0x31      none, once per model
+--   7     attack the building at x z  0x30      02 : 03 id32 00
+--   8     melee attack on a squad     0x46      01 : 04 id16
+--   14    out of the building         0x17      01 : 02 x y z                 (a command for the BUILDING the squad holds)
+--   100+k ability k at a place        0x35      1A : pbg32 00 00 02 x y z
+--   200+k ability k on a squad        0x35      1A : pbg32 00 00 04 id16
+--   300+k ability k on itself         0x35      19 : pbg32 00
+--   400+k the player's ability k      0x55      19 : pbg32 00                 (a command for the player: the Waaagh)
+--   12    the engine's own retreats off: eliteai_retlock (the engine AI's retreat commands of this player are not
+--         handed to its command proxy; no simulation write)
+--
+-- It installs itself as this AI state's eliteai_order (main.ai, mechanics.ai and mod/brain/00_core.ai take that name when
+-- they load, after this chunk): nothing else in the scripts changes. What elite.scar still does with an order is LOOK:
+-- after an order went out here the same five numbers go into the old queue with mode + 1000 ("sent - watch it"), and
+-- elite.scar runs its observers (did the cast take, who ordered the retreat, the Waaagh's cost) without issuing anything.
+-- The dodge reflex of the old layer still SEES the grenades in SCAR (the AI state has no reading of them) but its step is
+-- handed back here (string.eliteai_net[player]) and goes out as a network command too.
+--
+-- Keys ([Lua], numbers; 0 returns the SCAR path of step 8.1 for that kind of order, for comparison only - never in a
+-- network game): Net_Orders (all), Net_Move (1, 2), Net_Retreat (3), Net_Attack (4, 7, 8), Net_Capture (5),
+-- Net_Reinforce (6), Net_Unload (14), Net_Cast (100-399), Net_Global (400+k), Net_RetLock (12). Net_Log=1: one line per
+-- command. Mode 500+k (a player ability at a place by SCAR) is not here: the roks go by the AI's own request since
+-- step 8, the SCAR command only with Brain_GlobalPosScar=1.
+-- Rules of the game's AI Lua kept: no pcall (every engine call is preceded by the checks that make it fail), no gmatch,
+-- no '#'. Nothing of the engine is kept between calls.
+local G0 = getfenv and getfenv(0) or {}
+local _log = eliteai_log or G0.eliteai_log or string.eliteai_log
+local _cfg = eliteai_cfg or G0.eliteai_cfg or string.eliteai_cfg
+local _queue = eliteai_order or G0.eliteai_order or string.eliteai_order      -- the DLL's queue to elite.scar
+local _cmd = eliteai_cmd or G0.eliteai_cmd or string.eliteai_cmd
+local _retlock = eliteai_retlock or G0.eliteai_retlock or string.eliteai_retlock
+if _queue == nil then return end
+
+local function num(key, default)
+	local v = _cfg and tonumber(_cfg(key))
+	if v == nil then return default end
+	return v
+end
+local NET = { on = false, st = { sent = 0, refused = 0, held = 0, nopoint = 0, nobld = 0 }, hold = {}, abid = {}, why = {}, lock = false, lock_t = -1000 }
+EliteAI_Net = NET
+NET.pid = AI_GetPlayerID()
+NET.on = (num("Net_Orders", 1) >= 1) and type(_cmd) == "function"
+local function say(...) if _log then _log("p" .. tostring(NET.pid), "NET", ...) end end
+if not NET.on then
+	say("orders", "off", "why", (type(_cmd) ~= "function") and "this EliteAI.dll has no eliteai_cmd (older than 0.15)" or "Net_Orders=0", "- the orders go through elite.scar as in step 8.1 (single player only)")
+	return
+end
+
+-- ---- the abilities: THE SAME NUMBERING as EliteAI_MECH_ABILITIES / EliteAI_PLAYER_ABILITIES of append/scar/elite/elite.scar
+-- (elite.scar keeps its copy for the cast watch; test/brain_stub.lua compares the two tables)
+EliteAI_NET_ABILITIES = {
+	[1] = "ability/pvp/race_marine/sm_repair_pvp",
+	[2] = "ability/pvp/race_imperial_guard/ig_repair_pvp",
+	[3] = "ability/pvp/race_ork/sluggas/ork_repair",
+	[4] = "ability/pvp/race_ork/gretchin/grot_repair",
+	[5] = "ability/pvp/race_eldar/guardian/eld_repair",
+	[6] = "ability/pvp/race_chaos/cultist/csm_repair",
+	[7] = "ability/pvp/race_tau/pathfinders/tau_repair",
+	[8] = "ability/pvp/race_marine/assault_marine/sm_jump_target_assault",
+	[9] = "ability/pvp/race_chaos/raptor/csm_jump_raptor",
+	[10] = "ability/pvp/race_ork/stormboys/ork_jump_target_stormboy",
+	[11] = "ability/pvp/race_tyranid/ravener/tyr_jump_target_ravener",
+	[12] = "ability/pvp/race_eldar/autarch/eld_autarch_jump",
+	[13] = "ability/pvp/race_marine/scout/sm_damage_aoe_grenade",
+	[14] = "ability/pvp/race_imperial_guard/devils/ig_grenade_launch_triple",
+	[15] = "ability/pvp/race_imperial_guard/kasrkin/ig_damage_aoe_grenade",
+	[16] = "ability/pvp/race_eldar/guardian/eld_damage_aoe_grenade",
+	[17] = "ability/pvp/race_ork/stikkbomma/ork_damage_aoe_stikkbomb",
+	[18] = "ability/pvp/race_chaos/cultist/csm_knockback_aoe_grenades",
+	[19] = "ability/pvp/race_grey_knights/storm_troopers/gk_storm_trooper_grenade",
+	[20] = "ability/pvp/race_imperial_guard/manticore/ig_manticore_shot",
+	[21] = "ability/pvp/race_ork/stikkbomma/ork_immobilize_aoe_stungrenade",
+	[22] = "ability/pvp/race_ork/kommandos/ork_immobilize_aoe_stungrenade",
+	[23] = "ability/pvp/race_tau/pathfinders/tau_slow_grenade",
+	[24] = "ability/pvp/race_grey_knights/operatives/gk_operative_stunbomb",
+	[25] = "ability/pvp/race_tyranid/warrior/tyr_electroshock_grub",
+	[26] = "ability/pvp/race_tyranid/hive_tyrant/tyr_damage_aoe_bioplasma",
+	[27] = "ability/pvp/race_tyranid/lictor/tyr_jump_target_leap",
+	[28] = "ability/pvp/race_tyranid/lictor_hero/tyr_damage_target_fleshhook",
+	[29] = "ability/pvp/race_ork/ork_waaagh_shout",
+	[30] = "ability/pvp/race_ork/nobs/ork_buff_self_frenzy",
+	[31] = "ability/pvp/race_ork/sluggas/ork_buff_self_suppressionbreak",
+	[32] = "ability/pvp/race_ork/warboss/ork_stun_aoe_bigstomp",
+	[33] = "ability/pvp/race_ork/warboss/ork_damage_aoe_stomp",
+	[34] = "ability/pvp/race_ork/warboss/ork_knockdown_target_rapidfire",
+	[35] = "ability/pvp/race_ork/shootas/ork_debuff_target_suppression",
+	[36] = "ability/pvp/race_ork/tankbustas/ork_damage_aoe_mortar",
+	[37] = "ability/pvp/race_ork/kommandos/ork_damage_aoe_stikkbomb",
+	[38] = "ability/pvp/race_ork/kommando_hero/ork_damage_aoe_stikkbomb",
+	[39] = "ability/pvp/race_ork/sluggas/ork_burna_ability",
+	[40] = "ability/pvp/race_ork/kommando_hero/ork_immobilize_aoe_stungrenade",
+	[41] = "ability/pvp/race_ork/kommando_hero/ork_damage_target_highpoweredshot",
+	[42] = "ability/pvp/race_ork/tank/ork_damage_aoe_highpoweredshot",
+	[43] = "ability/pvp/race_ork/deff_dread/ork_buff_self_speed",
+	[44] = "ability/pvp/race_ork/mekboy/ork_buff_self_invincibility",
+	[45] = "ability/pvp/race_ork/kommandos/ork_dot_aoe_burnabomb",
+	[46] = "ability/pvp/race_ork/battlewagon/ork_damage_aoe_battlewagon_artillery",
+	[47] = "ability/pvp/race_ork/mekboy/ork_spawn_proximity_mine",
+	[48] = "ability/pvp/race_ork/kommando_hero/ork_damage_aoe_explosiveshot",
+	[49] = "ability/pvp/race_ork/mekboy/ork_immobilize_aoe_earthquake",
+	[50] = "ability/pvp/race_marine/tactical_squad/sm_buff_self_damage",
+	[51] = "ability/pvp/race_marine/force_commander/sm_buff_aoe_battlecry",
+	[52] = "ability/pvp/race_marine/scout/sm_stun_aoe_knockback",
+	[53] = "ability/pvp/race_marine/devastator/sm_buff_self_damage",
+	[54] = "ability/pvp/race_marine/assault_marine/sm_immobilize_target_meltabomb",
+	[55] = "ability/pvp/race_marine/apothecary/sm_heal_target_apoth",
+	[56] = "ability/pvp/race_marine/librarian/sm_damage_aoe_smite",
+	[57] = "ability/pvp/race_marine/dreadnought/sm_stun_aoe_fist",
+	[58] = "ability/pvp/race_marine/dreadnought/sm_damage_aoe_cannonbarrage",
+	[59] = "ability/pvp/race_marine/whirlwind/sm_whirlwind_hunter_killer",
+	[60] = "ability/pvp/race_marine/terminator/sm_damage_aoe_missilebarrage",
+	[61] = "ability/pvp/race_marine/techmarine/sm_damage_target_highpoweredshot",
+	[62] = "ability/pvp/race_marine/techmarine/sm_debuff_target_marktarget",
+	[63] = "ability/pvp/race_marine/apothecary/sm_dot_aoe_toxingrenade",
+	[64] = "ability/pvp/race_marine/apothecary/sm_damage_target_rapidfire",
+	[65] = "ability/pvp/race_marine/force_commander/sm_buff_self_speed",
+	[66] = "ability/pvp/race_marine/apothecary/sm_buff_target_damage",
+	[67] = "ability/pvp/race_marine/techmarine/sm_debuff_aoe_empgrenade",
+	[68] = "ability/pvp/race_marine/assault_marine/sm_jump_target_vanguard",
+	[69] = "ability/pvp/race_marine/dreadnought_venerable/sm_stun_aoe_fist",
+	[70] = "ability/pvp/race_ork/lootas/ork_buff_self_infiltrate",
+	[71] = "ability/pvp/race_ork/kommandos/ork_buff_self_infiltration",
+	[72] = "ability/pvp/race_ork/kommando_hero/ork_buff_self_infiltrate",
+	[73] = "ability/pvp/race_marine/scout/sm_buff_self_infiltrate",
+}
+EliteAI_NET_PLAYER_ABILITIES = {
+	[1] = "ability/pvp/race_ork/globals/ork_waaagh",
+	[2] = "ability/pvp/race_ork/globals/ork_damage_target_rokks",
+}
+-- the engine's number of an ability blueprint, looked up once per name (false = the engine does not know it)
+local function abil_id(name)
+	if name == nil then return nil end
+	local id = NET.abid[name]
+	if id == nil then
+		id = false
+		if type(World_GetPropertyBagGroupID) == "function" then
+			local v = World_GetPropertyBagGroupID(name)                      -- (a constant of this file; the SCAR side asks the same question)
+			if type(v) == "number" and v > 0 then id = v end
+		end
+		NET.abid[name] = id
+		say("ability", name, id and id or "NOT FOUND")
+	end
+	return id or nil
+end
+
+-- ---- bytes ---------------------------------------------------------------------------------------------------------------
+-- (the hex text of the command's data; whole numbers only - the DLL turns the text into bytes and computes nothing)
+local HEX = { "0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "a", "b", "c", "d", "e", "f" }
+local function byte(b)
+	local hi = math.floor(b / 16)
+	return HEX[hi + 1] .. HEX[b - hi * 16 + 1]
+end
+local function u16(v)
+	v = math.floor(v + 0.5)
+	local hi = math.floor(v / 256)
+	return byte(v - hi * 256) .. byte(hi - math.floor(hi / 256) * 256)
+end
+local function u32(v)
+	v = math.floor(v + 0.5)
+	local out = ""
+	for i = 1, 4 do
+		local q = math.floor(v / 256)
+		out = out .. byte(v - q * 256)
+		v = q
+	end
+	return out
+end
+-- a number as the four bytes of an IEEE single (little endian): sign, exponent, 23 bits of the fraction, rounded to the
+-- nearest. Done with whole-number steps (halving / doubling and floor are exact in a double): the same bytes on any machine.
+local function f32(x)
+	if type(x) ~= "number" or x == 0 or x ~= x then return "00000000" end
+	local sign = 0
+	if x < 0 then sign, x = 1, -x end
+	local e = 0
+	while x >= 2 and e < 120 do x = x / 2; e = e + 1 end
+	while x < 1 and e > -120 do x = x * 2; e = e - 1 end
+	local m = math.floor((x - 1) * 8388608 + 0.5)                           -- 2^23
+	if m >= 8388608 then m = 0; e = e + 1 end
+	local bits_hi = sign * 128 + math.floor((e + 127) / 2)                  -- sign + the upper 7 bits of the exponent
+	local b2 = ((e + 127) - math.floor((e + 127) / 2) * 2) * 128 + math.floor(m / 65536)
+	local rest = m - math.floor(m / 65536) * 65536
+	return byte(rest - math.floor(rest / 256) * 256) .. byte(math.floor(rest / 256)) .. byte(b2) .. byte(bits_hi)
+end
+NET.f32, NET.u16, NET.u32 = f32, u16, u32                                    -- (test/brain_stub.lua checks them against known bytes)
+local function t_pos(x, y, z) return "02" .. f32(x) .. f32(y) .. f32(z) end
+local function t_squad(id) return "04" .. u16(id) end
+local function t_entity(id) return "03" .. u32(id) end
+
+-- ---- the engine's objects an order names (read now, used now) ---------------------------------------------------------
+local function squad_of(id)
+	if type(id) ~= "number" or id <= 0 or id > 65535 then return nil end   -- (a squad target is 16 bits in the command)
+	if type(Squad_IsValid) ~= "function" or type(Squad_FromWorldID) ~= "function" or not Squad_IsValid(id) then return nil end
+	local sq = Squad_FromWorldID(id)
+	if sq == nil or (type(Squad_Count) == "function" and Squad_Count(sq) == 0) then return nil end
+	return sq
+end
+local function hold_entity_id(sq)
+	if sq == nil or type(Squad_IsInHoldEntity) ~= "function" or type(Squad_GetHoldEntity) ~= "function" or type(Entity_GetGameID) ~= "function" then return nil end
+	if not Squad_IsInHoldEntity(sq) then return nil end
+	local e = Squad_GetHoldEntity(sq)
+	if e == nil then return nil end
+	return Entity_GetGameID(e)
+end
+-- the entity nearest to x z among those of the owner types given that 'want' accepts; its id or nil
+local function entity_near(x, y, z, r, types, want)
+	if type(World_GetEntitiesNearPoint) ~= "function" or type(EGroup_CreateIfNotFound) ~= "function" or type(EGroup_Clear) ~= "function"
+		or type(EGroup_CountSpawned) ~= "function" or type(EGroup_GetSpawnedEntityAt) ~= "function" or type(Entity_GetPosition) ~= "function"
+		or type(Entity_GetGameID) ~= "function" or type(Player_FromId) ~= "function" or type(World_Pos) ~= "function" then return nil end
+	local pl = Player_FromId(NET.pid)
+	if pl == nil then return nil end
+	local eg = EGroup_CreateIfNotFound("eliteai_net_eg")
+	local pos = World_Pos(x, y, z)
+	local best, bd
+	for _, ot in ipairs(types) do
+		if ot ~= nil then
+			EGroup_Clear(eg)
+			World_GetEntitiesNearPoint(pl, eg, pos, r, ot)
+			local n = EGroup_CountSpawned(eg)
+			for i = 1, n do
+				local e = EGroup_GetSpawnedEntityAt(eg, i)
+				if e ~= nil and want(e) then
+					local p = Entity_GetPosition(e)
+					if p ~= nil and p.x ~= nil then
+						local d = (p.x - x) * (p.x - x) + (p.z - z) * (p.z - z)
+						if best == nil or d < bd then best, bd = Entity_GetGameID(e), d end
+					end
+				end
+			end
+		end
+	end
+	EGroup_Clear(eg)
+	return best
+end
+local function is_point(e) return type(Entity_IsStrategicPoint) == "function" and Entity_IsStrategicPoint(e) == true end
+local function is_building(e)
+	if type(Entity_IsBuilding) == "function" and not Entity_IsBuilding(e) then return false end
+	return not is_point(e)
+end
+
+-- ---- one order -> the engine ------------------------------------------------------------------------------------------
+local function send(kind, id, ctype_cmd, ctype, data)
+	local ok, why = _cmd(NET.pid, kind, id, ctype_cmd, ctype, data or "")
+	if ok == 1 then
+		NET.st.sent = NET.st.sent + 1
+		return true
+	end
+	NET.st.refused = NET.st.refused + 1
+	why = tostring(why)
+	NET.why[why] = (NET.why[why] or 0) + 1
+	if NET.why[why] <= 3 then say("refused", why, "kind", kind, "id", id, "cmd", ctype_cmd, "n", NET.st.refused) end
+	return false
+end
+-- does this kind of order go by the network? (the keys of the header; read once)
+local KEYS = {}
+local function by_net(mode)
+	local key
+	if mode == 1 or mode == 2 then key = "Net_Move"
+	elseif mode == 3 then key = "Net_Retreat"
+	elseif mode == 4 or mode == 7 or mode == 8 then key = "Net_Attack"
+	elseif mode == 5 then key = "Net_Capture"
+	elseif mode == 6 then key = "Net_Reinforce"
+	elseif mode == 14 then key = "Net_Unload"
+	elseif mode >= 100 and mode < 400 then key = "Net_Cast"
+	elseif mode >= 400 and mode < 500 then key = "Net_Global"
+	else return false end
+	local v = KEYS[key]
+	if v == nil then v = (num(key, 1) >= 1); KEYS[key] = v end
+	return v
+end
+-- Returns true when a command went out, false when the order named nothing the engine has (a dead squad, no point there)
+local function squad_order(id, x, y, z, mode)
+	if squad_of(id) == nil then return false end
+	if mode == 1 then return send(1, id, 44, 1, t_pos(x, y, z)) end
+	if mode == 2 then return send(1, id, 52, 1, t_pos(x, y, z)) end
+	if mode == 3 then return send(1, id, 61, -1, "") end
+	if mode == 4 then
+		local tsq = squad_of(x)
+		if tsq == nil then return false end
+		local hold = hold_entity_id(tsq)
+		if hold ~= nil then return send(1, id, 48, 2, t_entity(hold) .. "00") end
+		return send(1, id, 48, 2, t_squad(x) .. "00")
+	end
+	if mode == 5 then
+		local e = entity_near(x, y, z, 8, { OT_Neutral, OT_Enemy }, is_point)
+		if e == nil then
+			NET.st.nopoint = NET.st.nopoint + 1
+			if NET.st.nopoint <= 5 then say("no point at", math.floor(x), math.floor(z)) end
+			return false
+		end
+		return send(1, id, 47, 1, t_entity(e))
+	end
+	if mode == 6 then
+		local k = math.floor(x or 1)
+		if k < 1 then k = 1 elseif k > 4 then k = 4 end
+		local any = false
+		for i = 1, k do if send(1, id, 49, -1, "") then any = true end end
+		return any
+	end
+	if mode == 7 then
+		local e = entity_near(x, y, z, 10, { OT_Enemy }, is_building)
+		if e == nil then
+			NET.st.nobld = NET.st.nobld + 1
+			if NET.st.nobld <= 5 then say("no enemy building at", math.floor(x), math.floor(z)) end
+			return false
+		end
+		return send(1, id, 48, 2, t_entity(e) .. "00")
+	end
+	if mode == 8 then
+		if squad_of(x) == nil then return false end
+		return send(1, id, 70, 1, t_squad(x))
+	end
+	if mode == 14 then
+		local hold = hold_entity_id(squad_of(id))
+		if hold == nil then return false end
+		return send(2, hold, 23, 1, t_pos(x, y, z))
+	end
+	if mode >= 300 then
+		local ab = abil_id(EliteAI_NET_ABILITIES[mode - 300])
+		if ab == nil then return false end
+		return send(1, id, 53, 25, u32(ab) .. "00")
+	end
+	if mode >= 200 then
+		local ab = abil_id(EliteAI_NET_ABILITIES[mode - 200])
+		if ab == nil or squad_of(x) == nil then return false end
+		return send(1, id, 53, 26, u32(ab) .. "0000" .. t_squad(x))
+	end
+	if mode >= 100 then
+		local ab = abil_id(EliteAI_NET_ABILITIES[mode - 100])
+		if ab == nil then return false end
+		return send(1, id, 53, 26, u32(ab) .. "0000" .. t_pos(x, y, z))
+	end
+	return false
+end
+local function now_secs()
+	if type(World_GetGameTime) == "function" then return World_GetGameTime() end
+	return 0
+end
+local function relock()
+	if not NET.lock or type(_retlock) ~= "function" then return end
+	local now = now_secs()
+	if now - NET.lock_t < 30 then return end
+	NET.lock_t = now
+	_retlock(NET.pid, 1)                                                     -- (again: the DLL forgets a player whose AI is another object - a new match)
+end
+local function marching(mode) return mode == 1 or mode == 2 or mode == 4 or mode == 5 or mode == 7 or (mode >= 100 and mode < 400) end
+
+-- eliteai_order(id, x, y, z, mode) of this AI state from here on
+local function net_order(id, x, y, z, mode)
+	if type(mode) ~= "number" or type(id) ~= "number" then return end
+	x, y, z = x or 0, y or 0, z or 0
+	relock()
+	if mode == 12 then
+		-- the engine's own retreats off for this player's squads: its AI's retreat commands are not sent (the DLL), not the simulation's switch
+		if num("Net_RetLock", 1) >= 1 and type(_retlock) == "function" then
+			NET.lock = (x >= 1)
+			NET.lock_t = now_secs()
+			local r = _retlock(NET.pid, NET.lock and 1 or 0)
+			say("retlock", NET.lock and 1 or 0, "dll", tostring(r), "(the engine AI's own retreat commands of this player are not sent; elite.scar's Squad_EnableRetreat is not used)")
+			return
+		end
+		return _queue(id, x, y, z, mode)
+	end
+	if not by_net(mode) then return _queue(id, x, y, z, mode) end           -- the words to elite.scar (9, 10, 11, 13, 15) and a kind switched back by its key
+	if mode >= 400 then
+		local ab = abil_id(EliteAI_NET_PLAYER_ABILITIES[mode - 400])
+		if ab ~= nil and send(3, NET.pid, 85, 25, u32(ab) .. "00") then
+			if num("Net_Log", 0) >= 1 then say("cmd", "player", mode) end
+			-- (the mark carries the purse as this state knew it before the command: elite.scar's look 2 s later compares with it)
+			local pr = (type(Brain) == "table") and Brain.purse or nil
+			_queue(id, x, (pr and pr.red) or -1, (pr and pr.req) or -1, mode + 1000)
+		end
+		return
+	end
+	-- a squad that is stepping out of a blast (the SCAR reflex told us): its marching orders wait there, a retreat ends it
+	local h = NET.hold[id]
+	if h ~= nil then
+		if mode == 3 or now_secs() >= h then NET.hold[id] = nil
+		elseif marching(mode) then
+			NET.st.held = NET.st.held + 1
+			return _queue(id, x, y, z, mode + 2000)
+		end
+	end
+	if squad_order(id, x, y, z, mode) then
+		if num("Net_Log", 0) >= 1 then say("cmd", id, mode, math.floor(x), math.floor(z)) end
+		_queue(id, x, y, z, mode + 1000)
+	end
+end
+eliteai_order = net_order
+-- what elite.scar hands back (AI_DoString -> string.eliteai_net[player id]; numbers only): the dodge reflex's step and
+-- the order a squad gets back after it. hold > 0: the squad's marching orders wait that many seconds.
+if type(string) == "table" then
+	local t = string.eliteai_net
+	if type(t) ~= "table" then t = {}; string.eliteai_net = t end
+	t[NET.pid] = function(id, mode, x, y, z, hold)
+		if type(id) ~= "number" or type(mode) ~= "number" then return end
+		if squad_order(id, x or 0, y or 0, z or 0, mode) then _queue(id, x or 0, y or 0, z or 0, mode + 3000) end
+		if type(hold) == "number" and hold > 0 then NET.hold[id] = now_secs() + hold else NET.hold[id] = nil end
+	end
+end
+_queue(NET.pid, 1, 0, 0, 15)                                                 -- the word to elite.scar: this player's orders go by the network
+say("orders", "on", "eliteai_cmd", type(_cmd), "eliteai_retlock", type(_retlock), "OT_Neutral", tostring(OT_Neutral), "OT_Enemy", tostring(OT_Enemy),
+	"World_GetEntitiesNearPoint", type(World_GetEntitiesNearPoint), "Squad_GetHoldEntity", type(Squad_GetHoldEntity), "World_GetPropertyBagGroupID", type(World_GetPropertyBagGroupID))
+
+	end
+	eliteai_netorder()
+end
+
 -- ===== EliteAI main.ai =====
 -- EliteAI: our module, inserted by EliteAI.dll into Elite's default.ai right before its final InitializeAI() call.
 -- Elite's files stay as they are; we only wrap/override a few functions, and only for AI players with the new logic on.
@@ -1769,7 +2196,14 @@ end
 EliteAI.on = new_logic_on()
 if EliteAI.on then
 	local d, v = EliteAI.real_diff, string.upper(cfg("Variant" .. tostring(s_selfplayerid), nil) or cfg("Variant", "") or "")  -- tests: [Lua] Variant1000=A or Variant=A
-	if not EliteAI_VARIANTS[v] then v = (d == AD_Easy and "A") or (d == AD_Hard and "C") or "B" end
+	-- step 9 (14.11, Orca fb 1095 'Hard always beats Easy / Normal'; the owner: one AI, the best one): EVERY SLOT LEVEL PLAYS
+	-- RULES C. Until now the level picked the rules of the disputed decisions (Easy = A, Normal = B, Hard = C; 0.9 of 10.11,
+	-- for testers to compare). [Lua] VariantByDiff=1 returns that; Variant / Variant<player id> = A | B | C still name one.
+	-- (What the level still changes is the ENGINE's: an AI player's income is x1.0 / x1.1 / x1.3 / x1.5 on Easy / Normal /
+	-- Hard / Expert - bench s9_diff0..3, HANDOFF step 9. The scripts cannot change that without writing into the simulation.)
+	if not EliteAI_VARIANTS[v] then
+		if tonumber(cfg("VariantByDiff", 0)) == 1 then v = (d == AD_Easy and "A") or (d == AD_Hard and "C") or "B" else v = "C" end
+	end
 	EliteAI.variant, EliteAI.vp = v, EliteAI_VARIANTS[v]
 	-- every variant plays the standard personality and build orders (Elite reads the level again in Reset/buildorder conditions)
 	-- 0.21: on the vanilla base every variant plays the level the dispatcher set (Hard, or VanillaDiff) - its wrapper of
@@ -7976,7 +8410,7 @@ do
 --  * every decision writes one reason line: Brain.say / Brain.order. A scene's timeline must explain itself.
 
 Brain = {}
-Brain.VERSION = "0.8"
+Brain.VERSION = "0.9"
 Brain.RACES = { orks = true, space_marines = true }              -- the races that have a profile (60_roles.ai). Which of them PLAY with the brain is the dispatcher's: [Lua] Brain_Races (default orks)
 Brain.on = (type(EliteAI_MODE) == "table" and EliteAI_MODE.brain == true)
 
@@ -12500,8 +12934,12 @@ local function can_capture(u)
 	if u.veh then return false end
 	local roles = Brain.roles
 	local role = roles.of(u)
-	-- (step 8.1: the gretchin - the squad that comes for the red resource - are the capturers: role "worker")
-	if role == "worker" and Brain.num("CapWorker", 1) >= 1 then return u.hp >= Brain.num("CapMinHP", 0.5) end
+	-- (step 9, Orca fb 1090 'the gretchin are sent to points and cannot take them'): by the attributes of Elite 3.2.1 the
+	-- gretchin CANNOT capture (sbps/pvp/race_ork/troops/ork_gretchin: squad_capture_strategic_point_ext can_capture = False,
+	-- can_uncapture = True; sluggas, shootas ... have can_capture = True). Step 8.1 made them the first capturers - wrong.
+	-- A worker is no capturer: it is a squad of the rear (60_roles.ai R.is_rear) and walks behind the fist as the mek's
+	-- helpers do. [Lua] Brain_CapWorker=1 returns step 8.1 (for the comparison only).
+	if role == "worker" and Brain.num("CapWorker", 0) >= 1 then return u.hp >= Brain.num("CapMinHP", 0.5) end
 	if roles.is_machine(role) or roles.is_rear(role) or role == "setup" then return false end
 	return u.hp >= Brain.num("CapMinHP", 0.5)
 end
@@ -12572,7 +13010,7 @@ local function pick(p, free, rank, n, max_d, core_ok, hero_ok)
 			if d <= max_d then
 				local core = (rank[u.id] ~= nil and rank[u.id] <= core_n)
 				if is_hero(u) then if d <= hero_d then hero = u end
-				elseif Brain.roles.of(u) == "worker" and Brain.num("CapWorker", 1) >= 1 then
+				elseif Brain.roles.of(u) == "worker" and Brain.num("CapWorker", 0) >= 1 then
 					local s = d - 2000                                        -- (step 8.1: a worker - the gretchin - before any fighting squad)
 					if bs == nil or s < bs then best, bs = u, s end
 				elseif core_ok or not core then
@@ -12926,6 +13364,11 @@ R.PROFILES = {
 			["race_ork/troops/ork_lootas"] = { role = "setup" },
 			["race_ork/troops/ork_tankbustas"] = { role = "av" },
 			["race_ork/troops/ork_kommandos"] = { role = "flank" },
+			-- (step 9: the gretchin cannot capture - Elite 3.2.1 can_capture = False - and the brain never builds with them (the
+			-- owner, 14.11): they walk behind the fist. NOT WIRED yet, their own kit by the attributes: the repair of a machine
+			-- (upgrade ork_gretchin_repair_krew -> ability gretchin/grot_repair, k 4 of the cast table), the healers (upgrade
+			-- ork_gretchin_grot_orderlies), the ammo runts (ork_gretchin_ammo_runtz), their hiding (gretchin/gretchin_infiltrate),
+			-- the hut / the banner / their turret (buildings: never).)
 			["race_ork/troops/ork_gretchin"] = { role = "worker" },
 			["race_ork/troops/ork_painboy"] = { role = "support" },
 			["race_ork/troops/ork_weirdboy"] = { role = "support" },

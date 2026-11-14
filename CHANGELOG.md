@@ -4,6 +4,31 @@ Every version gets an entry here before it reaches `main`. CI then tags `vX.Y.Z`
 version (`X.Y.0`) it also publishes a GitHub Release with the DLLs and the entries since the previous `X.Y.0`.
 The version of the set lives only in `VERSION`; each DLL still writes its own version to its log.
 
+## 0.2.78 — 2026-11-14
+New AI 28 (store newai-28, experiment, off by default, Elite only): step 9 of the brain (brain 0.9) and EliteAI.dll 0.16 (network matches).
+eliteai branch newai-28 06f5cff = brain 42e9a52 with main.ai, mechanics.ai and the vanilla-base sources of
+strategy_tech_purchase.ai / strategy_unit_purchase.ai of a3a378a (newai-23 / 23.1), exactly as newai-24 .. 27, EXCEPT one step-9 change kept
+on top of the template main.ai: commit 66ab6a1, every slot level plays rule set C (main.ai had picked Conf_* by the level; [Lua]
+VariantByDiff=1 returns Easy = A / Normal = B / Hard = C). Step 9 did not touch mechanics.ai or the vanilla-base sources.
+Against newai-27 three served files change: default.ai (mod/netorder.ai inlined before main.ai, the brain chunks 0.8.1 -> 0.9, the variant
+rule), append/scar/elite/elite.scar (orders are observed, not executed, when sent as network commands) and main.ai (the variant rule); plus the DLL.
+- Every order of the new AI is a network command of its own player (move, attack-move, retreat, attack, capture, reinforce, melee, out of a
+  building, squad and player abilities), built by EliteAI.dll `eliteai_cmd` and handed to the AI player's CommandProxy as the engine's own AI
+  does: numbered, recorded in the .rec, sent like a click. elite.scar orders nothing by default. Proof: the recording of a bench game made
+  of the commands the sync carried plays back with no AI with every CRC equal (48 of 48 games, 466386 ticks; step 8.1 differs from tick 60).
+- Gretchin are no capturers (they cannot capture) and follow the fist. Every difficulty plays rule set C; the engine's income x1.0 / 1.1 / 1.3 / 1.5
+  by level stays (the only thing the level changes now).
+- EliteAI.dll 0.16: the retreat lock (the AI's own retreats of a brain player off) is eliteai/retlock.h now and ends with its match (0.15 could
+  carry a lock into the next match of the same session); NETWORK matches enabled - the station that computes a computer player (the engine's slot
+  table, re-asked at every call, so a host migration follows) runs the new AI, the others do nothing; nothing changes the simulation on one
+  machine only; `[EliteAI] Multiplayer=0` turns it off; the replay of a network match is uploaded too (X-Lobby stays newai). Integers only.
+- Check (independent verifier, VERIFY_9_RU: READY WITH NOTES): CRC playback proof above, extra attempts to break it (one extra SCAR command, one
+  missing network command) are caught at the exact tick; 48 live games at equal income: 41 won : 0, 46 ahead, 0 Lua errors, 0 refused orders;
+  the retreat-lock note (note 1) is fixed in 0.16 (test/retlock_test.c 18 PASS). Stub 134 PASS on the release tree.
+- NOT verified: a real two-PC network match and a host migration (the engine's station ids are read from the exe's code; if they are not as
+  read, the new AI gives no orders in a network match and the log says so - no desync); the multithreaded engine mode; a real game-recorded .rec.
+  In a network match every player must have Melee freeze fix or New AI turned on.
+
 ## 0.2.77 — 2026-11-14
 New AI 27 (store newai-27, experiment, off by default, Elite only): step 8 / 8.1 of the ork brain (brain 0.8.1) and EliteAI.dll 0.14 (log
 per match). eliteai branch newai-27 1a9fac3 = brain 7c8fe94 with main.ai, mechanics.ai and the vanilla-base sources of
