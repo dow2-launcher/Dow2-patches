@@ -38,6 +38,18 @@
 // archives, same modVersion) refused every such file ("replay start: REFUSED by the game"). The file gets this game's own value
 // before the start - the match is of the version the spectator plays (the launcher offers matches of his game); the sync check
 // says it if the data differ.
+// LiveReplay 4 (14.11.2026, siritos: "Watch" at any minute, 8x up to the live edge): the players' logs since LiveReplay 3 show a late
+// Watch that starts (cut answers used) but never catches up - 09.11 "catching up: 1500 steps behind" took 22 minutes, 1.1x instead
+// of 4x: SimulationController::Update (0x438613) runs at most ONE tick per drawn frame, so a replay is as fast as the frames come
+// (memory: ReplaySpeed). The catch-up now runs at CatchUpSpeed=80 (8x) for real: while it catches up, the main loop's passes
+// between two shown frames skip the visual update and the draw (call sites 0x40E58D / 0x40E6DC - ReplaySpeed's 8x, chained with
+// its stubs when it is there; hooked only for the catch-up, put back after it), a frame is shown every 1/30 s (CatchUpFps), and the
+// rate set is raised up to 2 x CatchUpSpeed until the replay really does CatchUpSpeed ticks a second; every 5 s the log says the real
+// speed. The player's own speed button ends the catch-up. Also: the game's own "Connecting" box (common/connbox.h) from the accepted
+// watch to the start of the replay's loading, its second line the scout's "See, but do not be seen." (DOW2.ucs 9027524 through
+// Localizer, so in the game's language; a language without it: 550002) - LiveReplay.ini ConnectingBox=0 / ConnectingText=<id>.
+// The ladder's route needs no change for this: a cut answer is already used as far as it goes (LiveReplay 3), and even cut to the
+// tunnel's first burst (24 KB per ~0.5 s) it brings the records far faster than 8x plays them (stand: a 13.5-min 3v3 = 1.3 KB/s).
 #ifndef _WIN32_WINNT
 #define _WIN32_WINNT 0x0600                 // CancelIoEx (Vista+) with older mingw headers
 #endif
@@ -51,7 +63,7 @@
 #include <stdarg.h>
 #include <wchar.h>
 
-#define LR_VERSION "3"
+#define LR_VERSION "4"
 // ---- DOW2.exe 3.19
 #define G_SETTINGS     0x01335A78         // +0x118 game type (0x800 playback)
 #define G_GAMEOBJ_PTR  0x01335A74         // what the replay start takes in EDX ([+4] = the settings)
@@ -74,6 +86,12 @@
 #define FN_FSCMD       0x00681AB0
 #define FN_FSCMD_VT0   0x00681E80
 #define T_PLAYBACK     0x800
+// LiveReplay 4: the main loop's two call sites a catch-up pass may skip (as ReplaySpeed's 8x; chained with its stubs)
+#define AT_VISUAL      0x0040E58D         // call 0x439CE8 (stdcall, 3 args): the visual update
+#define FN_VISUAL      0x00439CE8
+#define AT_DRAW        0x0040E6DC         // call 0x405935 (stdcall, 6 args, EDI = perf block): draw + Present
+#define FN_DRAW        0x00405935
+#define BOX_SCOUT      9027524            // DOW2.ucs: the scout's "See, but do not be seen." (9028480 is the same line)
 
 typedef void *(__fastcall *ThisRet_t)(void *self, void *edx);
 typedef char (__fastcall *GetSync_t)(void *self, void *edx, void *out, unsigned tick);
@@ -108,6 +126,8 @@ static void logmsg(const char *fmt, ...) {
     EnterCriticalSection(&g_lk); DWORD w; WriteFile(g_log, b, n, &w, NULL); LeaveCriticalSection(&g_lk);
 }
 static int ok(const void *p, int n) { return p && !IsBadReadPtr(p, n); }
+#define CONNBOX_LOG logmsg
+#include "../common/connbox.h"
 #define I32(p, o) (*(int *)((char *)(p) + (o)))
 #define P32(p, o) (*(char **)((char *)(p) + (o)))
 
@@ -132,6 +152,16 @@ static volatile LONG g_syncOk, g_syncBad, g_syncFirstBad = -1;
 static unsigned *g_crc; static unsigned g_crcN;     // tick -> the players' crc + 1 (0 = not known), from the records' headers
 static wchar_t g_file[MAX_PATH];
 static DWORD g_startAt;
+// LiveReplay 4: the game's own "Connecting" box (common/connbox.h) from the accepted watch to the start of the replay's loading
+static int g_boxCfg = 1, g_boxText = BOX_SCOUT, g_boxTried; static DWORD g_firstFrame;
+// LiveReplay 4: the catch-up really at CatchUpSpeed (8x): SimulationController runs at most one tick per drawn frame, so 4x of
+// LiveReplay 3 was as fast as the frames came (players' logs 09.11: "1500 steps behind" took 22 min = 1.1x). While it catches up,
+// passes between two shown frames skip the visual update and the draw (the call sites of ReplaySpeed's 8x, chained with them),
+// and the rate set is raised (at most 2 x CatchUpSpeed) until the replay really runs CatchUpSpeed ticks a second.
+static int g_cuFast, g_cuFps = 30; static float g_cuSet; static LONGLONG g_qf = 1000, g_lastShown, g_tickAt, g_ctlAt, g_winAt;
+static int g_ctlTick = -1, g_winTick = -1, g_lastTick = -1, g_passes, g_shown, g_skipHooked;
+void *g_nextVisual = (void *)FN_VISUAL, *g_nextDraw = (void *)FN_DRAW;
+static volatile int g_skipOn;
 
 // ---------------- the pipe's events (any thread -> the pipe thread) ----------------
 #define MAXC 4
@@ -310,6 +340,80 @@ static int iat_hook(DWORD slot, void *fn, void **orig) {
     patch_unlock(mx); return r;
 }
 
+// ---------------- LiveReplay 4: the catch-up's frame skipping (only while it catches up, only our live replay) ----------------
+static LONGLONG qpc(void) { LARGE_INTEGER c; QueryPerformanceCounter(&c); return c.QuadPart; }
+static LONGLONG g_drawCost; static int g_prevShown;                 // a shown pass's cost (draw + the rest of that pass), EMA
+static int skip_decide(void) {
+    if (!g_skipOn) return 0;
+    LONGLONG now = qpc();
+    if (now - g_tickAt > g_qf / 4) return 0;                          // no tick for 0.25 s (waiting for records, paused): draw
+    // a frame every 1/CatchUpFps s, but drawing never more than about half of the time: on a slow PC (a frame of 90 ms) the frames
+    // shown get fewer, not the ticks (a fixed 1/30 s would draw every pass there and the catch-up would again be as slow as the frames)
+    LONGLONG per = g_qf / g_cuFps; if (per < 2 * g_drawCost) per = 2 * g_drawCost;
+    return now - g_lastShown < per;
+}
+static int g_passDecided, g_passSkip;
+int __cdecl lr_visual(void) {
+    if (g_prevShown) {                                                // the pass after a shown one: what that one cost
+        LONGLONG d = qpc() - g_lastShown; g_prevShown = 0;
+        if (d > 0 && d < g_qf) g_drawCost = g_drawCost ? (g_drawCost * 7 + d) / 8 : d;
+    }
+    g_passSkip = skip_decide(); g_passDecided = 1; return g_passSkip;
+}
+int __cdecl lr_draw(void) {
+    int skip = g_passDecided ? g_passSkip : skip_decide(); g_passDecided = 0;
+    g_passes++; if (!skip) { g_shown++; g_lastShown = qpc(); g_prevShown = 1; }
+    return skip;
+}
+// call-site stubs: eax/ecx/edx kept, EDI (the draw's hidden argument) untouched; skip = return with the callee's own ret N;
+// not skipped = on to whatever the call site called before us (the game's function or ReplaySpeed's stub)
+__attribute__((naked)) void lr_stub_visual(void) {
+    __asm__ volatile(
+        "pushl %eax\n\tpushl %ecx\n\tpushl %edx\n\t"
+        "call _lr_visual\n\t"
+        "testl %eax, %eax\n\t"
+        "popl %edx\n\tpopl %ecx\n\tpopl %eax\n\t"
+        "jnz 1f\n\t"
+        "jmp *_g_nextVisual\n"
+        "1:\n\tret $0xC\n");
+}
+__attribute__((naked)) void lr_stub_draw(void) {
+    __asm__ volatile(
+        "pushl %eax\n\tpushl %ecx\n\tpushl %edx\n\t"
+        "call _lr_draw\n\t"
+        "testl %eax, %eax\n\t"
+        "popl %edx\n\tpopl %ecx\n\tpopl %eax\n\t"
+        "jnz 1f\n\t"
+        "jmp *_g_nextDraw\n"
+        "1:\n\tret $0x18\n");
+}
+static HANDLE patch_lock(void); static void patch_unlock(HANDLE mx); static int is_code(DWORD a);
+static DWORD call_target(DWORD at) { unsigned char *p = (unsigned char *)at; return IsBadReadPtr(p, 5) || p[0] != 0xE8 ? 0 : at + 5 + *(int *)(p + 1); }
+static int call_set(DWORD at, DWORD to) {
+    unsigned char *p = (unsigned char *)at; DWORD old;
+    if (!VirtualProtect(p, 5, PAGE_EXECUTE_READWRITE, &old)) return 0;
+    InterlockedExchange((LONG *)(p + 1), (LONG)(to - (at + 5)));
+    VirtualProtect(p, 5, old, &old); FlushInstructionCache(GetCurrentProcess(), p, 5); return 1;
+}
+// on: the two call sites through our stubs (from the game's thread, between two passes of its loop - it is that loop's own thread)
+static void skip_hook(int on) {
+    HANDLE mx = patch_lock();
+    DWORD v = call_target(AT_VISUAL), d = call_target(AT_DRAW);
+    if (on && !g_skipHooked) {
+        if (v && d && (v == FN_VISUAL || is_code(v)) && (d == FN_DRAW || is_code(d)) && v != (DWORD)lr_stub_visual && d != (DWORD)lr_stub_draw) {
+            g_nextVisual = (void *)v; g_nextDraw = (void *)d;
+            g_skipHooked = call_set(AT_VISUAL, (DWORD)lr_stub_visual) && call_set(AT_DRAW, (DWORD)lr_stub_draw);
+            logmsg("catch-up: frame skipping on%s%s", v != FN_VISUAL || d != FN_DRAW ? " (after another add-on's hook there - ReplaySpeed)" : "",
+                   g_skipHooked ? "" : " - FAILED, the speed is as fast as the frames come");
+        } else logmsg("catch-up: the loop's call sites are not as expected (%08lX / %08lX) - no frame skipping, the speed is as fast as the frames come", v, d);
+    } else if (!on && g_skipHooked) {
+        if (v == (DWORD)lr_stub_visual) call_set(AT_VISUAL, (DWORD)g_nextVisual);
+        if (d == (DWORD)lr_stub_draw) call_set(AT_DRAW, (DWORD)g_nextDraw);
+        g_skipHooked = 0; logmsg("catch-up: frame skipping off");
+    }
+    patch_unlock(mx);
+}
+
 // ---------------- the menu (which full-screen panel is up: as RoomJoin) ----------------
 enum { SC_UNKNOWN, SC_OTHER, SC_MAIN, SC_MM, SC_LIST, SC_SETUP };
 static const char *SC_NAME[] = {"unknown", "other", "main", "find_game", "games_list", "lobby"};
@@ -461,6 +565,54 @@ static DWORD WINAPI net_thread(LPVOID arg) {
 }
 
 // ---------------- the game's thread ----------------
+typedef float (__fastcall *GetF_t)(void *o, void *edx);
+static void cu_off(void *sr, const char *why) {                       // the catch-up is over: normal speed, frames as always
+    g_skipOn = 0; skip_hook(0);
+    if (g_cuFast && sr) ((SetF_t)(*(void ***)sr)[0x28 / 4])(sr, 0, 10.0f);
+    if (g_cuFast) logmsg("catch-up over (%s): normal speed", why);
+    g_cuFast = 0; g_cuDone = 1;
+}
+static void catch_up(char *sr, int cur, int behind) {
+    LONGLONG now = qpc();
+    if (cur != g_lastTick) { g_lastTick = cur; g_tickAt = now; }
+    if (!g_cuFast) {
+        if (behind <= 300) return;                                    // close to the live edge (the first answers may still come in pieces)
+        g_cuFast = 1; g_cuSet = g_cuSpeed; ((SetF_t)(*(void ***)sr)[0x28 / 4])(sr, 0, g_cuSet);
+        g_ctlAt = g_winAt = now; g_ctlTick = g_winTick = cur; g_passes = g_shown = 0; g_lastShown = 0;
+        g_drawCost = 0; g_prevShown = 0; skip_hook(1); g_skipOn = g_skipHooked;
+        logmsg("catching up: %d steps behind (%.0f s), %gx - %d ticks/s%s", behind, behind / 10.0, g_cuSpeed / 10.0, (int)g_cuSpeed,
+               g_skipHooked ? ", a frame shown every 1/30 s" : "");
+        return;
+    }
+    float r = ((GetF_t)(*(void ***)sr)[0x2C / 4])(sr, 0);
+    if (r < g_cuSet - 0.01f || r > g_cuSet + 0.01f) { logmsg("the replay speed was changed (%g ticks/s, by the player or another add-on)", r); g_cuFast = 0; cu_off(NULL, "the speed changed"); return; }
+    if (behind < 60) { cu_off(sr, "caught up"); logmsg("caught up (step %d of %ld)", cur, g_availTicks); return; }
+    // the controller (as ReplaySpeed's 8x): each drawn frame longer than 1/rate costs the controller a part of a tick - the rate set
+    // is raised until the replay really runs CatchUpSpeed ticks a second (at most twice that)
+    if (now - g_ctlAt >= g_qf) {
+        double dt = (double)(now - g_ctlAt) / g_qf; int dtk = cur - g_ctlTick;
+        if (g_ctlTick >= 0 && dtk > 0 && now - g_tickAt < g_qf / 4 && dt < 3) {
+            float got = (float)(dtk / dt), nr = g_cuSet + (g_cuSpeed - got) * 0.6f;
+            if (nr < g_cuSpeed) nr = g_cuSpeed; if (nr > 2 * g_cuSpeed) nr = 2 * g_cuSpeed;
+            if (nr < g_cuSet - 0.5f || nr > g_cuSet + 0.5f) { ((SetF_t)(*(void ***)sr)[0x28 / 4])(sr, 0, nr); g_cuSet = nr; }
+        }
+        g_ctlAt = now; g_ctlTick = cur;
+    }
+    if (now - g_winAt >= g_qf * 5) {                                   // every 5 s: what it really does
+        double dt = (double)(now - g_winAt) / g_qf;
+        logmsg("catch-up: %.1f ticks/s = %.2fx, %.1f frames shown/s (a shown pass %.0f ms), %.0f loop passes/s, %d steps behind (rate set %g)",
+               (cur - g_winTick) / dt, (cur - g_winTick) / dt / 10.0, g_shown / dt, g_drawCost * 1000.0 / g_qf, g_passes / dt, behind, g_cuSet);
+        g_winAt = now; g_winTick = cur; g_passes = g_shown = 0;
+    }
+}
+static void box_want(void) {                                          // the Connecting box while the watch is fetched (front end only)
+    if (!g_boxCfg || g_boxTried || connbox_is_open() || g_inWorld || g_loading) return;
+    if (g_screen == SC_SETUP) return;                                // a lobby: not ours to cover
+    // no full-screen panel seen (LiveReplay came in after the menu's first panel): the front end once the game has run 10 s of
+    // frames without a world (at its very start the front end may still be coming up: no box then, the watch still goes on)
+    if (g_screen == SC_UNKNOWN && (!g_firstFrame || GetTickCount() - g_firstFrame < 10000)) return;
+    g_boxTried = 1; connbox_open(g_boxText, "a live replay is fetched");
+}
 static void start_watch(const char *match, const char *base) {
     if (g_inWorld || g_loading) { snprintf(g_match, sizeof g_match, "%s", match); set_state(ST_FAILED, "busy_match"); return; }
     if (g_screen == SC_SETUP) { snprintf(g_match, sizeof g_match, "%s", match); set_state(ST_FAILED, "busy_lobby"); return; }
@@ -471,19 +623,28 @@ static void start_watch(const char *match, const char *base) {
     free(g_crc); g_crc = NULL; g_crcN = 0;
     LeaveCriticalSection(&g_qlk);
     g_fileReady = 0; g_live = 0; g_waiting = 0; g_cuDone = 0; g_syncOk = g_syncBad = 0; g_syncFirstBad = -1; g_crcLogged = 0;
+    if (g_cuFast || g_skipHooked) cu_off(NULL, "a new watch");
+    g_cuFast = 0; g_boxTried = 0; g_lastTick = -1;
     g_startAt = GetTickCount();
     logmsg("watch %s from %s", match, base);
     set_state(ST_FETCH, NULL);
+    box_want();
     HANDLE t = CreateThread(NULL, 256 * 1024, net_thread, (LPVOID)(INT_PTR)me, STACK_SIZE_PARAM_IS_A_RESERVATION, NULL); if (t) CloseHandle(t);
 }
 static void game_step(void) {
     DWORD now = GetTickCount();
+    if (!g_firstFrame) g_firstFrame = now ? now : 1;
+    if (g_state == ST_FETCH) box_want();
+    else if (connbox_is_open()) connbox_close(g_state == ST_FAILED ? g_reason : ST_NAME[g_state]);   // failed / stopped (any thread set it)
+    if (connbox_is_open() && (g_inWorld || g_loading)) connbox_close("a world loads");
+    if ((g_cuFast || g_skipHooked) && !(g_live && our_playback())) cu_off(NULL, "the replay is not ours / over");
     if (g_state == ST_FETCH && g_fileReady) {
         if (g_inWorld || g_loading) { set_state(ST_FAILED, "busy_match"); g_session++; return; }
         if (g_screen == SC_SETUP) { set_state(ST_FAILED, "busy_lobby"); g_session++; return; }
         // no panel seen yet (Elite's loader brings the add-ons in once the front end runs - its first panel may be up already):
         // the menu after 3 s of frames without a world
         if (g_screen == SC_UNKNOWN && now - g_startAt < 3000) return;
+        connbox_close("the replay loads");                               // LiveReplay 4: up to the start of the loading
         g_live = 1;
         file_fix_datacrc();
         char pb[] = "playback:live_watch.rec";
@@ -504,12 +665,7 @@ static void game_step(void) {
             I32(w, 0x174) = g_availTicks > g_fileTicks ? g_availTicks : g_fileTicks;   // the replay panel's length: what is here
             int cur = I32(w, 0x178), behind = g_availTicks - cur;
             char *hud = ok((void *)G_HUD, 4) ? *(char **)G_HUD : NULL, *h = ok(hud, 12) ? P32(hud, 8) : NULL, *sr = ok(h, 0x70) ? P32(h, 0x68) : NULL;
-            if (g_catchUp && !g_cuDone && cur > 0 && ok(sr, 4)) {
-                static int fast;
-                if (!fast && behind > 300) { fast = 1; ((SetF_t)(*(void ***)sr)[0x28 / 4])(sr, 0, g_cuSpeed); logmsg("catching up: %d steps behind, faster", behind); }
-                else if (fast && behind < 60) { fast = 0; g_cuDone = 1; ((SetF_t)(*(void ***)sr)[0x28 / 4])(sr, 0, 10.0f); logmsg("caught up (step %d of %ld): normal speed", cur, g_availTicks); }
-                else if (!fast && behind <= 300) g_cuDone = 1;
-            }
+            if (g_catchUp && !g_cuDone && cur > 0 && ok(sr, 4)) catch_up(sr, cur, behind);
         }
     }
 }
@@ -689,7 +845,11 @@ BOOL WINAPI DllMain(HINSTANCE h, DWORD r, LPVOID _) {
     wchar_t ini[MAX_PATH], v[200]; _snwprintf(ini, MAX_PATH, L"%lsLiveReplay.ini", g_dir); ini[MAX_PATH - 1] = 0;
     if (!GetPrivateProfileIntW(L"LiveReplay", L"Enabled", 1, ini)) { logmsg("disabled in LiveReplay.ini - no hooks"); return TRUE; }
     g_catchUp = GetPrivateProfileIntW(L"LiveReplay", L"CatchUp", 1, ini) != 0;
-    g_cuSpeed = (float)GetPrivateProfileIntW(L"LiveReplay", L"CatchUpSpeed", 40, ini); if (g_cuSpeed < 10 || g_cuSpeed > 160) g_cuSpeed = 40;
+    g_cuSpeed = (float)GetPrivateProfileIntW(L"LiveReplay", L"CatchUpSpeed", 80, ini); if (g_cuSpeed < 10 || g_cuSpeed > 160) g_cuSpeed = 80;
+    g_cuFps = GetPrivateProfileIntW(L"LiveReplay", L"CatchUpFps", 30, ini); if (g_cuFps < 5 || g_cuFps > 240) g_cuFps = 30;
+    g_boxCfg = GetPrivateProfileIntW(L"LiveReplay", L"ConnectingBox", 1, ini) != 0;
+    g_boxText = GetPrivateProfileIntW(L"LiveReplay", L"ConnectingText", BOX_SCOUT, ini);
+    { LARGE_INTEGER f; QueryPerformanceFrequency(&f); g_qf = f.QuadPart ? f.QuadPart : 1000; }
     g_syncOff = GetPrivateProfileIntW(L"LiveReplay", L"SyncOffset", 0, ini);
     GetPrivateProfileStringW(L"LiveReplay", L"Server", L"https://rts.fintebtc.de", v, 200, ini);
     WideCharToMultiByte(CP_UTF8, 0, v, -1, g_defBase, sizeof g_defBase, NULL, NULL); g_defBase[sizeof g_defBase - 1] = 0;
@@ -712,6 +872,8 @@ BOOL WINAPI DllMain(HINSTANCE h, DWORD r, LPVOID _) {
     int c = slot_hook(VT_PLAYBACK + 0x1C, FN_PBCRC, (void *)my_pbcrc, (void **)&g_crcOrig);
     int d = patch_call(AT_PB_END, FN_PB_END, (void *)my_pb_end);
     logmsg("playback hooks: reader %d, sync %d, crc %d, end %d; screens %d", a, b, c, d, hook_fscmd());
+    logmsg("catch-up %s at %d ticks/s (%gx), a frame every 1/%d s; Connecting box %s (text %d)", g_catchUp ? "on" : "off", (int)g_cuSpeed, g_cuSpeed / 10.0,
+           g_cuFps, g_boxCfg && connbox_check() ? "on" : "off", g_boxText);
     g_outEv = CreateEventW(NULL, FALSE, FALSE, NULL);
     HANDLE t = CreateThread(NULL, 64 * 1024, installer, NULL, STACK_SIZE_PARAM_IS_A_RESERVATION, NULL); if (t) CloseHandle(t);
     return TRUE;
