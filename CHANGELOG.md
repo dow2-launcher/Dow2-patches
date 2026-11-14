@@ -4,6 +4,26 @@ Every version gets an entry here before it reaches `main`. CI then tags `vX.Y.Z`
 version (`X.Y.0`) it also publishes a GitHub Release with the DLLs and the entries since the previous `X.Y.0`.
 The version of the set lives only in `VERSION`; each DLL still writes its own version to its log.
 
+## 0.2.74 — 2026-11-14
+New AI 25 (store newai-25, experiment, off by default, Elite only): step 6 of the ork brain (brain 0.6). eliteai branch newai-25
+e7b1802 = brain 6c6fd43 with main.ai, mechanics.ai and the vanilla-base sources of strategy_tech_purchase.ai /
+strategy_unit_purchase.ai of a3a378a (newai-23 / 23.1), exactly as newai-24, so every non-ork slot still plays newai-23.1.
+EliteAI.dll 0.11 unchanged. Against newai-24 only two served files change: default.ai (the brain chunks 0.5 -> 0.6) and
+elite.scar (ork abilities 32-38 for casts in a fight; an unload order 14 the brain does not send by default) - additions only.
+- The brain (ork new-AI slots, [Lua] Brain default 1; Brain=0 = newai-23.1 for all): cover spots in a fight
+  (Squad_FindCoverCompareCurrent), going round a set-up team's arc, casts in a fight (stikkbombs, mortar, shootas' suppression,
+  warboss stomps / rapid fire) with the target checked alive and not retreating, no melee squad into a building (Relic's 'Hold'
+  tactic refused for mobs of a brain player only), a power crisis (no power income: the tier keeps no money, a power point is
+  the objective), the first two hero pieces do not wait for the tier, a fallen enemy hero is no enemy, burnt ground after a rout,
+  enemy turrets known by sight and sieged by machines / tankbustas, retreat at a third of the models in pressed fights.
+- Known weak spots: the army arrives in pieces, the late game is weak, nobz are rare; turrets and the power crisis are not tested
+  against people (the bench's computer opponent rarely builds turrets and never takes the brain's power point).
+- Check (independent verifier, fastbench_1113, own worktrees): lib3 32, lib7 31, lib8 24 + 24 more seeds, lib6 3 and lib8 24
+  multithreaded - 0 hangs, 0 TAKE FAILED, 0 Lua / SCAR errors. 48 live 25-min games vs a computer space marine, a647d94 ->
+  6c6fd43: ahead on tickets 27 -> 40 (13 games flip to ahead, 0 the other way), squads lost 79 -> 27, melee-in-building seconds
+  216 -> 0. Brain=0 = vanilla-s9 on the 9-scene library (0 squad-seconds differ). Package: ork slots brain on, 0 squad-seconds
+  differ from 6c6fd43; eldar / space marines brain off, 0 squad-seconds differ from newai-23.1.
+
 ## 0.2.73 — 2026-11-13
 New AI 24 (store newai-24, experiment, off by default, Elite only): the new AI "brain" for orks. eliteai branch newai-24 eceeed9 =
 brain a647d94 (step 5 d4969a0 + "release default Brain=1": [Lua] Brain defaults to 1, Brain=0 turns it off) with main.ai,
