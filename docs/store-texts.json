@@ -831,5 +831,23 @@
       "fr": "Un ordinateur placé dans l'emplacement libéré par un humain (p. ex. l'hôte passé en observateur) n'avait pas d'armée : des carrés roses au lieu de son emblème. Il reçoit maintenant l'armée par défaut de sa race.",
       "de": "Ein Computer in einem Platz, den ein Mensch verlassen hat (z. B. der Host ging zu den Zuschauern), hatte keine Armee: rosa Quadrate statt seines Abzeichens. Jetzt bekommt er die Standardarmee seiner Rasse."
     }
+  },
+  "parallelpose": {
+    "category": "experiment",
+    "order": 1130,
+    "name": {
+      "en": "Parallel Pose",
+      "ru": "Parallel Pose",
+      "es": "Parallel Pose",
+      "fr": "Parallel Pose",
+      "de": "Parallel Pose"
+    },
+    "description": {
+      "en": "Smoother big late-game fights: models are animated on several CPU cores instead of one. Experimental; looks only, no effect on sync.",
+      "ru": "Плавнее поздние массовые бои: анимация моделей считается на нескольких ядрах процессора, а не на одном. Экспериментально; только картинка, на синхронизацию не влияет.",
+      "es": "Batallas grandes más fluidas al final de la partida: la animación de los modelos se reparte entre varios núcleos del procesador. Experimental; solo afecta a la imagen, no a la sincronización.",
+      "fr": "Gros combats de fin de partie plus fluides : l'animation des modèles est répartie sur plusieurs cœurs du processeur. Expérimental ; n'affecte que l'image, pas la synchronisation.",
+      "de": "Flüssigere große Gefechte im späten Spiel: Die Modellanimation wird auf mehrere CPU-Kerne verteilt. Experimentell; betrifft nur die Darstellung, nicht die Synchronisation."
+    }
   }
 }

@@ -1,0 +1,1 @@
+- New: Parallel Pose (experiment, off by default, Elite only): smoother big late-game fights - the animation of the models is spread over several CPU cores instead of one. Looks only, no effect on sync.

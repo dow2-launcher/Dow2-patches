@@ -28,6 +28,7 @@ all: $(OUT)/EliteMaps.dll
 all: $(OUT)/OverwatchOnce.dll
 all: $(OUT)/CtrlAttack.dll
 all: $(OUT)/SpeechStreakFix.dll
+all: $(OUT)/ParallelPose.dll
 all: $(OUT)/ArmyBadgeFix.dll
 all: $(OUT)/DocsFix.dll
 all: $(OUT)/LangSwitch.dll
@@ -191,6 +192,10 @@ $(OUT)/ArmyBadgeFix.dll: armybadgefix/armybadgefix.c | $(OUT)
 
 # 11.11.2026: the kill-streak speech read 4 bytes past its list for a unit's first kill (crash at 0x00B8FC24); 4 bytes patched
 $(OUT)/SpeechStreakFix.dll: speechstreakfix/speechstreakfix.c | $(OUT)
+	$(CC) $(CFLAGS) -shared -o $@ $< -static-libgcc
+
+# 14.11.2026: the skeleton poses of the models in view built on several CPU cores (visual only); every patch site byte-checked
+$(OUT)/ParallelPose.dll: parallelpose/parallelpose.c | $(OUT)
 	$(CC) $(CFLAGS) -shared -o $@ $< -static-libgcc
 
 # 12.11.2026: Alt+Shift / Ctrl+Shift / Win+Space switch the keyboard language inside the game window (the game's message loop
