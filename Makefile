@@ -203,7 +203,7 @@ $(OUT)/JumpRetry.dll: jumpretry/jumpretry.c | $(OUT)
 	$(CC) $(CFLAGS) -shared -o $@ $< -static-libgcc
 
 # 03.11.2026 experiment: joining a room from the launcher (the Lobbies tab), its own add-on next to MMFind; RoomJoin 9 (05.11): the pipe
-$(OUT)/RoomJoin.dll: roomjoin/roomjoin.c | $(OUT)
+$(OUT)/RoomJoin.dll: roomjoin/roomjoin.c common/connbox.h | $(OUT)
 	$(CC) $(CFLAGS) -shared -o $@ $< -lpsapi -static-libgcc -Wl,--exclude-all-symbols
 # RoomJoin's pipe for a launcher outside Wine (Linux): shipped with the add-on as Elite_DLLs/rjbridge.exe
 $(OUT)/rjbridge.exe: roomjoin/rjbridge.c | $(OUT)
@@ -214,6 +214,9 @@ $(OUT)/mmbridge.exe: roomjoin/rjbridge.c | $(OUT)
 # the test client of MMFind's pipe (not shipped): make build/mmpipe.exe
 $(OUT)/mmpipe.exe: roomjoin/rjpipe.c | $(OUT)
 	$(CC) $(CFLAGS) -DPIPE_PREFIX='"EliteMMFind"' -o $@ $< -static-libgcc
+# the test client of LiveReplay's pipe (not shipped): make build/lrpipe.exe
+$(OUT)/lrpipe.exe: roomjoin/rjpipe.c | $(OUT)
+	$(CC) $(CFLAGS) -DPIPE_PREFIX='"EliteLiveReplay"' -o $@ $< -static-libgcc
 # the test client of RoomJoin's pipe (RoomJoin 9; not shipped): make build/rjpipe.exe
 $(OUT)/rjpipe.exe: roomjoin/rjpipe.c | $(OUT)
 	$(CC) $(CFLAGS) -o $@ $< -static-libgcc
@@ -224,7 +227,7 @@ $(OUT)/UnitStats.dll: unitstats/unitstats.c common/gfxui.h | $(OUT)
 	$(CC) $(CFLAGS) -shared -o $@ unitstats/unitstats.c -static-libgcc -Wl,--exclude-all-symbols
 
 # 06.11.2026: watch a running match of our servers as a growing replay (the spectator's side; the servers build the replay)
-$(OUT)/LiveReplay.dll: livereplay/livereplay.c | $(OUT)
+$(OUT)/LiveReplay.dll: livereplay/livereplay.c common/connbox.h | $(OUT)
 	$(CC) $(CFLAGS) -shared -o $@ $< -lwinhttp -lshell32 -static-libgcc
 # its pipe for a launcher outside Wine (Linux), shipped with the add-on as Elite_DLLs/lrbridge.exe
 $(OUT)/lrbridge.exe: roomjoin/rjbridge.c | $(OUT)
