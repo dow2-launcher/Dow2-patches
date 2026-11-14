@@ -4,6 +4,66 @@ Every version gets an entry here before it reaches `main`. CI then tags `vX.Y.Z`
 version (`X.Y.0`) it also publishes a GitHub Release with the DLLs and the entries since the previous `X.Y.0`.
 The version of the set lives only in `VERSION`; each DLL still writes its own version to its log.
 
+## 0.2.78 — 2026-11-14
+ReplayOpen 1 (new add-on, store replayopen-1, experiment, off by default, Elite): "Play" of a replay from the launcher (siritos
+14.11.2026). Pipe \\.\pipe\EliteReplayOpen-<pid> (robridge.exe for a launcher outside Wine), protocol in replayopen/replayopen.c:
+{"cmd":"play","file":"<path or name in Playback>"} / status / cancel; events accepted, data_mismatch, loading, playing, over, failed.
+- A running game shows the game's own "Connecting" box (common/connbox.h) at once, then starts the replay as Game History -> Load
+  Replay does (0x40F526) from a copy Playback\launcher_replay.rec; a game the launcher just started gets the command once the pipe is
+  up and starts the replay when its menu is there.
+- "Replays of another micro-patch of the same game do not start": the header check 0x42B259 wants build 10320, a zero word, "DOW2_REC"
+  and the game data's checksum 0x7A0A30() - every Elite build with other attrib archives has its own (3.2 D6805B7D, 3.2.1 819567F8)
+  and the game's own Load Replay of such a file silently does nothing. ReplayOpen checks the header first: another game build or no
+  replay = failed "version" / "bad_file" with the reason; another data checksum = the copy gets this game's checksum and the replay
+  starts, the launcher gets {"ev":"data_mismatch","replay":"..","game":".."} (it may go out of sync where the builds' data differ);
+  ReplayOpen.ini Mismatch=refuse fails it instead.
+
+## 0.2.77 — 2026-11-14
+MMFind 0.50 (Automatch v2.0, hand release mmfind-0.52 = mmfind-0.51 with this MMFind.dll): the game's "Connecting" box while a
+launcher room's match starts; an observer's ticket of a launcher room.
+- The box (common/connbox.h) from Start Searching to the loading screen; closed on every failure / cancel / server cancel and at the
+  loading screen, never in a match. Not from the launcher's command on: while a message box is up the game's menu ignores every
+  command - stand 14.11 with the box up from the command in the main menu, MMFind sent Find a Game 26 times, nothing opened,
+  walk_timeout after 60 s (the box then closed). [MMFind] ConnectingBox=0: no box.
+- {"cmd":"room","room":"<id>","mode":"..","watch":true} (the ladder's lroom observer ticket): no walk, no army; mm/join mode "watch"
+  with "lroom":"<id>", mm/poll every 2 s until the ladder made him a watcher of the room's match and the host's game room is up, then
+  that room joined by its id from the main menu (the game browser's join, RoomJoin's call); events accepted / searching / matched /
+  in_room / loading / failed (expired, server_cancelled, refused, in_lobby, left_screen, cancelled). Cancel = mm/leave.
+
+## 0.2.76 — 2026-11-14
+LiveReplay 4 (store livereplay-4, experiment, off by default): Watch at any minute of a match, 8x up to the live edge, the game's
+"Connecting" box with the scout's line.
+- Why a late Watch did not work: since LiveReplay 3 it starts (answers cut by the UDP tunnel are used as far as they go), but it never
+  caught up - players' logs 09.11: "catching up: 1500 steps behind" was "caught up" 22 minutes later, at the end of the match (1.1x
+  instead of 4x). SimulationController::Update 0x438613 runs at most one tick per drawn frame, so the replay was as fast as the frames.
+- Now the catch-up runs at CatchUpSpeed=80 (8x, was 40) for real: while it catches up, the main loop's passes between two shown frames
+  skip the visual update and the draw (call sites 0x40E58D / 0x40E6DC, as ReplaySpeed's 8x; chained with its stubs when it is there,
+  hooked only for the catch-up and put back after it), a frame shown every 1/30 s (CatchUpFps), the rate set raised (at most 2 x
+  CatchUpSpeed) until the replay really runs CatchUpSpeed ticks a second; the real speed in the log every 5 s. The player's own speed
+  button ends the catch-up. A catch-up can start whenever the replay is more than 30 s behind (not only at the first step).
+- The game's own "Connecting" box (common/connbox.h) from the accepted watch to the start of the replay's loading, second line the
+  scout's "See, but do not be seen." - DOW2.ucs 9027524 through Localizer (each language its own; a language without it, as the
+  Russian DOW2.ucs, gets 550002 "Connecting to the game..."). LiveReplay.ini ConnectingBox=0 / ConnectingText=<id>.
+- No server change needed (dow2-ladder fix/live-replay-cut-answers stays optional): even cut to the tunnel's first burst the answers
+  bring the records far faster than 8x plays them.
+
+## 0.2.75 — 2026-11-14
+RoomJoin 14 (store roomjoin-8, experiment, off by default) and common/connbox.h (siritos 14.11.2026).
+- common/connbox.h: the game's own "Connecting" box of RoomJoin 13 (MessageBoxManager 0x45A3CD / 0xAD5FE0 / 0xAD6200, title
+  550001, text 550002 or a DOW2.ucs id of the caller, no buttons) as shared source, so RoomJoin, MMFind, LiveReplay and ReplayOpen
+  show the same box. Its three code places are checked for 3.19 before the first use (else: logged, never shown); a text id the
+  game's language does not have falls back to 550002. Only from the game's thread, only in the front end.
+- RoomJoin 14: the box from common/connbox.h (as before: from the start of the join to the lobby screen). New: into a lobby as an
+  observer - {"cmd":"join","room":id,"name":"...","as":"obs"}: the join as always, then on the lobby screen a free observer seat
+  with the screen's own command for a click on that seat (fscommand player_list_panel_mc.OnObserverItemClick "<position>" ->
+  0x491D51, its menu item "Move to this slot" 0x492EF1 run at once - MMFind 0.12-0.44's watchers did it the same way); observer
+  seats = each team's positions from max_players/2 on (the lobby's Receive_SetMaxPlayers, as 0x491D51 decides), free = GameInfo slot
+  type 0 without a person; my seat from the player list's own row. Answers {"ev":"in_lobby","room":id,"as":"obs"}; no free observer
+  seat (or 6 changes that did not take) -> {"ev":"failed","room":id,"reason":"no_obs_slot"} and Back out of the lobby. The seat menu
+  hook is installed only on 3.19's prologue under the shared patch lock; without it a join "as obs" fails at once ("error").
+  Status "version":"14" (the launcher sends "as" to 14+ only). _WIN32_WINNT for older mingw headers (CancelIoEx), as MMFind.
+- Stand (stand 1, Elite 3.2.1, one Steam account - the only stand with a working Steam login on 14.11): see the PR.
+
 ## 0.2.74 — 2026-11-14
 New AI 25 (store newai-25, experiment, off by default, Elite only): step 6 of the ork brain (brain 0.6). eliteai branch newai-25
 e7b1802 = brain 6c6fd43 with main.ai, mechanics.ai and the vanilla-base sources of strategy_tech_purchase.ai /

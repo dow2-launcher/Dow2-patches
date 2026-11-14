@@ -13,6 +13,7 @@ all: $(OUT)/RelayForward.dll $(OUT)/OwnLobby.dll $(OUT)/CrashLog.dll $(OUT)/NetP
 all: $(OUT)/rjbridge.exe
 all: $(OUT)/ShellFix.dll
 all: $(OUT)/LiveReplay.dll $(OUT)/lrbridge.exe
+all: $(OUT)/ReplayOpen.dll $(OUT)/robridge.exe
 all: $(OUT)/UnitStats.dll
 all: $(OUT)/ReplayTakeover.dll
 all: $(OUT)/SoundFix.dll
@@ -91,7 +92,7 @@ $(OUT)/EliteAI.dll: eliteai/eliteai.c | $(OUT)
 $(OUT)/Reverse.dll: reverse/reverse.c | $(OUT)
 	$(CC) $(CFLAGS) -shared -o $@ $< -static-libgcc
 
-$(OUT)/MMFind.dll: mmfind/mmfind.c | $(OUT)
+$(OUT)/MMFind.dll: mmfind/mmfind.c common/connbox.h | $(OUT)
 	$(CC) $(CFLAGS) -shared -o $@ $< -lwinhttp -lpsapi -lshell32 -lole32 -static-libgcc
 
 # Relay 17: two DLLs from one source: Relay.dll (since 05.11.2026 part of the automatch package, loaded by MMFind.dll - the
@@ -203,7 +204,7 @@ $(OUT)/JumpRetry.dll: jumpretry/jumpretry.c | $(OUT)
 	$(CC) $(CFLAGS) -shared -o $@ $< -static-libgcc
 
 # 03.11.2026 experiment: joining a room from the launcher (the Lobbies tab), its own add-on next to MMFind; RoomJoin 9 (05.11): the pipe
-$(OUT)/RoomJoin.dll: roomjoin/roomjoin.c | $(OUT)
+$(OUT)/RoomJoin.dll: roomjoin/roomjoin.c common/connbox.h | $(OUT)
 	$(CC) $(CFLAGS) -shared -o $@ $< -lpsapi -static-libgcc -Wl,--exclude-all-symbols
 # RoomJoin's pipe for a launcher outside Wine (Linux): shipped with the add-on as Elite_DLLs/rjbridge.exe
 $(OUT)/rjbridge.exe: roomjoin/rjbridge.c | $(OUT)
@@ -214,6 +215,12 @@ $(OUT)/mmbridge.exe: roomjoin/rjbridge.c | $(OUT)
 # the test client of MMFind's pipe (not shipped): make build/mmpipe.exe
 $(OUT)/mmpipe.exe: roomjoin/rjpipe.c | $(OUT)
 	$(CC) $(CFLAGS) -DPIPE_PREFIX='"EliteMMFind"' -o $@ $< -static-libgcc
+# the test client of ReplayOpen's pipe (not shipped): make build/ropipe.exe
+$(OUT)/ropipe.exe: roomjoin/rjpipe.c | $(OUT)
+	$(CC) $(CFLAGS) -DPIPE_PREFIX='"EliteReplayOpen"' -o $@ $< -static-libgcc
+# the test client of LiveReplay's pipe (not shipped): make build/lrpipe.exe
+$(OUT)/lrpipe.exe: roomjoin/rjpipe.c | $(OUT)
+	$(CC) $(CFLAGS) -DPIPE_PREFIX='"EliteLiveReplay"' -o $@ $< -static-libgcc
 # the test client of RoomJoin's pipe (RoomJoin 9; not shipped): make build/rjpipe.exe
 $(OUT)/rjpipe.exe: roomjoin/rjpipe.c | $(OUT)
 	$(CC) $(CFLAGS) -o $@ $< -static-libgcc
@@ -224,11 +231,16 @@ $(OUT)/UnitStats.dll: unitstats/unitstats.c common/gfxui.h | $(OUT)
 	$(CC) $(CFLAGS) -shared -o $@ unitstats/unitstats.c -static-libgcc -Wl,--exclude-all-symbols
 
 # 06.11.2026: watch a running match of our servers as a growing replay (the spectator's side; the servers build the replay)
-$(OUT)/LiveReplay.dll: livereplay/livereplay.c | $(OUT)
+$(OUT)/LiveReplay.dll: livereplay/livereplay.c common/connbox.h | $(OUT)
 	$(CC) $(CFLAGS) -shared -o $@ $< -lwinhttp -lshell32 -static-libgcc
 # its pipe for a launcher outside Wine (Linux), shipped with the add-on as Elite_DLLs/lrbridge.exe
 $(OUT)/lrbridge.exe: roomjoin/rjbridge.c | $(OUT)
 	$(CC) $(CFLAGS) -DPIPE_PREFIX='L"EliteLiveReplay"' -o $@ $< -static-libgcc
+# 14.11.2026 (siritos): "Play" of a replay from the launcher - the game's Connecting box, then the replay (its own add-on)
+$(OUT)/ReplayOpen.dll: replayopen/replayopen.c common/connbox.h | $(OUT)
+	$(CC) $(CFLAGS) -shared -o $@ $< -lshell32 -static-libgcc -Wl,--exclude-all-symbols
+$(OUT)/robridge.exe: roomjoin/rjbridge.c | $(OUT)
+	$(CC) $(CFLAGS) -DPIPE_PREFIX='L"EliteReplayOpen"' -o $@ $< -static-libgcc
 # 09.11.2026 (performance): the game's Direct3D 9 through DXVK 2.7.1 (dxvk/DXVK_d3d9.bin = the official x32 d3d9.dll, zlib licence
 # dxvk/DXVK_LICENSE.txt): only Spooge's Direct3DCreate9 import is pointed at it; nothing when the game's d3d9.dll is DXVK already
 $(OUT)/DXVK.dll: dxvk/dxvk.c | $(OUT)
