@@ -1,0 +1,2 @@
+- New AI 26: the orks now buy nobz at tier 3 and upgrade them (against vehicles the leader with the power klaw first), do not send squads to capture or march on a point under an enemy turret they cannot break, and answer a turret with an anti-armour squad. The rare freeze of the whole game when a melee unit charges (an engine movement bug) is now fixed inside New AI itself, the Melee freeze fix add-on is no longer needed for it. Every other race plays as in New AI 23.1.
+- Still weak: the army still arrives at a fight in pieces, and the late push gives no clear gain yet.

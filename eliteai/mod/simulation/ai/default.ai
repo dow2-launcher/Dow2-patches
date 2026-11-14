@@ -7971,7 +7971,7 @@ do
 --  * every decision writes one reason line: Brain.say / Brain.order. A scene's timeline must explain itself.
 
 Brain = {}
-Brain.VERSION = "0.6"
+Brain.VERSION = "0.7"
 Brain.RACES = { orks = true }                                    -- the races that have a profile (60_roles.ai); the dispatcher has the same list
 Brain.on = (type(EliteAI_MODE) == "table" and EliteAI_MODE.brain == true)
 
@@ -9062,7 +9062,19 @@ local function point_score(p, cx, cz, W)
 	if not p.vp and not crisis and W.vp.behind and W.vp.losing then worth = worth * Brain.num("ObjRaceK", 0.4) end
 	-- Step 6: burnt ground (50_army.ai: a place where we lost four times what the enemy lost - a nest of set-up teams or
 	-- turrets) is not the next objective while another point is to be had
-	if Brain.army ~= nil and Brain.army.zone_at ~= nil and Brain.army.zone_at(p.x, p.z) ~= nil then worth = worth * Brain.num("ObjZoneK", 0.2) end
+	if Brain.army ~= nil and Brain.army.zone_at ~= nil then
+		local z = Brain.army.zone_at(p.x, p.z)
+		-- (step 7, the turret scenes from people's replays - test/scenes7, t7_tur_afeb88_9m10: an IG player put a turret 16 m
+		-- from a victory point, the fist went on marching to that point and spent 27 % of its squad-seconds inside the
+		-- turret's circle with nothing that could break it. A point inside the circle of a turret that stands is no
+		-- objective until a machine or a squad whose trade is armour stands with the army - Brain_ObjTurret=0: only x ObjZoneK)
+		if z ~= nil and z.turret ~= nil and not Brain.army.can_siege and Brain.num("ObjTurret", 1) >= 1 then return nil end
+		if z ~= nil then worth = worth * Brain.num("ObjZoneK", 0.2) end
+	end
+	-- Step 7: THE PUSH (L.push below) - the fist goes for the enemy's victory point, the small points are the capturers'
+	if L.push ~= nil then
+		if p.vp and p.enemy then worth = worth * Brain.num("PushVpK", 1.5) elseif not p.vp and not crisis then worth = worth * Brain.num("PushOtherK", 0.4) end
+	end
 	for _, h in ipairs(W.ehq) do                                                                            -- R15: not under the enemy's base
 		if d2(p.x, p.z, h.x, h.z) <= Brain.num("ObjHqR", 55) then return nil end
 	end
@@ -9079,7 +9091,10 @@ end
 local function fight_pulls(F, c, W)
 	if Brain.num("PlanFightRule", 1) < 1 then return true end
 	if Brain.capture ~= nil and Brain.capture.clash ~= nil and Brain.capture.clash.key == F.key then return true end   -- the first clash calls everybody
-	if d2(F.x, F.z, c.x, c.z) <= Brain.num("PlanFightR", 60) then return true end
+	-- Step 7 (the race: 'do not lose on tickets while winning fights'): the enemy holds more victory points, we are behind
+	-- and RaceAlarmTickets (150) or fewer are left - only a fight at a victory point or at home is the fist's business
+	local alarm = (W.vp.losing and W.vp.behind and (W.vp.t_ours or 500) <= Brain.num("RaceAlarmTickets", 150))
+	if not alarm and d2(F.x, F.z, c.x, c.z) <= Brain.num("PlanFightR", 60) then return true end
 	if W.home ~= nil and d2(F.x, F.z, W.home.x, W.home.z) <= Brain.num("PlanFightHomeR", 70) then return true end
 	for _, p in ipairs(W.pts) do
 		if p.vp and d2(F.x, F.z, p.x, p.z) <= Brain.num("PlanFightVpR", 40) then return true end
@@ -9088,11 +9103,49 @@ local function fight_pulls(F, c, W)
 	return false
 end
 
+-- Step 7: THE PUSH. The late game of step 6 had no plan of its own: after the 15th minute the fist went on taking the
+-- nearest point worth most per metre, two squads captured at the sides, the set-up team stood at its post - the enemy's
+-- victory point was one objective among many. People who are even or ahead by the 12th-14th minute gather everything and
+-- go for the enemy's victory point. From PushSecs (780 s) on, while we are not behind on tickets by more than
+-- PushBehindOk (40) and PushArmy (5) squads of the army are fit (not on the way home, models x health 0.5+), the plan is a
+-- PUSH: the enemy's victory points are worth PushVpK x, the other points PushOtherK x (20_plan), one side capture
+-- instead of two (55_capture.ai), the set-up team walks with the fist (50_army.ai), the fist stages with
+-- StageFracPush (0.8) of its squads, and the Waaagh goes into the push's fight (70_abilities.ai). It ends when fewer
+-- than PushStopArmy (3) fit squads are left - then not again for PushRestSecs (60 s). Brain_Push=0: off.
+-- Log: 'BR PLAN <t> PUSH START|END why ...'.
+function L.push_update(W)
+	local now = W.now
+	if Brain.num("Push", 1) < 1 then L.push = nil; return end
+	local fit = 0
+	for _, u in ipairs(W.army) do
+		if not u.retreating and (u.eff or 0) >= Brain.num("PushFitEff", 0.5) then fit = fit + 1 end
+	end
+	local to, te = W.vp.t_ours or 500, W.vp.t_enemy or 500
+	if L.push ~= nil then
+		local why
+		if fit < Brain.num("PushStopArmy", 3) then why = "only " .. fit .. " fit squads are left"
+		elseif to < te - 2 * Brain.num("PushBehindOk", 40) then why = "behind on tickets " .. to .. ":" .. te .. " - the race rules take over" end
+		if why ~= nil then
+			Brain.log("PLAN", "PUSH", "END", "why", why, "lasted", Brain.f0(now - L.push.t0), "s", "tickets", to .. ":" .. te, "vp", W.vp.ours .. "/" .. W.vp.enemy .. "/" .. W.vp.neutral)
+			L.push, L.push_end = nil, now
+		end
+		return
+	end
+	if now < Brain.num("PushSecs", 780) or now - (L.push_end or -1000) < Brain.num("PushRestSecs", 60) then return end
+	if fit >= Brain.num("PushArmy", 5) and to >= te - Brain.num("PushBehindOk", 40) then
+		L.push = { t0 = now }
+		L.push_n = (L.push_n or 0) + 1
+		Brain.log("PLAN", "PUSH", "START", "why", (to > te and "ahead" or "even") .. " on tickets " .. to .. ":" .. te .. " with " .. fit .. " fit squads of " .. table.getn(W.army) ..
+			": everything to the enemy's victory point", "vp", W.vp.ours .. "/" .. W.vp.enemy .. "/" .. W.vp.neutral, "n", L.push_n)
+	end
+end
+
 function L.update(W)
 	local now = W.now
 	local A = Brain.army
 	local c = (A and A.centre) or W.home
 	if c == nil then return end
+	L.push_update(W)
 	local cur = L.objective
 	local pick
 	-- 1. a fight we are holding or winning: the fist goes there
@@ -9535,7 +9588,14 @@ function E.update(W)
 		local buys0, k = S.buys, 0
 		for i = 0, n - 1 do
 			local pbg = AIProduction_GetReinforcementSquadPBGAt(s_selfplayer, i)
-			if pbg ~= nil and k < batch then
+			-- (step 7: the population the late core waits for is not filled up again with tier 1 models - 8b below)
+			local held = false
+			if pbg ~= nil and E.pop_hold ~= nil and S.popmax - S.pop < E.pop_hold.pop + Brain.num("EconPopHoldPad", 2) then
+				local d = Brain.UNITS[Brain.bp_key(PBG_GetName(pbg) or "")]
+				held = (d ~= nil and (d.t or 1) <= 1 and d.arm ~= "cmd")
+				if held then E.pop_hold.skipped = (E.pop_hold.skipped or 0) + 1 end
+			end
+			if pbg ~= nil and k < batch and not held then
 				local r, p = cost_rp(AIPlayer_GetProductionCost(s_self_modplayer, PITEM_SquadReinforce, pbg))
 				S.buys = 0
 				if wish(S, "reinf", short_pbg(pbg), r, p, "a squad at a refill point is short of models (" .. n .. " such)", false, function()
@@ -9649,6 +9709,59 @@ function E.update(W)
 		end
 	end
 
+	-- 8a. (step 7) THE LATE CORE and the population: at tier 3 the profile's core squad (orks: the nobz) is wanted whatever
+	-- the squad clock says (40_composition.ai C.late_core), and before the clock's squad. The bank lay idle at the
+	-- population cap (bench, 48 live games of step 6: 515 / 280 in the bank at 91+ of 100, 12 squads ordered after 15:00
+	-- in 36 games) because the two squads 'above the clock' and every lost model of a tier 1 squad had filled the 20
+	-- population the nobz need. The purse now keeps POPULATION as it keeps money:
+	--   * from EconCoreReserveSecs (600 s) on, while no core squad stands, a squad above the clock (12 below) is not
+	--     ordered into the core's room (S.pop_reserve, read by C.pick);
+	--   * from the click of tier 3 on, while the core does not fit, the tier 1 squads are not refilled (step 2 above):
+	--     they fight on as they are, the room comes with their losses, the core is ordered the second it fits.
+	-- People swap the weak for the strong the same way - they stop refilling the squad they no longer want.
+	-- Log: 'BR ECON <t> SWAP unit <core> why ... it needs P population, N are free' / 'BUY unit ... why the late core ...'.
+	local hold0 = E.pop_hold
+	E.pop_hold = nil
+	local core_on = (P.late_core ~= nil and Brain.num("EconLateCore", 1) >= 1 and not opening)
+	local core_stands = false
+	if core_on then
+		local k1 = P.late_order and P.late_order[1] and P.late_order[1].key   -- (the room is kept for the first squad of the order)
+		if (S.kinds[k1] or 0) > 0 then core_stands = true end
+		for _, q in ipairs(E.pending) do if q.key == k1 then core_stands = true end end
+		if not core_stands and now >= Brain.num("EconCoreReserveSecs", 600) and Brain.UNITS[k1] ~= nil then S.pop_reserve = Brain.UNITS[k1].pop or 0 end
+	end
+	local core
+	if core_on and S.tier >= 3 then core = Brain.composition.late_core(W, S, E) end
+	if S.tier >= 3 and core == nil then S.pop_reserve = nil end        -- (not wanted now: the enemy is machines, or the core stands)
+	if core_on and not core_stands and S.researching and S.tier == 2 and (S.pop_reserve or 0) > 0 and S.popmax - S.pop < S.pop_reserve then
+		-- (the research of tier 3 runs: the room is made meanwhile)
+		E.pop_hold = { pop = S.pop_reserve, key = "the tier 3 core", t = hold0 and hold0.t or now, skipped = hold0 and hold0.skipped or 0 }
+	end
+	if core ~= nil then
+		local room = S.popmax - S.pop
+		if room < core.pop then
+			-- (the hold is not for ever: after EconPopHoldMaxSecs (150 s) without the room the tier 1 squads are refilled
+			-- again for as long, then the next try - an army of half squads is worse than one without nobz)
+			local hmax = Brain.num("EconPopHoldMaxSecs", 150)
+			if hold0 ~= nil and now - hold0.t > hmax then E.pop_rest = now end
+			if (core.have == 0 or S.req >= Brain.num("EconCore2HoldReq", 900)) and now - (E.pop_rest or -1000) >= hmax then
+				E.pop_hold = { pop = core.pop, key = core.key, t = hold0 and hold0.t or now, skipped = hold0 and hold0.skipped or 0 }
+				S.keep_req, S.keep_pow = S.keep_req + core.req, S.keep_pow + core.pow
+				Brain.say("ECON", "swap", 60, { "SWAP", "unit", Brain.short(core.key), "cost", rp(core.req, core.pow), "why", core.why .. ": it needs " .. core.pop .. " population, " .. room .. " are free of " .. S.popmax ..
+					" - the tier 1 squads are not refilled until it fits", "bank", rp(S.req, S.pow), "held", Brain.f0(now - E.pop_hold.t), "s", "refills skipped", E.pop_hold.skipped }, "swap|" .. core.key)
+			end
+			core = nil
+		elseif now - E.t_unit >= Brain.num("EconUnitGapSecs", 20) then
+			wish(S, "unit", Brain.short(core.key), core.req, core.pow, core.why .. (hold0 and (" - the room was made in " .. Brain.f0(now - hold0.t) .. " s") or ""), true, function()
+				Request_Production(s_selfplayer, TGROUP_BuildUnits, TPRIORITY_BuildUnits, PITEM_Spawn, core.pbg)
+				table.insert(E.pending, { key = core.key, t = now, had = S.squads })
+				if core.veh then E.n.veh = E.n.veh + 1 end
+				if core.tier == S.tier then E.tier_unit = S.tier end
+				E.t_unit = now
+				S.pending = S.pending + 1
+			end)
+		end
+	end
 	-- 8. the next squad by the clock (a lost squad is replaced: the clock counts the living)
 	local kr, kp = S.keep_req, S.keep_pow
 	-- (step 5: while the tier's research runs the squad the clock asks for waits for it, TierUnitWaitSecs (90 s) at most and
@@ -9656,7 +9769,7 @@ function E.update(W)
 	-- lib6: the squad of 840 s was bought at tier 2 a minute before tier 3 came, and no nobz for the rest of the game)
 	local t_click = E.t_tier[S.tier + 1]
 	local tier_wait = (S.researching and t_click ~= nil and now - t_click < Brain.num("EconTierUnitWaitSecs", 90) and S.squads >= 4 and not S.home_fight)
-	if not opening and have < want and now - E.t_unit >= Brain.num("EconUnitGapSecs", 20) then
+	if not opening and have < want and now - E.t_unit >= Brain.num("EconUnitGapSecs", 20) and core == nil then
 		if tier_wait then
 			Brain.say("ECON", "keep|unitwait", 30, { "KEEP", "unit", "-", "why", "the research of tier " .. (S.tier + 1) .. " runs (" .. Brain.f0(now - t_click) .. " s): the next squad is of the new tier",
 				"bank", rp(S.req, S.pow) }, "unitwait")
@@ -9713,13 +9826,21 @@ function E.update(W)
 	local upg_want = 0
 	if now >= P.upg_first then upg_want = math.min(1 + math.floor((now - P.upg_first) / P.upg_every), plan_num("upg_max", 10)) end
 	if floating and now >= P.upg_first and now - (E.t_upg or -1000) >= Brain.num("EconFloatUpgSecs", 20) then upg_want = math.max(upg_want, E.n.upg + 1) end
+	-- (step 7, the late game: at tier 3 the clock's ten upgrades are spent long ago and the bank lies idle at the population
+	-- cap - a squad of the top tier takes every upgrade of its list (the nobz: kit, hammers, the leader with the klaw), the
+	-- others a third one, one upgrade every EconLateUpgSecs (30 s) while the bank is above EconLateUpgReq (300))
+	local late_upg = (S.tier >= 3 and Brain.num("EconLateUpg", 1) >= 1 and S.req - S.keep_req >= Brain.num("EconLateUpgReq", 300))
+	if late_upg and now - (E.t_upg or -1000) >= Brain.num("EconLateUpgSecs", 30) then upg_want = math.max(upg_want, E.n.upg + 1) end
 	if E.n.upg < upg_want then
 		local best, best_c, best_aisq
 		for _, u in ipairs(W.own) do
 			local prefs = P.upg[u.key]
+			if prefs ~= nil and (en_veh or 0) >= 1 and P.upg_veh ~= nil and P.upg_veh[u.key] ~= nil then prefs = P.upg_veh[u.key] end
 			if prefs ~= nil and not u.retreating then
 				local had = E.upg[u.id] or { n = 0 }
-				if had.n < Brain.num("EconUpgPerSquad", 2) and (best == nil or had.n < (E.upg[best.id] or { n = 0 }).n) then
+				local per = Brain.num("EconUpgPerSquad", 2)
+				if late_upg then per = math.max(per, Brain.num("EconLateUpgPerSquad", 3)) end
+				if had.n < per and (best == nil or had.n < (E.upg[best.id] or { n = 0 }).n) then
 					local aisq = aisquad_by_id(u.id)
 					if aisq ~= nil and Task_CountAISquadProduction(aisq) == 0 then
 						-- (step 6, Orca's match 1: 'beamy deffguns with no machine around' - 3 of 7 upgrades; an upgrade the profile
@@ -9756,7 +9877,9 @@ function E.update(W)
 	if free_req >= 1.5 * Brain.num("EconFloatReq", 500) then fgap = fgap / 3 end
 	if not opening and free_req >= Brain.num("EconFloatReq", 500) and now - E.t_unit >= fgap
 		and have < want + Brain.num("EconFloatSquads", 2) + (S.crisis and 1 or 0) and not tier_wait then
+		S.float_buy = true
 		buy_unit("the bank floats (" .. Brain.f0(S.req) .. " requisition, " .. Brain.f0(S.keep_req) .. " of it kept)", false)
+		S.float_buy = nil
 	end
 
 	Brain.say("ECON", "state", 60, { "STATE", "units", E.n.unit, "veh", E.n.veh, "gens", S.gens, "posts", S.posts, "tier", S.tier .. (S.researching and "+" or ""),
@@ -9839,9 +9962,50 @@ function C.enemy_mix(W)
 	m.inf, m.hinf, m.veh = m.inf / sum, m.hinf / sum, m.veh / sum
 	return m, n, veh_n, setup_n
 end
+-- Step 7: THE LATE CORE (the complaint: 'nobz are almost never bought' - bench, 48 live games of step 6: a nob squad in
+-- 3 of 36 games that reached tier 3; the squad clock asks for 6 squads and 7 stand, the population is 93 of 100, so no
+-- order is made at all, and when one is, the dread / the tankbustas outscore the nobz). People who reach tier 3 order
+-- a nob squad (human_baseline_1113: 'the first new unit after T3 - ... a nob squad ...'). At tier 3, while the enemy is
+-- mostly infantry (CompCoreInfMix 0.5 of what was seen), the profile's core squad (econ.late_core: orks - the nobz,
+-- 3000 health in heavy armour, a mob that does reach its target) is wanted whatever the squad clock says: one, a second
+-- when the bank holds twice its price. It does not ask the engine about population - the purse makes the room
+-- (30_economy.ai, 8b). Returns { key, pbg, req, pow, pop, why } or nil. Brain_EconLateCore=0: off.
+function C.late_core(W, S, E)
+	local P = S.P
+	if P.late_core == nil or S.tier < 3 then return nil end
+	local mix, seen, en_veh = C.enemy_mix(W)
+	if mix.inf + mix.hinf < Brain.num("CompCoreInfMix", 0.5) then return nil end
+	local can = {}
+	local cnt = AIProduction_GetBuildableSquadCount(s_selfplayer)
+	for i = 0, cnt - 1 do
+		local pbg = AIProduction_GetBuildableSquadAt(s_selfplayer, i)
+		local key = pbg and Brain.bp_key(PBG_GetName(pbg) or "") or ""
+		if P.late_core[key] ~= nil and Brain.UNITS[key] ~= nil and AIProduction_CanProduce(s_selfplayer, PITEM_Spawn, pbg) == true then can[key] = pbg end
+	end
+	for _, e in ipairs(P.late_order or {}) do
+		local pbg, d = can[e.key], Brain.UNITS[e.key]
+		if pbg ~= nil and e.n <= Brain.num("CompCoreMax", 2) then
+			local have = (S.kinds[e.key] or 0)
+			for _, q in ipairs(E.pending) do if q.key == e.key then have = have + 1 end end
+			local c = AIPlayer_GetProductionCost(s_self_modplayer, PITEM_Spawn, pbg)
+			local r, p = (c and c.requisition) or d.req, (c and c.power) or d.pow
+			local k = Brain.num("CompCore2K", 2)
+			if have < e.n and (not e.rich or (S.req >= k * r and S.pow >= k * p)) then
+				return { key = e.key, pbg = pbg, req = r, pow = p, pop = d.pop or 0, tier = d.t, have = have, veh = (d.arm == "veh"),
+					why = "the late core: " .. Brain.short(e.key) .. " " .. (have + 1) .. " of " .. e.n .. " at tier " .. S.tier .. " against infantry (" .. Brain.f0((mix.inf + mix.hinf) * 100) .. " % of the enemy seen)"
+						.. (e.rich and ", the bank holds twice its price" or "") }
+			end
+		end
+	end
+	return nil
+end
 function C.pick(W, S, E)
 	local P = S.P
 	local mix, seen, en_veh, en_setup = C.enemy_mix(W)
+	-- (step 7: a turret of the enemy that stands in the field asks for a squad that breaks armour as a machine does - the
+	-- infantry keeps out of its circle and nothing else of ours can take it; Brain_CompTurretAv=0: off)
+	local n_tur = table.getn((Brain.army and Brain.army.turrets) or {})
+	if n_tur > 0 and Brain.num("CompTurretAv", 1) >= 1 then en_veh = (en_veh or 0) + n_tur end
 	local opening_i = E.n.unit + 1
 	local open_key = (S.opening and P.opening) and P.opening[opening_i] or nil
 	local mel, rng, av, brk, top, setups = 0, 0, 0, 0, 0, 0
@@ -9940,6 +10104,8 @@ function C.pick(W, S, E)
 			if r > S.req - S.keep_req + S.ireq * Brain.num("CompUnitReqSecs", 45) then v = 0 end
 			-- (population: the engine's own answer went with 'can produce now' - a squad that does not fit is no candidate)
 			if (d.pop or 0) > (S.popmax or 0) - (S.pop or 0) then v = 0 end
+			-- (step 7: the room kept for the tier 3 core - 30_economy.ai 8a; a squad of the core itself and the clock's own squads are not held by it)
+			if S.float_buy and (S.pop_reserve or 0) > 0 and not (P.late_core and P.late_core[key]) and (d.pop or 0) > (S.popmax or 0) - (S.pop or 0) - S.pop_reserve then v = 0 end
 			if open_key ~= nil then
 				if key == open_key then v, why = 1000, "the people's opening" else v = 0 end
 			end
@@ -10701,6 +10867,23 @@ local function fight(F, W, taken)
 			local wr = roles.of(w)
 			if not roles.is_machine(wr) and not roles.is_rear(wr) then ix, iz, ik = ix + w.x, iz + w.z, ik + 1 end
 		end
+		-- Step 7: the support comes in together (A.stage_gate): the squads that are called and still out of the enemy's
+		-- reach wait at its edge for each other - not one by one into the fight as each gets back from the base
+		local sup_wait = {}
+		if Brain.num("Stage", 1) >= 1 and Brain.num("StageSupport", 1) >= 1 then
+			local cand = {}
+			for _, u in ipairs(F.support) do
+				local ur = roles.of(u)
+				if not taken[u.id] and not roles.is_machine(ur) and not roles.is_rear(ur) then table.insert(cand, u) end
+			end
+			if table.getn(cand) >= 2 then
+				local g, ready, sn = A.stage_gate(F.key, cand, F.en, W, false, Brain.num("StageSupSecs", 6))
+				if g == "wait" then
+					for _, u in ipairs(cand) do sup_wait[u.id] = true; taken[u.id] = true end
+					Brain.say("ARMY", "fstage|" .. F.key, 10, { "fight", F.key, "STAGE", "why", "the support waits at the edge of the enemy's reach for each other", "there", ready, "of", sn }, "stage")
+				end
+			end
+		end
 		for _, u in ipairs(F.support) do
 			if not taken[u.id] then
 				taken[u.id] = true; A.st[u.id] = { mode = "join", t = now }
@@ -10807,6 +10990,90 @@ function A.group_centre(list, r)
 	return cx / k, cz / k, cy / k
 end
 
+-- Step 7: THE STAGE - 'the army arrives in pieces' (bench, 48 live games of step 6: in the fights where we lost 250+ in
+-- 10 s for next to nothing 1.9 squads of 6.7 alive were there; the others were on the march or 'joining' one by one).
+-- A group that is about to go into an enemy it knows about does not walk in as each squad arrives: every squad walks up
+-- to the edge of the enemy's reach (its longest gun + StagePad, 50-62 m from its nearest squad) and waits there; when
+-- StageFrac of the squads that are coming (people: 67 % of the squads are in the main group in 1v1, 80 % in a team game
+-- - human_baseline_1113) stand at that edge, all go in the same second. The wait is StageMaxSecs (20 s) at most from
+-- the first squad at the edge (with two there; 2 x that with one) - no stall in front of a point the enemy is taking.
+-- Used by the fist before contact (the enemy seen or remembered); the support of a fight that is on (the squads called
+-- from within SupportR) only waits StageSupSecs (6 s) for each other - our squads in that fight need them.
+-- Brain_Stage=0: off. Log: 'fist STAGE ...' / 'fight <F> STAGE ...' and the orders 'stage: ...'.
+A.stage = {}
+local function stage_keep(en)
+	local mr = 0
+	for _, e in ipairs(en) do if e.d ~= nil and (e.d.rng or 0) > mr then mr = e.d.rng end end
+	if mr <= 0 then mr = 40 end
+	return math.max(Brain.num("StageMinD", 50), math.min(mr + Brain.num("StagePad", 8), Brain.num("StageMaxD", 62)))
+end
+local function near_enemy(u, en)
+	local bd, be
+	for _, e in ipairs(en) do
+		local d = d2(u.x, u.z, e.x, e.z)
+		if bd == nil or d < bd then bd, be = d, e end
+	end
+	return bd, be
+end
+-- cand = the squads that are to go in; en = the enemy they go into. Returns "go" (the gate is open: order them in) or
+-- "wait" (the stage orders are given here), ready, n.
+function A.stage_gate(key, cand, en, W, team, max_secs)
+	local now = W.now
+	local n = table.getn(cand)
+	if n == 0 or table.getn(en) == 0 then return "go", 0, 0 end
+	local st = A.stage[key]
+	if st ~= nil and now - st.seen > 10 then st = nil end                   -- (an old stage of the same name)
+	if st == nil then st = { seen = now }; A.stage[key] = st end
+	st.seen = now
+	if st.go ~= nil and now - st.go < Brain.num("StageGoSecs", 20) then return "go", n, n end
+	local keep = stage_keep(en)
+	local band = Brain.num("StageBand", 10)
+	local ready, hit = 0, false
+	local dist = {}
+	for _, u in ipairs(cand) do
+		local d, e = near_enemy(u, en)
+		dist[u.id] = { d = d, e = e }
+		if d <= keep + band then ready = ready + 1 end
+		if u.hit and d <= keep + band then hit = true end
+	end
+	local frac = team and Brain.num("StageFracTeam", 0.8) or Brain.num("StageFrac1v1", 0.7)
+	if Brain.plan.push ~= nil then frac = math.max(frac, Brain.num("StageFracPush", 0.8)) end
+	local need = math.min(n, math.ceil(n * Brain.num("StageFrac", frac) - 0.001))
+	if ready > 0 and st.t0 == nil then st.t0 = now end
+	if ready == 0 then st.t0 = nil end
+	local waited = (st.t0 ~= nil) and (now - st.t0) or 0
+	local max_s = max_secs or Brain.num("StageMaxSecs", 20)
+	if max_secs ~= nil then need = n end                                     -- (the support of a fight that is on: all of them, but a few seconds only)
+	local why
+	if ready >= need then why = ready .. " of " .. n .. " at the edge"
+	elseif hit then why = "shot at at the edge"
+	elseif waited >= max_s and ready >= 2 then why = "waited " .. f0(waited) .. " s with " .. ready .. " of " .. n
+	elseif waited >= 2 * max_s then why = "waited " .. f0(waited) .. " s" end
+	if why ~= nil then
+		st.go, st.t0 = now, nil
+		A.stats.stage_go = (A.stats.stage_go or 0) + 1
+		Brain.log("ARMY", "stage", key, "GO", "why", why, "ready", ready, "of", n, "edge", f0(keep), "waited", f0(waited))
+		return "go", ready, n
+	end
+	A.stats.stage_wait = (A.stats.stage_wait or 0) + 1
+	for _, u in ipairs(cand) do
+		local q = dist[u.id]
+		local e = q.e
+		local ust = A.st[u.id]
+		if q.d > keep + band - 6 or q.d < keep - 8 then
+			-- to the edge: the point at 'keep' from the enemy's nearest squad on the line to this squad (a squad that got
+			-- nearer walks back out of reach)
+			local k = keep / math.max(q.d, 1)
+			A.st[u.id] = { mode = "stage", t = now }
+			Brain.order(u, O.MOVE, e.x + (u.x - e.x) * k, u.y, e.z + (u.z - e.z) * k, { "stage: to the edge of the enemy's reach", f0(keep), "enemy at", f0(q.d), "there", ready .. "/" .. n, key })
+		elseif ust == nil or ust.mode ~= "stage" or ust.held == nil then
+			A.st[u.id] = { mode = "stage", t = now, held = true }
+			Brain.order(u, O.MOVE, u.x, u.y, u.z, { "stage: wait at the edge for the others", "enemy at", f0(q.d), "there", ready .. "/" .. n, key })
+		end
+	end
+	return "wait", ready, n
+end
+
 local function fist(W, taken)
 	local now = W.now
 	local list = {}
@@ -10819,10 +11086,12 @@ local function fist(W, taken)
 	-- fist is not left thin. Brain_SetupPost=0: it walks with the fist as before.
 	-- Log: 'BR ARMY <t> squad <id> <unit> POST at <point> why covers the direction ... dist D'.
 	local posted = 0
-	if Brain.num("SetupPost", 1) >= 1 and now >= Brain.num("SetupPostSecs", 150) and table.getn(W.army) >= Brain.num("SetupPostArmy", 4) then
+	-- (step 7: not during a push - the set-up team walks with the fist then)
+	if Brain.num("SetupPost", 1) >= 1 and now >= Brain.num("SetupPostSecs", 150) and table.getn(W.army) >= Brain.num("SetupPostArmy", 4) and Brain.plan.push == nil then
 		local posts
 		for _, u in ipairs(W.army) do
-			if not taken[u.id] and Brain.roles.of(u) == "setup" then
+			local mu = Brain.capture.muster
+			if not taken[u.id] and Brain.roles.of(u) == "setup" and not (mu ~= nil and d2(u.x, u.z, mu.x, mu.z) <= Brain.num("MusterD", 150)) then
 				if posts == nil then
 					posts = {}
 					for _, p in ipairs(W.pts) do
@@ -10891,16 +11160,24 @@ local function fist(W, taken)
 	local cx, cz, cy = A.group_centre(list, fist_r)
 	A.centre = { x = cx, y = cy, z = cz }
 	local inside, n_in = {}, 0
+	local outside = {}
 	for _, u in ipairs(list) do
 		local d = d2(u.x, u.z, cx, cz)
-		if d <= fist_r then table.insert(inside, u); n_in = n_in + 1
-		else
-			A.st[u.id] = { mode = "gather", t = now }
-			Brain.order(u, O.MOVE, cx, cy, cz, { "join the fist", "away", f0(d), "together", n_in .. "+/" .. n })
+		if d <= fist_r then table.insert(inside, u); n_in = n_in + 1 else table.insert(outside, u) end
+	end
+	-- (step 7: the squads away from the fist are ordered below, when it is known whether the fist stages - then they go
+	-- to the edge with the others, not to the fist's centre)
+	local staged = {}
+	local function join_far()
+		for _, u in ipairs(outside) do
+			if not staged[u.id] then
+				A.st[u.id] = { mode = "gather", t = now }
+				Brain.order(u, O.MOVE, cx, cy, cz, { "join the fist", "away", f0(d2(u.x, u.z, cx, cz)), "together", n_in .. "/" .. n })
+			end
 		end
 	end
 	local obj = Brain.plan.objective
-	if obj == nil then return end
+	if obj == nil then join_far(); return end
 	-- how much of the free army must stand together before it marches (step 3, against people - human_baseline_1113):
 	-- in 1v1 their main group holds 67 % of the squads and they stand as one fist 43 % of the time; in team games 80 %
 	-- and 63-68 %. FistFrac (set = both modes) / FistFrac1v1 0.6 / FistFracTeam 0.75.
@@ -10921,17 +11198,22 @@ local function fist(W, taken)
 	local P = Brain.perception
 	local threat_r = Brain.num("ThreatR", 70)
 	local th, th_s, th_ratio
-	local function look(en, x, z, k)
+	local function look(en, x, z, k, F)
 		if table.getn(en) == 0 or table.getn(inside) == 0 then return end
 		if d2(x, z, cx, cz) > threat_r and d2(x, z, obj.x, obj.z) > Brain.num("ThreatObjR", 40) then return end
 		local s_en = k * P.strength(en, P.mix_of(inside))
 		if th_s == nil or s_en > th_s then
-			th, th_s = { x = x, z = z, n = table.getn(en), ghost = (k < 1) }, s_en
+			th, th_s = { x = x, z = z, n = table.getn(en), ghost = (k < 1), en = en, F = F }, s_en
 			th_ratio = P.strength(inside, P.mix_of(en)) / math.max(s_en, 1)
+			-- (step 7: the enemy of a fight of ours is weighed against the fist AND our squads that fight it - a squad back
+			-- from the base stood where it was, 'the enemy ahead is stronger', while its fist was holding that enemy)
+			-- (bench s7_a, 48 games: with it on by default the fist stood half as often and attacked twice as often - more
+			-- fights, 2.42 models lost a minute against 2.04; StageCountFight=1 turns it on)
+			if F ~= nil and Brain.num("StageCountFight", 0) >= 1 then th_ratio = th_ratio + (F.s_ours or 0) / math.max(F.s_en or s_en, 1) end
 		end
 	end
 	for _, c in ipairs(W.threats) do look(c.en, c.x, c.z, 1) end
-	for _, c in ipairs(W.fights) do look(c.en, c.x, c.z, 1) end
+	for _, c in ipairs(W.fights) do look(c.en, c.x, c.z, 1, c) end
 	if table.getn(W.ghosts) > 0 then
 		local gx, gz, gk = 0, 0, 0
 		local near = {}
@@ -10947,6 +11229,27 @@ local function fist(W, taken)
 		for _, g in ipairs(near) do if (g.age or 99) <= Brain.num("GhostFreshSecs", 8) then fresh = true end end
 		if gk > 0 then look(near, gx / gk, gz / gk, fresh and 1 or Brain.num("GhostK", 0.5)) end
 	end
+	-- Step 7: does the fist stage? It is about to go into the enemy 'th' (it would attack it, or its objective lies within
+	-- that enemy's reach) and is not weaker - then nobody walks in ahead: A.stage_gate.
+	local even_now = Brain.num("Even", 0.8)
+	if th ~= nil then
+		if A.fist_stop ~= nil and now - A.fist_stop < Brain.num("FistBackSecs", 12) then even_now = even_now * (1 + Brain.num("FistBackBand", 0.25)) end
+		if now >= Brain.num("LateSecs", 840) and (W.vp.behind or W.vp.losing) then even_now = math.min(even_now, Brain.num("LateEven", 0.65)) end
+	end
+	local stage_cand
+	if th ~= nil and th_ratio >= even_now and Brain.num("Stage", 1) >= 1 and table.getn(th.en) >= Brain.num("StageMinEnemy", 1) then
+		local keep = stage_keep(th.en)
+		local to_obj = (d2(th.x, th.z, obj.x, obj.z) <= keep + Brain.num("StageObjPad", 15))
+		local attack = (th_ratio >= A.win_line(W) and not th.ghost and d2(th.x, th.z, cx, cz) <= threat_r)
+		if to_obj or attack then
+			stage_cand = {}
+			for _, u in ipairs(list) do
+				local d = near_enemy(u, th.en)
+				if d <= Brain.num("StageComeD", 150) then table.insert(stage_cand, u); staged[u.id] = true end
+			end
+		end
+	end
+	join_far()
 	if th ~= nil then
 		table.insert(tail, "threat"); table.insert(tail, th.n .. (th.ghost and "g" or "") .. "@" .. f0(th.x) .. "," .. f0(th.z)); table.insert(tail, "ratio"); table.insert(tail, f2(th_ratio))
 		-- (step 6: a fist that stood or went back for this threat marches again only when it is clearly no weaker - the
@@ -10982,6 +11285,28 @@ local function fist(W, taken)
 		if A.zone_at(th.x, th.z) ~= nil and th_ratio < Brain.num("ZonePressRatio", 2) then
 			burnt = true
 			for _, u in ipairs(inside) do if u.veh then burnt = false end end
+		end
+		if stage_cand ~= nil and not burnt then
+			local g, ready, sn = A.stage_gate(th.F and th.F.key or "fist", stage_cand, th.en, W, team)
+			if g == "wait" then
+				say("STAGE", "at the edge of the enemy's reach " .. ready .. " of " .. sn .. ": all go in together")
+				return
+			end
+			-- the gate is open: everybody that was staged goes in now
+			if th_ratio >= A.win_line(W) and not th.ghost and d2(th.x, th.z, cx, cz) <= threat_r then
+				for _, u in ipairs(stage_cand) do
+					A.st[u.id] = { mode = "attack", t = now }
+					Brain.order(u, O.AMOVE, th.x, u.y, th.z, { "attack together: the fist was at the edge", ready .. "/" .. sn, "ratio", f2(th_ratio) })
+				end
+				say("ATTACK", "together from the edge of the enemy's reach")
+				return
+			end
+			for _, u in ipairs(stage_cand) do
+				A.st[u.id] = { mode = "march", t = now }
+				Brain.order(u, O.AMOVE, obj.x, obj.y, obj.z, { "march together from the edge", obj.kind, obj.key, "fist", ready .. "/" .. sn })
+			end
+			say("MARCH", "together from the edge of the enemy's reach: " .. obj.why)
+			return
 		end
 		if th_ratio >= A.win_line(W) and not th.ghost and not burnt and d2(th.x, th.z, cx, cz) <= threat_r and frac >= fist_frac then
 			for _, u in ipairs(inside) do
@@ -11028,6 +11353,12 @@ end
 -- ---- the tick --------------------------------------------------------------------------------------------------------
 function A.update(W)
 	A.turrets = W.turrets
+	-- (step 7: is there anything with the army that can break a turret - a machine or a squad whose trade is armour; 20_plan.ai)
+	A.can_siege = false
+	for _, u in ipairs(W.army) do
+		local role = Brain.roles.of(u)
+		if (u.veh or role == "av") and role ~= "transport" then A.can_siege = true end
+	end
 	for _, id in ipairs(Brain.keys(A.st)) do
 		if W.by_id[id] == nil then A.st[id] = nil; Brain.forget(id) end
 	end
@@ -11082,7 +11413,7 @@ function A.update(W)
 			"verdict_changes", A.stats.verdicts, "members_in", A.stats.mem_in, "members_out", A.stats.mem_out, "loner", A.stats.loner,
 			"retreat_not_ours", A.stats.not_ours, "leave_young", A.stats.young,
 			"cover_asked", A.cover.asked, "cover_found", A.cover.found, "zones", A.stats.zones or 0, "flank", A.stats.flank or 0,
-			"turrets", table.getn(W.turrets or {}), "siege", A.stats.siege or 0, "casts", Brain.abilities.n_cast or 0, "hold_refused", A.stats.hold_no or 0, "evicted", A.stats.evict or 0)
+			"turrets", table.getn(W.turrets or {}), "siege", A.stats.siege or 0, "stage_wait", A.stats.stage_wait or 0, "stage_go", A.stats.stage_go or 0, "casts", Brain.abilities.n_cast or 0, "hold_refused", A.stats.hold_no or 0, "evicted", A.stats.evict or 0)
 	end)
 end
 
@@ -11142,6 +11473,12 @@ local function kind_of(p)
 	return (p.vp and "victory point" or (p.pow and "power point" or "requisition point")) .. (p.enemy and " of the enemy" or " free")
 end
 local function danger(p, W, r)
+	-- (step 7, the turret scenes from people's replays - test/scenes7, t7_tur_542a64_3m31: a squad was sent to capture the
+	-- victory point 2 m from an IG turret and stood in its circle for 37 of the scene's samples; a point inside the
+	-- circle of a turret we know - TurretR 42 m, 10_perception.ai - is no capture job. Brain_CapTurret=0: as before)
+	if Brain.num("CapTurret", 1) >= 1 then
+		for _, tu in ipairs(W.turrets or {}) do if d2(tu.x, tu.z, p.x, p.z) <= Brain.num("TurretR", 42) then return true end end
+	end
 	for _, e in ipairs(W.en) do if d2(e.x, e.z, p.x, p.z) <= r then return true end end
 	local gs = Brain.num("GhostCapSecs", 10)
 	for _, g in ipairs(W.ghosts) do if g.age <= gs and d2(g.x, g.z, p.x, p.z) <= r then return true end end
@@ -11258,6 +11595,23 @@ function C.update(W, taken)
 		end
 	end
 	C.clash = clash
+	-- Step 7: THE MUSTER ('the army arrives in pieces'; bench, 48 live games of step 6: in the fights against two enemy
+	-- squads or more 2.2 of our 6.3 squads were there - and 1.0 squad was walking to a point or capturing, 0.4 stood at
+	-- its post). A fight against MusterEnemy (2) squads or more that is not won (with the support below MusterRatio 1.6)
+	-- is the army's business: a capturer within MusterD (150 m) of it that is not capturing yet is called, no new job
+	-- starts while it lasts, the set-up team leaves its post for it (50_army.ai). After the opening only (MusterFrom
+	-- 150 s: the first minutes are the people's 'everybody captures').
+	-- OFF BY DEFAULT (Brain_Muster=1 turns it on): 48 live games with it (s7_c) against the same code without (s7_b) -
+	-- 74 capturers called, our squads in a fight against two or more 2.22 against 2.27 (no gain), the one-sided
+	-- five-second windows of those fights 235 against 188, ahead on tickets at the end 40 against 44.
+	local muster
+	if clash == nil and Brain.num("Muster", 0) >= 1 and now >= Brain.num("MusterFrom", 150) then
+		for _, F in ipairs(W.fights) do
+			if table.getn(F.en) >= Brain.num("MusterEnemy", 2) and table.getn(F.ours) >= 1 and F.verdict ~= nil and F.verdict ~= "avoid"
+				and (F.ratio_all or F.ratio or 0) < Brain.num("MusterRatio", 1.6) and (muster == nil or F.s_en > muster.s_en) then muster = F end
+		end
+	end
+	C.muster = muster
 	for _, id in ipairs(ids) do
 		local j, u = C.jobs[id], W.by_id[id]
 		local p = point_by_key(W, j.key)
@@ -11266,6 +11620,9 @@ function C.update(W, taken)
 		elseif clash ~= nil and not j.at and not u.capturing and d2(u.x, u.z, clash.x, clash.z) <= Brain.num("CapClashD", 160) then
 			drop(id, u, "the first clash: called to the fight " .. clash.key .. " (" .. table.getn(clash.ours) .. " against " .. table.getn(clash.en) .. ")", false)
 			C.stats.called = C.stats.called + 1
+		elseif muster ~= nil and not j.at and not u.capturing and d2(u.x, u.z, muster.x, muster.z) <= Brain.num("MusterD", 150) then
+			drop(id, u, "the muster: called to the fight " .. muster.key .. " (" .. table.getn(muster.ours) .. " against " .. table.getn(muster.en) .. ", ratio " .. Brain.f2(muster.ratio_all or muster.ratio or 0) .. ")", false)
+			C.stats.called = C.stats.called + 1; C.stats.muster = (C.stats.muster or 0) + 1
 		elseif p == nil then drop(id, u, "the point is gone", false)
 		elseif p.ours then drop(id, u, "the point is ours", true)
 		elseif danger(p, W, Brain.num("CapAbortR", 40)) and not u.capturing then drop(id, u, "the enemy is at the point", false)
@@ -11337,6 +11694,7 @@ function C.update(W, taken)
 	local seen_ok = (Brain.num("CapOpeningSeen", 1) >= 1)
 	local opening = (now < Brain.num("OpeningSecs", 150) and (seen_ok or not Brain.perception.enemy_ever))
 	if clash ~= nil then return end                                     -- the first clash: nobody leaves for a point
+	if muster ~= nil then return end                                    -- (step 7) the muster: nobody leaves for a point
 	if in_fight and (opening or Brain.num("CapInFight", 1) < 1) then return end
 	local danger_r = Brain.num("CapDangerR", 50)
 	local hero_ok = (table.getn(W.fights) == 0)
@@ -11358,6 +11716,7 @@ function C.update(W, taken)
 	local max_side, free_open = 0, false
 	if n_army >= 2 then
 		max_side = math.min(Brain.num("CapJobsMax", 2), math.max(1, math.floor(n_army / 3)))
+		if Brain.plan.push ~= nil then max_side = math.min(max_side, Brain.num("PushCapJobs", 1)) end   -- (step 7: the push keeps the fist whole)
 		-- the opening (step 3, against people): in the first OpeningSecs they capture with nearly every squad, one a point
 		-- (bench, k_1c56ef_0m52, 0:52-1:32: the human had 14 % of his army within 40 m of its centre, we 51-65 %; lib2
 		-- r7_ork_0031c6: 39 %) - also after the first enemy squad was seen. All but one squad may capture (CapJobsOpening 3
@@ -11442,6 +11801,11 @@ R.PROFILES = {
 		econ = {
 			starters = 1, army0 = 3,                         -- squads besides the hero: the starter mob + the two opening squads
 			opening = { "race_ork/troops/ork_shoota", "race_ork/troops/ork_shoota" },   -- 86-93 % of the people's ork games
+			-- step 7: the tier 3 core (40_composition.ai C.late_core): which squads and how many at most; late_order = the
+			-- order they are asked for (rich = only while the bank holds CompCore2K x the price: the idle bank at the cap)
+			late_core = { ["race_ork/troops/ork_nob_squad"] = 2, ["race_ork/vehicles/ork_looted_tank"] = 1 },
+			late_order = { { key = "race_ork/troops/ork_nob_squad", n = 1 }, { key = "race_ork/vehicles/ork_looted_tank", n = 1, rich = true },
+				{ key = "race_ork/troops/ork_nob_squad", n = 2, rich = true } },
 			army_t = { 150, 480, 840 },                      -- one more squad stands from each of these on (the living are counted)
 			post = "ORK_SECURE", gen = "ORK_GENERATOR", tiers = { "ORK_TIER2", "ORK_TIER3" },   -- EBP.* / UPG.* of lua_consts.ai
 			post_t = { 40, 200, 600 }, gen_t = { 120, 180, 420 }, gen_max = 3,
@@ -11461,6 +11825,8 @@ R.PROFILES = {
 				["race_ork/heroes/ork_hero_kommando"] = "wp1_kommando_rokkit_launcha" },
 			-- step 6: upgrades that need a reason ("veh" = machines of the enemy seen)
 			upg_need = { ork_deffgun_beamy = "veh" },
+			-- (step 7) the order of a squad's upgrades while machines of the enemy are remembered: the nobz' leader carries the power klaw
+			upg_veh = { ["race_ork/troops/ork_nob_squad"] = { "ork_nob_leader_nobz", "ork_nob_hammers", "ork_nob_kit" } },
 			upg_first = 75, upg_every = 110, upg_max = 10,   -- people: 10 squad upgrades a match (7-15), big shoota / burna among the first 8 purchases
 			upg = {
 				["race_ork/troops/ork_shoota"] = { "ork_big_shoota", "ork_nob_leader_shoota" },
@@ -11808,6 +12174,14 @@ function B.global(W)
 		if F.keep ~= nil and F.keep.tc ~= nil and table.getn(F.ours) >= Brain.num("GlobalMinOurs", 3) and table.getn(F.en) >= 2 then
 			if rule >= 4 then
 				local yes, no = B.global_fit(F, Brain.purse ~= nil and ((Brain.purse.req or 0) >= Brain.num("GlobalRichReq", 600) or (Brain.purse.red or 0) >= Brain.num("GlobalRichRed", 800)))
+				-- (step 7: the push's fight - the fist is in at the plan's objective: the Waaagh goes with it unless the fight is
+				-- lost or won already, GlobalPush=0: off)
+				local obj = Brain.plan.objective
+				if yes == nil and Brain.plan.push ~= nil and obj ~= nil and Brain.num("GlobalPush", 1) >= 1 and (F.verdict == "press" or F.verdict == "hold")
+					and F.age >= Brain.num("GlobalMinAge", 3) and Brain.d2(F.x, F.z, obj.x, obj.z) <= Brain.num("GlobalPushR", 50)
+					and F.ratio >= Brain.num("GlobalMinRatio", 0.6) and F.ratio <= Brain.num("GlobalRichMaxRatio", 2.5) then
+					yes = "the push: the fist is in at the objective, " .. table.getn(F.ours) .. " against " .. table.getn(F.en) .. " (" .. F.verdict .. ", ratio " .. Brain.f2(F.ratio) .. ")"
+				end
 				if yes ~= nil then
 					if best == nil or F.s_en > best.s_en then best, why = F, yes end
 				elseif no_F == nil or F.s_en > no_F.s_en then no_F, no_why = F, no end

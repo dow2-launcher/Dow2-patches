@@ -4,6 +4,29 @@ Every version gets an entry here before it reaches `main`. CI then tags `vX.Y.Z`
 version (`X.Y.0`) it also publishes a GitHub Release with the DLLs and the entries since the previous `X.Y.0`.
 The version of the set lives only in `VERSION`; each DLL still writes its own version to its log.
 
+## 0.2.75 — 2026-11-14
+New AI 26 (store newai-26, experiment, off by default, Elite only): step 7 of the ork brain (brain 0.7) and EliteAI.dll 0.12 with
+the engine's melee freeze guarded inside it. eliteai branch newai-26 3802e3b = brain dd217b8 (step 7 6794233 + the guard) with
+main.ai, mechanics.ai and the vanilla-base sources of strategy_tech_purchase.ai / strategy_unit_purchase.ai of a3a378a (newai-23 /
+23.1), exactly as newai-24 / newai-25, so every non-ork slot still plays newai-23.1. Against newai-25 one served file changes
+(default.ai: the brain chunks 0.6 -> 0.7) plus the DLL.
+- The brain (ork new-AI slots, [Lua] Brain default 1; Brain=0 = newai-23.1 for all): nobz at tier 3 whatever the squad clock says
+  and the population kept for them (tier 1 refills held up to 150 s), late upgrades (the nob leader with the klaw first against
+  vehicles), a push from 13:00 while even or ahead, the fist waits at the edge of the enemy's reach before it goes in, no capture
+  job and no objective inside the circle of a standing enemy turret while nothing of ours can break it, a turret asks for an
+  anti-armour squad.
+- EliteAI.dll 0.12: eliteai/moveloop_guard.h = MoveLoopFix 1 (same patch at 0x009141A0 / 0x009144F3, same bytes checked first,
+  same mutex Local\dow2patch_MoveLoopFix_<pid>: whichever loads first installs, the other stays idle); fires are logged to
+  EliteAI.log. The store entry no longer requires moveloopfix (0e546cc), the guard is in the DLL now.
+- Known weak spots: the army still arrives at a fight in pieces, the late push gives no measurable gain on the bench.
+- Check (independent verifier, fastbench_1113, own detached worktrees, the guard DLL in every run): lib8 48 live games, lib3 32,
+  lib7 31, test/scenes7 9, lib 9 (Brain=0), the three step-7 hang repros - 0 HANG, 0 TAKE FAILED, 0 Lua / SCAR errors; the
+  guard "installed" in every run and fired only on the known hang ticks (5148, 6795, 7033), each game then ran to its end.
+  48 games 6c6fd43 -> this code: ahead on tickets 40 -> 46 (7 flips up, 1 down), lost 8 -> 2, games with nobz at tier 3
+  3 of 36 -> 17 of 30, models lost a minute 2.04 -> 2.07. Brain=0 = vanilla-s9 on the 9-scene library (0 squad-seconds
+  differ). Package: ork slots brain on, 0 squad-seconds differ from dd217b8; eldar / space marines brain off, 0 squad-seconds
+  differ from newai-23.1.
+
 ## 0.2.74 — 2026-11-14
 New AI 25 (store newai-25, experiment, off by default, Elite only): step 6 of the ork brain (brain 0.6). eliteai branch newai-25
 e7b1802 = brain 6c6fd43 with main.ai, mechanics.ai and the vanilla-base sources of strategy_tech_purchase.ai /

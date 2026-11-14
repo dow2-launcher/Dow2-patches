@@ -11,6 +11,7 @@
 #include <ctype.h>
 #include <winhttp.h>
 #include <shlobj.h>
+#include "moveloop_guard.h"     // 0.12 (14.11.2026): the engine's melee freeze (= MoveLoopFix 1; fastbench_1113 HANG_12da6e_RU.md, brain step 7 hangs)
 
 typedef const char *(__stdcall *LuaReader)(void *L, void *data, size_t *size);
 typedef int (__stdcall *LuaLoadFn)(void *L, LuaReader reader, void *data, const char *chunkname);
@@ -430,7 +431,7 @@ typedef struct { wchar_t host[64]; volatile LONG refs; volatile int ok; volatile
 static void rp_unref(RpProbe *p) { if (!InterlockedDecrement(&p->refs)) free(p); }
 static DWORD WINAPI rp_probe(LPVOID a) {                    // GET /replay/api/by_lobby/<x>: the site answers "{}" (404) at once
     RpProbe *p = a; DWORD t0 = GetTickCount(), code = 0, sz = sizeof code, m; char out[64]; int n = 0;
-    HINTERNET s = WinHttpOpen(L"EliteAI/0.11", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, NULL, NULL, 0);
+    HINTERNET s = WinHttpOpen(L"EliteAI/0.12", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, NULL, NULL, 0);
     if (s) {
         WinHttpSetTimeouts(s, RP_CHECK_MS, RP_CHECK_MS, RP_CHECK_MS, RP_CHECK_MS);
         HINTERNET c = WinHttpConnect(s, p->host, INTERNET_DEFAULT_HTTPS_PORT, 0);
@@ -448,7 +449,7 @@ static DWORD WINAPI rp_probe(LPVOID a) {                    // GET /replay/api/b
 static DWORD rp_post(const wchar_t *host, const char *buf, DWORD size, const char *fname, char *out, int cap, DWORD tmoRecv) {
     wchar_t hdr[400]; _snwprintf(hdr, 400, L"Content-Type: application/octet-stream\r\nX-Filename: %hs\r\nX-Lobby: newai\r\n", fname);
     DWORD code = 0, sz = sizeof code, m; int n = 0; out[0] = 0;
-    HINTERNET s = WinHttpOpen(L"EliteAI/0.11", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, NULL, NULL, 0); if (!s) return 0;
+    HINTERNET s = WinHttpOpen(L"EliteAI/0.12", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, NULL, NULL, 0); if (!s) return 0;
     WinHttpSetTimeouts(s, 4000, 4000, 30000, (int)tmoRecv);       // the site parses the replay before it answers
     HINTERNET c = WinHttpConnect(s, host, INTERNET_DEFAULT_HTTPS_PORT, 0);
     HINTERNET r = c ? WinHttpOpenRequest(c, L"POST", L"/replay/api/upload", NULL, NULL, NULL, WINHTTP_FLAG_SECURE) : NULL;
@@ -588,6 +589,9 @@ static int install(void) {
     return 1;
 }
 
+// the move loop guard's fires into EliteAI.log, off the game's thread
+static DWORD WINAPI mlg_watch(LPVOID _) { (void)_; LONG done = 0; for (;;) { Sleep(1000); mlg_poll(&done, logmsg); } return 0; }
+
 BOOL WINAPI DllMain(HINSTANCE h, DWORD reason, LPVOID _) {
     if (reason != DLL_PROCESS_ATTACH) return TRUE;
     DisableThreadLibraryCalls(h); InitializeCriticalSection(&g_lk);
@@ -597,8 +601,12 @@ BOOL WINAPI DllMain(HINSTANCE h, DWORD reason, LPVOID _) {
     GetModuleFileNameW(NULL, g_dir, MAX_PATH); wchar_t *s = wcsrchr(g_dir, L'\\'); if (s) wcscpy(s + 1, L"Elite_DLLs\\");
     _snwprintf(g_ini, MAX_PATH, L"%lsEliteAI.ini", g_dir);
     g_verbose = GetPrivateProfileIntW(L"EliteAI", L"Verbose", 0, g_ini);
-    logmsg("EliteAI 0.11 start (single-player games only), hook %s", install() ? "installed" : "NOT installed");
+    logmsg("EliteAI 0.12 start (single-player games only), hook %s", install() ? "installed" : "NOT installed");
     install_labels();
+    int mg = mlg_install();
+    logmsg("move loop guard (DOW2.exe 009141A0 / 009144F3): %s", mg == 1 ? "installed" : mg == 0 ? "MoveLoopFix.dll is active, not needed"
+           : mg == -1 ? "NOT installed (bytes differ: not DOW2.exe 3.19.10320 or already changed)" : "NOT installed (VirtualProtect failed)");
+    if (mg == 1) { HANDLE g = CreateThread(NULL, 0, mlg_watch, NULL, 0, NULL); if (g) CloseHandle(g); }
     HANDLE w = CreateThread(NULL, 0, rp_watch, NULL, 0, NULL); if (w) CloseHandle(w);   // 0.11: the replay after a match with the new AI
     return TRUE;
 }
