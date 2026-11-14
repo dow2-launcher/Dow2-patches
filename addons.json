@@ -1195,6 +1195,7 @@
     "games": [
       "elite"
     ],
+    "requires": [],
     "category": "experiment",
     "order": 1000,
     "name": {
