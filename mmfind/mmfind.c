@@ -1696,9 +1696,9 @@ static void status_line(char *b, int cap) {
     char room[24]; EnterCriticalSection(&g_qlk); strcpy(room, g_room); LeaveCriticalSection(&g_qlk);
     int sc = g_screen;
     _snprintf(b, cap - 1, "{\"ev\":\"status\",\"ver\":\"" MMF_VER "\",\"screen\":\"%s\",\"match\":%s,\"state\":\"%s\",\"room\":\"%s\",\"step\":\"%s\","
-              "\"own_lobby\":%s,\"game\":\"%s\",\"pid\":%lu}\n",
+              "\"own_lobby\":%s,\"game\":\"%s\",\"room_obs\":%s,\"pid\":%lu}\n",
               !g_scrTick ? "unknown" : sc >= 0 && sc < 5 ? SC_NM[sc] : "unknown", g_loading ? "true" : "false", SN[g_state], g_rs ? room : "",
-              RSN[g_rs], GetModuleHandleW(L"OwnLobby.dll") ? "true" : "false", g_game, GetCurrentProcessId());
+              RSN[g_rs], GetModuleHandleW(L"OwnLobby.dll") ? "true" : "false", g_game, g_obsCfg ? "true" : "false", GetCurrentProcessId());   // 0.51: room_obs = RoomObservers=1
     b[cap - 1] = 0;
 }
 static void cli_line(Cli *c, char *s) {
