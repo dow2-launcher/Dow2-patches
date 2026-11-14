@@ -1,0 +1,1 @@
+- Lobby join (RoomJoin 15): joining a lobby as an observer, the game keeps its "Connecting" window up until the player already sits on an observer seat - no more second or two on a player's seat.

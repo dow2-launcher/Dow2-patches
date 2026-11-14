@@ -4,6 +4,18 @@ Every version gets an entry here before it reaches `main`. CI then tags `vX.Y.Z`
 version (`X.Y.0`) it also publishes a GitHub Release with the DLLs and the entries since the previous `X.Y.0`.
 The version of the set lives only in `VERSION`; each DLL still writes its own version to its log.
 
+## 0.2.79 — 2026-11-14
+RoomJoin 15 (store roomjoin-9, experiment, off by default): into a lobby as an observer without seeing a player's seat (siritos fb 1062).
+- {"cmd":"join",...,"as":"obs"}: the seat change is a straight call of the game's own "Move to this slot" (0x492EF1, the observer
+  seat's menu item; objdump/Ghidra 14.11: __thiscall panel, ret 8, of its panel only the seat in +0x50 is read - the rest is the RLink
+  manager's match: target slot opened, the player moved there, his old slot back to its kind), with a panel of our own, made while
+  the game's "Connecting" box is still up (the box blocks the menu's commands, not the engine). The box goes only once the player
+  sits on an observer seat; in_lobby then says "seat":"direct". Not seated after 3 calls / 6 s (or the lobby's max players / own
+  seat not known): the box goes and RoomJoin 14's click on the lobby screen does it ("seat":"click"). [RoomJoin] DirectSeat=0: the
+  click way only. Stand 1, 14.11: own custom lobby (observer seats opened by the host), the join as an observer - one call, seat 0 ->
+  observer seat 1 in 264 ms under the box, no player's seat shown.
+- [RoomJoin] DebugPipe=1 (stands only): {"cmd":"open_obs"} - the host's "Open All Observer Slots" (0x493396) called straight.
+
 ## 0.2.78 — 2026-11-14
 ReplayOpen 1 (new add-on, store replayopen-1, experiment, off by default, Elite): "Play" of a replay from the launcher (siritos
 14.11.2026). Pipe \\.\pipe\EliteReplayOpen-<pid> (robridge.exe for a launcher outside Wine), protocol in replayopen/replayopen.c:
