@@ -35,15 +35,20 @@ static int g_verbose;
 
 // THE OWNER'S RULE FOR THIS DLL (14.11.2026): whatever here touches the AI's control or the simulation must be deterministic
 // and INTEGER (or fixed-point) - no float / double arithmetic, no wall-clock time, no randomness of ours, a stable order.
-// The Mac (Feral) build computes floats differently and in multiplayer every client runs the AI: a difference is a desync.
+// The Mac (Feral) build computes floats differently. (14.11: in a network game ONE machine - the host - computes the AI and
+// its orders reach the others as recorded commands, so the AI's decisions need not be bit-equal across machines; the rule
+// stays, so that nothing here has to be ported twice.)
 // Decisions live in the Lua scripts; the DLL is plumbing - loading, the log, the cfg, the order pipe, the move loop guard.
 // State of this file against the rule:
 //   * the log (below), the replay upload and the labels use the wall clock and never feed anything back to the scripts;
 //   * the order pipe (lua_order / lua_take) does NO arithmetic, but it carries the scripts' numbers as doubles and prints
-//     them with "%.2f" - the C runtime's rounding of a double is in the path of control data. To be replaced by integers
-//     (the scripts send centimetres) before the new AI runs in a multiplayer game: NOT DONE, the protocol is shared with
-//     main.ai / mechanics.ai / elite.scar;
-//   * lua_cfg hands the scripts strings of the local EliteAI.ini: in multiplayer every client must have the same [Lua] keys;
+//     them with "%.2f". Since 0.15 (brain step 9) NO ORDER GOES THROUGH IT by default: it carries only what elite.scar
+//     watches (an order already sent, with mode + 1000) and the scripts' words to it (modes 9-15) - nothing of it reaches
+//     the simulation. It is the control path again only with [Lua] Net_Orders=0 (the comparison path, single player);
+//   * eliteai_cmd / eliteai_retlock (0.15, below): integers, bytes and pointer compares only - see there; the table of
+//     the retreat locks (retlock.h, 0.16) is emptied at a match start and by the simulation's own state, never by a timer;
+//   * lua_cfg hands the scripts strings of the local EliteAI.ini. In a network match (0.16) only the station that computes
+//     a computer runs its scripts, so the keys need not be equal across stations - but the keys of the SCAR path are not read;
 //   * the move loop guard (moveloop_guard.h) changes the simulation only where the engine would hang; it counts passes
 //     whose 'time left' is BIT-equal to the pass before (an integer compare of the four bytes) - the float is read as a
 //     number only for the log line.
@@ -131,7 +136,7 @@ static int log_holds_match(void) {               // does EliteAI.log hold the he
     }
     CloseHandle(f); return found;
 }
-static void log_match(const char *chunk) {       // an AI script of OURS is being given to the engine
+static int log_match(const char *chunk) {        // an AI script of OURS is being given to the engine -> 1 the first of a match
     DWORD now = GetTickCount(); int fresh, rotated = 0;
     EnterCriticalSection(&g_lk);
     fresh = (g_lastLoadTick == 0 || now - g_lastLoadTick > LOG_MATCH_GAP_MS); g_lastLoadTick = now ? now : 1;
@@ -147,10 +152,11 @@ static void log_match(const char *chunk) {       // an AI script of OURS is bein
     LeaveCriticalSection(&g_lk);
     if (fresh) {
         SYSTEMTIME t; GetLocalTime(&t);
-        logmsg(LOG_MATCH_MARK " 0.14: a match of the new AI starts %04d-%02d-%02d %02d:%02d:%02d (first AI script %s); %s ===",
+        logmsg(LOG_MATCH_MARK " 0.16: a match of the new AI starts %04d-%02d-%02d %02d:%02d:%02d (first AI script %s); %s ===",
                t.wYear, t.wMonth, t.wDay, t.wHour, t.wMinute, t.wSecond, chunk ? chunk : "?",
                rotated ? "the match before it is in EliteAI.prev.log" : "no match in this file before it: nothing rotated");
     }
+    return fresh;
 }
 
 // "data:simulation/ai/default.ai", "@Simulation\AI\Personality\orks\expert.ai" ... -> "simulation\ai\default.ai" (lower case)
@@ -173,9 +179,19 @@ static int __stdcall lua_log(void *L) {          // eliteai_log(a, b, ...) -> on
     }
     line[sizeof line - 1] = 0; logmsg("AI: %s", line); replay_note(line); return 0;
 }
+static int mp_game(void);                        // 0.16: a network match (below, MULTIPLAYER)
+static int mp_scar_key(const char *k) { return k && ((!strncmp(k, "Net_", 4) && strcmp(k, "Net_Log")) || !strcmp(k, "Brain_GlobalPosScar")); }
 static int __stdcall lua_cfg(void *L) {          // eliteai_cfg("Key") -> string from EliteAI.ini [Lua], or nil (quick tuning, A/B tests)
     const char *k = p_tolstring(L, 1, NULL); char v[256] = "";
     char ini[MAX_PATH]; WideCharToMultiByte(CP_ACP, 0, g_ini, -1, ini, sizeof ini, NULL, NULL);
+    // 0.16: in a network match the scripts are told so ("MP" -> "1"), and the keys that would bring an order back to the SCAR
+    // path (a command of this machine only = a desync) do not exist: Net_* (but Net_Log) and Brain_GlobalPosScar read as unset
+    if (k && !strcmp(k, "MP")) { if (mp_game()) p_pushstring(L, "1"); else p_pushnil(L); return 1; }
+    if (mp_scar_key(k) && mp_game()) {
+        static long said; GetPrivateProfileStringA("Lua", k, "", v, sizeof v, ini);
+        if (v[0] && said++ < 12) logmsg("MP: [Lua] %s=%s is not read in a network match (it would order through SCAR on this machine only)", k, v);
+        p_pushnil(L); return 1;
+    }
     if (k) GetPrivateProfileStringA("Lua", k, "", v, sizeof v, ini);
     if (v[0]) p_pushstring(L, v); else p_pushnil(L);
     return 1;
@@ -190,13 +206,265 @@ static int __stdcall lua_order(void *L) {          // eliteai_order(squad_world_
         o->id = p_tonumber(L, 1); o->x = p_tonumber(L, 2); o->y = p_tonumber(L, 3); o->z = p_tonumber(L, 4); o->mode = p_tonumber(L, 5); }
     LeaveCriticalSection(&g_lk); return 0;
 }
+static void probe_install(void);
 static int __stdcall lua_take(void *L) {           // eliteai_take_orders() -> "id x y z mode;..." (empty string = none)
     static char buf[1024 * 64]; int n = 0; buf[0] = 0;
+    probe_install();
+    // 0.16: in a network match NOTHING that elite.scar could turn into a command of its own reaches it - only the marks of
+    // the orders already sent as network commands (mode + 1000 and above: watched) and the scripts' words that order
+    // nothing (9 the variant's label, 10 the dodge policy, 11 the cast watch, 13 the purse, 15 'my orders go by the
+    // network'). A plain order (1-8, 14, 100-599) or the old retreat lock (12) is dropped here and counted in the log.
+    int mp = mp_game(); long dropped = 0; static long droppedAll;
     EnterCriticalSection(&g_lk);
-    for (int i = 0; i < g_nOrders && n < (int)sizeof buf - 128; i++)
+    for (int i = 0; i < g_nOrders && n < (int)sizeof buf - 128; i++) {
+        if (mp) { int m = (int)g_orders[i].mode; if (!(m >= 1000 || m == 9 || m == 10 || m == 11 || m == 13 || m == 15)) { dropped++; continue; } }
         n += snprintf(buf + n, sizeof buf - n, "%.0f %.2f %.2f %.2f %.0f;", g_orders[i].id, g_orders[i].x, g_orders[i].y, g_orders[i].z, g_orders[i].mode);
+    }
     g_nOrders = 0; LeaveCriticalSection(&g_lk);
+    if (dropped) { long was = droppedAll; droppedAll += dropped; if (was < 20 || was / 500 != droppedAll / 500) logmsg("MP: %ld order(s) for the SCAR path dropped (a network match takes network commands only; %ld so far)", dropped, droppedAll); }
     p_pushstring(L, buf); return 1;
+}
+// ---- 0.15 (brain step 9): THE AI PLAYER'S ORDERS AS NETWORK COMMANDS -------------------------------------------------------
+// Until 0.14 every order of the new AI went through the queue above into SCAR (Cmd_* of elite.scar): straight into the
+// simulation of this machine, past the game's command stream - not in the .rec (the replay of such a match desyncs at the
+// first order), and in a network game only the host would have them. The engine's own AI sends its orders another way
+// (DOW2.exe 3.19.10320, AICommand_*::SendCommand, e.g. 0x00A6FF00 move, 0x00A71E40 stop):
+//     cmd = WorldDoCommandSquad(type, queued, player, squad)      SimEngine.dll export: builds a WorldCommand
+//     the custom data of the command (target, ability ...)        WorldCommand::SetCustomDataRaw(type byte, bytes, len)
+//     proxy->DoCommand(cmd)                                       CommandProxy of the AIPlayer (vtable + 0x5C)
+// and the proxy hands it to the game's command interface: the command is numbered, recorded and sent like a human's click.
+// eliteai_cmd does exactly these three calls for the AI player that calls it. It is a TRANSPORT: integers and bytes in,
+// no arithmetic, no float, no clock (the owner's rule above). What to order and every byte of the custom data (the
+// position as IEEE bits included) is made by the Lua script (mod/netorder.ai).
+//     eliteai_cmd(player id, receiver kind 1 squad | 2 entity | 3 the player, receiver id, command type, custom data
+//                 type (-1 none), "hex bytes of the custom data") -> 1 sent, or 0 and a reason word
+// Addresses of DOW2.exe (checked by bytes before the first use; another exe = nothing is called, the function says 0
+// "exe" and the scripts keep the SCAR path): AIPlayer_GetLocal 0x008E8820 (stdcall, player id -> AIPlayer*),
+// AIPlayer + 0x0C Player*, + 0x14 CommandProxy*; World + 0x154 squad manager (vtable + 8: by id), + 0xF8 entity manager
+// (vtable + 0x14: by id); Squad + 0x4C its Player*.
+#define FN_AIP_GETLOCAL 0x008E8820
+static const unsigned char AIP_GETLOCAL_BYTES[16] = { 0x8B, 0x44, 0x24, 0x04, 0x8B, 0x0D, 0x1C, 0x91, 0x3A, 0x01, 0x50, 0xA1, 0x18, 0x91, 0x3A, 0x01 };
+typedef void *(__stdcall *AipGetLocal)(unsigned long pid);
+typedef void *(__stdcall *WdcObj)(unsigned long type, int queued, void *player, void *obj);
+typedef void (__attribute__((thiscall)) *SetRaw)(void *cmd, unsigned char type, const void *data, unsigned len);
+typedef void *(__attribute__((thiscall)) *ById)(void *mgr, unsigned long id);
+typedef void (__attribute__((thiscall)) *ProxyDo)(void *proxy, void *cmd);
+static WdcObj p_wdcSquad, p_wdcEntity, p_wdcPlayer; static SetRaw p_setRaw; static void **p_gWorld;
+static void (__stdcall *p_pushinteger)(void *L, int n);
+static int (__stdcall *p_tointeger)(void *L, int idx);
+static int g_cmdState;                           // 0 not looked at, 1 usable, -1 not usable (the reason is in the log once)
+static long g_cmdSent, g_cmdRefused;
+static int cmd_ready(void) {
+    if (g_cmdState) return g_cmdState > 0;
+    HMODULE se = GetModuleHandleA("SimEngine.dll"); g_cmdState = -1;
+    if (!se) { logmsg("NET cmd: SimEngine.dll not loaded"); return 0; }
+    p_wdcSquad = (WdcObj)GetProcAddress(se, "?WorldDoCommandSquad@@YGPAVWorldCommand@@K_NPBVPlayer@@PBVSquad@@@Z");
+    p_wdcEntity = (WdcObj)GetProcAddress(se, "?WorldDoCommandEntity@@YGPAVWorldCommand@@K_NPBVPlayer@@PBVEntity@@@Z");
+    p_wdcPlayer = (WdcObj)GetProcAddress(se, "?WorldDoCommandPlayer@@YGPAVWorldCommand@@K_NPBVPlayer@@1@Z");
+    p_setRaw = (SetRaw)GetProcAddress(se, "?SetCustomDataRaw@WorldCommand@@QAEXEPBXI@Z");
+    p_gWorld = (void **)GetProcAddress(se, "?g_World@@3PAVWorld@@A");
+    if (!p_wdcSquad || !p_wdcEntity || !p_wdcPlayer || !p_setRaw || !p_gWorld) { logmsg("NET cmd: SimEngine exports missing - the orders stay on the SCAR path"); return 0; }
+    if (IsBadReadPtr((void *)FN_AIP_GETLOCAL, 16) || memcmp((void *)FN_AIP_GETLOCAL, AIP_GETLOCAL_BYTES, 16)) {
+        logmsg("NET cmd: DOW2.exe differs at %08X (not 3.19.10320) - the orders stay on the SCAR path", FN_AIP_GETLOCAL); return 0; }
+    if (!p_pushinteger || !p_tointeger) { logmsg("NET cmd: no lua_pushinteger / lua_tointeger"); return 0; }
+    g_cmdState = 1; logmsg("NET cmd: ready (the AI player's orders go as network commands: WorldDoCommand* + CommandProxy::DoCommand)");
+    return 1;
+}
+// ---- 0.16: MULTIPLAYER (the owner, 14.11.2026: the new AI may be tried in network games) ---------------------------------
+// The engine computes a computer player on ONE station and the others get its orders as commands (the replay pool; the
+// step 9 playback). Which station: the game's slot table - S = *(0x01335A78) + 0x118 (S + 0 is the game type), records of
+// 0xA8 bytes at [S + 0x810], [S + 0x814] of them; record + 0x9C the player id, + 0x58 the team, + 0x60 the id (64 bit) of
+// the station that owns the slot - for a computer, the station that simulates it; S + 0xE48 this machine's station id.
+// Read from DOW2.exe 3.19.10320: a station drops -> 0x00425E.. picks the lowest remaining station id -> for every computer
+// of the dropped one 0x004261D4 writes the new id to record + 0x60 and, IF IT IS [S + 0xE48], makes the AI on this
+// machine (record + 0 = 1; otherwise 4) - "GameObj - AI Simulation for player [%d] on team [%d] migrated ...". The AI
+// object, its Lua state and so its scripts exist only where the AI is simulated: a station that does not compute a
+// computer never loads an AI script for it, and this DLL gives it none and orders nothing for it.
+//   * mp_computes(pid): the slot of pid is owned by this station AND the engine has an AIPlayer of pid here. eliteai_cmd
+//     and eliteai_retlock ask it at EVERY call in a network match - after a migration the answer is the engine's new one;
+//   * what the new AI loads must not change the simulation on this machine only: the AI scripts order by eliteai_cmd
+//     (commands of the player, sent to every station); elite.scar gets no order to execute (lua_take), the keys of the
+//     SCAR path are not read (lua_cfg), and without the engine calls of eliteai_cmd (another exe) the new AI stays out;
+//   * [EliteAI] Multiplayer=0 in EliteAI.ini: network matches as before 0.16 - Elite's own scripts, nothing of ours.
+// Integers and pointer compares only; nothing here is timed by the wall clock.
+#define MP_TYPES 0x558
+typedef struct { int type, pid, team; unsigned lo, hi; } MpSlot;
+static DWORD game_type(void);
+// [EliteAI] / [Lua] MpSelfTest=1 (the bench only, never in a package): a single-player game is treated as a network match
+// by everything below - the gate, the slot table, the per-call check, the filters - since the bench cannot run two stations.
+// A single-player game has no station ids (this station FFFFFFFFFFFFFFFF, the slots 0): with 1 every order is refused as
+// 'another station's' (what a station that does not compute the AI does); with 2 the missing ids are let through, so the
+// AI plays under the network match's filters.
+static int mp_selftest(void) { static int k = -1; if (k < 0 && g_ini[0]) { k = GetPrivateProfileIntW(L"EliteAI", L"MpSelfTest", 0, g_ini); if (!k) k = GetPrivateProfileIntW(L"Lua", L"MpSelfTest", 0, g_ini); if (k < 0) k = 0; } return k > 0 ? k : 0; }
+static int mp_game(void) { DWORD t = game_type(); return ((t & MP_TYPES) && !(t & 0x800)) || (t && !(t & 0x800) && mp_selftest()); }
+static int mp_on(void) { static int k = -1; if (k < 0 && g_ini[0]) k = GetPrivateProfileIntW(L"EliteAI", L"Multiplayer", 1, g_ini) ? 1 : 0; return k != 0; }
+static int mp_slots(MpSlot *o, int cap, unsigned *llo, unsigned *lhi) {     // -> the number of slots read (0: no game)
+    char **g = (char **)0x01335A78; *llo = *lhi = 0xFFFFFFFF;
+    if (IsBadReadPtr(g, 4) || !*g || IsBadReadPtr(*g + 0x118, 0xE50)) return 0;
+    char *S = *g + 0x118; unsigned n = *(unsigned *)(S + 0x814); char *b = *(char **)(S + 0x810);
+    *llo = *(unsigned *)(S + 0xE48); *lhi = *(unsigned *)(S + 0xE4C);
+    if (!b || !n || n > 16 || IsBadReadPtr(b, n * 0xA8)) return 0;
+    if ((int)n > cap) n = cap;
+    for (unsigned i = 0; i < n; i++) { char *r = b + i * 0xA8; o[i].type = *(int *)r; o[i].pid = *(int *)(r + 0x9C); o[i].team = *(int *)(r + 0x58); o[i].lo = *(unsigned *)(r + 0x60); o[i].hi = *(unsigned *)(r + 0x64); }
+    return (int)n;
+}
+static int mp_computes(int pid) {                // 1 this station simulates the computer pid, 0 another one does, -1 no such slot
+    MpSlot s[16]; unsigned lo, hi; int n = mp_slots(s, 16, &lo, &hi);
+    for (int i = 0; i < n; i++) if (s[i].pid == pid)
+        return ((s[i].lo == lo && s[i].hi == hi && !(lo == 0xFFFFFFFF && hi == 0xFFFFFFFF)) || (lo == 0xFFFFFFFF && hi == 0xFFFFFFFF && mp_selftest() == 2))
+            && g_cmdState > 0 && ((AipGetLocal)FN_AIP_GETLOCAL)((unsigned long)pid) != NULL;
+    return -1;
+}
+// the log: who computes what, at the start of a match and whenever the engine's answer for a player changes (a migration)
+static struct { int pid, mine; } g_mpSeen[16];
+static void mp_slots_line(const char *head) {
+    MpSlot s[16]; unsigned lo, hi; int n = mp_slots(s, 16, &lo, &hi); char b[900]; int k = 0; char mine[200] = ""; int mk = 0;
+    for (int i = 0; i < n && k < (int)sizeof b - 80; i++) {
+        int c = g_cmdState > 0 && s[i].pid >= 1000 && ((AipGetLocal)FN_AIP_GETLOCAL)((unsigned long)s[i].pid) != NULL;   // an AI object of that player on this machine
+        k += snprintf(b + k, sizeof b - k, " [%d: player %d type %d team %d station %08X%08X%s]", i, s[i].pid, s[i].type, s[i].team, s[i].hi, s[i].lo, c ? " AI here" : "");
+        if (c && mp_computes(s[i].pid) == 1 && mk < (int)sizeof mine - 12) mk += snprintf(mine + mk, sizeof mine - mk, " %d", s[i].pid);
+    }
+    b[k] = 0;
+    logmsg("%s; this station %08X%08X; computing AI players:%s; slots:%s", head, hi, lo, mine[0] ? mine : " none yet", n ? b : " none");
+}
+static void mp_watch(int pid) {                  // a network match: has the engine's answer for this player changed?
+    int c = mp_computes(pid), slot = -1;
+    for (int i = 0; i < 16; i++) { if (g_mpSeen[i].pid == pid) { slot = i; break; } if (slot < 0 && !g_mpSeen[i].pid) slot = i; }
+    if (slot < 0 || (g_mpSeen[slot].pid == pid && g_mpSeen[slot].mine == c)) return;
+    g_mpSeen[slot].pid = pid; g_mpSeen[slot].mine = c;
+    { char h[160]; void *w = (p_gWorld && *p_gWorld && !IsBadReadPtr(*p_gWorld, 0x17C)) ? *p_gWorld : NULL;
+      snprintf(h, sizeof h, "MP: AI player %d is %s (world tick %d)", pid, c == 1 ? "COMPUTED BY THIS STATION - the new AI orders for it" : c == 0 ? "computed by another station - nothing is ordered for it here" : "in no slot - nothing is ordered for it", w ? *(int *)((char *)w + 0x178) : -1);
+      mp_slots_line(h); }
+}
+static void mp_match_line(int fresh) {           // an AI script of ours is given in a network match: the engine makes an AI here
+    cmd_ready();
+    void *w = (p_gWorld && *p_gWorld && !IsBadReadPtr(*p_gWorld, 0x17C)) ? *p_gWorld : NULL; int tick = w ? *(int *)((char *)w + 0x178) : -1; char h[400];
+    if (fresh) { memset(g_mpSeen, 0, sizeof g_mpSeen);
+        snprintf(h, sizeof h, "MP: a NETWORK match with the new AI (game type %lX, world tick %d): this station computes computer players - their orders go to every station as network commands; OTHER STATIONS NEED MoveLoopFix (Melee freeze fix) or this add-on: without it a client can hang in the engine's melee freeze where this machine does not. [EliteAI] Multiplayer=0 turns this off", game_type(), tick);
+    } else snprintf(h, sizeof h, "MP: the engine makes an AI player on this station (world tick %d%s)", tick, tick > 600 ? ": mid-match - the AI simulation MIGRATED here, the new AI takes it over" : "");
+    mp_slots_line(h);
+}
+static int cmd_fail(void *L, const char *why) {
+    if (++g_cmdRefused <= 20 || g_cmdRefused % 500 == 0) logmsg("NET cmd refused: %s (n %ld)", why, g_cmdRefused);
+    p_pushinteger(L, 0); p_pushstring(L, why); return 2;
+}
+static int __stdcall lua_cmd(void *L) {           // eliteai_cmd(pid, kind, id, type, ctype, hex) -> 1 | 0, reason
+    if (!cmd_ready()) { if (p_pushinteger) { p_pushinteger(L, 0); p_pushstring(L, "exe"); return 2; } return 0; }
+    int pid = p_tointeger(L, 1), kind = p_tointeger(L, 2), id = p_tointeger(L, 3), type = p_tointeger(L, 4), ctype = p_tointeger(L, 5);
+    const char *hex = p_gettop(L) >= 6 ? p_tolstring(L, 6, NULL) : NULL;
+    unsigned char data[96]; unsigned n = 0;
+    for (; hex && hex[0] && hex[1]; hex += 2) {
+        int a = hex[0], b = hex[1];
+        a = a >= '0' && a <= '9' ? a - '0' : a >= 'a' && a <= 'f' ? a - 'a' + 10 : -1; b = b >= '0' && b <= '9' ? b - '0' : b >= 'a' && b <= 'f' ? b - 'a' + 10 : -1;
+        if (a < 0 || b < 0 || n >= sizeof data) return cmd_fail(L, "hex");
+        data[n++] = (unsigned char)(a * 16 + b);
+    }
+    if (type <= 0 || type > 255 || ctype > 255) return cmd_fail(L, "type");
+    if (mp_game()) {                                 // 0.16: a network match - only for a computer THIS station simulates (asked every time)
+        mp_watch(pid);
+        if (!mp_on()) return cmd_fail(L, "MP off (Multiplayer=0)");
+        if (mp_computes(pid) != 1) return cmd_fail(L, "MP: this station does not compute that AI player");
+    }
+    char *aip = ((AipGetLocal)FN_AIP_GETLOCAL)((unsigned long)pid);
+    if (!aip || IsBadReadPtr(aip, 0x18)) return cmd_fail(L, "no AI player");
+    void *player = *(void **)(aip + 0x0C); void **proxy = *(void ***)(aip + 0x14);
+    char *world = p_gWorld ? *(char **)p_gWorld : NULL;
+    if (!player || !proxy || IsBadReadPtr(proxy, 4) || IsBadReadPtr(*proxy, 0x60) || !world || IsBadReadPtr(world, 0x158)) return cmd_fail(L, "no proxy / world");
+    void *cmd = NULL;
+    if (kind == 1) {
+        void **mgr = *(void ***)(world + 0x154); if (!mgr || IsBadReadPtr(mgr, 4) || IsBadReadPtr(*mgr, 12)) return cmd_fail(L, "squad manager");
+        char *sq = ((ById)((void **)*mgr)[2])(mgr, (unsigned long)id);
+        if (!sq || IsBadReadPtr(sq, 0x50)) return cmd_fail(L, "no squad");
+        if (*(void **)(sq + 0x4C) != player) return cmd_fail(L, "not the player's squad");
+        cmd = p_wdcSquad((unsigned long)type, 0, player, sq);
+    } else if (kind == 2) {
+        void **mgr = *(void ***)(world + 0xF8); if (!mgr || IsBadReadPtr(mgr, 4) || IsBadReadPtr(*mgr, 0x18)) return cmd_fail(L, "entity manager");
+        void *en = ((ById)((void **)*mgr)[5])(mgr, (unsigned long)id);
+        if (!en) return cmd_fail(L, "no entity");
+        cmd = p_wdcEntity((unsigned long)type, 0, player, en);
+    } else if (kind == 3) cmd = p_wdcPlayer((unsigned long)type, 0, player, player);
+    else return cmd_fail(L, "kind");
+    if (!cmd) return cmd_fail(L, "the engine made no command");
+    if (ctype >= 0) p_setRaw(cmd, (unsigned char)ctype, data, n);
+    ((ProxyDo)((void **)*proxy)[0x5C / 4])(proxy, cmd);
+    g_cmdSent++;
+    p_pushinteger(L, 1); return 1;
+}
+// 0.15: THE ENGINE'S OWN RETREATS OFF FOR A BRAIN PLAYER, ON THE AI'S SIDE. The engine's squad tasks send squads home by
+// themselves (brain step 2: 12 such retreats in 15 scenes, squads at 0.5-0.9 of their health). Until 0.14 elite.scar
+// switched the retreat off IN THE SIMULATION (Squad_EnableRetreat) - a change of the simulation from SCAR, in no
+// recording. What happened then: the engine's AI went on SENDING its retreat commands (bench s81_l8i: 526 commands 0x3D
+// of the brain players in 48 games) and the simulation refused each. The same result without touching the simulation:
+// the engine's AI sends every retreat from ONE place (DOW2.exe AICommand_SquadRetreat::SendCommand, the hand-over to the
+// CommandProxy at 0x00A71B29); for the proxy of a player whose brain asked for it (eliteai_retlock) the command is not
+// handed over, for every other player it goes on as before. The AI's tasks see what they saw under the old lock - an
+// order that did nothing; the brain's own retreat is eliteai_cmd, which does not pass here. Integers and pointer compares.
+// (The command object the engine made is left alone: ~0x90 bytes, a few hundred times a match.)
+#define AT_AI_RETREAT_SEND 0x00A71B29
+static const unsigned char AI_RETREAT_SEND_BYTES[11] = { 0x8B, 0x55, 0x00, 0x8B, 0x42, 0x5C, 0x56, 0x8B, 0xCD, 0xFF, 0xD0 };   // mov edx,[ebp]; mov eax,[edx+5C]; push esi; mov ecx,ebp; call eax
+// 0.16 (the verifier of step 9, note 1): the table of the locks is retlock.h - it is emptied when a match starts and a
+// lock ends when its AI player is gone (0.15 kept it for the life of the process: a later match of the same session
+// could inherit it). World + 0x178 = the simulation's tick, an int.
+static long g_retSaid;
+#define RL_AIP(pid)     (((AipGetLocal)FN_AIP_GETLOCAL)((unsigned long)(pid)))
+#define RL_OK(p, n)     (!IsBadReadPtr((p), (n)))
+#define RL_PLAYER(aip)  (*(void **)((char *)(aip) + 0x0C))
+#define RL_PROXY(aip)   (*(void **)((char *)(aip) + 0x14))
+#define RL_WORLD()      ((p_gWorld && *p_gWorld && !IsBadReadPtr(*p_gWorld, 0x17C)) ? *p_gWorld : NULL)
+#define RL_TICK(w)      (*(int *)((char *)(w) + 0x178))
+#define RL_SAY(why, n)  do { if (++g_retSaid <= 40 || g_retSaid % 500 == 0) logmsg("NET retlock: %d lock(s) dropped - %s (n %ld)", (int)(n), (why), g_retSaid); } while (0)
+#include "retlock.h"
+static int g_retHook;   // 0 not tried, 1 installed, -1 cannot
+static long g_retDropped;
+static void __stdcall ai_retreat_send(void **proxy, void *cmd) {         // (esi = the command, ebp = the proxy at the patched place)
+    if (ret_locked(proxy)) { g_retDropped++; return; }
+    ((ProxyDo)((void **)*proxy)[0x5C / 4])(proxy, cmd);
+}
+static int __stdcall lua_retlock(void *L) {       // eliteai_retlock(player id, 1 | 0) -> 1 done, 0 not available
+    if (!cmd_ready()) { if (p_pushinteger) { p_pushinteger(L, 0); return 1; } return 0; }
+    int pid = p_tointeger(L, 1), on = p_tointeger(L, 2);
+    if (!g_retHook) {
+        unsigned char *c = (unsigned char *)AT_AI_RETREAT_SEND; g_retHook = -1;
+        if (!IsBadReadPtr(c, 11) && !memcmp(c, AI_RETREAT_SEND_BYTES, 11)) {
+            DWORD o; if (VirtualProtect(c, 11, PAGE_EXECUTE_READWRITE, &o)) {
+                unsigned char n[11] = { 0x56, 0x55, 0xE8, 0, 0, 0, 0, 0x90, 0x90, 0x90, 0x90 };            // push esi; push ebp; call ai_retreat_send; nop x4
+                *(int *)(n + 3) = (int)((DWORD)ai_retreat_send - (AT_AI_RETREAT_SEND + 7));
+                memcpy(c, n, 11); VirtualProtect(c, 11, o, &o); FlushInstructionCache(GetCurrentProcess(), c, 11); g_retHook = 1; }
+        }
+        { void *w = RL_WORLD(); logmsg("NET retlock: the engine AI's retreat hand-over at %08X %s (world tick %d)", AT_AI_RETREAT_SEND, g_retHook > 0 ? "redirected" : "NOT redirected (bytes differ)", w ? RL_TICK(w) : -1); }
+    }
+    if (g_retHook < 0) { p_pushinteger(L, 0); return 1; }
+    if (on && mp_game() && (!mp_on() || mp_computes(pid) != 1)) { p_pushinteger(L, 0); return 1; }   // 0.16: not this station's AI player
+    p_pushinteger(L, ret_set(pid, on)); return 1;
+}
+// Developer's probe ([EliteAI] CmdProbe=1, the bench only): what a SCAR command of elite.scar hands to the simulation -
+// World::DoCommand (vtable + 0x78 of the world) is wrapped and every command is written to the log (type, custom data
+// type, bytes). Read only; it is how the bytes mod/netorder.ai builds were learnt. Never on without the key.
+typedef void (__attribute__((thiscall)) *WorldDo)(void *world, void *cmd);
+static WorldDo g_probeOrig; static void *g_probeVt[256]; static int g_probeOn = -1;
+static void __attribute__((thiscall)) probe_do(void *world, void *cmd) {
+    static unsigned long (__attribute__((thiscall)) *gc)(void *), (__attribute__((thiscall)) *gl)(void *), (__attribute__((thiscall)) *rc)(void *);
+    static unsigned char (__attribute__((thiscall)) *gt)(void *); static void *(__attribute__((thiscall)) *gd)(void *); static long n;
+    HMODULE se = GetModuleHandleA("SimEngine.dll");
+    if (!gc && se) { gc = (void *)GetProcAddress(se, "?GetCommand@WorldCommand@@QBEKXZ"); gl = (void *)GetProcAddress(se, "?GetCustomDataLength@WorldCommand@@QBEIXZ");
+        gt = (void *)GetProcAddress(se, "?GetCustomDataType@WorldCommand@@QBEEXZ"); gd = (void *)GetProcAddress(se, "?GetCustomData@WorldCommand@@QBEPAXXZ");
+        rc = (void *)GetProcAddress(se, "?GetReceiverCount@WorldCommand@@QBEIXZ"); }
+    DWORD ra = (DWORD)__builtin_return_address(0);          // (only the SCAR bindings Command_*: DOW2.exe 0x937000..0x93C000)
+    if (gc && gl && gt && gd && rc && cmd && ra >= 0x00937000 && ra < 0x0093C000 && ++n <= 6000) {
+        unsigned len = gl(cmd); unsigned char *d = gd(cmd); char hx[200]; int k = 0;
+        for (unsigned i = 0; d && i < len && i < 90; i++) k += sprintf(hx + k, "%02x", d[i]);
+        hx[k] = 0; logmsg("CMDPROBE type %02lx ctype %02x len %u recv %lu data %s from %08lx", gc(cmd), gt(cmd), len, rc(cmd), hx, ra);
+    }
+    g_probeOrig(world, cmd);
+}
+static void probe_install(void) {
+    if (g_probeOn >= 0) return;
+    g_probeOn = (GetPrivateProfileIntW(L"EliteAI", L"CmdProbe", 0, g_ini) || GetPrivateProfileIntW(L"Lua", L"CmdProbe", 0, g_ini)) ? 1 : 0;
+    if (!g_probeOn) return;
+    void ***w = (void ***)0x013356A4;
+    if (IsBadReadPtr(w, 4) || !*w || IsBadReadPtr(*w, 4) || IsBadReadPtr(**w, sizeof g_probeVt)) { g_probeOn = -1; return; }
+    memcpy(g_probeVt, **w, sizeof g_probeVt); g_probeOrig = (WorldDo)g_probeVt[0x78 / 4]; g_probeVt[0x78 / 4] = (void *)probe_do;
+    **w = (void *)g_probeVt; logmsg("CMDPROBE on: World::DoCommand wrapped (orig %p)", (void *)g_probeOrig);
 }
 static void give_log(void *L) {
     if (!p_pushcclosure || !p_setfield) return;
@@ -205,6 +473,8 @@ static void give_log(void *L) {
     if (p_tonumber) {
         p_pushcclosure(L, lua_order, 0); p_setfield(L, LUA_GLOBALSINDEX, "eliteai_order");
         p_pushcclosure(L, lua_take, 0); p_setfield(L, LUA_GLOBALSINDEX, "eliteai_take_orders");
+        p_pushcclosure(L, lua_cmd, 0); p_setfield(L, LUA_GLOBALSINDEX, "eliteai_cmd");
+        p_pushcclosure(L, lua_retlock, 0); p_setfield(L, LUA_GLOBALSINDEX, "eliteai_retlock");
     }
     if (p_getfield && p_settop) {                 // AI scripts run in their own environment: also via the shared string table
         p_getfield(L, LUA_GLOBALSINDEX, "string");
@@ -212,6 +482,7 @@ static void give_log(void *L) {
         p_pushcclosure(L, lua_cfg, 0); p_setfield(L, -2, "eliteai_cfg");
         if (p_tonumber) { p_pushcclosure(L, lua_order, 0); p_setfield(L, -2, "eliteai_order");
                           p_pushcclosure(L, lua_take, 0); p_setfield(L, -2, "eliteai_take_orders"); }
+        if (p_tonumber) { p_pushcclosure(L, lua_cmd, 0); p_setfield(L, -2, "eliteai_cmd"); p_pushcclosure(L, lua_retlock, 0); p_setfield(L, -2, "eliteai_retlock"); }
         p_settop(L, -2);
     }
 }
@@ -242,8 +513,9 @@ static int append_load(void *L, LuaReader reader, void *data, const char *chunkn
     BufState st = { all, n, 0 }; give_log(L);
     int r = g_loadOrig(L, buf_reader, &st, chunkname); free(all); return r;
 }
-// The new AI only in single-player games. The AI and SCAR scripts run on every machine of a match, so one player with it
-// would desync an online game for everyone; a replay must replay with the scripts it was recorded with. The game type
+// Until 0.15 the new AI came on only in single-player games: its SCAR commands ran on the machine that had it, so one
+// player with it would have desynced an online game. Since brain step 9 every order is a network command of the AI's
+// player, and 0.16 lets it into network matches too (MULTIPLAYER above); a replay still replays with Elite's scripts. The game type
 // is [*(0x01335A78) + 0x118] (reverse 21.10): SP_SKIRMISH 0x4, SP_FFA_SOLO 0x80, SP_FFA_TEAM 0x200; every MP_* is in
 // 0x558, PLAYBACK 0x800. (0.5 used the network session's flags instead - they are set whenever the game is logged in
 // to Steam, so the new AI never came on, not even in a skirmish.)
@@ -265,10 +537,19 @@ static int replay_takeover_on(void) { return game_type() == T_PLAYBACK && GetMod
 static int __stdcall load_hook(void *L, LuaReader reader, void *data, const char *chunkname) {
     char rel[400];
     int rt = 0;
-    if (!single_player() && !(rt = replay_takeover_on())) {   // online, replay, menus: Elite's own scripts, untouched
+    if (chunkname) {                                   // 0.16: a SCAR script is being loaded = a world starts (before its AI players
+        char b[400]; int n = 0;                        // are made; any game type) - no retreat lock of the match before outlives it
+        for (const char *s = chunkname; *s && n < 398; s++) b[n++] = (*s == '/') ? '\\' : (char)tolower((unsigned char)*s);
+        b[n] = 0; if (strstr(b, "simulation\\scar\\")) ret_clear_all("a SCAR script is loaded: a match starts");
+    }
+    // 0.16: a network match is in too (see MULTIPLAYER above) - unless [EliteAI] Multiplayer=0, or the engine calls of
+    // eliteai_cmd are not there (another exe: the orders would have to go through SCAR, on this machine only)
+    int mp = 0;
+    if (!single_player() && !(rt = replay_takeover_on()) && !(mp = (mp_game() && mp_on() && cmd_ready()))) {   // replay, menus, MP switched off: Elite's own scripts, untouched
         static DWORD said, lastType = 1;
         DWORD t = game_type();
-        if (t && (t != lastType || GetTickCount() - said > 60000)) { said = GetTickCount(); lastType = t; logmsg("game type %lX (not single player): the new AI stays out", t); }
+        if (t && (t != lastType || GetTickCount() - said > 60000)) { said = GetTickCount(); lastType = t;
+            logmsg("game type %lX (not single player%s): the new AI stays out", t, !mp_game() ? "" : !mp_on() ? "; a network match, [EliteAI] Multiplayer=0" : "; a network match, but no network commands with this exe"); }
         return g_loadOrig(L, reader, data, chunkname);
     }
     if (chunkname) {                                   // SCAR scripts: EliteAI\append\scar\<name> is appended (the order queue of the new AI)
@@ -286,7 +567,8 @@ static int __stdcall load_hook(void *L, LuaReader reader, void *data, const char
         wchar_t p[MAX_PATH]; _snwprintf(p, MAX_PATH, L"%lsEliteAI\\%hs", g_dir, rel);
         size_t len = 0; char *buf = read_file(p, &len);
         if (buf) {
-            log_match(chunkname);                            // 0.14: a log per match of the new AI (an AI script of ours is given)
+            int fresh = log_match(chunkname);                // 0.14: a log per match of the new AI (an AI script of ours is given)
+            if (!strcmp(rel, "simulation\\ai\\default.ai")) { if (mp || mp_game()) mp_match_line(fresh); else if (fresh && cmd_ready()) mp_slots_line("slots of this game (single player)"); }
             BufState st = { buf, len, 0 }; give_log(L);
             int r = g_loadOrig(L, buf_reader, &st, chunkname);
             logmsg("ai script %s -> ours (%u bytes), load %d", chunkname, (unsigned)len, r);
@@ -296,7 +578,7 @@ static int __stdcall load_hook(void *L, LuaReader reader, void *data, const char
             _snwprintf(p, MAX_PATH, L"%lsEliteAI\\main.ai", g_dir);
             size_t mlen = 0; char *mod = read_file(p, &mlen);
             if (mod) {                                               // mechanics.ai (10.11): right after main.ai, same chunk
-                log_match(chunkname);
+                { int fresh = log_match(chunkname); if (mp) mp_match_line(fresh); }
                 _snwprintf(p, MAX_PATH, L"%lsEliteAI\\mechanics.ai", g_dir);
                 size_t xlen = 0; char *mech = read_file(p, &xlen);
                 if (mech) {
@@ -429,6 +711,7 @@ static void install_labels(void) {
 typedef struct { int pid; char race[24]; char var; } RpBot;
 static RpBot g_rpBot[8]; static int g_rpN;                  // this match: the AI players seen (race from "init", variant = new AI)
 static volatile int g_rpNew;                                // a new AI played in this match
+static volatile int g_rpMp;                                 // ... and it is a network match (0.16): "mp_" in the file name
 static ULONGLONG g_rpStart;                                 // FILETIME (UTC) of the match start
 static volatile int g_rpPlayback;                           // a replay was on while in this game
 
@@ -444,6 +727,7 @@ static const char *u8(const wchar_t *w, char *o, int cap) {   // paths in the lo
 }
 static void rp_who(char *o, int cap) {                     // "orks-C_eldar-A": the new AI players of the match
     int n = 0; o[0] = 0;
+    if (g_rpMp) n = snprintf(o, cap, "mp_");
     EnterCriticalSection(&g_lk);
     for (int i = 0, k = 0; i < g_rpN && k < 4; i++) {
         if (!g_rpBot[i].var) continue;
@@ -475,6 +759,10 @@ static void rp_marker_done(ULONGLONG start) {              // only the marker of
 // lua_log: "p1002 init race orks difficulty 1 team 1 logic new eliteai 0.19", "p1002 variant C rules C real_diff 2"
 static void replay_note(const char *line) {
     int pid = 0; char race[24] = "", v = 0, w[16] = "";
+    // 0.16: a network match too. These lines are written by the new AI's scripts, and the engine runs them only on the station
+    // that computes the computer - so only that station sends, once, after the match (MMFind's own upload of a match with a
+    // computer is not stored by the site; ours, X-Lobby newai, is kept hidden for the AI's development). The file name says mp.
+    if (game_type() & MP_TYPES) g_rpMp = 1;
     if (line[0] != 'p' || (!strstr(line, " init race ") && !strstr(line, " variant "))) return;   // every AI log line comes here
     if (sscanf(line, "p%d init race %23s", &pid, race) == 2) ;
     else if (sscanf(line, "p%d variant %15s", &pid, w) == 2 && w[0] >= 'A' && w[0] <= 'Z' && !w[1]) v = w[0];
@@ -542,7 +830,7 @@ typedef struct { wchar_t host[64]; volatile LONG refs; volatile int ok; volatile
 static void rp_unref(RpProbe *p) { if (!InterlockedDecrement(&p->refs)) free(p); }
 static DWORD WINAPI rp_probe(LPVOID a) {                    // GET /replay/api/by_lobby/<x>: the site answers "{}" (404) at once
     RpProbe *p = a; DWORD t0 = GetTickCount(), code = 0, sz = sizeof code, m; char out[64]; int n = 0;
-    HINTERNET s = WinHttpOpen(L"EliteAI/0.14", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, NULL, NULL, 0);
+    HINTERNET s = WinHttpOpen(L"EliteAI/0.16", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, NULL, NULL, 0);
     if (s) {
         WinHttpSetTimeouts(s, RP_CHECK_MS, RP_CHECK_MS, RP_CHECK_MS, RP_CHECK_MS);
         HINTERNET c = WinHttpConnect(s, p->host, INTERNET_DEFAULT_HTTPS_PORT, 0);
@@ -560,7 +848,7 @@ static DWORD WINAPI rp_probe(LPVOID a) {                    // GET /replay/api/b
 static DWORD rp_post(const wchar_t *host, const char *buf, DWORD size, const char *fname, char *out, int cap, DWORD tmoRecv) {
     wchar_t hdr[400]; _snwprintf(hdr, 400, L"Content-Type: application/octet-stream\r\nX-Filename: %hs\r\nX-Lobby: newai\r\n", fname);
     DWORD code = 0, sz = sizeof code, m; int n = 0; out[0] = 0;
-    HINTERNET s = WinHttpOpen(L"EliteAI/0.14", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, NULL, NULL, 0); if (!s) return 0;
+    HINTERNET s = WinHttpOpen(L"EliteAI/0.16", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, NULL, NULL, 0); if (!s) return 0;
     WinHttpSetTimeouts(s, 4000, 4000, 30000, (int)tmoRecv);       // the site parses the replay before it answers
     HINTERNET c = WinHttpConnect(s, host, INTERNET_DEFAULT_HTTPS_PORT, 0);
     HINTERNET r = c ? WinHttpOpenRequest(c, L"POST", L"/replay/api/upload", NULL, NULL, NULL, WINHTTP_FLAG_SECURE) : NULL;
@@ -645,7 +933,7 @@ static void rp_send(ULONGLONG start, const char *who, int old) {
 static void rp_match_over(void) {                           // back in the menu
     char who[160]; rp_who(who, sizeof who);
     ULONGLONG start = g_rpStart; int nw = g_rpNew, pb = g_rpPlayback;
-    EnterCriticalSection(&g_lk); g_rpN = 0; g_rpNew = 0; g_rpStart = 0; g_rpPlayback = 0; LeaveCriticalSection(&g_lk);
+    EnterCriticalSection(&g_lk); g_rpN = 0; g_rpNew = 0; g_rpMp = 0; g_rpStart = 0; g_rpPlayback = 0; LeaveCriticalSection(&g_lk);
     if (!nw) return;
     if (pb) { logmsg("replay: a replay taken over - not sent"); rp_marker_done(start); return; }
     if (!rp_upload_on()) { logmsg("replay: upload off (%s) - not sent", rp_dev() ? "-dev run: only with [Replays] Upload=2" : "[Replays] Upload=0"); rp_marker_done(start); return; }
@@ -670,7 +958,7 @@ static DWORD WINAPI rp_watch(LPVOID _) {                    // once a second: in
         if (!IsBadReadPtr(g, 4) && *g && !IsBadReadPtr((void *)(*g + 0x114), 8)) { in = *(DWORD *)(*g + 0x114) != 0; t = *(DWORD *)(*g + 0x118); }
         if (in && t == T_PLAYBACK) g_rpPlayback = 1;
         if (in && !was) {                                        // set at the loading screen, before the AI scripts load (stand 11.11)
-            EnterCriticalSection(&g_lk); g_rpN = 0; g_rpNew = 0; g_rpPlayback = t == T_PLAYBACK; g_rpStart = ft_now() - 300000000ULL; LeaveCriticalSection(&g_lk);
+            EnterCriticalSection(&g_lk); g_rpN = 0; g_rpNew = 0; g_rpMp = 0; g_rpPlayback = t == T_PLAYBACK; g_rpStart = ft_now() - 300000000ULL; LeaveCriticalSection(&g_lk);
             if (g_verbose || g_rpNew) logmsg("replay: in a game (type %lX)", t);
         }
         if (!in && was) { if (g_verbose || g_rpNew) logmsg("replay: back in the menu"); rp_match_over(); }
@@ -689,6 +977,7 @@ static int install(void) {
     p_pushstring = (void *)GetProcAddress(lc, "_lua_pushstring@8"); p_pushnil = (void *)GetProcAddress(lc, "_lua_pushnil@4");
     p_getfield = (void *)GetProcAddress(lc, "_lua_getfield@12"); p_settop = (void *)GetProcAddress(lc, "_lua_settop@8");
     p_tonumber = (void *)GetProcAddress(lc, "_lua_tonumber@8");
+    p_pushinteger = (void *)GetProcAddress(lc, "_lua_pushinteger@8"); p_tointeger = (void *)GetProcAddress(lc, "_lua_tointeger@8");
     if (!p_pushcclosure || !p_setfield || !p_tolstring || !p_gettop || !p_pushstring || !p_pushnil) { p_pushcclosure = NULL; logmsg("no Lua API for eliteai_log"); }
     if (memcmp(t, LOAD_PRO, 6)) { logmsg("lua_load prologue differs (%02X %02X %02X ...) - not hooking", t[0], t[1], t[2]); return 0; }
     unsigned char *tr = VirtualAlloc(NULL, 32, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
@@ -712,7 +1001,7 @@ BOOL WINAPI DllMain(HINSTANCE h, DWORD reason, LPVOID _) {
     GetModuleFileNameW(NULL, g_dir, MAX_PATH); wchar_t *s = wcsrchr(g_dir, L'\\'); if (s) wcscpy(s + 1, L"Elite_DLLs\\");
     _snwprintf(g_ini, MAX_PATH, L"%lsEliteAI.ini", g_dir);
     g_verbose = GetPrivateProfileIntW(L"EliteAI", L"Verbose", 0, g_ini);
-    logmsg("EliteAI 0.14 start (single-player games only; a log per match of the new AI: EliteAI.log, the match before in EliteAI.prev.log), hook %s", install() ? "installed" : "NOT installed");
+    logmsg("EliteAI 0.16 start (single player, and network matches for the computers this station computes; a log per match of the new AI: EliteAI.log, the match before in EliteAI.prev.log), hook %s", install() ? "installed" : "NOT installed");
     install_labels();
     int mg = mlg_install();
     logmsg("move loop guard (DOW2.exe 009141A0 / 009144F3): %s", mg == 1 ? "installed" : mg == 0 ? "MoveLoopFix.dll is active, not needed"

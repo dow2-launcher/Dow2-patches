@@ -461,6 +461,11 @@ frameprobe/ - FrameProbe.dll (off), eliteai/ - EliteAI.dll (store id newai since
     newai-27 (0.2.77): brain 0.8.1 (steps 8 / 8.1, branch newai-27): a game without victory points ends by the HQ, no retreats at full
       health, the red resource is spent (Waaagh!, gretchin / kommandos call-ins, roks), no building with gretchin; EliteAI.dll 0.14
       keeps the log of the last match of the new AI (EliteAI.log / EliteAI.prev.log / EliteAI.more.log). Non-ork slots still newai-23.1.
+    newai-28 (0.2.78): brain 0.9 (step 9, branch newai-28): every order of the new AI is a network command of its own player
+      (mod/netorder.ai inlined in default.ai; elite.scar only observes), gretchin follow the fist, every difficulty plays rule set C
+      (main.ai: [Lua] VariantByDiff=1 returns the old A / B / C by level); EliteAI.dll 0.16: eliteai_cmd / eliteai_retlock
+      (eliteai/retlock.h, the retreat lock ends with its match), NETWORK matches - the station that computes a computer player runs
+      the new AI ([EliteAI] Multiplayer=0 turns it off), replay upload of a network match. Non-ork slots still newai-23.1.
 
 ## Building
 

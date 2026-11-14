@@ -1,1 +1,2 @@
-- New: Parallel Pose (experiment, off by default, Elite only): smoother big late-game fights - the animation of the models is spread over several CPU cores instead of one. Looks only, no effect on sync.
+- New AI 28: the new AI now plays in network games too - it plays the computer players of the host. Everyone in the match must have "Melee freeze fix" or New AI turned on, otherwise a player without it can freeze in a melee bug. The same AI plays on every difficulty (the difficulty now only changes the computer's income, as in the original game). The gretchin follow the army. The orders are sent like a player's, so replays of New AI matches play back correctly. Every other race plays as in New AI 23.1.
+- Not checked yet: a real match between two PCs and a change of host.
