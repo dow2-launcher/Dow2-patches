@@ -4,6 +4,23 @@ Every version gets an entry here before it reaches `main`. CI then tags `vX.Y.Z`
 version (`X.Y.0`) it also publishes a GitHub Release with the DLLs and the entries since the previous `X.Y.0`.
 The version of the set lives only in `VERSION`; each DLL still writes its own version to its log.
 
+## 0.2.76 — 2026-11-14
+LiveReplay 4 (store livereplay-4, experiment, off by default): Watch at any minute of a match, 8x up to the live edge, the game's
+"Connecting" box with the scout's line.
+- Why a late Watch did not work: since LiveReplay 3 it starts (answers cut by the UDP tunnel are used as far as they go), but it never
+  caught up - players' logs 09.11: "catching up: 1500 steps behind" was "caught up" 22 minutes later, at the end of the match (1.1x
+  instead of 4x). SimulationController::Update 0x438613 runs at most one tick per drawn frame, so the replay was as fast as the frames.
+- Now the catch-up runs at CatchUpSpeed=80 (8x, was 40) for real: while it catches up, the main loop's passes between two shown frames
+  skip the visual update and the draw (call sites 0x40E58D / 0x40E6DC, as ReplaySpeed's 8x; chained with its stubs when it is there,
+  hooked only for the catch-up and put back after it), a frame shown every 1/30 s (CatchUpFps), the rate set raised (at most 2 x
+  CatchUpSpeed) until the replay really runs CatchUpSpeed ticks a second; the real speed in the log every 5 s. The player's own speed
+  button ends the catch-up. A catch-up can start whenever the replay is more than 30 s behind (not only at the first step).
+- The game's own "Connecting" box (common/connbox.h) from the accepted watch to the start of the replay's loading, second line the
+  scout's "See, but do not be seen." - DOW2.ucs 9027524 through Localizer (each language its own; a language without it, as the
+  Russian DOW2.ucs, gets 550002 "Connecting to the game..."). LiveReplay.ini ConnectingBox=0 / ConnectingText=<id>.
+- No server change needed (dow2-ladder fix/live-replay-cut-answers stays optional): even cut to the tunnel's first burst the answers
+  bring the records far faster than 8x plays them.
+
 ## 0.2.75 — 2026-11-14
 RoomJoin 14 (store roomjoin-8, experiment, off by default) and common/connbox.h (siritos 14.11.2026).
 - common/connbox.h: the game's own "Connecting" box of RoomJoin 13 (MessageBoxManager 0x45A3CD / 0xAD5FE0 / 0xAD6200, title
