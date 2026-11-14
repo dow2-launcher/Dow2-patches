@@ -1195,6 +1195,9 @@
     "games": [
       "elite"
     ],
+    "requires": [
+      "moveloopfix"
+    ],
     "category": "experiment",
     "order": 1000,
     "name": {
