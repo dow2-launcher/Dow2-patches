@@ -11,7 +11,7 @@
 #include <ctype.h>
 #include <winhttp.h>
 #include <shlobj.h>
-#include "moveloop_guard.h"     // 0.12 (14.11.2026): the engine's melee freeze (= MoveLoopFix 1; fastbench_1113 HANG_12da6e_RU.md, brain step 7 hangs)
+#include "moveloop_guard.h"     // the engine's melee freeze (= MoveLoopFix 1; fastbench_1113 HANG_12da6e_RU.md, brain step 7 hangs)
 
 typedef const char *(__stdcall *LuaReader)(void *L, void *data, size_t *size);
 typedef int (__stdcall *LuaLoadFn)(void *L, LuaReader reader, void *data, const char *chunkname);
@@ -33,15 +33,124 @@ static wchar_t g_dir[MAX_PATH];                 // ...\Elite_DLLs\ (where this D
 static CRITICAL_SECTION g_lk;
 static int g_verbose;
 
-static void logmsg(const char *fmt, ...) {
-    wchar_t p[MAX_PATH]; _snwprintf(p, MAX_PATH, L"%lsEliteAI.log", g_dir);
-    EnterCriticalSection(&g_lk);
+// THE OWNER'S RULE FOR THIS DLL (14.11.2026): whatever here touches the AI's control or the simulation must be deterministic
+// and INTEGER (or fixed-point) - no float / double arithmetic, no wall-clock time, no randomness of ours, a stable order.
+// The Mac (Feral) build computes floats differently and in multiplayer every client runs the AI: a difference is a desync.
+// Decisions live in the Lua scripts; the DLL is plumbing - loading, the log, the cfg, the order pipe, the move loop guard.
+// State of this file against the rule:
+//   * the log (below), the replay upload and the labels use the wall clock and never feed anything back to the scripts;
+//   * the order pipe (lua_order / lua_take) does NO arithmetic, but it carries the scripts' numbers as doubles and prints
+//     them with "%.2f" - the C runtime's rounding of a double is in the path of control data. To be replaced by integers
+//     (the scripts send centimetres) before the new AI runs in a multiplayer game: NOT DONE, the protocol is shared with
+//     main.ai / mechanics.ai / elite.scar;
+//   * lua_cfg hands the scripts strings of the local EliteAI.ini: in multiplayer every client must have the same [Lua] keys;
+//   * the move loop guard (moveloop_guard.h) changes the simulation only where the engine would hang; it counts passes
+//     whose 'time left' is BIT-equal to the pass before (an integer compare of the four bytes) - the float is read as a
+//     number only for the log line.
+// 0.13 (14.11.2026): ONE LOG PER MATCH. (Integers only - byte counts and GetTickCount; it decides which FILE a line goes
+// to and nothing else: no script and no order ever sees it.) The launcher's "send logs" carries the LAST 256 KB of every *.log of this folder
+// (bundle 20261114-121730: 'EliteAI.log (669590 bytes, +387141 new)', 262146 bytes of it in the bundle - the match began
+// at 4:07 of the game there, the tester's marks of 1:07 and 1:30 had no line of the AI). Now:
+//   * at the start of a match OF THE NEW AI (0.14: the first AI script of ours the game is given for it - not a replay,
+//     not a SCAR load; see log_match) EliteAI.log becomes EliteAI.prev.log and EliteAI.more.log becomes
+//     EliteAI.more.prev.log; EliteAI.log holds the current match (and the few lines of the replays watched after it);
+//   * EliteAI.log never grows beyond LOG_MAIN_MAX (250 KB), so the launcher's tail is the whole file and THE BEGINNING OF
+//     THE MATCH IS NEVER CUT. What does not fit goes on in EliteAI.more.log, the least needed lines first: the order
+//     lines ('BR ORD', the counters) from LOG_ALL_MAX (140 KB) on, the fight / fist / capture lines from LOG_B_MAX
+//     (235 KB) on, everything from 250 KB on. One brain writes ~15 KB a minute, 6 KB of it orders: a 1v1 of 25 minutes
+//     fits whole (orders of its last minutes in the second file, which the launcher sends as well).
+#define LOG_ALL_MAX  (140 * 1024)
+#define LOG_B_MAX    (235 * 1024)
+#define LOG_MAIN_MAX (250 * 1024)
+static long g_logBytes = -1;                    // bytes in EliteAI.log (-1 = not measured yet)
+static int g_logSaid;                           // the line "goes on in EliteAI.more.log" was written (bits: 1 orders, 2 fights, 4 all)
+static DWORD g_lastLoadTick;                    // the last script load of a match (GetTickCount)
+static int log_class(const char *s) {           // 0 = always in the match's log, 1 = fights / fist / captures, 2 = orders / counters
+    if (strstr(s, " BR ORD ") || strstr(s, " stats ") || strstr(s, "CAST seen") || strstr(s, "RETREAT seen")) return 2;
+    if (strstr(s, " BR ARMY ")) return (strstr(s, " squad ") || strstr(s, " zone ") || strstr(s, " stage ")) ? 0 : 1;
+    if (strstr(s, " BR W ") || strstr(s, " BR CAP ") || strstr(s, " BR SEE ") || strstr(s, " BR COMP ")) return 1;
+    return 0;
+}
+static void log_write(const wchar_t *name, const char *stamp, const char *line) {
+    wchar_t p[MAX_PATH]; _snwprintf(p, MAX_PATH, L"%ls%ls", g_dir, name);
     FILE *f = _wfopen(p, L"a");
-    if (f) {
-        SYSTEMTIME t; GetLocalTime(&t); fprintf(f, "%02d:%02d:%02d.%03d ", t.wHour, t.wMinute, t.wSecond, t.wMilliseconds);
-        va_list a; va_start(a, fmt); vfprintf(f, fmt, a); va_end(a); fputc('\n', f); fclose(f);
+    if (f) { fputs(stamp, f); fputs(line, f); fputc('\n', f); fclose(f); }
+}
+static void logmsg(const char *fmt, ...) {
+    char line[1400], stamp[20];
+    va_list a; va_start(a, fmt); vsnprintf(line, sizeof line, fmt, a); va_end(a); line[sizeof line - 1] = 0;
+    SYSTEMTIME t; GetLocalTime(&t); snprintf(stamp, sizeof stamp, "%02d:%02d:%02d.%03d ", t.wHour, t.wMinute, t.wSecond, t.wMilliseconds);
+    EnterCriticalSection(&g_lk);
+    if (g_logBytes < 0) {                        // (appending to the file of the last session: its size counts)
+        wchar_t p[MAX_PATH]; _snwprintf(p, MAX_PATH, L"%lsEliteAI.log", g_dir);
+        WIN32_FILE_ATTRIBUTE_DATA d; g_logBytes = GetFileAttributesExW(p, GetFileExInfoStandard, &d) ? (long)d.nFileSizeLow : 0;
+    }
+    int c = log_class(line);
+    long cap = c == 2 ? LOG_ALL_MAX : c == 1 ? LOG_B_MAX : LOG_MAIN_MAX;
+    // ([EliteAI] LogWhole=1, or the scene bench's dump - [Lua] SceneTo: one file, no limits; the bench reads megabytes of it)
+    static int whole = -1;
+#ifdef LOG_TEST_SPLIT
+    whole = 0;                                   // (a bench test of the split itself)
+#else
+    if (whole < 0 && g_ini[0]) whole = GetPrivateProfileIntW(L"EliteAI", L"LogWhole", 0, g_ini) || GetPrivateProfileIntW(L"Lua", L"SceneTo", 0, g_ini) > 0;
+#endif
+    if (whole > 0 || g_logBytes < cap) {
+        log_write(L"EliteAI.log", stamp, line); g_logBytes += (long)(strlen(stamp) + strlen(line) + 2);
+    } else {
+        int bit = c == 2 ? 1 : c == 1 ? 2 : 4;
+        if (!(g_logSaid & bit) && g_logBytes < LOG_MAIN_MAX + 400) {
+            g_logSaid |= bit;
+            const char *w = c == 2 ? "the order lines (BR ORD, the counters) go on in EliteAI.more.log" : c == 1 ? "the fight / fist / capture lines go on in EliteAI.more.log"
+                                   : "this file is full (250 KB): everything goes on in EliteAI.more.log";
+            log_write(L"EliteAI.log", stamp, w); g_logBytes += (long)(strlen(stamp) + strlen(w) + 2);
+        }
+        log_write(L"EliteAI.more.log", stamp, line);
     }
     LeaveCriticalSection(&g_lk);
+}
+// 0.14 (14.11.2026, the verifier of brain step 8): the log is rotated ONLY WHEN A MATCH WITH THE NEW AI STARTS. 0.13
+// rotated at the first script of any game the hook touches - a replay watched with ReplayTakeover in the game (its SCAR
+// gets our append) and every skirmish alike - so a tester's AI match survived exactly one later game or replay. Now:
+//   * a SCAR append rotates nothing (a replay never gives an AI script of ours: its lines are added to the log as it is);
+//   * the first AI script that is given as OURS after LOG_MATCH_GAP_MS without one = a match of the new AI starts. The
+//     log is rotated then - and only if the file already holds a match (the line "=== EliteAI" in it): a file with
+//     nothing but the lines of replays / of this match's own SCAR load is kept and the match goes on in it.
+// (Integers only: GetTickCount and byte compares; it chooses the FILE of a line, nothing here reaches a script.)
+#define LOG_MATCH_GAP_MS 20000
+#define LOG_MATCH_MARK   "=== EliteAI"
+static int log_holds_match(void) {               // does EliteAI.log hold the header line of a match?
+    wchar_t p[MAX_PATH]; _snwprintf(p, MAX_PATH, L"%lsEliteAI.log", g_dir);
+    HANDLE f = CreateFileW(p, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, 0, NULL);
+    if (f == INVALID_HANDLE_VALUE) return 0;
+    static char buf[65536 + 16]; const int ml = (int)sizeof(LOG_MATCH_MARK) - 1;
+    int keep = 0, found = 0; DWORD got = 0;
+    while (!found && ReadFile(f, buf + keep, 65536, &got, NULL) && got) {
+        int n = keep + (int)got;
+        for (int i = 0; i + ml <= n; i++) if (buf[i] == '=' && !memcmp(buf + i, LOG_MATCH_MARK, ml)) { found = 1; break; }
+        keep = n < ml - 1 ? n : ml - 1; memmove(buf, buf + n - keep, keep);      // (the mark may lie across two reads)
+    }
+    CloseHandle(f); return found;
+}
+static void log_match(const char *chunk) {       // an AI script of OURS is being given to the engine
+    DWORD now = GetTickCount(); int fresh, rotated = 0;
+    EnterCriticalSection(&g_lk);
+    fresh = (g_lastLoadTick == 0 || now - g_lastLoadTick > LOG_MATCH_GAP_MS); g_lastLoadTick = now ? now : 1;
+    if (fresh && log_holds_match()) {
+        static const wchar_t *R[2][2] = { { L"EliteAI.log", L"EliteAI.prev.log" }, { L"EliteAI.more.log", L"EliteAI.more.prev.log" } };
+        for (int i = 0; i < 2; i++) {
+            wchar_t x[MAX_PATH], y[MAX_PATH]; _snwprintf(x, MAX_PATH, L"%ls%ls", g_dir, R[i][0]); _snwprintf(y, MAX_PATH, L"%ls%ls", g_dir, R[i][1]);
+            if (GetFileAttributesW(x) != INVALID_FILE_ATTRIBUTES) MoveFileExW(x, y, MOVEFILE_REPLACE_EXISTING);
+            else if (i == 1) DeleteFileW(y);    // (no second file in the last match: the one before it is not its)
+        }
+        g_logBytes = 0; g_logSaid = 0; rotated = 1;
+    }
+    LeaveCriticalSection(&g_lk);
+    if (fresh) {
+        SYSTEMTIME t; GetLocalTime(&t);
+        logmsg(LOG_MATCH_MARK " 0.14: a match of the new AI starts %04d-%02d-%02d %02d:%02d:%02d (first AI script %s); %s ===",
+               t.wYear, t.wMonth, t.wDay, t.wHour, t.wMinute, t.wSecond, chunk ? chunk : "?",
+               rotated ? "the match before it is in EliteAI.prev.log" : "no match in this file before it: nothing rotated");
+    }
 }
 
 // "data:simulation/ai/default.ai", "@Simulation\AI\Personality\orks\expert.ai" ... -> "simulation\ai\default.ai" (lower case)
@@ -177,6 +286,7 @@ static int __stdcall load_hook(void *L, LuaReader reader, void *data, const char
         wchar_t p[MAX_PATH]; _snwprintf(p, MAX_PATH, L"%lsEliteAI\\%hs", g_dir, rel);
         size_t len = 0; char *buf = read_file(p, &len);
         if (buf) {
+            log_match(chunkname);                            // 0.14: a log per match of the new AI (an AI script of ours is given)
             BufState st = { buf, len, 0 }; give_log(L);
             int r = g_loadOrig(L, buf_reader, &st, chunkname);
             logmsg("ai script %s -> ours (%u bytes), load %d", chunkname, (unsigned)len, r);
@@ -186,6 +296,7 @@ static int __stdcall load_hook(void *L, LuaReader reader, void *data, const char
             _snwprintf(p, MAX_PATH, L"%lsEliteAI\\main.ai", g_dir);
             size_t mlen = 0; char *mod = read_file(p, &mlen);
             if (mod) {                                               // mechanics.ai (10.11): right after main.ai, same chunk
+                log_match(chunkname);
                 _snwprintf(p, MAX_PATH, L"%lsEliteAI\\mechanics.ai", g_dir);
                 size_t xlen = 0; char *mech = read_file(p, &xlen);
                 if (mech) {
@@ -431,7 +542,7 @@ typedef struct { wchar_t host[64]; volatile LONG refs; volatile int ok; volatile
 static void rp_unref(RpProbe *p) { if (!InterlockedDecrement(&p->refs)) free(p); }
 static DWORD WINAPI rp_probe(LPVOID a) {                    // GET /replay/api/by_lobby/<x>: the site answers "{}" (404) at once
     RpProbe *p = a; DWORD t0 = GetTickCount(), code = 0, sz = sizeof code, m; char out[64]; int n = 0;
-    HINTERNET s = WinHttpOpen(L"EliteAI/0.12", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, NULL, NULL, 0);
+    HINTERNET s = WinHttpOpen(L"EliteAI/0.14", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, NULL, NULL, 0);
     if (s) {
         WinHttpSetTimeouts(s, RP_CHECK_MS, RP_CHECK_MS, RP_CHECK_MS, RP_CHECK_MS);
         HINTERNET c = WinHttpConnect(s, p->host, INTERNET_DEFAULT_HTTPS_PORT, 0);
@@ -449,7 +560,7 @@ static DWORD WINAPI rp_probe(LPVOID a) {                    // GET /replay/api/b
 static DWORD rp_post(const wchar_t *host, const char *buf, DWORD size, const char *fname, char *out, int cap, DWORD tmoRecv) {
     wchar_t hdr[400]; _snwprintf(hdr, 400, L"Content-Type: application/octet-stream\r\nX-Filename: %hs\r\nX-Lobby: newai\r\n", fname);
     DWORD code = 0, sz = sizeof code, m; int n = 0; out[0] = 0;
-    HINTERNET s = WinHttpOpen(L"EliteAI/0.12", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, NULL, NULL, 0); if (!s) return 0;
+    HINTERNET s = WinHttpOpen(L"EliteAI/0.14", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, NULL, NULL, 0); if (!s) return 0;
     WinHttpSetTimeouts(s, 4000, 4000, 30000, (int)tmoRecv);       // the site parses the replay before it answers
     HINTERNET c = WinHttpConnect(s, host, INTERNET_DEFAULT_HTTPS_PORT, 0);
     HINTERNET r = c ? WinHttpOpenRequest(c, L"POST", L"/replay/api/upload", NULL, NULL, NULL, WINHTTP_FLAG_SECURE) : NULL;
@@ -601,7 +712,7 @@ BOOL WINAPI DllMain(HINSTANCE h, DWORD reason, LPVOID _) {
     GetModuleFileNameW(NULL, g_dir, MAX_PATH); wchar_t *s = wcsrchr(g_dir, L'\\'); if (s) wcscpy(s + 1, L"Elite_DLLs\\");
     _snwprintf(g_ini, MAX_PATH, L"%lsEliteAI.ini", g_dir);
     g_verbose = GetPrivateProfileIntW(L"EliteAI", L"Verbose", 0, g_ini);
-    logmsg("EliteAI 0.12 start (single-player games only), hook %s", install() ? "installed" : "NOT installed");
+    logmsg("EliteAI 0.14 start (single-player games only; a log per match of the new AI: EliteAI.log, the match before in EliteAI.prev.log), hook %s", install() ? "installed" : "NOT installed");
     install_labels();
     int mg = mlg_install();
     logmsg("move loop guard (DOW2.exe 009141A0 / 009144F3): %s", mg == 1 ? "installed" : mg == 0 ? "MoveLoopFix.dll is active, not needed"

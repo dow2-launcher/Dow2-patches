@@ -87,6 +87,7 @@ clean:
 
 # EliteAI 0.11 (11.11.2026): the replay of a match with the new AI to the replay site (WinHTTP, SHGetFolderPathW)
 # EliteAI 0.12 (14.11.2026): the engine's melee freeze guarded from the DLL (eliteai/moveloop_guard.h = MoveLoopFix 1, same mutex)
+# EliteAI 0.14 (14.11.2026): one log per match of the new AI (rotation only when such a match starts), no build change
 $(OUT)/EliteAI.dll: eliteai/eliteai.c eliteai/moveloop_guard.h | $(OUT)
 	$(CC) $(CFLAGS) -shared -o $@ $< -lwinhttp -lshell32 -static-libgcc
 

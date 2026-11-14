@@ -89,6 +89,48 @@ EliteAI_MECH_ABILITIES = {
 	[36] = "ability/pvp/race_ork/tankbustas/ork_damage_aoe_mortar",
 	[37] = "ability/pvp/race_ork/kommandos/ork_damage_aoe_stikkbomb",
 	[38] = "ability/pvp/race_ork/kommando_hero/ork_damage_aoe_stikkbomb",
+	-- 39-49 (branch brain, step 8): the rest of the orks' fight kit - people cast 2.2 unit abilities a minute, the brain 0.8.
+	-- Target kinds by the attributes of Elite 3.2.1 (tools/brain_data.py writes them into Brain.ABILD): the burna and the
+	-- two shots of the kommando nob on a squad (200+k), the grenades / the tank's shot / the wagon's guns at a place
+	-- (100+k), the dread's rush, the mek's field and his quake on itself (300+k)
+	[39] = "ability/pvp/race_ork/sluggas/ork_burna_ability",
+	[40] = "ability/pvp/race_ork/kommando_hero/ork_immobilize_aoe_stungrenade",
+	[41] = "ability/pvp/race_ork/kommando_hero/ork_damage_target_highpoweredshot",
+	[42] = "ability/pvp/race_ork/tank/ork_damage_aoe_highpoweredshot",
+	[43] = "ability/pvp/race_ork/deff_dread/ork_buff_self_speed",
+	[44] = "ability/pvp/race_ork/mekboy/ork_buff_self_invincibility",
+	[45] = "ability/pvp/race_ork/kommandos/ork_dot_aoe_burnabomb",
+	[46] = "ability/pvp/race_ork/battlewagon/ork_damage_aoe_battlewagon_artillery",
+	[47] = "ability/pvp/race_ork/mekboy/ork_spawn_proximity_mine",
+	[48] = "ability/pvp/race_ork/kommando_hero/ork_damage_aoe_explosiveshot",
+	[49] = "ability/pvp/race_ork/mekboy/ork_immobilize_aoe_earthquake",
+	-- 50-69 (branch brain, step 8): space marines (60_roles.ai, the profile 'space_marines')
+	[50] = "ability/pvp/race_marine/tactical_squad/sm_buff_self_damage",
+	[51] = "ability/pvp/race_marine/force_commander/sm_buff_aoe_battlecry",
+	[52] = "ability/pvp/race_marine/scout/sm_stun_aoe_knockback",
+	[53] = "ability/pvp/race_marine/devastator/sm_buff_self_damage",
+	[54] = "ability/pvp/race_marine/assault_marine/sm_immobilize_target_meltabomb",
+	[55] = "ability/pvp/race_marine/apothecary/sm_heal_target_apoth",
+	[56] = "ability/pvp/race_marine/librarian/sm_damage_aoe_smite",
+	[57] = "ability/pvp/race_marine/dreadnought/sm_stun_aoe_fist",
+	[58] = "ability/pvp/race_marine/dreadnought/sm_damage_aoe_cannonbarrage",
+	[59] = "ability/pvp/race_marine/whirlwind/sm_whirlwind_hunter_killer",
+	[60] = "ability/pvp/race_marine/terminator/sm_damage_aoe_missilebarrage",
+	[61] = "ability/pvp/race_marine/techmarine/sm_damage_target_highpoweredshot",
+	[62] = "ability/pvp/race_marine/techmarine/sm_debuff_target_marktarget",
+	[63] = "ability/pvp/race_marine/apothecary/sm_dot_aoe_toxingrenade",
+	[64] = "ability/pvp/race_marine/apothecary/sm_damage_target_rapidfire",
+	[65] = "ability/pvp/race_marine/force_commander/sm_buff_self_speed",
+	[66] = "ability/pvp/race_marine/apothecary/sm_buff_target_damage",
+	[67] = "ability/pvp/race_marine/techmarine/sm_debuff_aoe_empgrenade",
+	[68] = "ability/pvp/race_marine/assault_marine/sm_jump_target_vanguard",
+	[69] = "ability/pvp/race_marine/dreadnought_venerable/sm_stun_aoe_fist",
+	-- 70-73 (step 8, Orca 14.11 'the lootas never use their camo'): the hiding of a squad, a toggle on itself (300+k). The
+	-- brain sends it only for a squad the engine says is NOT hidden (Squad_IsInfiltrated) - it is never switched off.
+	[70] = "ability/pvp/race_ork/lootas/ork_buff_self_infiltrate",
+	[71] = "ability/pvp/race_ork/kommandos/ork_buff_self_infiltration",
+	[72] = "ability/pvp/race_ork/kommando_hero/ork_buff_self_infiltrate",
+	[73] = "ability/pvp/race_marine/scout/sm_buff_self_infiltrate",
 }
 EliteAI_MechAbilityIDs = {}
 local function mech_ability(k)
@@ -226,14 +268,20 @@ local function mech_order(sg, sq, m, x, y, z)
 		if Squad_IsInHoldEntity and Squad_IsInHoldEntity(sq) then
 			EliteAI_UnloadN = (EliteAI_UnloadN or 0) + 1
 			local how = "no command here"
-			-- (bench s6_t8 - s6_t10: SCMD_Unload is not in this SCAR state; the library's Cmd_UngarrisonSquad(sgroup) and
-			-- (sgroup, position, false) both end in 'Invalid parameter 1 (SGroup* expected) in function SGroup_CountSpawned' -
-			-- its signature is not known. NO WORKING COMMAND YET: the brain sends this order only with Brain_Evict=1.)
-			if SCMD_Unload and Command_SquadPos then
-				Command_SquadPos(Squad_GetPlayerOwner(sq), sg, SCMD_Unload, World_Pos(tonumber(x), tonumber(y), tonumber(z)), false); how = "Command_SquadPos"
+			-- Step 8: THE COMMAND IS FOUND. Bench s8_ev (fourteen candidates in turn, each squad's next order saying what the
+			-- last one did): Cmd_Ungarrison takes the BUILDING - an EGroup with the entity the squad holds - and the place to
+			-- go to; 8 squads of 8 were out a second later. (With the squad's own group it is 'Invalid parameter 1 (EGroup*
+			-- expected)'; without the place, SGroup_Eject, Cmd_Unload, Cmd_SquadUnload, SCMD_UnloadSquads and a plain move
+			-- order after a stop leave the squad inside.) Every squad in that building comes out: the brain sends the order
+			-- only when none of them is there by its will (50_army.ai). The names and the entity are checked first.
+			local hold = (type(Squad_GetHoldEntity) == "function") and Squad_GetHoldEntity(sq) or nil
+			if hold ~= nil and type(Cmd_Ungarrison) == "function" and type(EGroup_CreateIfNotFound) == "function" and type(EGroup_Add) == "function" then
+				local eg = EGroup_CreateIfNotFound("eliteai_unload_eg")
+				EGroup_Clear(eg); EGroup_Add(eg, hold)
+				Cmd_Ungarrison(eg, World_Pos(tonumber(x), tonumber(y), tonumber(z)), false)
+				how = "Cmd_Ungarrison(building, place)"
 			end
-			if EliteAI_UnloadN <= 5 then _log("MECH unload", Squad_GetGameID(sq), "x" .. EliteAI_UnloadN, how, "SCMD_Unload", type(SCMD_Unload), "Command_SquadPos", type(Command_SquadPos),
-				"Command_Squad", type(Command_Squad), "Cmd_UngarrisonSquad", type(Cmd_UngarrisonSquad), "SCMD_UnloadSquads", type(SCMD_UnloadSquads)) end
+			if EliteAI_UnloadN <= 5 then _log("MECH unload", Squad_GetGameID(sq), "x" .. EliteAI_UnloadN, how, "Cmd_Ungarrison", type(Cmd_Ungarrison), "Squad_GetHoldEntity", type(Squad_GetHoldEntity)) end
 		elseif not EliteAI_UnloadNot then
 			EliteAI_UnloadNot = true
 			_log("MECH unload: the squad is not in a building here", Squad_GetGameID(sq), "Squad_IsInHoldEntity", type(Squad_IsInHoldEntity))
@@ -968,7 +1016,14 @@ function EliteAI_CastCfg(pid, on, dump)
 		for k, v in pairs(_G) do
 			if type(k) == "string" and type(v) == "function" and (string.find(k, "bilit", 1, true) or string.find(k, "odifier", 1, true)
 				or string.find(k, "ooldown", 1, true) or string.find(k, "Capture", 1, true) or string.find(k, "Retreat", 1, true)
-				or string.find(k, "Suppress", 1, true) or string.find(k, "Aggress", 1, true)) then table.insert(found, k) end
+				or string.find(k, "Suppress", 1, true) or string.find(k, "Aggress", 1, true) or string.find(k, "pgrade", 1, true)
+				or string.find(k, "nergy", 1, true) or string.find(k, "argear", 1, true) or string.find(k, "Weapon", 1, true)
+				or string.find(k, "Slot", 1, true) or string.find(k, "Construct", 1, true) or string.find(k, "Build", 1, true)
+				or string.find(k, "arrison", 1, true) or string.find(k, "nload", 1, true) or string.find(k, "vacuat", 1, true)
+				or string.find(k, "Hold", 1, true) or string.find(k, "Eject", 1, true) or string.find(k, "Exit", 1, true)) then table.insert(found, k) end
+		end
+		for k, v in pairs(_G) do
+			if type(k) == "string" and type(v) ~= "function" and (string.sub(k, 1, 5) == "SCMD_" or string.sub(k, 1, 5) == "PCMD_" or string.sub(k, 1, 5) == "ECMD_") then table.insert(found, k .. "=" .. tostring(v)) end
 		end
 		table.sort(found)
 		local line, cnt = {}, 0
@@ -1073,6 +1128,8 @@ end
 -- down by half the cost or more), and the AI is told (5, k, took, red now). Numbers only (keep in sync with 60_roles.ai).
 EliteAI_PLAYER_ABILITIES = {
 	[1] = "ability/pvp/race_ork/globals/ork_waaagh",
+	-- (step 8, Malum fb 985 'neither bot ever uses its faction abilities'): the roks, cast at a place (500+k)
+	[2] = "ability/pvp/race_ork/globals/ork_damage_target_rokks",
 }
 EliteAI_Glob = { pids = {}, order = {}, ids = {}, watch = {}, n = 0 }
 function EliteAI_GlobApi()
