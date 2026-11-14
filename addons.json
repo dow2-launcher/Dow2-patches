@@ -456,7 +456,7 @@
     "order": 40
   },
   "roomjoin": {
-    "version": "7",
+    "version": "8",
     "dll": "RoomJoin.dll",
     "files": {
       "rjbridge.exe": "build/rjbridge.exe"
@@ -522,7 +522,7 @@
     "order": 20
   },
   "livereplay": {
-    "version": "3",
+    "version": "4",
     "dll": "LiveReplay.dll",
     "files": {
       "lrbridge.exe": "build/lrbridge.exe"

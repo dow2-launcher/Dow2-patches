@@ -1,0 +1,1 @@
+- Automatch (MMFind 0.50): when a launcher room's match starts, the game shows its own "Connecting" window until the loading screen. An observer of a launcher room is sent into the match as an observer (needs the server side as well).

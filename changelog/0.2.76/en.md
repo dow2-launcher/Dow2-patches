@@ -1,0 +1,1 @@
+- Watch running matches (LiveReplay 4): you can now start watching at any minute of a match - the game catches up with the live edge about eight times faster, then plays at normal speed. While the match is being fetched, the game shows its own "Connecting" window with the scout's line "See, but do not be seen."
