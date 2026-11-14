@@ -1442,15 +1442,17 @@ static void room_start(const QCmd *c, DWORD now) {
     room_set(g_state == S_NATIVE || g_state == S_NASK ? RS_STOP : RS_WALK);
 }
 // 0.51: after a cancel (or a failure) before the match: the search stopped if it runs, then Back to the main menu (Find a Game left)
-static void room_back_main(DWORD now) { g_rBackAt = now + 300; g_rBacks = 0; }
+static int g_rBoxCloses;
+static void room_back_main(DWORD now) { g_rBackAt = now + 300; g_rBacks = 0; g_rBoxCloses = 0; }
 static void back_step(DWORD now) {
     if (!g_rBackAt || (int)(now - g_rBackAt) < 0) return;
-    if (g_rs == RS_NONE && !g_loading && g_screen == SC_MAIN && g_rBacks < 4 && game_boxes(1, "a cancelled launcher room's start: the game's notice away")) { g_rBackAt = now + 500; return; }
+    if (g_rs == RS_NONE && !g_loading && g_screen == SC_MAIN && g_rBoxCloses < 2 && game_boxes(0, NULL)) {   // at most twice a cancel
+        g_rBoxCloses++; game_boxes(1, "a cancelled launcher room's start: the game's notice away"); g_rBackAt = now + 500; return; }
     if (g_rs != RS_NONE || g_loading || g_screen != SC_MM || g_rBacks >= 4) {
         if (g_rBacks >= 4 && g_screen == SC_MM) logmsg("room: still on Find a Game after %d Backs - left there", g_rBacks);
         g_rBackAt = 0; return; }
     if (g_engSearch == 1 || g_state == S_NATIVE || g_state == S_NASK) { g_rBackAt = now + 700; return; }   // the search ends first
-    if (game_boxes(1, "a cancelled launcher room's start: the game's notice away")) { g_rBackAt = now + 500; return; }
+    if (g_rBoxCloses < 2 && game_boxes(0, NULL)) { g_rBoxCloses++; game_boxes(1, "a cancelled launcher room's start: the game's notice away"); g_rBackAt = now + 500; return; }
     g_rBacks++; g_rBackAt = now + 1500;
     if (g_heroUp && g_rBacks == 2) { logmsg("room: the hero panel is up - its Ready, then Back"); fs(".hero_selection_mc.OnClickAccept", ""); g_heroUp = 0; g_rBackAt = now + 600; return; }
     logmsg("room: Back to the main menu (%d)", g_rBacks); fs(".OnClickBack", "");
@@ -1530,9 +1532,12 @@ static void room_step(DWORD now) {
         // the game's question on the first Multiplayer of an account ("Play against CPU? ... an offline game against the CPU?"):
         // its menu ignores every command while a box is up (stand 2, 06.11) - No (OnButton2), then Multiplayer again
         if (g_screen == SC_MAIN && g_rWalked && now - g_rStepAt > 700 && msgbox_up()) { g_rStepAt = now; msgbox_scan(2); break; }
-        // 0.51: a box the game left up (its message box movie not known to us - no button to press): closed by its id, then the walk
-        if ((g_screen == SC_MAIN || g_screen == SC_MM) && now - g_rStepAt > 700 && game_boxes(0, NULL) && !msgbox_up()) {
-            g_rStepAt = now; game_boxes(1, "a launcher room's walk: the menu ignores commands under it"); break; }
+        // 0.51: the main menu deaf to 2 Find a Game commands and a box of the game up (its message box movie not known to us - no
+        // button to press; stand 14.11: the notice "The Countdown was stopped because ... left the game!" kept the walk out for 50 s):
+        // the box closed by its id, then the walk again. Not before: the manager lists a box nobody sees (stand 14.11, right after the
+        // game's start) and closing that one made the menu deaf for ~2 s.
+        if (g_screen == SC_MAIN && g_rWalked >= 2 && g_rWalked % 2 == 0 && now - g_rStepAt > 1200 && game_boxes(0, NULL) && !msgbox_up()) {
+            g_rStepAt = now; g_rWalked++; game_boxes(1, "a launcher room's walk: the menu ignored 2 commands"); break; }
         if (g_screen == SC_MAIN && now - g_scrTick > 1000 && now - g_rStepAt > 1500) {
             if (!g_rWalked) room_ev("walking");
             // Find a Game straight from the main menu (MainMenuForm::OnClickMatchMaking): Multiplayer first asks an account that never

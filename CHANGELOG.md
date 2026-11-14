@@ -20,8 +20,8 @@ automatch behind a switch (siritos fb 1062; report siritos_1114c).
   race / hero before the search: the army again); with go_at the ticket's ttl counts from go_at.
 - "cancel" at any step before the loading screen: the search stopped if it runs, the game's own notice it then shows ("The Countdown
   was stopped because ... left the game!") closed, Back to the main menu. A box the game left up (no button of it known) is closed
-  by its id before a walk (common/connbox.h connbox_active / connbox_close_id: the MessageBoxManager's list) - before, such a notice
-  made the menu deaf and the next walk ended in walk_timeout.
+  by its id when the main menu ignored 2 Find a Game commands of a walk (common/connbox.h connbox_active / connbox_close_id: the
+  MessageBoxManager's list) - before, such a notice made the menu deaf and the walk ended in walk_timeout.
 - [MMFind] RoomObservers=1 (default 0 = the 0.50 watch): an observer's ticket ("watch":true) walks as a player does (Find a Game,
   the room's mode, the army as it is, Ready), searches at go_at with "watch" in mm/native; the ladder (data/lroom_obs_native.on) makes
   him a watcher of the room's match with team = number of teams; a host whose ticket says "obs": K builds the AUTOMATCH room with K
