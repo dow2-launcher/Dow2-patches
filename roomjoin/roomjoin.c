@@ -28,6 +28,12 @@
 // screen's commands are logged, to find its real leave command if Back is not it).
 //
 // RoomJoin 13 (06.11.2026): the game's own "Connecting" box while joining, as its games list shows it (see box_open below).
+// RoomJoin 14 (14.11.2026, siritos): the box is common/connbox.h (MMFind, LiveReplay and ReplayOpen show the same one). Into a
+// lobby as an OBSERVER: {"cmd":"join","room":<id>,"name":"...","as":"obs"} - the join as always (the game puts a joiner in any free
+// seat), then on the lobby screen a free observer seat with the screen's own command a click on that seat sends (see "into a lobby
+// as an observer" below) -> {"ev":"in_lobby","room":id,"as":"obs"}; no free observer seat -> {"ev":"failed","room":id,"reason":
+// "no_obs_slot"} and Back out of the lobby (the player seat it got is a player's). "version":"14" in the status line: the launcher
+// sends "as" only to 14+ (an older RoomJoin ignores it and joins as a player).
 // RoomJoin 12 (05.11.2026, owner): NO cover by default - what follows about the cover is only with RoomJoin.ini Cover=1; the join
 // itself is the same, the player sees the game's own menu, its "Connecting" and the lobby screen, the launcher tells the rest.
 // In the game, once it is in its main menu: a cover ("Joining the Game", the room's name, Cancel; the menu under it hidden, so
@@ -48,6 +54,9 @@
 //     game's search animation on Find a Game, the game's message boxes while we join;
 //   - while the cover is up, the game window's procedure (subclass): Esc and mouse clicks go to the cover, not to the menu.
 // RoomJoin.ini [RoomJoin] Enabled=0: off (no hooks, no pipe).
+#ifndef _WIN32_WINNT
+#define _WIN32_WINNT 0x0600                 // CancelIoEx (Vista+) with older mingw headers, as MMFind / LiveReplay
+#endif
 #include <windows.h>
 #include <sddl.h>
 #include <psapi.h>
@@ -58,7 +67,7 @@
 #include <wchar.h>
 #include <wctype.h>
 
-#define RJ_VERSION  "13"
+#define RJ_VERSION  "14"
 #define HOOK_ADDR   0x0045DB6C                    // Invoke (engine -> Flash), this = SFMovie: +4 the movie, +0x18 its fscommand handler
 #define HOOK_RESUME 0x0045DB71
 static const unsigned char INV_PRO[5] = {0xB8, 0x59, 0x70, 0xEF, 0x00};
@@ -100,6 +109,7 @@ static void logmsg(const char *fmt, ...) {
 enum { SC_UNKNOWN, SC_OTHER, SC_MAIN, SC_MM, SC_LIST, SC_SETUP };
 static const char *SC_NAME[] = {"unknown", "other", "main", "find_game", "games_list", "lobby"};
 static volatile int g_screen, g_loading, g_inWorld;
+static volatile int g_maxPlayers, g_myPos = -1; static volatile DWORD g_plAt;   // the lobby screen: max players, my position, its last list
 static char g_panel[160];
 static void *g_fsSelf, *g_fsMovie; static int g_sending;
 static void *g_triedFs[16], *g_triedInv[16]; static int g_ntFs, g_ntInv;     // movies already asked "are you the menu?"
@@ -120,7 +130,7 @@ static void box_close(const char *why);               // RoomJoin 13: the game's
 static void menu_forget(const char *why) {
     box_close(why);
     if (g_fsMovie || g_fsSelf) logmsg("the menu movie forgotten (%s)", why);
-    g_fsMovie = NULL; g_fsSelf = NULL; g_ntFs = g_ntInv = 0; g_coverOn = 0; g_uiHidden = 0;
+    g_fsMovie = NULL; g_fsSelf = NULL; g_ntFs = g_ntInv = 0; g_coverOn = 0; g_uiHidden = 0; g_myPos = -1; g_maxPlayers = 0;
     screen_reset(why);
 }
 static int url_screen(const char *u) {
@@ -309,6 +319,14 @@ static int dj_join(unsigned long long room) {
     ((DjFn1)FN_PROFBUF_DTOR)(prof);
     return 1;
 }
+static unsigned long long my_pid(void) {                    // my Relic profile id (0 = not signed in)
+    static __attribute__((aligned(16))) unsigned char prof[0x400];
+    memset(prof, 0, sizeof prof); ((DjFn1)FN_PROFBUF_CTOR)(prof);
+    void *p4 = dj_mgr(0x4); unsigned long long id = 0;
+    if (p4) { ((DjProfFn)(*(void ***)p4)[0x54 / 4])(p4, prof); id = *(unsigned long long *)prof; }
+    ((DjFn1)FN_PROFBUF_DTOR)(prof);
+    return id == ~0ULL ? 0 : id;
+}
 static void dj_to_lobby(void) {                                // the menu to the lobby screen, as after a join from the browser
     static __attribute__((aligned(16))) unsigned char str[0x40]; static char alloc_dummy;
     memset(str, 0, sizeof str);
@@ -327,54 +345,80 @@ static void dj_to_lobby(void) {                                // the menu to th
 // main menu there is no games list form, so RoomJoin opens that box itself and closes it on every end of the join.
 //   manager: 0x0045A3CD() -> EAX;  open: ESI = manager, push 0, 0, &text, &title (LocStrings), call 0x00AD5FE0 -> EAX = box id;
 //   close:   EAX = manager, EDX = box id, call 0x00AD6200 (MessageBoxManager::DeactivateMessageBox).
-#define FN_MB_MGR   0x0045A3CD
-#define FN_MB_OPEN  0x00AD5FE0
-#define FN_MB_CLOSE 0x00AD6200
-static int g_boxCfg = 1, g_boxId = -1, g_boxOwn;                // g_boxOwn: our own box is being made (not a "no" of the game)
-static void *mb_mgr(void) {
-    void *m;
-    __asm__ volatile("call *%1" : "=a"(m) : "r"((void *)FN_MB_MGR) : "ecx", "edx", "memory");
-    return m;
-}
+// RoomJoin 14: the box itself is common/connbox.h now (MMFind, LiveReplay and ReplayOpen show the same one)
+#define CONNBOX_LOG logmsg
+#include "../common/connbox.h"
+static int g_boxCfg = 1;
 static void box_open(void) {
-    if (!g_boxCfg || g_coverCfg || g_boxId != -1 || !g_fsMovie || g_inWorld || g_loading) return;
-    HMODULE l = GetModuleHandleA("Localizer.dll"); if (!l) return;
-    typedef char (__stdcall *GetStrFn)(int, void *);
-    typedef void (__fastcall *CtorFn)(void *, void *);
-    GetStrFn get = (GetStrFn)GetProcAddress(l, "?GetString@Localizer@@SG_NHAAVLocString@@@Z");
-    CtorFn ctor = (CtorFn)GetProcAddress(l, "??0LocString@@QAE@XZ"), dtor = (CtorFn)GetProcAddress(l, "??1LocString@@UAE@XZ");
-    if (!get || !ctor || !dtor) { logmsg("Connecting box: no Localizer - not shown"); return; }
-    static __attribute__((aligned(16))) unsigned char title[64], text[64];
-    memset(title, 0, sizeof title); memset(text, 0, sizeof text);
-    ctor(title, NULL); ctor(text, NULL);
-    if (get(550001, title) && get(550002, text)) {
-        void *m = mb_mgr();
-        if (m) {
-            int id; void *ti = title, *tx = text, *fn = (void *)FN_MB_OPEN;
-            g_boxOwn = 1;
-            __asm__ volatile(                                 // EBX keeps the stack (no operand in it), whoever cleans it
-                "push %%ebx\n\tmov %%esp, %%ebx\n\t"
-                "push $0\n\tpush $0\n\tpush %%ecx\n\tpush %%edi\n\t"
-                "call *%%edx\n\t"
-                "mov %%ebx, %%esp\n\tpop %%ebx"
-                : "=a"(id), "+S"(m), "+c"(tx), "+d"(fn), "+D"(ti) : : "memory");
-            g_boxOwn = 0;
-            g_boxId = id;
-            logmsg("the game's Connecting box shown (id %d)", id);
-        } else logmsg("Connecting box: no message box manager - not shown");
-    } else logmsg("Connecting box: texts 550001/550002 not found - not shown");
-    dtor(title, NULL); dtor(text, NULL);
+    if (!g_boxCfg || g_coverCfg || connbox_is_open() || !g_fsMovie || g_inWorld || g_loading) return;
+    connbox_open(0, "joining a lobby");
 }
-static void box_close(const char *why) {
-    if (g_boxId == -1) return;
-    int id = g_boxId; g_boxId = -1;
-    void *fn = (void *)FN_MB_CLOSE; void *m = mb_mgr(); if (!m) { logmsg("Connecting box %d: no manager to close it (%s)", id, why); return; }
-    __asm__ volatile(
-        "push %%ebx\n\tmov %%esp, %%ebx\n\t"
-        "call *%%ecx\n\t"
-        "mov %%ebx, %%esp\n\tpop %%ebx"
-        : "+a"(m), "+d"(id), "+c"(fn) : : "memory");
-    logmsg("the game's Connecting box closed (%s)", why);
+static void box_close(const char *why) { connbox_close(why); }
+
+// ---------------- RoomJoin 14: into a lobby as an observer ({"cmd":"join",...,"as":"obs"}) ----------------
+// The game lets a joiner in while any seat is free and puts him in one (a player seat first). Then he moves himself to a free
+// observer seat with the lobby screen's own command, the one a click on that seat sends: the player list's fscommand
+// OnObserverItemClick "<position>" -> PlayerListPanel 0x491D51(panel, position), which keeps the position in panel+0x50 and pops
+// up the seat's menu; its item "Move to this slot" (observer seat) is the handler 0x492EF1(panel, 0, 0). As MMFind 0.12-0.44
+// did for its watchers (shipped there for weeks): 0x491D51 is hooked (its 6-byte prologue, 3.19's or nothing), and while we
+// ask, the menu is not popped up - the item's handler runs at once for that position (the same as a player's two clicks).
+// Seats: the GameInfo slot array (+0x70, 0xC8 each: +0 type - 0 open/a person, 1 closed, 2 computer, 5 an open observer seat -, +8 the person's id,
+// +0x98 the position): team 1 = positions 0..3, team 2 = 4..7, each team's first max_players/2 are player seats, the rest
+// observer seats (Receive_SetMaxPlayers of the lobby screen; 0x491D51 decides the same way). Mine: the player list's own row
+// (Receive_PopulatePlayerList, slot type 0), as LobbyStats reads it.
+#define FN_SLOTMENU   0x00491D51
+#define CB_MOVE_OBS   0x00492EF1
+static const unsigned char SLOTMENU_PRO[6] = {0x55, 0x8B, 0xEC, 0x83, 0xE4, 0xF8};
+static const unsigned char MOVEOBS_PRO[6] = {0x55, 0x8B, 0xEC, 0x83, 0xE4, 0xF8};
+typedef void (__stdcall *SlotMenuFn)(void *panel, int slot);
+typedef void (__fastcall *SlotCbFn)(void *panel, void *edx, int a, int b);
+static SlotMenuFn g_slotMenuOrig; static volatile DWORD g_slotCb; static int g_slotHooked;
+static void __stdcall slotmenu_hook(void *panel, int slot) {
+    if (!g_slotCb) { g_slotMenuOrig(panel, slot); return; }
+    DWORD cb = g_slotCb; g_slotCb = 0;
+    *(int *)((char *)panel + 0x50) = slot;
+    logmsg("seat %d: the seat menu's \"Move to this slot\" (%08lX) at once, no menu shown", slot, cb);
+    ((SlotCbFn)cb)(panel, NULL, 0, 0);
+}
+static HANDLE patch_lock(void); static void patch_unlock(HANDLE mx);
+static void install_slot_hook(void) {
+    unsigned char *t = (unsigned char *)FN_SLOTMENU;
+    if (IsBadReadPtr(t, 6) || memcmp(t, SLOTMENU_PRO, 6) || IsBadReadPtr((void *)CB_MOVE_OBS, 6) || memcmp((void *)CB_MOVE_OBS, MOVEOBS_PRO, 6)) {
+        logmsg("the lobby seat menu is not 3.19's (or another add-on has it) - no join as an observer"); return; }
+    unsigned char *tr = VirtualAlloc(NULL, 16, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE); if (!tr) return;
+    memcpy(tr, SLOTMENU_PRO, 6); tr[6] = 0xE9; *(DWORD *)(tr + 7) = (FN_SLOTMENU + 6) - (DWORD)(tr + 11); g_slotMenuOrig = (SlotMenuFn)tr;
+    unsigned char b[6]; b[0] = 0xE9; *(DWORD *)(b + 1) = (DWORD)slotmenu_hook - (DWORD)(t + 5); b[5] = 0x90;
+    HANDLE mx = patch_lock(); DWORD o; SIZE_T w = 0;
+    if (!memcmp(t, SLOTMENU_PRO, 6) && VirtualProtect(t, 6, PAGE_EXECUTE_READWRITE, &o)) {
+        g_slotHooked = WriteProcessMemory(GetCurrentProcess(), t, b, 6, &w) && w == 6; VirtualProtect(t, 6, o, &o); }
+    FlushInstructionCache(GetCurrentProcess(), t, 6); patch_unlock(mx);
+    logmsg(g_slotHooked ? "hooked the lobby seat menu (join as an observer)" : "the lobby seat menu could not be hooked - no join as an observer");
+}
+static int team_n(void) { return g_maxPlayers >= 2 && g_maxPlayers <= 8 ? g_maxPlayers / 2 : 0; }
+static int is_obs_pos(int p) { int n = team_n(); return n && p >= 0 && p < 8 && (p % 4) >= n; }
+// the seats as GameInfo has them: type and id by position (-1 = no such position); 0 = no lobby
+static int lobby_seats(int *type, unsigned long long *ids) {
+    for (int i = 0; i < 8; i++) { type[i] = -1; ids[i] = 0; }
+    void *m = dj_mgr(0x24); if (!m || IsBadReadPtr(m, 8)) return 0;
+    static __attribute__((aligned(16))) unsigned char info[0x2000];
+    memset(info, 0, sizeof info); ((DjFn1)0x0040172D)(info);
+    int n = 0; void **mvt = *(void ***)m;
+    if (!IsBadReadPtr(mvt, 8) && ((DjInfoFn)mvt[1])(m, info)) {
+        unsigned char *base = *(unsigned char **)(info + 0x70); int cnt = *(int *)(info + 0x78);
+        if (base && cnt > 0 && cnt <= 64 && !IsBadReadPtr(base, cnt * 0xC8))
+            for (int i = 0; i < cnt; i++) {
+                unsigned char *sl = base + i * 0xC8; int pos = *(int *)(sl + 0x98);
+                if (pos >= 0 && pos < 8) { type[pos] = *(int *)sl; ids[pos] = *(unsigned long long *)(sl + 8); n++; }
+            }
+    }
+    ((DjFn1)0x00401794)(info);
+    return n;
+}
+static int seat_free(int type, unsigned long long id) { return (type == 0 || type == 5) && (id == ~0ULL || id == 0); }   // 5: an open observer seat (stand 14.11)
+static void seat_move(int pos) {                     // the lobby screen's own click on that observer seat + its "Move to this slot"
+    char a[8]; snprintf(a, sizeof a, "%d", pos); g_slotCb = CB_MOVE_OBS;
+    fs(".player_list_panel_mc.OnObserverItemClick", a);
+    if (g_slotCb) { g_slotCb = 0; logmsg("seat %d: the lobby screen did not open the seat's menu", pos); }
 }
 
 // ---------------- the game's own texts for a "no" (its language: Localizer::GetString of the DOW2.ucs ids) ----------------
@@ -481,7 +525,7 @@ static const char *js_skip(const char *p) {                           // past on
     while (*p && *p != ',' && *p != '}' && *p != ']') p++;
     return p;
 }
-typedef struct { char cmd[16]; unsigned long long room; int hasRoom, leave; char name[200]; } Cmd;
+typedef struct { char cmd[16]; unsigned long long room; int hasRoom, leave, obs; char name[200]; } Cmd;
 static int js_command(const char *s, Cmd *c) {                        // one line -> the command; 0 = not an object we read
     memset(c, 0, sizeof *c);
     const char *p = js_ws(s); if (*p != '{') return 0; p = js_ws(p + 1);
@@ -491,6 +535,7 @@ static int js_command(const char *s, Cmd *c) {                        // one lin
         p = js_ws(p); if (*p != ':') return 0; p = js_ws(p + 1);
         if (!strcmp(k, "cmd") && *p == '"') { p = js_str(p, c->cmd, sizeof c->cmd); if (!p) return 0; }
         else if (!strcmp(k, "name") && *p == '"') { p = js_str(p, c->name, sizeof c->name); if (!p) return 0; }
+        else if (!strcmp(k, "as") && *p == '"') { char a[16]; p = js_str(p, a, sizeof a); if (!p) return 0; c->obs = !strcmp(a, "obs"); }   // RoomJoin 14
         else if (!strcmp(k, "room") && (*p == '"' || (*p >= '0' && *p <= '9'))) {   // a number, or a string of digits
             char d[32] = ""; int i = 0;
             if (*p == '"') { p = js_str(p, d, sizeof d); if (!p) return 0; }
@@ -510,7 +555,7 @@ static int js_command(const char *s, Cmd *c) {                        // one lin
 
 // ---------------- the queues between the pipe thread and the game's thread ----------------
 enum { CMD_JOIN = 1, CMD_CANCEL };
-typedef struct { int what, leave; unsigned long long room; wchar_t name[64]; DWORD from; } QCmd;
+typedef struct { int what, leave, obs; unsigned long long room; wchar_t name[64]; DWORD from; } QCmd;
 typedef struct { DWORD to; char s[700]; } QOut;                       // to 0 = every client
 static CRITICAL_SECTION g_qlk; static QCmd g_cq[8]; static int g_cqH, g_cqN; static QOut g_oq[32]; static int g_oqH, g_oqN;
 static HANDLE g_outEv;                                                // auto-reset: there is something to send
@@ -650,8 +695,9 @@ static void cover_update(void) {
 }
 
 // ---------------- the join ----------------
-enum { RJ_NONE, RJ_MENU, RJ_JOIN, RJ_LOBBY };
+enum { RJ_NONE, RJ_MENU, RJ_JOIN, RJ_LOBBY, RJ_SEAT };
 static int g_rj; static unsigned long long g_rjRoom; static wchar_t g_rjName[64];
+static int g_rjObs, g_seatTries[8], g_seatMoves; static DWORD g_seatAt, g_seatMoveAt;   // RoomJoin 14: as an observer
 // the game's own message boxes while we join (Receive_CreateMessageBox): the text of the latest one, and how many came.
 // The first one can be the game's "Connecting..." - a box after it, or one that is still up when the join gives up, is the reason
 static wchar_t g_mbText[200]; static volatile int g_mbCount; static DWORD g_mbAt;
@@ -671,11 +717,20 @@ static void notice(const wchar_t *title, const wchar_t *why, int toList) {   // 
     _snwprintf(g_coverLine, 199, L"%ls", why); g_coverLine[199] = 0; g_coverTextTick = 0;
     g_coverWant = 1; g_noticeUntil = GetTickCount() + (g_coverCfg ? 3000 : 0); g_noticeList = toList;   // no cover: the list at once
 }
-static void rj_ok(int late) {
+static void rj_in_lobby(int late) {
     box_close("in the lobby");
     logmsg("in the lobby of room %llu%s", g_rjRoom, late ? " (a late answer)" : "");
-    emitf("{\"ev\":\"in_lobby\",\"room\":%llu%s}", g_rjRoom, late ? ",\"late\":true" : "");
+    emitf("{\"ev\":\"in_lobby\",\"room\":%llu%s%s}", g_rjRoom, g_rjObs ? ",\"as\":\"obs\"" : "", late ? ",\"late\":true" : "");
     g_okRoom = g_rjRoom; g_okAt = GetTickCount(); g_rj = RJ_NONE; g_coverWant = 0; g_noticeUntil = 0; g_watchRoom = 0;
+}
+static int g_seatLate;
+static void rj_ok(int late) {                       // in the room, its lobby screen up: done - or, as an observer, the seat first
+    if (g_rjObs && g_rj != RJ_SEAT) {
+        box_close("in the lobby");
+        logmsg("in the lobby of room %llu%s - now to an observer seat", g_rjRoom, late ? " (a late answer)" : "");
+        g_rj = RJ_SEAT; g_seatAt = GetTickCount(); g_seatLate = late; return;
+    }
+    rj_in_lobby(late);
 }
 // the join failed: the event, and on the cover the reason (show = 1: 3 s, then the public games list if toList)
 static void rj_fail(const char *reason, const wchar_t *shown, int toList) {
@@ -719,9 +774,9 @@ static void nudge_menu(DWORD now) {
 }
 // a Join (from the pipe)
 static int lobby_walk_ok(void) { return g_screen == SC_MAIN || g_screen == SC_LIST; }   // (review 05.11 M3: never from Find a Game or another screen)
-static void rj_start(unsigned long long room, const wchar_t *name, int leave, DWORD now, const char *from) {
+static void rj_start(unsigned long long room, const wchar_t *name, int leave, int obs, DWORD now, const char *from) {
     char nm[200]; WideCharToMultiByte(CP_UTF8, 0, name, -1, nm, sizeof nm, NULL, NULL); nm[sizeof nm - 1] = 0;
-    logmsg("request (%s): room %llu \"%s\"", from, room, nm);
+    logmsg("request (%s): room %llu \"%s\"%s", from, room, nm, obs ? " as an observer" : "");
     if (!room) { emitf("{\"ev\":\"failed\",\"room\":0,\"reason\":\"error\",\"text\":\"no room id\"}"); return; }
     if (g_rj) {
         if (room == g_rjRoom) { emitf("{\"ev\":\"accepted\",\"room\":%llu}", room); return; }      // the same Join again: it goes on
@@ -735,6 +790,8 @@ static void rj_start(unsigned long long room, const wchar_t *name, int leave, DW
         emitf("{\"ev\":\"failed\",\"room\":%llu,\"reason\":\"busy_join\",\"text\":\"waiting for the previous room's answer\"}", room); return; }
     g_watchRoom = 0;
     g_rjRoom = room; wcsncpy(g_rjName, name, 63); g_rjName[63] = 0;
+    g_rjObs = obs && g_slotHooked; memset(g_seatTries, 0, sizeof g_seatTries); g_seatMoves = 0; g_seatMoveAt = 0; if (obs) { g_myPos = -1; g_plAt = 0; }
+    if (obs && !g_slotHooked) { emitf("{\"ev\":\"failed\",\"room\":%llu,\"reason\":\"error\",\"text\":\"no observer seat change in this game (see RoomJoin.log)\"}", room); return; }
     emitf("{\"ev\":\"accepted\",\"room\":%llu}", room);
     if (g_fsMovie && dj_room() == room) {
         logmsg("already in room %llu (screen %s)", room, SC_NAME[g_screen]);
@@ -860,6 +917,34 @@ static void rj_step(DWORD now) {
         if (g_screen == SC_SETUP) rj_ok(0);
         else if (now - g_rjAt > 10000) rj_fail("timeout", L"In the room, but its lobby screen did not open. Opening the public games list", 1);
         break;
+    case RJ_SEAT: {                                                   // RoomJoin 14: in the lobby, to a free observer seat
+        if (g_screen != SC_SETUP) {
+            if ((int)(now - g_seatAt) > 10000) rj_fail("timeout", NULL, 0);
+            break; }
+        static DWORD lastS; if (now - lastS < 300) break; lastS = now;
+        if ((int)(now - g_seatAt) < 1500) break;                        // the lobby screen's first player list (g_seatAt may be after now)
+        unsigned long long in = dj_room();
+        if (in != g_rjRoom) { rj_fail(in ? "other_lobby" : "closed", NULL, 0); break; }
+        if (!team_n()) { if ((int)(now - g_seatAt) > 8000) { logmsg("the lobby screen never said how many players the map has"); rj_fail("error", NULL, 0); } break; }
+        int type[8]; unsigned long long ids[8]; lobby_seats(type, ids);
+        int me = g_myPos;
+        if (me < 0) { unsigned long long pid = my_pid(); for (int p = 0; p < 8; p++) if (pid && ids[p] == pid) me = p; }
+        if (is_obs_pos(me)) {
+            logmsg("observer seat %d (max players %d, %d seat change%s)", me, g_maxPlayers, g_seatMoves, g_seatMoves == 1 ? "" : "s");
+            rj_in_lobby(g_seatLate); break; }
+        if (g_seatMoveAt && now - g_seatMoveAt < 2500) break;          // the last change: its answer first
+        { static DWORD lastLog; if (now - lastLog > 2000) { lastLog = now; char b[200]; int n = 0;
+            for (int p = 0; p < 8; p++) n += snprintf(b + n, sizeof b - n, " %d:%s%d%s", p, is_obs_pos(p) ? "o" : "p", type[p], ids[p] && ids[p] != ~0ULL ? "*" : "");
+            logmsg("seats (max players %d, me %d):%s", g_maxPlayers, me, b); } }
+        int target = -1;
+        for (int p = 0; p < 8 && target < 0; p++) if (is_obs_pos(p) && seat_free(type[p], ids[p]) && g_seatTries[p] < 2) target = p;
+        if (target < 0 || g_seatMoves >= 6) {
+            logmsg("no free observer seat in room %llu (%d changes tried) - out of the lobby again: the seat is a player's", g_rjRoom, g_seatMoves);
+            rj_fail("no_obs_slot", NULL, 0); fs(".OnClickBack", ""); break; }
+        g_seatTries[target]++; g_seatMoves++; g_seatMoveAt = now;
+        logmsg("seat %d -> observer seat %d", me, target);
+        seat_move(target);
+        break; }
     }
 }
 static void snap_update(DWORD now) {                                  // for "status" on the pipe thread
@@ -879,7 +964,7 @@ static void cmd_take(DWORD now) {
         if (g_cqN) { c = g_cq[g_cqH]; g_cqH = (g_cqH + 1) % 8; g_cqN--; have = 1; }
         LeaveCriticalSection(&g_qlk);
         if (!have) return;
-        if (c.what == CMD_JOIN) rj_start(c.room, c.name, c.leave, now, "the launcher's pipe");
+        if (c.what == CMD_JOIN) rj_start(c.room, c.name, c.leave, c.obs, now, "the launcher's pipe");
         else if (c.what == CMD_CANCEL && c.room && c.room != g_rjRoom && c.room != g_watchRoom) logmsg("Cancel (the launcher) for room %llu - not the join that runs: nothing", c.room);
         else if (c.what == CMD_CANCEL) {
             if (g_rj) rj_cancel("the launcher");
@@ -928,7 +1013,7 @@ static void cli_line(Cli *c, char *s) {
     if (!strcmp(cmd.cmd, "status")) { char b[400]; status_line(b, sizeof b); cli_write(c, b); return; }
     QCmd q; memset(&q, 0, sizeof q); q.from = c->id;
     if (!strcmp(cmd.cmd, "join") && cmd.hasRoom && cmd.room) {
-        q.what = CMD_JOIN; q.room = cmd.room; q.leave = cmd.leave;
+        q.what = CMD_JOIN; q.room = cmd.room; q.leave = cmd.leave; q.obs = cmd.obs;
         wchar_t wn[256];                                               // (review 05.11 L2: 64+ UTF-16 units into 64 failed - the name was lost)
         if (!MultiByteToWideChar(CP_UTF8, 0, cmd.name, -1, wn, 256)) wn[0] = 0;
         wn[255] = 0; wcsncpy(q.name, wn, 63); q.name[63] = 0;
@@ -1059,7 +1144,7 @@ static char __fastcall inv_hook(void *self, void *edx, const char *method, int f
         int on = args[0].type == GFX_BOOL ? args[0].v.b != 0 : args[0].v.num != 0;
         if (on != g_engSearch && g_screen == SC_MM) { g_engSearch = on; logmsg("the game's search %s", on ? "on" : "off"); }
     }
-    if (g_rj && !g_boxOwn && method && !IsBadReadPtr(method, 24) && !strcmp(method, "Receive_CreateMessageBox") && args && count && count < 32 && !IsBadReadPtr(args, count * sizeof(GFxValue))) {
+    if (g_rj && !connbox_own && method && !IsBadReadPtr(method, 24) && !strcmp(method, "Receive_CreateMessageBox") && args && count && count < 32 && !IsBadReadPtr(args, count * sizeof(GFxValue))) {
         wchar_t t[200] = L""; int n = 0; char dbg[400]; int dl = 0; dbg[0] = 0;
         for (unsigned i = 0; i < count; i++) {               // the box's strings: title, text, buttons - the longest one is the text
             int room = (int)sizeof dbg - dl; if (room < 2) break;
@@ -1074,6 +1159,20 @@ static char __fastcall inv_hook(void *self, void *edx, const char *method, int f
         logmsg("message box while joining (%u args):%s", count, dbg);
         if (t[0]) { wcsncpy(g_mbText, t, 199); g_mbText[199] = 0; }
         g_mbCount++; g_mbAt = GetTickCount();
+    }
+    // RoomJoin 14: the lobby screen's max players and my row (for the observer seat)
+    if (method && !IsBadReadPtr(method, 27) && args && count && count < 4096 && !IsBadReadPtr(args, count * sizeof(GFxValue))) {
+        if (!strcmp(method, "Receive_SetMaxPlayers") && args[0].type == GFX_NUMBER) {
+            int m = (int)args[0].v.num; if (m != g_maxPlayers && g_rjObs) logmsg("the lobby: max players %d", m); g_maxPlayers = m; }
+        else if (!strcmp(method, "Receive_PopulatePlayerList") && count >= 25 && (count - 5) % 20 == 0) {
+            int me = -1;
+            for (unsigned i = 0; i < (count - 5) / 20 && i < 16; i++) {
+                GFxValue *a = args + 5 + i * 20;
+                if (a[0].type == GFX_BOOL && a[0].v.b && a[4].type == GFX_NUMBER && (int)a[4].v.num == 0 && a[3].type == GFX_NUMBER) me = (int)a[3].v.num;
+            }
+            if (me != g_myPos && g_rjObs) logmsg("the lobby's player list: my seat %d", me);
+            g_myPos = me; g_plAt = GetTickCount();
+        }
     }
     // the menu's SFMovie: its movie (+4) has _level0.display_item; its fscommand handler (+0x18) as the buttons use it
     if (!g_fsMovie && !g_loading && !g_inWorld && self && !IsBadReadPtr(self, 0x1C)) {
@@ -1213,6 +1312,7 @@ BOOL WINAPI DllMain(HINSTANCE h, DWORD r, LPVOID _) {
     g_fsHooked = hook_fscmd();                    // the vtable slot: the same whether MMFind is in the game already or comes later
     if (!g_fsHooked) return TRUE;                 // without it no join can be done: nothing else either
     hook_invoke();
+    install_slot_hook();                          // RoomJoin 14: join as an observer
     g_outEv = CreateEventW(NULL, FALSE, FALSE, NULL);
     // 64 KB of stack reserved, not 1 MB (address space: see ShellFix, CHANGELOG 0.2.3)
     HANDLE t = CreateThread(NULL, 64 * 1024, installer, NULL, STACK_SIZE_PARAM_IS_A_RESERVATION, NULL); if (t) CloseHandle(t);
