@@ -28,6 +28,7 @@ all: $(OUT)/EliteMaps.dll
 all: $(OUT)/OverwatchOnce.dll
 all: $(OUT)/CtrlAttack.dll
 all: $(OUT)/SpeechStreakFix.dll
+all: $(OUT)/ArmyBadgeFix.dll
 all: $(OUT)/DocsFix.dll
 all: $(OUT)/LangSwitch.dll
 all: $(OUT)/NoHints.dll
@@ -180,6 +181,10 @@ $(OUT)/Continue.dll: continue/continue.c | $(OUT)
 
 # 11.11.2026: an overwatch order (right-click on a unit button) builds one squad, then the HUD's overwatch entry is erased
 $(OUT)/OverwatchOnce.dll: overwatchonce/overwatchonce.c | $(OUT)
+	$(CC) $(CFLAGS) -shared -o $@ $< -static-libgcc
+
+# 14.11.2026: a computer in a slot a human left had an empty army (pink badges); it gets its race's default army
+$(OUT)/ArmyBadgeFix.dll: armybadgefix/armybadgefix.c | $(OUT)
 	$(CC) $(CFLAGS) -shared -o $@ $< -static-libgcc
 
 # 11.11.2026: the kill-streak speech read 4 bytes past its list for a unit's first kill (crash at 0x00B8FC24); 4 bytes patched
