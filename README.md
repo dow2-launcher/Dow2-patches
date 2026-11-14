@@ -435,6 +435,9 @@ frameprobe/ - FrameProbe.dll (off), eliteai/ - EliteAI.dll (store id newai since
     dispatcher's [Lua] Brain (default 1 = ork new-AI slots, 0 = off); main.ai / mechanics.ai as newai-23.1 for every other race.
     newai-25 (0.2.74): brain step 6 (0.6, branch newai-25): cover, flanking / grenading set-up teams, casts in a fight, no mob in
     a building, the power crisis, turrets; elite.scar gains ork abilities 32-38. Non-ork slots still newai-23.1.
+    newai-26 (0.2.75): brain step 7 (0.7, branch newai-26): nobz at tier 3 and the population kept for them, late upgrades, the
+    push from 13:00, the stage at the edge of the enemy's reach, turret rules; EliteAI.dll 0.12 carries the move-loop guard
+    (eliteai/moveloop_guard.h = MoveLoopFix 1, idle when MoveLoopFix.dll is loaded). Non-ork slots still newai-23.1.
 
 ## Building
 
