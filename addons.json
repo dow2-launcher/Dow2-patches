@@ -1569,5 +1569,32 @@
       "fr": "Gros combats de fin de partie plus fluides : la préparation des modèles pour l'affichage est répartie sur plusieurs cœurs du processeur. Fonctionne seul ou avec Parallel Pose. Expérimental ; n'affecte que l'image, pas la synchronisation.",
       "de": "Flüssigere große Gefechte im späten Spiel: Die Modelle werden auf mehreren CPU-Kernen für das Zeichnen vorbereitet. Funktioniert allein oder zusammen mit Parallel Pose. Experimentell; betrifft nur die Darstellung, nicht die Synchronisation."
     }
+  },
+  "replayopen": {
+    "version": "1",
+    "dll": "ReplayOpen.dll",
+    "files": {
+      "robridge.exe": "build/robridge.exe"
+    },
+    "default": false,
+    "games": [
+      "elite"
+    ],
+    "name": {
+      "en": "Replay from the launcher",
+      "ru": "Replay from the launcher",
+      "es": "Replay from the launcher",
+      "fr": "Replay from the launcher",
+      "de": "Replay from the launcher"
+    },
+    "description": {
+      "en": "A Play button on replays in the launcher: the game starts (or shows its Connecting window) and opens the replay; replays of another Elite build open too.",
+      "ru": "Кнопка «Смотреть» у реплеев в лаунчере: игра запустится (или покажет своё окно Connecting) и откроет реплей; реплеи другой сборки Elite тоже открываются.",
+      "es": "Un botón Ver en las repeticiones del launcher: el juego se inicia (o muestra su ventana Connecting) y abre la repetición; también las de otra versión de Elite.",
+      "fr": "Un bouton Regarder sur les replays du launcher : le jeu démarre (ou affiche sa fenêtre Connecting) et ouvre le replay ; ceux d'une autre version d'Elite aussi.",
+      "de": "Ein Ansehen-Knopf an Replays im Launcher: das Spiel startet (oder zeigt sein Connecting-Fenster) und öffnet das Replay; auch Replays einer anderen Elite-Version."
+    },
+    "category": "experiment",
+    "order": 1140
   }
 }
