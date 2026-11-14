@@ -17,7 +17,7 @@ late 3v3 fights (research latelag_1114, REPORT_RU.md).
 - Stand (Wine, late 3v3): average fps +18 %; frames with min 28-32 fps: 18.3 -> 21.6; min 16-20: 18.0 -> 24.6.
 - Not checked yet: real Windows with PerfLog, 2-4 cores, FX on bones one frame late (video), vanilla CrcTrace. The Havok allocator's
   thread safety is assumed, not proven.
-- Version numbers 0.2.79-0.2.80, 0.2.75-0.2.77 are also claimed by open PRs #98-#101, #106, #107; whichever merges later takes the next free one.
+- Version numbers 0.2.75-0.2.80 are also claimed by open PRs #98-#101, #106, #107; whichever merges later takes the next free one.
 
 ## 0.2.78 — 2026-11-14
 New AI 28 (store newai-28, experiment, off by default, Elite only): step 9 of the brain (brain 0.9) and EliteAI.dll 0.16 (network matches).
