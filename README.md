@@ -433,6 +433,8 @@ frameprobe/ - FrameProbe.dll (off), eliteai/ - EliteAI.dll (store id newai since
     clock, the first T3 unit right after the tier, the dear unit, hurt walkers to the rear / home first.
     newai-24 (0.2.73): the brain for orks - default.ai also carries the 13 modules of eliteai mod/brain (branch newai-24) and the
     dispatcher's [Lua] Brain (default 1 = ork new-AI slots, 0 = off); main.ai / mechanics.ai as newai-23.1 for every other race.
+    newai-25 (0.2.74): brain step 6 (0.6, branch newai-25): cover, flanking / grenading set-up teams, casts in a fight, no mob in
+    a building, the power crisis, turrets; elite.scar gains ork abilities 32-38. Non-ork slots still newai-23.1.
 
 ## Building
 

@@ -79,6 +79,16 @@ EliteAI_MECH_ABILITIES = {
 	[29] = "ability/pvp/race_ork/ork_waaagh_shout",
 	[30] = "ability/pvp/race_ork/nobs/ork_buff_self_frenzy",
 	[31] = "ability/pvp/race_ork/sluggas/ork_buff_self_suppressionbreak",
+	-- 32-38 (branch brain, step 6; mod/brain/60_roles.ai 'casts'): what an ork squad casts IN a fight. By the attributes of
+	-- Elite 3.2.1: the stomps have no target (300+k), rapid fire and the shootas' suppression are cast on a squad (200+k),
+	-- the mortar and the stikkbombs at a place (100+k)
+	[32] = "ability/pvp/race_ork/warboss/ork_stun_aoe_bigstomp",
+	[33] = "ability/pvp/race_ork/warboss/ork_damage_aoe_stomp",
+	[34] = "ability/pvp/race_ork/warboss/ork_knockdown_target_rapidfire",
+	[35] = "ability/pvp/race_ork/shootas/ork_debuff_target_suppression",
+	[36] = "ability/pvp/race_ork/tankbustas/ork_damage_aoe_mortar",
+	[37] = "ability/pvp/race_ork/kommandos/ork_damage_aoe_stikkbomb",
+	[38] = "ability/pvp/race_ork/kommando_hero/ork_damage_aoe_stikkbomb",
 }
 EliteAI_MechAbilityIDs = {}
 local function mech_ability(k)
@@ -208,6 +218,25 @@ local function mech_order(sg, sq, m, x, y, z)
 		elseif not EliteAI_ReinfWarned then
 			EliteAI_ReinfWarned = true
 			_log("REINF dir scar: no Command_Squad / SCMD_ReinforceUnit here", type(Command_Squad), type(SCMD_ReinforceUnit))
+		end
+	elseif m == 14 then
+		-- branch brain, step 6: out of the building it holds (a mob that the engine's squad tactic sent inside; a move order
+		-- does not take a squad out of a building - bench s6_t1: 380 s inside under MOVE orders). The unload command of the
+		-- game with the place to go to; only for a squad that is inside, both names checked.
+		if Squad_IsInHoldEntity and Squad_IsInHoldEntity(sq) then
+			EliteAI_UnloadN = (EliteAI_UnloadN or 0) + 1
+			local how = "no command here"
+			-- (bench s6_t8 - s6_t10: SCMD_Unload is not in this SCAR state; the library's Cmd_UngarrisonSquad(sgroup) and
+			-- (sgroup, position, false) both end in 'Invalid parameter 1 (SGroup* expected) in function SGroup_CountSpawned' -
+			-- its signature is not known. NO WORKING COMMAND YET: the brain sends this order only with Brain_Evict=1.)
+			if SCMD_Unload and Command_SquadPos then
+				Command_SquadPos(Squad_GetPlayerOwner(sq), sg, SCMD_Unload, World_Pos(tonumber(x), tonumber(y), tonumber(z)), false); how = "Command_SquadPos"
+			end
+			if EliteAI_UnloadN <= 5 then _log("MECH unload", Squad_GetGameID(sq), "x" .. EliteAI_UnloadN, how, "SCMD_Unload", type(SCMD_Unload), "Command_SquadPos", type(Command_SquadPos),
+				"Command_Squad", type(Command_Squad), "Cmd_UngarrisonSquad", type(Cmd_UngarrisonSquad), "SCMD_UnloadSquads", type(SCMD_UnloadSquads)) end
+		elseif not EliteAI_UnloadNot then
+			EliteAI_UnloadNot = true
+			_log("MECH unload: the squad is not in a building here", Squad_GetGameID(sq), "Squad_IsInHoldEntity", type(Squad_IsInHoldEntity))
 		end
 	elseif m >= 100 then
 		local abid = mech_ability(m - 100)
