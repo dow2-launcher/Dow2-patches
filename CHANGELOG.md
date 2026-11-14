@@ -4,6 +4,21 @@ Every version gets an entry here before it reaches `main`. CI then tags `vX.Y.Z`
 version (`X.Y.0`) it also publishes a GitHub Release with the DLLs and the entries since the previous `X.Y.0`.
 The version of the set lives only in `VERSION`; each DLL still writes its own version to its log.
 
+## 0.2.78 — 2026-11-14
+Parallel Pose (store parallelpose-1, new, experiment order 1130, off by default, games elite only; vanilla and IG Rework not tested) -
+late 3v3 fights (research latelag_1114, REPORT_RU.md).
+- AnimatorVisual vtable 0x010C5D94 slot 3 (build pose, 0x00751B60) called from the Viz update queue's first loop (return address
+  0x0077BC26) is remembered instead of run; at 0x0077BC50 (right after the loop, before the loops that use the poses) a jmp to our
+  flush builds the remembered poses on the game thread plus up to cores-1 workers (max 7), grouped by render model so a shared
+  object is never touched by two threads. Workers are our own threads with Havok initialised as the game's XThread workers do
+  (0x006DABC0), the main thread's x87 control word and MXCSR per batch; serial until the spline decoder's lazy table is built.
+- Visual only: the simulation is untouched (per-tick CRC equal on two replays). Every patch site is byte-checked, on a mismatch the
+  DLL does nothing. ParallelPose.ini [ParallelPose]: Enabled=1, Threads=0, Mode=1, Stats=0 (release default; the stand prototype had 1).
+- Stand (Wine, late 3v3): average fps +18 %; frames with min 28-32 fps: 18.3 -> 21.6; min 16-20: 18.0 -> 24.6.
+- Not checked yet: real Windows with PerfLog, 2-4 cores, FX on bones one frame late (video), vanilla CrcTrace. The Havok allocator's
+  thread safety is assumed, not proven.
+- Version numbers 0.2.75-0.2.80 are also claimed by open PRs #98-#101, #106, #107; whichever merges later takes the next free one.
+
 ## 0.2.77 — 2026-11-14
 New AI 27 (store newai-27, experiment, off by default, Elite only): step 8 / 8.1 of the ork brain (brain 0.8.1) and EliteAI.dll 0.14 (log
 per match). eliteai branch newai-27 1a9fac3 = brain 7c8fe94 with main.ai, mechanics.ai and the vanilla-base sources of
