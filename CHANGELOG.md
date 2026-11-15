@@ -4,6 +4,26 @@ Every version gets an entry here before it reaches `main`. CI then tags `vX.Y.Z`
 version (`X.Y.0`) it also publishes a GitHub Release with the DLLs and the entries since the previous `X.Y.0`.
 The version of the set lives only in `VERSION`; each DLL still writes its own version to its log.
 
+## 0.2.81 — 2026-11-15
+Parallel Pose 2 and Parallel Draw 2 (store parallelpose-2, paralleldraw-2; still experiment, off by default, elite only) - a race
+in the hand-out of work to the workers, a watchdog and a crash note. Prompted by a player's crash/freeze at 1:28 of a 1v1 with both on
+(12 CPUs, 7 workers each); the player's game also froze without them (Windows AppHang 15.11 with neither DLL loaded).
+- Race (both, version 1): a worker took a number from g_next and compared it with the batch size afterwards; preempted in between,
+  it compared a number left over from the previous batch with the NEXT batch's size -> one model built by two threads at once,
+  g_done counted twice, the game thread went on while that worker still built (ParallelDraw: with the cache locks off, its arena
+  reset under it, and its Leave of the light-manager lock - Enter skipped in the phase - became a real LeaveCriticalSection by a
+  thread that did not own it). Stand, window widened with RaceTest=1: version 1 hung within a second of the first races (STAND_A).
+  Now the number and the batch size are one atomic word (size << 16 | number); the light-lock skip is pushed per thread at Enter
+  and popped by its Leave.
+- Parallel Pose: a visual seen for the first time (new squad, new model) gets its first pose on the game thread, as Parallel Draw
+  already does for its first build (the first pose may fill lazily built data).
+- Watchdog: the game thread only ever waits for models a worker is building; after Watchdog=100 ms it writes a STALL line (each
+  busy worker: model, how long, the game lock it is blocked on and its owner thread, or our spin lock and its holder), yields,
+  and Parallel Draw takes the light lock back; a wait of StallOff=2000 ms switches the workers off for the rest of the session.
+  Spin locks yield after ~1 ms. Stats line: stalls, late claims, other game locks taken in the phase, light lock by other threads.
+- Crash note: a fatal exception on a worker (or, Parallel Draw, on the game thread while it builds in the phase) writes
+  "EXCEPTION <code> at <module>+<offset> ... on worker N" to the add-on's log before the game's BugSplat handler ends the game.
+
 ## 0.2.80 — 2026-11-15
 Parallel Draw (store paralleldraw-1, new, experiment order 1131, off by default, games elite only; vanilla and IG Rework not tested) -
 late 3v3 fights, stage 2 of research latelag_1114 (STAGE2_RU.md).

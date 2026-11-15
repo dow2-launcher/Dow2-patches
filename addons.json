@@ -1523,7 +1523,7 @@
     }
   },
   "parallelpose": {
-    "version": "1",
+    "version": "2",
     "dll": "ParallelPose.dll",
     "default": false,
     "games": [
@@ -1547,7 +1547,7 @@
     }
   },
   "paralleldraw": {
-    "version": "1",
+    "version": "2",
     "dll": "ParallelDraw.dll",
     "default": false,
     "games": [
