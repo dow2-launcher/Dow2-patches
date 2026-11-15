@@ -33,7 +33,17 @@
 // Visual only: nothing here runs in the simulation. Nothing is done when any checked byte differs from 3.19.
 //
 // ParallelDraw.ini [ParallelDraw]: Enabled=1, Threads=0 (workers; 0 = cores-1, at most 7), Mode=1 (1 = parallel, 0 = off,
-// 2 = stand check: record + replay on the main thread only), Poll=0 (stand: re-read Mode every 0.5 s), Stats=0 (1 = a line every 10 s in ParallelDraw.log).
+// 2 = stand check: record + replay on the main thread only), Poll=0 (stand: re-read Mode every 0.5 s), Stats=0 (1 = a line every 10 s in ParallelDraw.log),
+// Watchdog=100 (ms the main thread waits for the workers before it writes a "STALL" line, takes the light lock back and yields;
+// a wait of StallOff=2000 ms or more switches the workers off for the rest of the game session), RaceTest=0 (stand only: a worker
+// sleeps that many ms between taking a model number and checking it - the window of the version 1 race, see run_todo).
+//
+// Version 2 (watchdog): a worker's model number and the batch size are one atomic word (g_claim). Version 1 took the number from
+// g_next and compared it with g_ntodo afterwards: a worker preempted between the two compared a number left over from the batch
+// before with the NEXT batch's size -> one model built by two threads at once, g_done counted twice, the main thread went on while
+// that worker still built (no locks: g_phase 0), and its Leave of the light lock (Enter skipped in the phase) became a real
+// LeaveCriticalSection by a thread that did not own it (Windows: "another thread using EnterCriticalSection may wait indefinitely").
+// The light-lock skip is now remembered per thread at Enter (stack), not looked up from g_phase at Leave.
 #define _WIN32_WINNT 0x0601
 #include <windows.h>
 #include <stdio.h>
@@ -79,7 +89,8 @@ typedef void (__attribute__((thiscall)) *DevFn)(void *, void *);
 
 static wchar_t g_dir[MAX_PATH], g_log[MAX_PATH], g_ini[MAX_PATH];
 static volatile LONG g_mode = 1;
-static int g_threads, g_stats;
+static int g_threads, g_stats, g_wd_ms = 100, g_off_ms = 2000, g_racetest;
+static volatile LONG g_par_off;        // a stall of g_off_ms or more: no workers for the rest of the game session
 static DWORD g_main_tid, g_tls = TLS_OUT_OF_INDEXES;
 static S7Fn o_s7 = (S7Fn)FN_S7;
 static DevFn o_dev;
@@ -108,6 +119,14 @@ typedef struct {
     LONG overflow;
     volatile LONG rd[4];       // reading under lock k (big-reader locks: readers touch only their own cache line)
     LONG fast[2];
+    // watchdog view of this thread (written by the thread itself, read by the main thread when a wait is long)
+    void *volatile cur;        // model being built
+    volatile LONGLONG t_cur;   // QPC at its start
+    void *volatile mx_wait;    // Plat::RecursiveMutex (CRITICAL_SECTION) this thread is blocked on
+    volatile LONG spin_k;      // our spin lock k + 1 this thread spins on
+    DWORD tid;
+    // light-lock Enter calls of this thread: skipped (handed over to the main thread) or real; Leave pops the same decision
+    void *lcs_stk[16]; char lskip[16]; int llsp;
 } __attribute__((aligned(64))) Ctx;
 static Ctx g_ctx[MAXT];
 typedef struct { void *obj, *a3; int thr, start, n, d; char rebuild, done, cold; } Item;
@@ -134,27 +153,35 @@ static int g_depth;            // number of active batches (main thread only)
 static volatile LONG g_wr[4][16];      // one cache line each
 static volatile LONG s_wait[4];
 static int g_nworkers;
-static void acq_x(int k) {
-    if (InterlockedCompareExchange(&g_wr[k][0], 1, 0) != 0) {
-        InterlockedIncrement(&s_wait[k]);
-        do { while (g_wr[k][0]) __builtin_ia32_pause(); } while (InterlockedCompareExchange(&g_wr[k][0], 1, 0) != 0);
+// a long spin (~1 ms) yields the CPU: a preempted lock holder on the same core gets it back
+static inline void spin_pause(unsigned *n) { __builtin_ia32_pause(); if (!(++*n & 4095)) SwitchToThread(); }
+static void acq_x(Ctx *c, int k) {
+    unsigned n = 0;
+    if (InterlockedCompareExchange(&g_wr[k][0], c->id + 1, 0) != 0) {
+        InterlockedIncrement(&s_wait[k]); c->spin_k = k + 1;
+        do { while (g_wr[k][0]) spin_pause(&n); } while (InterlockedCompareExchange(&g_wr[k][0], c->id + 1, 0) != 0);
     }
-    for (int t = 0; t <= g_nworkers; t++) while (g_ctx[t].rd[k]) __builtin_ia32_pause();
+    for (int t = 0; t <= g_nworkers; t++) if (g_ctx[t].rd[k]) { c->spin_k = k + 1; while (g_ctx[t].rd[k]) spin_pause(&n); }
+    c->spin_k = 0;
 }
 static void rel_x(int k) { __atomic_store_n(&g_wr[k][0], 0, __ATOMIC_RELEASE); }
 static void acq_s(Ctx *c, int k) {
+    unsigned n = 0;
     for (;;) {
         InterlockedExchange(&c->rd[k], 1);                 // full barrier: the flag is visible before the writer word is read
-        if (!g_wr[k][0]) return;
+        if (!g_wr[k][0]) { c->spin_k = 0; return; }
         __atomic_store_n(&c->rd[k], 0, __ATOMIC_RELEASE);
-        InterlockedIncrement(&s_wait[k]);
-        while (g_wr[k][0]) __builtin_ia32_pause();
+        InterlockedIncrement(&s_wait[k]); c->spin_k = k + 1;
+        while (g_wr[k][0]) spin_pause(&n);
     }
 }
 static void rel_s(Ctx *c, int k) { __atomic_store_n(&c->rd[k], 0, __ATOMIC_RELEASE); }
 static volatile LONG g_phase;  // workers running: the shared caches are locked
+static volatile LONG g_handover;       // the main thread holds the light lock for the building threads (their Enter/Leave skipped)
 static HANDLE g_sem; static HANDLE g_worker_h[MAXT];
-static volatile LONG g_next = 0x7fffffff, g_done, g_ntodo;
+// g_claim = batch size << 16 | next model number (MAXI < 65536): taking a number and checking it against the size of the SAME
+// batch is one atomic step. 0 between batches (size 0: every late claim fails).
+static volatile LONG g_claim, g_done, g_ntodo, g_batchno;
 static Item *volatile g_todo[MAXI];
 static void *volatile g_cur_a2, *volatile g_cur_e;
 static volatile int g_cur_d;
@@ -162,13 +189,15 @@ static unsigned short g_fcw; static unsigned int g_mxcsr;
 
 // stats
 static volatile LONG s_walks, s_batches, s_items, s_cold, s_emits, s_pushes, s_rebuild, s_unconsumed, s_replayed, s_nest_rec,
-    s_overflow, s_byworker, s_par_batches, s_dev_calls_worker_norec, s_skipdepth;
+    s_overflow, s_byworker, s_par_batches, s_dev_calls_worker_norec, s_skipdepth, s_stalls, s_late, s_mx_other, s_mx_other_busy,
+    s_mx_foreign, s_mx_foreign_phase;
+static volatile LONGLONG s_wait_max_qpc;
 static volatile LONGLONG s_qpc_pre, s_qpc_wait, s_qpc_walk;   // walk: main-thread time in slot 7 calls inside a walk (build or replay)
 
 static inline Ctx *ctx_get(void) { return g_tls == TLS_OUT_OF_INDEXES ? NULL : (Ctx *)TlsGetValue(g_tls); }
 
 // ---------------------------------------------------------------- lock levels (only while workers run)
-static void lk_x(Ctx *c, int k) { if (c->x[k]++ == 0) acq_x(k); }
+static void lk_x(Ctx *c, int k) { if (c->x[k]++ == 0) acq_x(c, k); }
 static void lk_unx(Ctx *c, int k) { if (--c->x[k] == 0) rel_x(k); }
 static void big_enter_k(int k) {
     Ctx *c = ctx_get(); if (!c) return;
@@ -289,15 +318,21 @@ static void vec_push(void *list, void *val) {
 static void build_item(Ctx *c, Item *it, void *a2, void *e) {
     int d = it->d; c->depth = d;
     int s = c->n[d];
+    LARGE_INTEGER t; QueryPerformanceCounter(&t); c->t_cur = t.QuadPart; c->cur = it->obj;
     c->rec_on = 1;
     o_s7(it->obj, a2, it->a3, e);
     c->rec_on = 0;
+    c->cur = NULL;
     it->thr = c->id; it->start = s; it->n = c->n[d] - s;
 }
 static void run_todo(Ctx *c) {
     for (;;) {
-        LONG i = InterlockedIncrement(&g_next) - 1;
-        if (i >= g_ntodo || i < 0) return;
+        LONG b = g_batchno;
+        unsigned v = (unsigned)InterlockedIncrement(&g_claim) - 1, i = v & 0xffff, n = v >> 16;
+        if (g_racetest && c->id && i >= n) Sleep(g_racetest);              // stand: the window version 1 lost a race in
+        if (i >= n) { if (c->id && g_batchno != b) InterlockedIncrement(&s_late); return; }   // s_late: version 1 could have raced
+        // a valid number: the batch stays alive (and g_todo, g_cur_*, g_fcw unchanged) until this model is counted in g_done
+        if (c->id) { unsigned short fcw = g_fcw; unsigned int mx = g_mxcsr; __asm__ volatile("fldcw %0" :: "m"(fcw)); __asm__ volatile("ldmxcsr %0" :: "m"(mx)); }
         build_item(c, g_todo[i], g_cur_a2, g_cur_e);
         if (c->id) InterlockedIncrement(&s_byworker);
         InterlockedIncrement(&g_done);
@@ -306,10 +341,9 @@ static void run_todo(Ctx *c) {
 static DWORD WINAPI worker(LPVOID arg) {
     Ctx *c = (Ctx *)arg;
     TlsSetValue(g_tls, c);
+    c->tid = GetCurrentThreadId();
     for (;;) {
         WaitForSingleObject(g_sem, INFINITE);
-        unsigned short fcw = g_fcw; unsigned int mx = g_mxcsr;
-        __asm__ volatile("fldcw %0" :: "m"(fcw)); __asm__ volatile("ldmxcsr %0" :: "m"(mx));
         run_todo(c);
     }
     return 0;
@@ -323,15 +357,56 @@ typedef void (__attribute__((thiscall)) *MxFn)(void *);
 static MxFn o_mx_enter, o_mx_leave;
 static void *volatile g_light_cs;
 static volatile LONG s_mx_skipped;
+// Plat::RecursiveMutex is a CRITICAL_SECTION (Platform.dll: Enter = EnterCriticalSection(this)). Whether a light-lock Enter was
+// skipped is pushed per thread and popped by its Leave, so a Leave never releases a lock its thread did not take.
 static void __attribute__((fastcall)) hk_mx_enter(void *cs) {
-    if (cs == g_light_cs && g_phase) { Ctx *c = ctx_get(); if (c) { InterlockedIncrement(&s_mx_skipped); return; } }
-    o_mx_enter(cs);
+    Ctx *c = ctx_get();
+    if (!c) {                                                       // the game's other threads: as before (counted)
+        if (cs && cs == g_light_cs) { s_mx_foreign++; if (g_handover) s_mx_foreign_phase++; }
+        o_mx_enter(cs); return;
+    }
+    if (cs && cs == g_light_cs) {
+        int skip = g_handover && c->llsp < 16;
+        if (c->llsp < 16) { c->lcs_stk[c->llsp] = cs; c->lskip[c->llsp] = (char)skip; }
+        c->llsp++;
+        if (skip) { InterlockedIncrement(&s_mx_skipped); return; }
+    } else if (g_phase) {                                           // another game lock taken while building in the phase
+        InterlockedIncrement(&s_mx_other);
+        if (TryEnterCriticalSection((CRITICAL_SECTION *)cs)) return;
+        InterlockedIncrement(&s_mx_other_busy);
+    }
+    c->mx_wait = cs; o_mx_enter(cs); c->mx_wait = NULL;
 }
 static void __attribute__((fastcall)) hk_mx_leave(void *cs) {
-    if (cs == g_light_cs && g_phase && ctx_get()) return;
+    Ctx *c = ctx_get();
+    if (c && cs && c->llsp > 0 && (c->llsp > 16 || c->lcs_stk[c->llsp - 1] == cs)) {
+        c->llsp--;
+        if (c->llsp < 16 && c->lskip[c->llsp]) return;
+    }
     o_mx_leave(cs);
 }
 static void *light_cs(void) { void *m = *(void **)0x013351B4u; return m ? *(void **)m : NULL; }
+
+// ---------------------------------------------------------------- watchdog
+static DWORD cs_owner(void *cs) { return cs ? (DWORD)(ULONG_PTR)((CRITICAL_SECTION *)cs)->OwningThread : 0; }
+static const char *lk_name(int k) { return k == LK_SH ? "shaders" : k == LK_AT ? "attachments" : k == LK_MAT ? "materials" : "?"; }
+static void stall_report(LONGLONG ms, int nt, int d, void *lcs) {
+    LARGE_INTEGER now; QueryPerformanceCounter(&now);
+    char b[1400]; int o = snprintf(b, sizeof b, "STALL: main thread (tid %lu) waits %lld ms for the workers: batch %ld (depth %d), %ld of %d models "
+        "done; light lock %p owner tid %lu%s", g_main_tid, ms, (long)g_batchno, d, (long)g_done, nt, lcs, cs_owner(lcs),
+        g_handover ? " (handed over)" : "");
+    for (int t = 1; t <= g_nworkers && o < (int)sizeof b - 200; t++) {
+        Ctx *c = &g_ctx[t]; void *obj = c->cur;
+        if (!obj) continue;
+        o += snprintf(b + o, sizeof b - o, " | worker %d (tid %lu): model %p vtable %08lx for %lld ms", t, c->tid, obj,
+                      IsBadReadPtr(obj, 4) ? 0ul : *(DWORD *)obj, (now.QuadPart - c->t_cur) * 1000 / g_qf.QuadPart);
+        void *mw = c->mx_wait; LONG sk = c->spin_k;
+        if (mw) o += snprintf(b + o, sizeof b - o, ", blocked on game lock %p%s owned by tid %lu%s", mw, mw == lcs ? " (light)" : "",
+                              cs_owner(mw), cs_owner(mw) == g_main_tid ? " = MAIN" : "");
+        if (sk) o += snprintf(b + o, sizeof b - o, ", spins on our %s lock (writer: thread %ld)", lk_name(sk - 1), (long)g_wr[sk - 1][0] - 1);
+    }
+    logmsg("%s", b);
+}
 
 // models seen before (with the same render model, in the same pass): their lazily built caches exist
 #define HS 65536
@@ -379,7 +454,7 @@ static void mark_dups(int d, int ni) {
 // called from the 0x78B730 entry thunk (all registers saved)
 void __cdecl pre_batch(void *e, void **lists, void *a2, void *a3) {
     DWORD tid = GetCurrentThreadId();
-    if (!g_main_tid) { g_main_tid = tid; TlsSetValue(g_tls, &g_ctx[0]); }
+    if (!g_main_tid) { g_main_tid = tid; g_ctx[0].tid = tid; TlsSetValue(g_tls, &g_ctx[0]); }
     Ctx *c = ctx_get();
     if (c && c->rec_on) { InterlockedIncrement(&s_nest_rec); return; }   // a walk inside a model being built: left as it is
     if (tid != g_main_tid) return;
@@ -391,6 +466,7 @@ void __cdecl pre_batch(void *e, void **lists, void *a2, void *a3) {
     g_nhused[d] = 0;
     LONG mode = g_mode;
     if (mode != 1 && mode != 2) return;
+    if (mode == 1 && g_par_off) return;                              // switched off after a stall: the game's own walk
     LARGE_INTEGER q0, q1; QueryPerformanceCounter(&q0);
     // the walk's lists: list 0 (deferred list a3), 5 buckets at +0x30, 2 at +0x6C (deferred list 0)
     int ni = 0;
@@ -426,20 +502,41 @@ void __cdecl pre_batch(void *e, void **lists, void *a2, void *a3) {
     if (nt) {
         unsigned short fcw; unsigned int mxc;
         __asm__ volatile("fnstcw %0" : "=m"(fcw)); __asm__ volatile("stmxcsr %0" : "=m"(mxc));
-        g_fcw = fcw; g_mxcsr = mxc; g_cur_a2 = a2; g_cur_e = e; g_cur_d = d; g_ntodo = nt; g_done = 0;
+        g_fcw = fcw; g_mxcsr = mxc; g_cur_a2 = a2; g_cur_e = e; g_cur_d = d; g_ntodo = nt; g_done = 0; g_batchno++;
         void *lcs = o_mx_enter ? light_cs() : NULL;
-        if (lcs) { o_mx_enter(lcs); g_light_cs = lcs; }                    // before the phase: our threads skip it only then
+        g_light_cs = lcs;
+        if (lcs) { o_mx_enter(lcs); InterlockedExchange(&g_handover, 1); }   // before the phase: our threads skip it only then
         InterlockedExchange(&g_phase, 1);
-        InterlockedExchange(&g_next, 0);
+        InterlockedExchange(&g_claim, nt << 16);                             // publish (full barrier)
         int wake = g_nworkers < nt - 1 ? g_nworkers : nt - 1;
         if (wake > 0) ReleaseSemaphore(g_sem, wake, NULL);
         run_todo(m);
+        // every model is taken now; only models being built by workers remain. Spin (they take tens of us), yield after 2 ms, and
+        // after g_wd_ms write a STALL line and take the light lock back (a foreign thread waiting for it may hold what a worker needs)
         LARGE_INTEGER w0, w1; QueryPerformanceCounter(&w0);
-        while (g_done < nt) __builtin_ia32_pause();
+        unsigned sp = 0; LONGLONG next_ms = g_wd_ms, ms = 0;
+        while (g_done < nt) {
+            __builtin_ia32_pause();
+            if (++sp & 1023) continue;
+            QueryPerformanceCounter(&w1); ms = (w1.QuadPart - w0.QuadPart) * 1000 / g_qf.QuadPart;
+            if (ms >= 2) SwitchToThread();
+            if (g_wd_ms > 0 && ms >= next_ms) {
+                if (next_ms == g_wd_ms) InterlockedIncrement(&s_stalls);
+                stall_report(ms, nt, d, lcs);
+                if (g_handover) { InterlockedExchange(&g_handover, 0); o_mx_leave(lcs); logmsg("STALL: light lock taken back from the workers"); }
+                next_ms = next_ms < 1000 ? 1000 : next_ms + 5000;
+            }
+        }
         QueryPerformanceCounter(&w1); s_qpc_wait += w1.QuadPart - w0.QuadPart;
-        InterlockedExchange(&g_next, 0x7fffffff);
+        if (w1.QuadPart - w0.QuadPart > s_wait_max_qpc) s_wait_max_qpc = w1.QuadPart - w0.QuadPart;
+        InterlockedExchange(&g_claim, 0);
         InterlockedExchange(&g_phase, 0);
-        if (lcs) o_mx_leave(lcs);
+        if (g_handover) { InterlockedExchange(&g_handover, 0); o_mx_leave(lcs); }
+        if (g_wd_ms > 0 && ms >= g_wd_ms) {
+            ms = (w1.QuadPart - w0.QuadPart) * 1000 / g_qf.QuadPart;
+            logmsg("STALL over: the workers finished after %lld ms (batch %ld)", ms, (long)g_batchno);
+            if (g_off_ms > 0 && ms >= g_off_ms) { g_par_off = 1; logmsg("STALL: workers switched off for the rest of this game session"); }
+        }
         s_par_batches++;
     }
     LONG ov = 0;
@@ -575,6 +672,31 @@ __asm__(".text\n_th_gs:\n\t"
         "movl %eax, 0x20(%esp)\n\t" "popfl\n\t" "popal\n\t" "ret $8\n"
         "1:\n\t" "popfl\n\t" "popal\n\t" "jmp _th_5e20_slow\n");
 
+// ---------------------------------------------------------------- crash note
+// A crash inside the game ends in the game's BugSplat handler (TerminateProcess, nothing in the Windows log). A fatal exception on
+// one of our workers - or on the main thread while it builds in the parallel phase - writes one line first, without the C runtime.
+static volatile LONG s_exc;
+static LONG CALLBACK veh(EXCEPTION_POINTERS *ep) {
+    DWORD code = ep->ExceptionRecord->ExceptionCode;
+    if (code != EXCEPTION_ACCESS_VIOLATION && code != EXCEPTION_ILLEGAL_INSTRUCTION && code != EXCEPTION_PRIV_INSTRUCTION
+        && code != EXCEPTION_INT_DIVIDE_BY_ZERO && code != EXCEPTION_STACK_OVERFLOW && code != 0xC0000409u) return EXCEPTION_CONTINUE_SEARCH;
+    Ctx *c = ctx_get();
+    if (!c || (c->id == 0 && !g_phase)) return EXCEPTION_CONTINUE_SEARCH;
+    if (InterlockedIncrement(&s_exc) > 3) return EXCEPTION_CONTINUE_SEARCH;
+    void *at = ep->ExceptionRecord->ExceptionAddress; HMODULE m = NULL; char mod[MAX_PATH] = "?";
+    if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, (LPCSTR)at, &m) && m) {
+        GetModuleFileNameA(m, mod, sizeof mod); char *q = strrchr(mod, '\\'); if (q) memmove(mod, q + 1, strlen(q));
+    }
+    void *obj = c->cur; SYSTEMTIME t; GetLocalTime(&t); char b[512];
+    int n = wsprintfA(b, "%02d:%02d:%02d EXCEPTION %08lX at %s+%lX (%p), data %p, on %s %d (tid %lu) building model %p - the game's crash "
+                      "handler takes over\r\n", t.wHour, t.wMinute, t.wSecond, code, mod, (DWORD)((char *)at - (char *)m), at,
+                      ep->ExceptionRecord->NumberParameters > 1 ? (void *)ep->ExceptionRecord->ExceptionInformation[1] : NULL,
+                      c->id ? "worker" : "main thread", c->id, GetCurrentThreadId(), obj);
+    HANDLE f = CreateFileW(g_log, FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_ALWAYS, 0, NULL);
+    if (f != INVALID_HANDLE_VALUE) { DWORD w; WriteFile(f, b, n, &w, NULL); CloseHandle(f); }
+    return EXCEPTION_CONTINUE_SEARCH;
+}
+
 // ---------------------------------------------------------------- install
 static int bytes_are(DWORD at, const BYTE *b, int n) { return !IsBadReadPtr((void *)at, n) && !memcmp((void *)at, b, n); }
 static int call_to(DWORD at, DWORD target) { return *(BYTE *)at == 0xE8 && at + 5 + *(int *)(at + 1) == target; }
@@ -601,6 +723,8 @@ static DWORD WINAPI logger(LPVOID _) {
         if (!g_stats || ++k % 20) continue;
         LONG v[20] = {s_batches, s_items, s_cold, s_emits, s_pushes, s_rebuild, s_unconsumed, s_replayed, s_nest_rec, s_overflow,
                       s_wait[0], s_byworker, s_par_batches, s_skipdepth, s_wait[1], s_wait[2], s_wait[3], 0, 0, 0};
+        LONG x[7] = {s_stalls, s_late, s_mx_other, s_mx_other_busy, s_mx_foreign, s_mx_foreign_phase, 0}; static LONG px[7];
+        double wmax = s_wait_max_qpc * 1000.0 / g_qf.QuadPart; s_wait_max_qpc = 0;
         for (int t = 0; t < MAXT; t++) { v[17] += g_ctx[t].fast[0]; v[18] += g_ctx[t].fast[1]; }
         v[19] = s_mx_skipped;
         LONGLONG q = s_qpc_pre, w = s_qpc_wait, wk = s_qpc_walk; LONG nw = s_walks;
@@ -614,12 +738,15 @@ static DWORD WINAPI logger(LPVOID _) {
         logmsg("10 s: mode %ld, batches %ld (parallel %ld), models %ld (%.0f/batch), cold %ld, packets %ld, pushes %ld, rebuilt %ld, "
                "unconsumed %ld, replayed %ld, walks inside a build %ld, overflow %ld, lock waits sh/li/at/mat %ld/%ld/%ld/%ld, fast gs/5e20 %ld/%ld, "
                "built by workers %.0f %%, too deep %ld, light-lock enters skipped %ld | "
-               "prebuild %.2f ms/batch (wait %.2f) | main thread per 10 s: prebuild %.0f ms + slot 7 in the walk %.0f ms (%ld walks) | worker CPU %%:%s",
+               "prebuild %.2f ms/batch (wait %.2f, longest %.2f) | main thread per 10 s: prebuild %.0f ms + slot 7 in the walk %.0f ms (%ld walks) | "
+               "stalls %ld, late claims %ld, other game locks in the phase %ld (busy %ld), light lock by other threads %ld (in the phase %ld)%s | worker CPU %%:%s",
                (long)g_mode, db, v[12] - p[12], v[1] - p[1], db ? (double)(v[1] - p[1]) / db : 0, v[2] - p[2], v[3] - p[3], v[4] - p[4],
                v[5] - p[5], v[6] - p[6], v[7] - p[7], v[8] - p[8], v[9] - p[9], v[10] - p[10], v[14] - p[14], v[15] - p[15], v[16] - p[16], v[17] - p[17], v[18] - p[18],
                v[1] - p[1] ? 100.0 * (v[11] - p[11]) / (v[1] - p[1]) : 0, v[13] - p[13], v[19] - p[19],
-               db ? (q - pq) * 1000.0 / g_qf.QuadPart / db : 0, db ? (w - pw) * 1000.0 / g_qf.QuadPart / db : 0,
-               (q - pq) * 1000.0 / g_qf.QuadPart, (wk - pwk) * 1000.0 / g_qf.QuadPart, nw - pnw, cpu);
+               db ? (q - pq) * 1000.0 / g_qf.QuadPart / db : 0, db ? (w - pw) * 1000.0 / g_qf.QuadPart / db : 0, wmax,
+               (q - pq) * 1000.0 / g_qf.QuadPart, (wk - pwk) * 1000.0 / g_qf.QuadPart, nw - pnw,
+               x[0] - px[0], x[1] - px[1], x[2] - px[2], x[3] - px[3], x[4] - px[4], x[5] - px[5], g_par_off ? ", WORKERS OFF" : "", cpu);
+        memcpy(px, x, sizeof px);
         memcpy(p, v, sizeof p); pq = q; pw = w; pwk = wk; pnw = nw;
     }
     return 0;
@@ -708,8 +835,9 @@ static void install(void) {
     if (!jmp_at(FN_RL, th_rl, 5)) { logmsg("walk hook failed"); return; }
     if (!VirtualProtect(&vt[7], 4, PAGE_EXECUTE_READWRITE, &old)) { logmsg("VirtualProtect AV vtable failed"); return; }
     InterlockedExchange((LONG *)&vt[7], (LONG)hk_s7); VirtualProtect(&vt[7], 4, old, &old);
-    logmsg("ParallelDraw 1: AnimatorVisual slot 7 (0x7525D0) prebuilt at the render-list walk (0x78B730) by the main "
-           "thread + %d workers (%d CPUs), packets replayed in order; mode %ld", g_nworkers, ncpu, (long)g_mode);
+    AddVectoredExceptionHandler(1, veh);
+    logmsg("ParallelDraw 2: AnimatorVisual slot 7 (0x7525D0) prebuilt at the render-list walk (0x78B730) by the main "
+           "thread + %d workers (%d CPUs), packets replayed in order; mode %ld, watchdog %d ms", g_nworkers, ncpu, (long)g_mode, g_wd_ms);
 }
 
 BOOL WINAPI DllMain(HINSTANCE h, DWORD reason, LPVOID _) {
@@ -722,6 +850,9 @@ BOOL WINAPI DllMain(HINSTANCE h, DWORD reason, LPVOID _) {
     if (!GetPrivateProfileIntW(L"ParallelDraw", L"Enabled", 1, g_ini)) { logmsg("disabled in ParallelDraw.ini"); return TRUE; }
     g_mode = GetPrivateProfileIntW(L"ParallelDraw", L"Mode", 1, g_ini);
     g_stats = GetPrivateProfileIntW(L"ParallelDraw", L"Stats", 0, g_ini);
+    g_wd_ms = GetPrivateProfileIntW(L"ParallelDraw", L"Watchdog", 100, g_ini);
+    g_off_ms = GetPrivateProfileIntW(L"ParallelDraw", L"StallOff", 2000, g_ini);
+    g_racetest = GetPrivateProfileIntW(L"ParallelDraw", L"RaceTest", 0, g_ini);
     install();
     TlsSetValue(g_tls, NULL);
     CloseHandle(CreateThread(NULL, 0, logger, NULL, 0, NULL));
