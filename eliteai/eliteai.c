@@ -49,6 +49,8 @@ static int g_verbose;
 //     the retreat locks (retlock.h, 0.16) is emptied at a match start and by the simulation's own state, never by a timer;
 //   * lua_cfg hands the scripts strings of the local EliteAI.ini. In a network match (0.16) only the station that computes
 //     a computer runs its scripts, so the keys need not be equal across stations - but the keys of the SCAR path are not read;
+//   * the marks' file (0.17, EliteAI_Mark): the world's tick is read to choose which lines go into EliteAI.marks.log - ints
+//     and byte counts, nothing goes back to a script or an order;
 //   * the move loop guard (moveloop_guard.h) changes the simulation only where the engine would hang; it counts passes
 //     whose 'time left' is BIT-equal to the pass before (an integer compare of the four bytes) - the float is read as a
 //     number only for the log line.
@@ -81,6 +83,201 @@ static void log_write(const wchar_t *name, const char *stamp, const char *line) 
     FILE *f = _wfopen(p, L"a");
     if (f) { fputs(stamp, f); fputs(line, f); fputc('\n', f); fclose(f); }
 }
+// ---- 0.17 (15.11.2026): THE TESTERS' MARKS -> EliteAI.marks.log ------------------------------------------------------------
+// A tester presses the mark hotkey / button of Marks.dll; Marks.log says "MARK n | game m:ss ...". The launcher's "send logs"
+// carries the last 256 KB of every *.log, and the new AI writes megabytes a match (a 3v3 of six brains ~2.5 KB a second of
+// game), so three bundles in a row had no AI line at the early marks (20261115-082422-09df0f: marks from 0:34, the AI's lines
+// from 17:49 on). Now every mark keeps the AI's lines of 20 s of game before it and 20 s after it in a small file of its own:
+//   * HOW EliteAI LEARNS OF A MARK: Marks.dll 2 calls the export EliteAI_Mark(n, tick, line) of every module named
+//     EliteAI.dll (the copy that is not active - Elite's injector and dow2-patches may both load one - answers 0) at the
+//     moment of the mark, on the game's UI thread. No file is watched, nothing is polled. The call writes Marks' line into
+//     EliteAI.log through logmsg (Marks 1 appended it to the file itself, past the size count of the split) and opens the
+//     mark's window here. Without Marks.dll the export is never called and nothing of this runs; Marks 1 (no call) leaves
+//     EliteAI.marks.log empty and appends its line as before; Marks 2 with an older EliteAI (no export) does the same;
+//   * every line of logmsg also goes into a ring in memory (MK_RING_N lines / MK_RING_BYTES) with the world object and the
+//     world's tick (World + 0x178, an int; a tick = 0.1 s of game) it was written at;
+//   * a mark at tick T: its header, the ring's lines of the same world from T - 200 on (those not in the file yet: a mark
+//     inside the window of the one before goes on from where that one is), then every new line up to tick T + 200;
+//   * EliteAI.marks.log stays under MK_FILE_MAX (240 KB, the launcher takes 256 KB). One mark takes at most MK_SIDE_MAX
+//     (60 KB) of lines before it (the nearest ones) and as much after it. When the next lines do not fit, room is made from
+//     the OLDEST marks first, in two steps: (1) an older mark is squeezed to the MK_SQUEEZE (10 KB) of lines nearest to it on
+//     each side (a note says how much went), one mark at a time from the oldest; (2) only when every older mark is squeezed,
+//     the oldest is dropped whole. The first line of the file counts both. Sizes (bench and the tester's bundle): one brain
+//     ~0.5 KB a second of game, so a 1v1 mark is ~20 KB and a match keeps ~11 marks whole; a 3v3 of six brains ~2.5 KB a
+//     second, a mark ~100 KB: the last mark whole, the 7 before it squeezed to about +-4 s each, older ones dropped
+//     (test/marks_test.c with the 14 marks of that bundle: marks 7-14 kept, 1-6 dropped, 245 327 bytes);
+//   * one file per match: the first mark of another match (another world object, or the tick went back) moves the file of
+//     the match before to EliteAI.marks.prev.log - also when that match had no new AI (Elite's AI, a network match);
+//   * every line of the file starts with its game time ("g 15:26.3") and then the real time of EliteAI.log.
+// (Integers only - ticks, byte counts, pointer compares; it decides which FILE a line goes to and nothing else: no script
+// and no order ever sees it. The world's tick is read, never written.)
+#define MK_FILE_MAX   (240 * 1024)
+#define MK_SIDE_MAX   (60 * 1024)
+#define MK_SQUEEZE    (10 * 1024)
+#define MK_WIN_TICKS  200
+#define MK_RING_N     8192
+#define MK_RING_BYTES (1024 * 1024)
+#define MK_SEC_MAX    128
+#define MK_G_WORLD    0x013356A4                // DOW2.exe 3.19.10320: the World (= SimEngine's g_World), + 0x178 its tick
+typedef struct { char *s; int len; void *world; int tick; unsigned seq; } MkLine;
+static MkLine g_mkRing[MK_RING_N];
+static int g_mkHead, g_mkCount; static long g_mkRingBytes; static unsigned g_mkSeq;
+static char g_mkFile[MK_FILE_MAX + 2048];       // = EliteAI.marks.log (the file is only ever written from here)
+typedef struct { int start, body, mid, squeezed; } MkSec;  // a mark's section: its header line, its first line, its first line after the mark
+static MkSec g_mkSec[MK_SEC_MAX];
+static int g_mkLen, g_mkNSec, g_mkDropped, g_mkSqueezed;     // the file's length, its marks, marks dropped / squeezed in this match
+static void *g_mkWorld; static int g_mkLastTick = -1;            // the match the file holds
+static int g_mkOpen, g_mkN, g_mkT, g_mkUntil, g_mkAfter, g_mkCut; static unsigned g_mkDone;   // the window of the last mark
+static volatile int g_active;                   // this copy is the one that works (DllMain: the other copy stays idle)
+static void mk_world(void **w, int *tick) {
+    void **g = (void **)MK_G_WORLD; *w = NULL; *tick = -1;
+    if (IsBadReadPtr(g, 4) || !*g || IsBadReadPtr(*g, 0x17C)) return;
+    *w = *g; *tick = *(int *)((char *)*g + 0x178);
+}
+static void mk_path(wchar_t *p, int prev) { _snwprintf(p, MAX_PATH, L"%lsEliteAI.marks%ls.log", g_dir, prev ? L".prev" : L""); }
+static void mk_rewrite(void) {
+    wchar_t p[MAX_PATH]; mk_path(p, 0); FILE *f = _wfopen(p, L"wb");
+    if (f) { fwrite(g_mkFile, 1, g_mkLen, f); fclose(f); }
+}
+static int mk_head(char *o, int cap) {          // the first line of the file
+    return snprintf(o, cap, "=== EliteAI 0.17: the AI's lines %d s of game before and after each mark of Marks.dll (Marks.log has the players); "
+                    "at most %d KB: older marks are squeezed to the lines nearest to them, then dropped - in this match %d squeezed, %d dropped ===\n",
+                    MK_WIN_TICKS / 10, MK_FILE_MAX / 1024, g_mkSqueezed, g_mkDropped);
+}
+static char g_mkTmp[MK_FILE_MAX + 2048];
+// the file = A + B + C -> A + B' + C, every section offset after the change moved by the difference
+static void mk_splice(int at, int len, const char *by, int n) {
+    int tail = g_mkLen - at - len, d = n - len;
+    memcpy(g_mkTmp, g_mkFile + at + len, tail); memcpy(g_mkFile + at, by, n); memcpy(g_mkFile + at + n, g_mkTmp, tail); g_mkLen += d;
+    for (int i = 0; i < g_mkNSec; i++) {
+        if (g_mkSec[i].start >= at + len) g_mkSec[i].start += d;
+        if (g_mkSec[i].body >= at + len) g_mkSec[i].body += d;
+        if (g_mkSec[i].mid >= at + len) g_mkSec[i].mid += d;
+    }
+}
+static void mk_newhead(void) {                  // the first line again (the counts changed)
+    char h[400]; int hl = mk_head(h, sizeof h), old = g_mkNSec ? g_mkSec[0].start : g_mkLen;
+    mk_splice(0, old, h, hl);
+}
+static void mk_drop(int d) {                    // the d oldest marks of the file go (whole)
+    g_mkDropped += d;
+    int a = g_mkSec[0].start, e = g_mkSec[d].start;
+    mk_splice(a, e - a, "", 0);
+    memmove(g_mkSec, g_mkSec + d, sizeof g_mkSec[0] * (g_mkNSec - d)); g_mkNSec -= d;
+    mk_newhead();
+}
+static void mk_squeeze(int i) {                 // an older mark keeps the MK_SQUEEZE of lines nearest to it on each side
+    MkSec *m = &g_mkSec[i]; int end = i + 1 < g_mkNSec ? g_mkSec[i + 1].start : g_mkLen;
+    char note[200]; int k;
+    m->squeezed = 1; g_mkSqueezed++;
+    int q = m->mid + MK_SQUEEZE;                    // after it: up to the line end past MK_SQUEEZE
+    if (q < end) {
+        while (q < end && g_mkFile[q - 1] != '\n') q++;
+        k = snprintf(note, sizeof note, "(squeezed for later marks: %d KB of lines farther after this mark dropped)\n", (end - q + 1023) / 1024);
+        mk_splice(q, end - q, note, k);
+    }
+    int p = m->mid - MK_SQUEEZE;                    // before it: from the line start past mid - MK_SQUEEZE
+    if (p > m->body) {
+        while (p < m->mid && g_mkFile[p - 1] != '\n') p++;
+        k = snprintf(note, sizeof note, "(squeezed for later marks: %d KB of lines farther before this mark dropped)\n", (p - m->body + 1023) / 1024);
+        mk_splice(m->body, p - m->body, note, k);
+    }
+}
+static int mk_put(const char *s, int n) {       // append to the file; room is made from the oldest marks -> 0 = not written
+    while (g_mkLen + n > MK_FILE_MAX && g_mkNSec > 1) {
+        // never the last mark (the one being written); squeeze the oldest not squeezed yet, else drop the oldest
+        int i = 0; while (i < g_mkNSec - 1 && g_mkSec[i].squeezed) i++;
+        if (i < g_mkNSec - 1) mk_squeeze(i); else mk_drop(1);
+        mk_newhead(); mk_rewrite();
+    }
+    if (g_mkLen + n > MK_FILE_MAX) return 0;
+    memcpy(g_mkFile + g_mkLen, s, n); g_mkLen += n;
+    wchar_t p[MAX_PATH]; mk_path(p, 0); FILE *f = _wfopen(p, L"ab");
+    if (f) { fwrite(s, 1, n, f); fclose(f); }
+    return 1;
+}
+static int mk_fmt(char *o, int cap, const MkLine *l) {      // "g 15:26.3 12:03:10.115 AI: p1000 BR ..."
+    int t = l->tick < 0 ? 0 : l->tick;
+    int n = snprintf(o, cap, "g %d:%02d.%d %.*s\n", t / 600, (t / 10) % 60, t % 10, l->len, l->s);
+    return n < cap ? n : cap - 1;
+}
+static void mk_close(const char *why) {
+    if (!g_mkOpen) return;
+    char b[200]; int n = snprintf(b, sizeof b, "---- end of MARK %d (game %d:%02d): %s ----\n", g_mkN, g_mkT / 600, (g_mkT / 10) % 60, why);
+    mk_put(b, n); g_mkOpen = 0;
+}
+static void mk_line(const char *stamp, const char *line) {  // every line of logmsg (g_lk held)
+    void *w; int t; mk_world(&w, &t);
+    int ls = (int)strlen(stamp), ll = (int)strlen(line);
+    char *s = malloc(ls + ll + 1); if (!s) return;
+    memcpy(s, stamp, ls); memcpy(s + ls, line, ll); s[ls + ll] = 0;
+    while (g_mkCount && (g_mkCount == MK_RING_N || g_mkRingBytes + ls + ll > MK_RING_BYTES)) {   // the oldest lines go
+        MkLine *o = &g_mkRing[g_mkHead]; g_mkRingBytes -= o->len; free(o->s); o->s = NULL;
+        g_mkHead = (g_mkHead + 1) % MK_RING_N; g_mkCount--;
+    }
+    MkLine *l = &g_mkRing[(g_mkHead + g_mkCount) % MK_RING_N]; g_mkCount++;
+    l->s = s; l->len = ls + ll; l->world = w; l->tick = t; l->seq = ++g_mkSeq; g_mkRingBytes += l->len;
+    if (!g_mkOpen) return;
+    if (!w || w != g_mkWorld || t < g_mkT) { mk_close(!w ? "the match is over" : "another match"); return; }
+    if (t > g_mkUntil) { mk_close("20 s of game after it"); return; }
+    char b[1600]; int n = mk_fmt(b, sizeof b, l);
+    if (g_mkAfter + n > MK_SIDE_MAX) {
+        if (!g_mkCut) { g_mkCut = 1; char c[160]; int k = snprintf(c, sizeof c, "(the lines after MARK %d stop here: %d KB after one mark at most)\n", g_mkN, MK_SIDE_MAX / 1024); mk_put(c, k); }
+        return;
+    }
+    if (mk_put(b, n)) { g_mkAfter += n; g_mkDone = l->seq; }
+}
+static void logmsg(const char *fmt, ...);
+// Marks.dll 2: at a mark of a live match. n = Marks' number, tick = the world's tick Marks read, line = Marks' line for
+// EliteAI.log ("MARK 3 game 15:26 (926.0 s, tick 9260) map ... camera ..."). -> 1 taken, 0 not this copy / no match.
+__declspec(dllexport) int __cdecl EliteAI_Mark(int n, int tick, const char *line) {
+    if (!g_active) return 0;
+    void *w; int t; mk_world(&w, &t);
+    if (!w) return 0;
+    if (tick < 0) tick = t;
+    EnterCriticalSection(&g_lk);
+    mk_close("the next mark");
+    if (w != g_mkWorld || tick < g_mkLastTick || !g_mkNSec) {          // the first mark of a match: a file of its own
+        wchar_t a[MAX_PATH], b[MAX_PATH]; mk_path(a, 0); mk_path(b, 1);
+        if (w != g_mkWorld || tick < g_mkLastTick) {                     // (the file of the match before -> prev)
+            if (GetFileAttributesW(a) != INVALID_FILE_ATTRIBUTES) MoveFileExW(a, b, MOVEFILE_REPLACE_EXISTING);
+            g_mkDropped = g_mkSqueezed = 0;
+        }
+        g_mkWorld = w; g_mkNSec = 0; g_mkLen = mk_head(g_mkFile, 400); mk_rewrite();
+    }
+    g_mkLastTick = tick;
+    if (g_mkNSec == MK_SEC_MAX) { mk_drop(1); mk_rewrite(); }   // (128 marks in the file: the oldest goes)
+    // the lines before it: those of this world from T - 20 s on that are not in the file yet, the nearest MK_SIDE_MAX of them
+    int from = tick - MK_WIN_TICKS, first = g_mkCount, bytes = 0, older = 0, above = 0;
+    char b[1600];
+    for (int i = g_mkCount - 1, next = tick; i >= 0; i--) {          // (back in time: a tick that goes UP = the match before)
+        MkLine *l = &g_mkRing[(g_mkHead + i) % MK_RING_N];
+        if (l->world != w || l->tick < from || l->tick < 0 || l->tick > next) break;
+        next = l->tick;
+        if (l->seq <= g_mkDone) { above = 1; break; }
+        int k = mk_fmt(b, sizeof b, l);
+        if (bytes + k > MK_SIDE_MAX) { older = 1; break; }
+        bytes += k; first = i;
+    }
+    char h[700]; SYSTEMTIME st; GetLocalTime(&st);
+    int hl = snprintf(h, sizeof h, "\n==== MARK %d | game %d:%02d (tick %d) | %02d:%02d:%02d | the AI's lines from game %d:%02d to %d:%02d ====\n%s",
+                      n, tick / 600, (tick / 10) % 60, tick, st.wHour, st.wMinute, st.wSecond, from < 0 ? 0 : from / 600, from < 0 ? 0 : (from / 10) % 60,
+                      (tick + MK_WIN_TICKS) / 600, ((tick + MK_WIN_TICKS) / 10) % 60,
+                      above ? "(the lines before these, from the same 20 s, are under the mark above)\n" : "");
+    if (hl >= (int)sizeof h) hl = sizeof h - 1;
+    MkSec *sec = &g_mkSec[g_mkNSec++];              // this mark's section (the last one: mk_put never squeezes or drops it)
+    memset(sec, 0, sizeof *sec); sec->start = sec->body = sec->mid = g_mkLen;
+    if (mk_put(h, hl)) {
+        if (older) { char c[160]; int k = snprintf(c, sizeof c, "(earlier lines of the 20 s before it left out: %d KB before one mark at most)\n", MK_SIDE_MAX / 1024); mk_put(c, k); }
+        sec = &g_mkSec[g_mkNSec - 1]; sec->body = g_mkLen;                       // (mk_put may have moved the file)
+        for (int i = first; i < g_mkCount; i++) { MkLine *l = &g_mkRing[(g_mkHead + i) % MK_RING_N]; int k = mk_fmt(b, sizeof b, l); if (mk_put(b, k)) g_mkDone = l->seq; }
+        g_mkSec[g_mkNSec - 1].mid = g_mkLen;
+        g_mkOpen = 1; g_mkN = n; g_mkT = tick; g_mkUntil = tick + MK_WIN_TICKS; g_mkAfter = 0; g_mkCut = 0;
+    }
+    LeaveCriticalSection(&g_lk);
+    logmsg("%s", line && line[0] ? line : "MARK (no text from Marks.dll)");   // EliteAI.log as before - and the first line after the mark here
+    return 1;
+}
 static void logmsg(const char *fmt, ...) {
     char line[1400], stamp[20];
     va_list a; va_start(a, fmt); vsnprintf(line, sizeof line, fmt, a); va_end(a); line[sizeof line - 1] = 0;
@@ -111,6 +308,7 @@ static void logmsg(const char *fmt, ...) {
         }
         log_write(L"EliteAI.more.log", stamp, line);
     }
+    mk_line(stamp, line);                        // 0.17: the ring of the marks' windows (and the open window -> EliteAI.marks.log)
     LeaveCriticalSection(&g_lk);
 }
 // 0.14 (14.11.2026, the verifier of brain step 8): the log is rotated ONLY WHEN A MATCH WITH THE NEW AI STARTS. 0.13
@@ -152,7 +350,7 @@ static int log_match(const char *chunk) {        // an AI script of OURS is bein
     LeaveCriticalSection(&g_lk);
     if (fresh) {
         SYSTEMTIME t; GetLocalTime(&t);
-        logmsg(LOG_MATCH_MARK " 0.16: a match of the new AI starts %04d-%02d-%02d %02d:%02d:%02d (first AI script %s); %s ===",
+        logmsg(LOG_MATCH_MARK " 0.17: a match of the new AI starts %04d-%02d-%02d %02d:%02d:%02d (first AI script %s); %s ===",
                t.wYear, t.wMonth, t.wDay, t.wHour, t.wMinute, t.wSecond, chunk ? chunk : "?",
                rotated ? "the match before it is in EliteAI.prev.log" : "no match in this file before it: nothing rotated");
     }
@@ -539,8 +737,9 @@ static int __stdcall load_hook(void *L, LuaReader reader, void *data, const char
     int rt = 0;
     if (chunkname) {                                   // 0.16: a SCAR script is being loaded = a world starts (before its AI players
         char b[400]; int n = 0;                        // are made; any game type) - no retreat lock of the match before outlives it
+                                                       // (0.17: or an AI player is made mid-match - retlock.h ret_scar_load)
         for (const char *s = chunkname; *s && n < 398; s++) b[n++] = (*s == '/') ? '\\' : (char)tolower((unsigned char)*s);
-        b[n] = 0; if (strstr(b, "simulation\\scar\\")) ret_clear_all("a SCAR script is loaded: a match starts");
+        b[n] = 0; if (strstr(b, "simulation\\scar\\")) ret_scar_load();   // 0.17: a new match only (a migration keeps the locks)
     }
     // 0.16: a network match is in too (see MULTIPLAYER above) - unless [EliteAI] Multiplayer=0, or the engine calls of
     // eliteai_cmd are not there (another exe: the orders would have to go through SCAR, on this machine only)
@@ -763,9 +962,20 @@ static void replay_note(const char *line) {
     // that computes the computer - so only that station sends, once, after the match (MMFind's own upload of a match with a
     // computer is not stored by the site; ours, X-Lobby newai, is kept hidden for the AI's development). The file name says mp.
     if (game_type() & MP_TYPES) g_rpMp = 1;
-    if (line[0] != 'p' || (!strstr(line, " init race ") && !strstr(line, " variant "))) return;   // every AI log line comes here
+    // 0.17 (the network check of 15.11, MP_CHECK_1115_RU.md bug 1): a computer of the BRAIN (orks since newai-24) never wrote
+    // 'variant' - only the old layer does (default.ai / main.ai under EliteAI.on, and the dispatcher sets EliteAI.on = false
+    // for a brain slot), so no match of the brain was sent since newai-24, single player or network. The brain's own first
+    // line is "p1001 BR INIT 5 brain 0.9 race orks profile 1 team 1 diff 2 units ..." (mod/brain/90_boot.ai): it is written
+    // only by the station whose engine runs that AI player's scripts, like 'variant', and it counts the same - race from it,
+    // the variant letter from its diff (0 / 1 / 2 -> A / B / C: the rules it plays; any other -> 'X').
+    if (line[0] != 'p' || (!strstr(line, " init race ") && !strstr(line, " variant ") && !strstr(line, " BR INIT "))) return;   // every AI log line comes here
     if (sscanf(line, "p%d init race %23s", &pid, race) == 2) ;
     else if (sscanf(line, "p%d variant %15s", &pid, w) == 2 && w[0] >= 'A' && w[0] <= 'Z' && !w[1]) v = w[0];
+    else if (sscanf(line, "p%d BR INIT %*d brain %*s race %23s", &pid, race) == 2) {
+        const char *d = strstr(line, " diff "); int dv = -1;
+        if (d) sscanf(d + 6, "%d", &dv);
+        v = dv >= 0 && dv <= 2 ? (char)('A' + dv) : 'X';
+    }
     else return;
     int first = 0;
     EnterCriticalSection(&g_lk);
@@ -830,7 +1040,7 @@ typedef struct { wchar_t host[64]; volatile LONG refs; volatile int ok; volatile
 static void rp_unref(RpProbe *p) { if (!InterlockedDecrement(&p->refs)) free(p); }
 static DWORD WINAPI rp_probe(LPVOID a) {                    // GET /replay/api/by_lobby/<x>: the site answers "{}" (404) at once
     RpProbe *p = a; DWORD t0 = GetTickCount(), code = 0, sz = sizeof code, m; char out[64]; int n = 0;
-    HINTERNET s = WinHttpOpen(L"EliteAI/0.16", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, NULL, NULL, 0);
+    HINTERNET s = WinHttpOpen(L"EliteAI/0.17", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, NULL, NULL, 0);
     if (s) {
         WinHttpSetTimeouts(s, RP_CHECK_MS, RP_CHECK_MS, RP_CHECK_MS, RP_CHECK_MS);
         HINTERNET c = WinHttpConnect(s, p->host, INTERNET_DEFAULT_HTTPS_PORT, 0);
@@ -848,7 +1058,7 @@ static DWORD WINAPI rp_probe(LPVOID a) {                    // GET /replay/api/b
 static DWORD rp_post(const wchar_t *host, const char *buf, DWORD size, const char *fname, char *out, int cap, DWORD tmoRecv) {
     wchar_t hdr[400]; _snwprintf(hdr, 400, L"Content-Type: application/octet-stream\r\nX-Filename: %hs\r\nX-Lobby: newai\r\n", fname);
     DWORD code = 0, sz = sizeof code, m; int n = 0; out[0] = 0;
-    HINTERNET s = WinHttpOpen(L"EliteAI/0.16", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, NULL, NULL, 0); if (!s) return 0;
+    HINTERNET s = WinHttpOpen(L"EliteAI/0.17", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, NULL, NULL, 0); if (!s) return 0;
     WinHttpSetTimeouts(s, 4000, 4000, 30000, (int)tmoRecv);       // the site parses the replay before it answers
     HINTERNET c = WinHttpConnect(s, host, INTERNET_DEFAULT_HTTPS_PORT, 0);
     HINTERNET r = c ? WinHttpOpenRequest(c, L"POST", L"/replay/api/upload", NULL, NULL, NULL, WINHTTP_FLAG_SECURE) : NULL;
@@ -997,11 +1207,12 @@ BOOL WINAPI DllMain(HINSTANCE h, DWORD reason, LPVOID _) {
     DisableThreadLibraryCalls(h); InitializeCriticalSection(&g_lk);
     wchar_t mx[64]; _snwprintf(mx, 64, L"Local\\EliteAI_%lu", GetCurrentProcessId());   // one copy per game (Elite's injector + dow2-patches)
     CreateMutexW(NULL, FALSE, mx); if (GetLastError() == ERROR_ALREADY_EXISTS) return TRUE;
+    g_active = 1;                                // (0.17: EliteAI_Mark of the idle copy answers 0)
     // data always in <game>\Elite_DLLs\ - also when loaded from dow2-patches (-dev runs: Elite's injector skips its DLLs there)
     GetModuleFileNameW(NULL, g_dir, MAX_PATH); wchar_t *s = wcsrchr(g_dir, L'\\'); if (s) wcscpy(s + 1, L"Elite_DLLs\\");
     _snwprintf(g_ini, MAX_PATH, L"%lsEliteAI.ini", g_dir);
     g_verbose = GetPrivateProfileIntW(L"EliteAI", L"Verbose", 0, g_ini);
-    logmsg("EliteAI 0.16 start (single player, and network matches for the computers this station computes; a log per match of the new AI: EliteAI.log, the match before in EliteAI.prev.log), hook %s", install() ? "installed" : "NOT installed");
+    logmsg("EliteAI 0.17 start (single player, and network matches for the computers this station computes; a log per match of the new AI: EliteAI.log, the match before in EliteAI.prev.log; the AI's lines around each mark of Marks.dll: EliteAI.marks.log), hook %s", install() ? "installed" : "NOT installed");
     install_labels();
     int mg = mlg_install();
     logmsg("move loop guard (DOW2.exe 009141A0 / 009144F3): %s", mg == 1 ? "installed" : mg == 0 ? "MoveLoopFix.dll is active, not needed"

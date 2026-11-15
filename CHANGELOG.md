@@ -4,6 +4,62 @@ Every version gets an entry here before it reaches `main`. CI then tags `vX.Y.Z`
 version (`X.Y.0`) it also publishes a GitHub Release with the DLLs and the entries since the previous `X.Y.0`.
 The version of the set lives only in `VERSION`; each DLL still writes its own version to its log.
 
+## 0.2.89 — 2026-11-15
+Match marks 2 (store marks-2, experiment, order 1100, off by default, games elite + vanilla + igrework) - the camera point of a
+mark, and the new AI's lines around a mark reach the developers. Was PR #112 (0.2.81 on top of 0.2.80, closed): marks/ did not change on
+main since, so marks.c is that branch's as is; renumbered after 0.2.88 (New AI 29 with EliteAI.dll 0.17, the other half of the pair).
+- Camera: 1 cast a ray from the camera's eye (top of GameObj's camera stack, as Misc_GetCameraPos) to the plane y = 0; the
+  ground is ~200 high on some maps (Kathari Ruins: the eye 242-250 high all match long), so "looks at" came out off the map, by
+  two anchors ~(32, 32) from the eye. 2 reads the point the gameplay camera itself looks at: CameraGameplay (vtable 0x0111BD04,
+  RTTI .?AVCameraGameplay@@) = the active controller of the camera manager *(0x01335090) (as 0x00BB3430 of
+  Camera_GetGameplayCameraTuningValue finds it, the vtable compared instead of a dynamic_cast), + 0x2D0 / 0x2D4 / 0x2D8 its target
+  x / terrain height / z (panning adds to it in 0x00BACC10; vt + 0xC 0x00BADA00 writes it as eye + direction * distance),
+  + 0x300 the distance. Fallback: the camera stack's top - 8 when its vtable is CameraGameplay's; else "?". Reads only, no call.
+  Marks.log: "camera looks at x .. z .. (ground height .., camera distance ..)".
+- EliteAI: the mark goes to EliteAI.dll 0.17+ through its export EliteAI_Mark(n, tick, line) (every module named EliteAI.dll is
+  asked; the idle copy answers 0): EliteAI writes the line into EliteAI.log itself and keeps its lines of 20 s of game before and
+  after the mark in EliteAI.marks.log (<= 240 KB a match; the launcher sends the last 256 KB of a log, and a whole match of the
+  new AI is megabytes). An EliteAI without the export (0.16 and older) or one that answers 0: the line is appended to EliteAI.log
+  as in 1; no EliteAI.dll loaded: nothing written there, as in 1 (elite_ai_log checks GetModuleHandle). EliteAI 0.17 ships in 0.2.88.
+- Bench (fastbench, no UI: Marks' own mark() called from a test thread at fixed ticks, 1v1 live game with the brain): the export
+  taken every time, the camera found (CameraGameplay, distance 55, 45 degrees; the headless bench never moves it: target 0, 0).
+  The step-10 verifier (s10/VERIFY_10_RU) saw Marks 2 marks reach EliteAI.marks.log and the camera point match the HQ within 0.5 m.
+  Not checked yet: the real game - the hotkey / button path is Marks 1's, unchanged.
+
+## 0.2.88 — 2026-11-15
+New AI 29 (store newai-29, experiment, off by default, Elite only): steps 10 and 10.1 of the brain (brain 0.10.1) and EliteAI.dll 0.17.
+eliteai branch newai-29 d7c3a0d = brain 8682e89 with main.ai, mechanics.ai and the vanilla-base sources of
+strategy_tech_purchase.ai / strategy_unit_purchase.ai of newai-28 06f5cff (= a3a378a, newai-23 / 23.1, plus the step-9 change 66ab6a1 in
+main.ai: every slot level plays rule set C), exactly as newai-24 .. 28; dispatchers rebuilt by tools/vanilla_dispatch.py. Steps 10 and 10.1
+(42e9a52..8682e89) did not touch main.ai, mechanics.ai, the vanilla-base sources or elite.scar. Against newai-28 one served file changes:
+default.ai (the brain chunks 0.9 -> 0.10.1 and netorder.ai modes 16 / 17 / 600 + k); plus the DLL. The brain's own committed default.ai at
+8682e89 was not rebuilt after its last commit (it still had Brain_EconMatchTeam on); the release build has it off, as 8682e89 says.
+- Map control and the race (against the OLD layer of other races, the testers' complaint: Orca 4:409, Malum 38:424): a victory point weighs
+  more the fewer tickets are left, a point guarded by a stronger enemy weighs less, one squad takes the best far point, the fist screens
+  25 m beyond the point one squad captures, a capturer about to finish stays 10 s more, a lost power point (farm) is remembered and retaken,
+  DEFEND (our point the enemy takes is an objective), the rear is no fist by itself. The army by the enemy's army: squads seen in 90 s are
+  matched, up to 3 over the clock (the whole enemy team is counted - Brain_EconMatchTeam=0 by default since 8682e89).
+- Allies (80_team.ai): a point an ally's squad claims is left to it (read from the ally's squads, no shared memory).
+- Burnas from the ranged stance (netorder.ai mode 16: SCMD_SetWeaponStance 0x47) at generators, listening posts and occupied buildings, the
+  burna ability on a building; lootas keep their post and hide (FACE: mode 17, the move command with data type 03, then the toggle).
+- 'Call da Boyz!' (the squads around the hero short of models; the cry of the fist in a fight in the balance; at the red cap), the hero's
+  globals on a squad ('Ard Boyz, Use Yer Choppas, More Dakka: mode 600 + k, the player's ability 0x55 with a squad target, asked of the
+  engine first), refill at home (half-strength infantry out of every fight), no chase into the enemy base, own-bomb hazards, bombs spread,
+  the mek's mines in the enemy's way, the roks at a set-up team that stood 4 s or a clump, one stormboy squad from 4:00.
+- Gretchin: the Repair Krew is bought and repairs vehicles anywhere; NO capture jobs (10.1: the attributes let a krew only neutralise an
+  enemy point, never take a free one; Brain_CapKrew=1 returns step 10).
+- EliteAI.dll 0.17: export EliteAI_Mark(n, tick, line) for Marks 2 - the AI's lines of 20 s of game around each mark in EliteAI.marks.log
+  (<= 240 KB a match, fits the launcher's 256 KB tail); a match whose new AI is only the brain is uploaded to the replay site (the 'new AI'
+  flag counts 'pN BR INIT' too - no brain-only match was sent since newai-24); a host migration keeps the retreat locks (retlock.h
+  ret_scar_load). Integers and pointer compares only, the world tick read, never written.
+- Check (independent verifier, s10/VERIFY_10_RU: READY WITH NOTES): 327 bench runs with 0 Lua error lines; 22 bench recordings and 4 of two
+  real network matches play back with no AI with every CRC equal; two real network matches on two stands without desync (stance and hero
+  globals included, AI migration too); the brain's replay reached the site; Marks 2 marks reach EliteAI.marks.log. Its condition 1 (no
+  gretchin capture) is 10.1. Honest standing (condition 2): over three seeds the brain is ahead in 11 of 36 games against the old layer of
+  other races (42e9a52: 6 of 36), the old layer playing the orks (Brain=0) in 21 of 36. Step 10.1: 12 live games ahead 4 of 12 as before
+  it, 0 capture jobs for gretchin (84 before), 3v3 with Brain_EconMatchTeam on lost two 3-brain scenes it won off - hence off.
+  DLL tests retlock_test 24 PASS, marks_test 23 PASS, replay_brain_test 8 PASS. Stub 171 PASS on the release tree.
+
 ## 0.2.87 — 2026-11-15
 MMFind 0.51 (Automatch v2.0; hand release: store automatch mmfind-0.51 = the live package mmfind-0.50 with this MMFind.dll):
 a launcher room's start faster and earlier, observers through the native automatch behind a switch (siritos fb 1062; report
