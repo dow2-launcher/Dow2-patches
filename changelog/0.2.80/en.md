@@ -1,0 +1,1 @@
+- New: Parallel Draw (experiment, off by default, Elite only): smoother big late-game fights - the models are prepared for drawing on several CPU cores instead of one. Works on its own or together with Parallel Pose. Looks only, no effect on sync.

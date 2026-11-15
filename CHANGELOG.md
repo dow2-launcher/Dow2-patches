@@ -4,6 +4,22 @@ Every version gets an entry here before it reaches `main`. CI then tags `vX.Y.Z`
 version (`X.Y.0`) it also publishes a GitHub Release with the DLLs and the entries since the previous `X.Y.0`.
 The version of the set lives only in `VERSION`; each DLL still writes its own version to its log.
 
+## 0.2.80 — 2026-11-15
+Parallel Draw (store paralleldraw-1, new, experiment order 1131, off by default, games elite only; vanilla and IG Rework not tested) -
+late 3v3 fights, stage 2 of research latelag_1114 (STAGE2_RU.md).
+- The draw packets of the animated models (AnimatorVisual slot 7, 0x007525D0) are built at the entry of the render-list walk
+  0x0078B730 by the game thread plus up to cores-1 workers (max 7), in "record" mode (sp::Device+0xEC submit and the deferred-list
+  push 0x006CEE36 only append to the thread's arena); the original walk replays them at each model's place - same packets, same
+  order to Spooge. Models seen for the first time are built on the game thread (lazy caches). Shared caches under big-reader
+  locks; the light-manager lock is held by the game thread for the parallel phase. Recorded twice -> rebuilt in place; overflow ->
+  the walk is rebuilt.
+- Visual only: per-tick CRC equal (replay 095f... 16551 ticks, replay 7127... 20289 of 20289; with Parallel Pose and, run rel1,
+  alone - byte-identical CrcTrace). Rebuilt / unconsumed / overflow 0 in every run. Every patch site byte-checked, on a mismatch
+  the DLL does nothing. ParallelDraw.ini [ParallelDraw]: Enabled=1, Threads=0, Mode=1, Stats=0 (release default; the stand had 1).
+- Stand (Wine + DXVK, late 3v3, min 28-32): with Parallel Pose fps 24.9 -> 27.8, game thread 39.6 -> 35.1 ms (slot 7 on the game
+  thread 7.9 -> 3.1 ms); alone fps 19.6 -> 20.9, game thread 50.4 -> 47.3 ms. Cost: ~0.25 of a core.
+- Not checked yet: real Windows, 2-4 cores, video of a late fight, vanilla CrcTrace.
+
 ## 0.2.79 — 2026-11-14
 Parallel Pose (store parallelpose-1, new, experiment order 1130, off by default, games elite only; vanilla and IG Rework not tested) -
 late 3v3 fights (research latelag_1114, REPORT_RU.md).

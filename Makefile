@@ -29,6 +29,7 @@ all: $(OUT)/OverwatchOnce.dll
 all: $(OUT)/CtrlAttack.dll
 all: $(OUT)/SpeechStreakFix.dll
 all: $(OUT)/ParallelPose.dll
+all: $(OUT)/ParallelDraw.dll
 all: $(OUT)/ArmyBadgeFix.dll
 all: $(OUT)/DocsFix.dll
 all: $(OUT)/LangSwitch.dll
@@ -196,6 +197,10 @@ $(OUT)/SpeechStreakFix.dll: speechstreakfix/speechstreakfix.c | $(OUT)
 
 # 14.11.2026: the skeleton poses of the models in view built on several CPU cores (visual only); every patch site byte-checked
 $(OUT)/ParallelPose.dll: parallelpose/parallelpose.c | $(OUT)
+	$(CC) $(CFLAGS) -shared -o $@ $< -static-libgcc
+
+# 15.11.2026: the draw packets of the animated models built on several CPU cores, submitted in the original order (visual only)
+$(OUT)/ParallelDraw.dll: paralleldraw/paralleldraw.c | $(OUT)
 	$(CC) $(CFLAGS) -shared -o $@ $< -static-libgcc
 
 # 12.11.2026: Alt+Shift / Ctrl+Shift / Win+Space switch the keyboard language inside the game window (the game's message loop

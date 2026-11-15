@@ -47,6 +47,7 @@ are client-side, and the other players in the match don't need them.
 | **Elite maps** (new, staging, experiment, vanilla only) | Vanilla Retribution: Elite's 1v1-3v3 maps (60 of its 62; the 2 FFA maps are not offered by vanilla) in the map list of skirmish and custom games, read from the player's own Elite installation in the same game folder. EliteMaps 3: in any room, public ones too (EliteMaps.ini BlockPublic=1 keeps them out of public rooms, as EliteMaps 2 did); a player without it crashes joining a room with an Elite map already picked, and with him already in the lobby an Elite-map match does not start (vanilla has no map download) - pick the Elite map once everyone is in. Vanilla maps, the data checksum and the automatch stay vanilla's. | `elitemaps` → `elitemaps-3` (staging) | `elitemaps/` | maps only (no game data) |
 | **Overwatch once** (new, staging, experiment) | Right-click (overwatch) on a unit's build button orders one squad: it is built as soon as it is affordable, then the overwatch mark goes off by itself (no surprise second squad). Elite and vanilla. | `overwatchonce` → `overwatchonce-1` (staging) | `overwatchonce/` | no (overwatch lives in the HUD only; at most one build order less) |
 | **Parallel Pose** (new, staging, experiment, Elite only) | Smoother big late-game fights: the skeleton poses of the models in view are built on several CPU cores (game thread + up to cores-1 workers, max 7) instead of the game thread alone. Stand (late 3v3): +18 % fps on average. Looks only; off by default; vanilla and IG Rework not tested. | `parallelpose` → `parallelpose-1` (staging) | `parallelpose/` | no (visual update only; CRC equal on two replays) |
+| **Parallel Draw** (new, staging, experiment, Elite only) | Smoother big late-game fights: the draw packets of the animated models (render-list slot 7) are built on several CPU cores (game thread + up to cores-1 workers, max 7); the packets still reach the renderer from the game thread in the original order. Stand (late 3v3): with Parallel Pose on +12 % fps (min 28-32: 24.9 -> 27.8), alone +7 %. Looks only; off by default; vanilla and IG Rework not tested. | `paralleldraw` → `paralleldraw-1` (staging) | `paralleldraw/` | no (visual only; CRC equal on two replays, alone and with Parallel Pose) |
 | **Speech streak fix** (new, staging, experiment) | Fixes a rare crash of the game when a unit gets a kill: the unit speech about kill streaks read past its list for a unit's first kill. Elite and vanilla. | `speechstreakfix` → `speechstreakfix-1` (staging) | `speechstreakfix/` | no (speech only) |
 | **Computer army fix** (new, staging, experiment) | A computer added into a team slot a human left (the host moved to the observers or to another slot) had no army: pink "missing texture" squares where its badge goes, units and buildings in colour 0. Now it gets the default army of its race, live and in replays. Elite and vanilla. | `armybadgefix` → `armybadgefix-1` (staging) | `armybadgefix/` | no (team colours and badges are drawing only) |
 | **LangSwitch** (new, staging, experiment) | Alt+Shift, Ctrl+Shift and Win+Space switch the keyboard language inside the game window (for the chat), no alt-tab. Elite and vanilla. | `langswitch` → `langswitch-1` (staging) | `langswitch/` | no (window messages only) |
@@ -302,6 +303,17 @@ parallelpose/ - **ParallelPose.dll** (ParallelPose 1)
     model. Workers: own threads, Havok initialised as the game's XThread workers (0x006DABC0), x87 CW / MXCSR of the game thread.
     Serial until the spline decoder's lazy table exists. Every patch site byte-checked. Visual only, no sync impact.
     ParallelPose.ini: Enabled, Threads (0 = auto), Mode (1 on, 0 off, 2 stand comparison), Stats (log line every 10 s).
+
+paralleldraw/ - **ParallelDraw.dll** (ParallelDraw 1)
+    The render-list walk 0x0078B730 calls vtable slot 7 of every render object in list order; for AnimatorVisual (vtable
+    0x010C5D94) slot 7 = 0x007525D0 -> 0x00769110 -> 0x006CEA90 fills each sub-mesh's draw packet and submits it (sp::Device+0xEC)
+    or pushes it into the deferred list (0x006CEE36). At the walk's entry (game thread only) every AnimatorVisual of the lists is
+    built in "record" mode by the game thread plus workers (cores-1, max 7): submit / push only append to the thread's arena.
+    The original walk then replays the recorded packets at each model's own place, so Spooge gets the same packets in the same
+    order. Shared caches (shaders, material bindings, attachments) under big-reader locks; the light manager's own lock is held
+    by the game thread for the parallel phase (Platform.dll RecursiveMutex imports). A packet recorded twice -> those models are
+    rebuilt in place; arena overflow -> the walk is rebuilt. Every patch site byte-checked. Visual only, no sync impact.
+    ParallelDraw.ini: Enabled, Threads (0 = auto), Mode (1 on, 0 off, 2 stand check), Stats (log line every 10 s).
 
 speechstreakfix/ - **SpeechStreakFix.dll** (SpeechStreakFix 1)
     The unit speech counts kills per entity ("Killing_Streak" of speechtuning) in a sorted vector map {Entity*, count} of its event
