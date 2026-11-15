@@ -47,13 +47,19 @@
 // Hard = C, Expert = Elite's AI), so newai_* gives the former humans' computers that difficulty (Player+0xBC, slot +0x2C)
 // instead of [Difficulty]. EliteAI.dll not loaded or EliteAI.ini [Lua] NewAI=none -> logged, Elite's AI (Difficulty) instead.
 // EliteAI itself takes the game for a single-player one: the type is already 4 when the computers are made.
+//
+// ReplayTakeover 4 (15.11.2026, player noofancy, fb 1206 - he had reported both before): (1) after "Continue as" the player's
+// squads had no squad tabs and no control-group numbers (Ctrl+N by hand worked) - a replay has no local player, so the skirmish
+// SCAR never set them up; now the takeover runs the game's own Skirmish_SetupSquad for each of his squads (see setup_squads).
+// (2) the next replay of the same run went out of sync from its first tick - the shutdown of the continued game skipped the
+// end of the replay (its type was 4); now everything the takeover changed is put back at that shutdown (see restore).
 #include <windows.h>
 #include <stdio.h>
 #include <string.h>
 #include <wchar.h>
 #include "../common/gfxui.h"
 
-#define VERSION "3"
+#define VERSION "4"
 
 #define G_SETTINGS   0x01335A78   // +0x110 GameObj, +0x118 game type (0x800 playback), +0x118+0x810 slots, +0x814 count
 #define G_WORLD      0x013356A4   // +0xF8 entities (vtbl+0x10 = by id), +0x194 PlayerManager, +0x174 playback length, +0x178 tick
@@ -69,6 +75,7 @@
 #define FN_ECHO_CTOR 0x00404B74   // EchoSynchronization ctor, stdcall(this), 0x34 bytes
 #define FN_SELECTION 0x00ADEE60   // thiscall(selection, vector<EntityID> *): the selected entities
 #define VT_PLAYBACK  0x010B9E2C
+#define VT_ECHO      0x01087A54   // EchoSynchronization (slot 0: scalar deleting destructor 0x404C85)
 #define VT_CONCEDE   0x0110C16C   // BindingConcedeMatchButton
 #define FN_CC_ACTIVE 0x00AD2D80   // slot 3: IsActive (thiscall, 1 arg)
 #define FN_CC_CLICK  0x00AD2EB0   // the click delegate (thiscall widget, event)
@@ -166,6 +173,152 @@ static void *selected_player(void) {
     return found;
 }
 
+
+// ---- PROBE (stand only, ReplayTakeover.ini Probe=1) ----
+static int g_probe; static void *g_prGs; static int g_prState = -99, g_prType = -99, g_prTick = -1;
+static void probe(const char *why) {
+    char *st = settings(), *w = world(); char *go = st ? P32(st, 0x110) : NULL; char *gs = gamestate(st);
+    char *g678 = ok((void *)0x1335678, 4) ? *(char **)0x1335678 : NULL; char *p4 = ok(g678, 8) ? P32(g678, 4) : NULL;
+    char *sc = gs && ok(gs + 0x154, 4) ? P32(gs, 0x154) : NULL; char *sy = ok(sc, 0x78) ? P32(sc, 4) : NULL;
+    logmsg("PROBE %s: st %p type %X | g678 %p +4 %p (=st+118? %d) *+4 %X | go %p gs %p state %d 6C %p 74 %d | sc %p sync %p vt %08lX sc74 %d | w %p 174 %d tick %d",
+        why, st, st ? I32(st, 0x118) : -1, g678, p4, p4 == st + 0x118, ok(p4, 4) ? I32(p4, 0) : -1, go, gs, gs ? I32(gs, 0x34) : -1,
+        gs ? P32(gs, 0x6C) : NULL, gs ? U8(gs, 0x74) : -1, sc, sy, ok(sy, 4) ? *(DWORD *)sy : 0, ok(sc, 0x78) ? I32(sc, 0x74) : -1,
+        w, w ? I32(w, 0x174) : -1, w ? I32(w, 0x178) : -1);
+    { char *rg = st ? P32(st, 0x10C) : NULL; char b[400]; int k = 0; b[0] = 0;
+      if (ok(rg, 0x40)) for (int i = 0; i < 0x40; i += 4) k += snprintf(b + k, sizeof b - k, " %08X", I32(rg, i));
+      logmsg("PROBE   st+10C %p vt %08lX vt8 %08lX:%s", rg, ok(rg, 4) ? *(DWORD *)rg : 0, ok(rg, 4) && ok(*(void **)rg, 12) ? (*(DWORD **)rg)[2] : 0, b); }
+    if (st) { char *arr = P32(st, 0x118 + 0x810); int n = I32(st, 0x118 + 0x814); char b[512]; int k = 0; b[0] = 0;
+        for (int i = 0; i < n && i < 16 && ok(arr + i * 0xA8, 0xA8); i++) k += snprintf(b + k, sizeof b - k, " [%d t%d id%d d%d]", i, I32(arr + i * 0xA8, 0), I32(arr + i * 0xA8, 0x9C), I32(arr + i * 0xA8, SLOT_AIDIFF));
+        logmsg("PROBE   slots(%d) arr %p:%s", n, arr, b); }
+    if (ok(p4, 0x820) && p4 != st + 0x118) { char *arr = P32(p4, 0x810); int n = I32(p4, 0x814); char b[512]; int k = 0; b[0] = 0;
+        for (int i = 0; i < n && i < 16 && ok(arr + i * 0xA8, 0xA8); i++) k += snprintf(b + k, sizeof b - k, " [%d t%d id%d]", i, I32(arr + i * 0xA8, 0), I32(arr + i * 0xA8, 0x9C));
+        logmsg("PROBE   +4 slots(%d) arr %p:%s", n, arr, b); }
+}
+static void probe_frame(char *gs) {
+    if (!g_probe) return;
+    char *st = settings(); char *w = world(); int stt = ok(gs, 0x40) ? I32(gs, 0x34) : -1, ty = st ? I32(st, 0x118) : -1, tk = w ? I32(w, 0x178) : -1;
+    if (gs != g_prGs || stt != g_prState || ty != g_prType || (tk >= 0 && tk / 300 != g_prTick / 300 && tk < 1500)) {
+        g_prGs = gs; g_prState = stt; g_prType = ty; g_prTick = tk; probe("frame");
+    }
+}
+
+
+// ---- v4: the squad tabs and control groups of the new local player ----
+// In a match the game's skirmish SCAR gives every squad of the LOCAL player a squad tab and the next free control group
+// (Skirmish_Start for the starting squads, heroes first; Skirmish_GE_SquadCreated -> Skirmish_SetupSquad for each new one:
+// UI_AddSquadTab + Misc_GetEmptyControlGroup / Misc_SetSquadControlGroup; Elite does the group in Elite.ui.on_squad_created).
+// A replay has no local player, so none of his squads got a tab or a number, and after "Continue as" only squads built later
+// got one (player noofancy, fb 1206: "no binds on the units that are yours"). The groups are UI state (the selection object,
+// *(*(0x01335720)+8)+0x20: +0x344 groups, +0x380 pending), not the simulation; the replay does not record them.
+// So right after the takeover the same SCAR function runs for each squad of the new local player that has no group yet:
+// heroes first, then the others, each in the order the game made them (squad id) - as at a match start.
+// Through the game's own SCAR state: World::GetSimManager -> SimManager::GetScar -> Scar::GetState (LuaConfig) ->
+// LuaConfig::GetState (lua_State), luaL_loadbuffer + lua_pcall; the simulation is idle here (between two ticks).
+typedef void *(__fastcall *This0_t)(void *o, void *edx);
+typedef int (__stdcall *LLoadBuf_t)(void *L, const char *b, size_t n, const char *name);
+typedef int (__stdcall *LPcall_t)(void *L, int nargs, int nres, int errf);
+typedef int (__stdcall *LGetTop_t)(void *L);
+typedef void (__stdcall *LSetTop_t)(void *L, int i);
+typedef const char *(__stdcall *LToStr_t)(void *L, int i, size_t *n);
+static This0_t g_getsm, g_getscar, g_scarstate, g_lcstate;
+static LLoadBuf_t g_lload; static LPcall_t g_lpcall; static LGetTop_t g_lgettop; static LSetTop_t g_lsettop; static LToStr_t g_ltostr;
+static const char SETUP_LUA[] =
+    "local ok, r = pcall(function()\n"
+    " if not (Game_HasLocalPlayer and Game_HasLocalPlayer()) then return 'no local player' end\n"
+    " local setup = Skirmish_SetupSquad\n"
+    " if setup == nil then return 'no Skirmish_SetupSquad' end\n"
+    " local heroes, others, k = {}, {}, 0\n"
+    " SGroup_ForEach(Player_GetSquads(Game_GetLocalPlayer()), function(g, i, s)\n"
+    "  if Misc_GetSquadControlGroup(s) < 0 then\n"
+    "   k = k + 1\n"
+    "   local e = {s = s, id = (Squad_GetGameID and Squad_GetGameID(s)) or k}\n"
+    "   if string.find(string.lower(Squad_GetBlueprintName(s)), '\\\\heroes\\\\', 1, true) then table.insert(heroes, e) else table.insert(others, e) end\n"
+    "  end\n"
+    "  return false\n"
+    " end)\n"
+    " local by = function(a, b) return a.id < b.id end\n"
+    " table.sort(heroes, by); table.sort(others, by)\n"
+    " local n = 0\n"
+    " for _, e in ipairs(heroes) do setup(e.s); n = n + 1 end\n"
+    " for _, e in ipairs(others) do setup(e.s); n = n + 1 end\n"
+    " return n .. ' squad(s) set up (' .. #heroes .. ' hero), next free group ' .. Misc_GetEmptyControlGroup()\n"
+    "end)\n"
+    "return tostring(ok), tostring(r)\n";
+static void setup_squads(void) {
+    char *w = world();
+    void *sm = w && g_getsm ? g_getsm(w, 0) : NULL, *sc = sm && g_getscar ? g_getscar(sm, 0) : NULL;
+    void *lc = sc && g_scarstate ? g_scarstate(sc, 0) : NULL, *L = lc && g_lcstate ? g_lcstate(lc, 0) : NULL;
+    if (!L || !g_lload || !g_lpcall || !g_lgettop || !g_lsettop || !g_ltostr) { logmsg("  squad tabs / control groups: no SCAR state (%p) - not set", L); return; }
+    int top = g_lgettop(L);
+    int r = g_lload(L, SETUP_LUA, sizeof SETUP_LUA - 1, "=ReplayTakeover");
+    if (!r) r = g_lpcall(L, 0, 2, 0);
+    const char *a = g_ltostr(L, r ? -1 : -2, NULL), *b = r ? NULL : g_ltostr(L, -1, NULL);
+    if (r) logmsg("  squad tabs / control groups: Lua error %d: %s", r, a ? a : "?");
+    else logmsg("  squad tabs / control groups: %s%s", a && !strcmp(a, "true") ? "" : "failed: ", b ? b : "?");
+    g_lsettop(L, top);
+}
+
+
+// ---- v4: what the takeover changes, put back when that game shuts down ----
+// Player noofancy (fb 1206): after "Continue as" in one replay, the NEXT replay of the same run went out of sync - from its
+// first tick the game rejected the recorded orders ("Rejecting a command because it is coming from a player that doesn't
+// own the squad", 390 times). GameObj::ShutdownGameObj (0x422104) ends a replay with a call of the recorded-game object
+// (settings+0x10C, vtable 0x0108BA30, slot 2 = 0x42BE27): it empties the queue of recorded orders read ahead of the
+// simulation (+4..+0x14) and zeroes its tick (+0x30) and flag (+0x2C) - but only when the game type (settings+0x118) is
+// still 0x800 there. A continued game had type 4, so the orders the replay had read ahead stayed in that queue, and the
+// next replay began by playing them: orders of the old match for squad ids that now belong to other players (stand 1,
+// 3v3 rt_test321 taken at tick 200, then the same replay again: 34 rejected orders in 20 s). Now, in the shutdown
+// of a continued game, at the call of "GAME -- Ending mission" (0x42224A -> 0x4202EC, before that type check), everything
+// the takeover changed goes back to the replay's values: the type, the GameInfo slots (type, AI difficulty), the
+// synchronization source of the SimulationController (the replay's PlaybackSynchronization back, our EchoSynchronization
+// deleted) and its mode, GameState+0x6C/+0x74 (the shutdown zeroes those itself). The world, its players and the HUD die
+// with the game anyway.
+#define AT_ENDMISSION 0x0042224A   // call 0x4202EC in GameObj::ShutdownGameObj's body (0x422104), the only call of it
+#define FN_ENDMISSION 0x004202EC
+typedef void (__fastcall *Del_t)(void *o, void *edx, int flags);
+static struct {
+    int active; void *go, *gs, *sc, *playback, *echo; int type, scMode, n; void *local; unsigned char local74;
+    int slotType[16], slotDiff[16];
+} g_snap;
+static int g_testNoRestore;                        // stands only (ReplayTakeover.ini TestNoRestore=1): the old behaviour
+static void snapshot(char *st, char *gs, char *sc) {
+    char *arr = P32(st, 0x118 + 0x810); int n = I32(st, 0x118 + 0x814); if (n > 16) n = 16;
+    memset(&g_snap, 0, sizeof g_snap);
+    g_snap.go = P32(st, 0x110); g_snap.gs = gs; g_snap.sc = sc; g_snap.playback = P32(sc, 4); g_snap.scMode = I32(sc, 0x74);
+    g_snap.type = I32(st, 0x118); g_snap.local = P32(gs, 0x6C); g_snap.local74 = U8(gs, 0x74); g_snap.n = n;
+    for (int i = 0; i < n; i++) { g_snap.slotType[i] = I32(arr + i * 0xA8, 0); g_snap.slotDiff[i] = I32(arr + i * 0xA8, SLOT_AIDIFF); }
+    g_snap.active = 1;
+}
+static void restore(const char *why) {
+    if (!g_snap.active) return;
+    g_snap.active = 0;
+    if (g_testNoRestore) { logmsg("restore (%s): TestNoRestore=1 - left as it is", why); return; }
+    char *st = settings(); int k = 0;
+    if (!st || P32(st, 0x110) != g_snap.go) { logmsg("restore (%s): not the continued game any more - nothing done", why); return; }
+    I32(st, 0x118) = g_snap.type;
+    char *arr = P32(st, 0x118 + 0x810); int n = I32(st, 0x118 + 0x814);
+    if (n == g_snap.n || (n > 16 && g_snap.n == 16))
+        for (int i = 0; i < g_snap.n; i++) if (ok(arr + i * 0xA8, 0xA8)) {
+            if (I32(arr + i * 0xA8, 0) != g_snap.slotType[i]) { I32(arr + i * 0xA8, 0) = g_snap.slotType[i]; k++; }
+            if (I32(arr + i * 0xA8, SLOT_AIDIFF) != g_snap.slotDiff[i]) { I32(arr + i * 0xA8, SLOT_AIDIFF) = g_snap.slotDiff[i]; k++; }
+        }
+    char *gs = g_snap.go && ok(g_snap.go, 8) ? P32(g_snap.go, 4) : NULL;
+    const char *src = "gone";
+    if (gs == g_snap.gs && ok(gs, 0x158) && P32(gs, 0x154) == g_snap.sc && ok(g_snap.sc, 0x78)) {
+        if (P32(g_snap.sc, 4) == g_snap.echo && g_snap.playback) {
+            P32(g_snap.sc, 4) = g_snap.playback; I32(g_snap.sc, 0x74) = g_snap.scMode; src = "playback back";
+            if (ok(g_snap.echo, 4) && *(DWORD *)g_snap.echo == VT_ECHO) ((Del_t)(*(void ***)g_snap.echo)[0])(g_snap.echo, 0, 1);
+        } else src = "not ours - left";
+        P32(gs, 0x6C) = g_snap.local; U8(gs, 0x74) = g_snap.local74;
+    }
+    logmsg("restore (%s): game type %X, %d slot field(s), sync source: %s", why, g_snap.type, k, src);
+}
+static void my_endmission(void) {                  // GameObj::ShutdownGameObj -> "GAME -- Ending mission"
+    if (g_probe) probe("shutdown");
+    restore("the continued game shuts down");
+    ((void (*)(void))FN_ENDMISSION)();
+}
+
 // ---- the takeover itself (main thread, between two ticks) ----
 static void hud_down(char *gs) { void *gu = P32(gs, 4); ((Fast1_t)(*(void ***)gu)[0x68 / 4])(gu); }
 static void hud_up(char *gs) { void *gu = P32(gs, 4); ((Fast1_t)(*(void ***)gu)[0x64 / 4])(gu); }
@@ -179,6 +332,7 @@ static void minimap_tick(void) {
     char *m = ok((void *)G_MINIMAP, 4) ? *(char **)G_MINIMAP : NULL;
     if (ok(m, 0xB10)) U8(m, 0xAEC) = g_mm_saved ? g_mm_saved : 1;
 }
+
 
 static volatile LONG g_pending;                    // player id to take, 0 = none
 static void *g_takenGame;                          // GameObj of the game we turned into a skirmish
@@ -205,6 +359,7 @@ static void take(DWORD id) {
         if (why) logmsg("  new AI %c asked, but %s - Elite's AI instead (difficulty %s)", 'A' + g_newai, why, diff < 0 ? "kept" : DIFF_NAME[diff]);
         else { diff = g_newai; logmsg("  new AI %c (EliteAI.dll): the computers play at %s", 'A' + g_newai, DIFF_NAME[diff]); }
     }
+    snapshot(st, gs, sc);
     I32(st, 0x118) = T_SKIRMISH;
     unsigned char wasAi[16] = {0};
     for (int i = 0; i < n; i++) {
@@ -229,12 +384,14 @@ static void take(DWORD id) {
     }
     P32(gs, 0x6C) = tp; U8(gs, 0x74) = 1;
     void *echo = ((New_t)FN_NEW)(0x34);
-    if (echo) { ((Ctor_t)FN_ECHO_CTOR)(echo); P32(sc, 4) = echo; I32(sc, 0x74) = 3; }   // the playback source stays alive, unused
+    if (echo) { ((Ctor_t)FN_ECHO_CTOR)(echo); P32(sc, 4) = echo; I32(sc, 0x74) = 3; g_snap.echo = echo; }   // the playback source: put back at shutdown
     I32(w, 0x174) = 0;
     hud_up(gs);
+    setup_squads();
     char *um = *(char **)G_UIMGR; void *o = ok(um, 0x38) ? P32(um, 0x34) : NULL; if (ok(o, 4)) ((V1_t)(*(void ***)o)[0x34 / 4])(o, 0, 1);
     minimap_kick(); g_takenGame = go;
     logmsg("done: a skirmish now, %s is yours", u8(player_name(tp)));
+    if (g_probe) probe("after take");
 }
 static void try_take(char *gs) {
     LONG id = g_pending; if (!id || sim_busy(gs)) return;
@@ -252,7 +409,9 @@ void simthr_stub(void);
 static int __stdcall my_frame(void *go, int a, int b, float dt) {
     minimap_tick();
     char *gs = ok(go, 8) ? P32(go, 4) : NULL;
+    probe_frame(gs);
     if (g_takenGame && (!ok(gs, 0x40) || I32(gs, 0x34) != 5 || is_replay())) g_takenGame = NULL;   // that game is over
+    if (g_snap.active && go != g_snap.go) { g_snap.active = 0; logmsg("a new game, and the continued one was not restored at its shutdown (it is gone now)"); }
     if (g_testAt >= 0 && !g_pending && is_replay() && ok(gs, 0x40) && I32(gs, 0x34) == 5) {   // stands only: take at that tick
         char *w = world(), *st = settings();
         if (w && st && I32(w, 0x178) >= g_testAt && g_testSlot >= 0 && g_testSlot < I32(st, 0x118 + 0x814)) {
@@ -347,6 +506,8 @@ BOOL WINAPI DllMain(HINSTANCE h, DWORD reason, LPVOID _) {
     g_newai = !_wcsicmp(v, L"newai_a") ? 0 : !_wcsicmp(v, L"newai_b") ? 1 : !_wcsicmp(v, L"newai_c") ? 2 : -1;   // elite / ai = Elite's
     GetPrivateProfileStringW(L"ReplayTakeover", L"Difficulty", L"expert", v, 32, ini);
     g_diff = !_wcsicmp(v, L"keep") ? -1 : !_wcsicmp(v, L"easy") ? 0 : !_wcsicmp(v, L"normal") ? 1 : !_wcsicmp(v, L"hard") ? 2 : 3;
+    g_probe = GetPrivateProfileIntW(L"ReplayTakeover", L"Probe", 0, ini);
+    g_testNoRestore = GetPrivateProfileIntW(L"ReplayTakeover", L"TestNoRestore", 0, ini);
     g_testAt = GetPrivateProfileIntW(L"ReplayTakeover", L"TestTakeAt", -1, ini); g_testSlot = GetPrivateProfileIntW(L"ReplayTakeover", L"TestSlot", -1, ini);
     GetPrivateProfileStringW(L"ReplayTakeover", L"Language", L"auto", v, 32, ini);
     g_ru = !_wcsicmp(v, L"ru") || (!_wcsicmp(v, L"auto") && PRIMARYLANGID(GetUserDefaultUILanguage()) == LANG_RUSSIAN);
@@ -357,6 +518,15 @@ BOOL WINAPI DllMain(HINSTANCE h, DWORD reason, LPVOID _) {
     g_isdone = xt ? (IsDone_t)GetProcAddress(xt, "?IsDone@Job@XThread@@QBE_NXZ") : NULL;
     g_cstr = lz ? (CStr_t)GetProcAddress(lz, "?c_str@LocString@@QBEPB_WXZ") : NULL;
     g_dealloc = sp ? (Dealloc_t)GetProcAddress(sp, "?deallocate@__new_alloc@_STL@@SGXPAXI@Z") : NULL;
+
+    if (se) { g_getsm = (This0_t)GetProcAddress(se, "?GetSimManager@World@@QAEPAVSimManager@@XZ");
+              g_getscar = (This0_t)GetProcAddress(se, "?GetScar@SimManager@@QAEPAVScar@@XZ");
+              g_scarstate = (This0_t)GetProcAddress(se, "?GetState@Scar@@QAEPAVLuaConfig@@XZ"); }
+    HMODULE lcm = GetModuleHandleA("LuaConfig.dll");
+    if (lcm) { g_lcstate = (This0_t)GetProcAddress(lcm, "?GetState@LuaConfig@@QAEPAUlua_State@@XZ");
+               g_lload = (LLoadBuf_t)GetProcAddress(lcm, "_luaL_loadbuffer@16"); g_lpcall = (LPcall_t)GetProcAddress(lcm, "_lua_pcall@16");
+               g_lgettop = (LGetTop_t)GetProcAddress(lcm, "_lua_gettop@4"); g_lsettop = (LSetTop_t)GetProcAddress(lcm, "_lua_settop@8");
+               g_ltostr = (LToStr_t)GetProcAddress(lcm, "_lua_tolstring@12"); }
     // all or nothing: DOW2.exe 3.19 bytes where we patch, and what we call
     unsigned char *f = (unsigned char *)AT_FRAME, *s = (unsigned char *)AT_SIMTHR, *c = (unsigned char *)AT_CC_CLICK;
     DWORD *vt = (DWORD *)VT_CONCEDE;
@@ -364,7 +534,11 @@ BOOL WINAPI DllMain(HINSTANCE h, DWORD reason, LPVOID _) {
         && !IsBadReadPtr(c, 5) && c[0] == 0xB9 && *(DWORD *)(c + 1) == FN_CC_CLICK && !IsBadReadPtr(vt, 0x1C)
         && vt[3] == FN_CC_ACTIVE && vt[6] == FN_NOP4 && *(DWORD *)VT_PLAYBACK == 0x0066AD20;
     if (!good) { logmsg("ReplayTakeover " VERSION ": not DOW2.exe 3.19 (or a module missing) - nothing changed"); return TRUE; }
-    int r = patch_call(AT_FRAME, FN_FRAME, (void *)my_frame) & patch_call(AT_SIMTHR, FN_SIMTHR, (void *)simthr_stub);
+    unsigned char *em = (unsigned char *)AT_ENDMISSION;
+    if (IsBadReadPtr(em, 5) || em[0] != 0xE8 || (DWORD)(em + 5) + *(int *)(em + 1) != FN_ENDMISSION) {
+        logmsg("ReplayTakeover " VERSION ": the game's shutdown call differs - nothing changed"); return TRUE; }
+    int r = patch_call(AT_FRAME, FN_FRAME, (void *)my_frame) & patch_call(AT_SIMTHR, FN_SIMTHR, (void *)simthr_stub)
+          & patch_call(AT_ENDMISSION, FN_ENDMISSION, (void *)my_endmission);
     if (!r) { logmsg("ReplayTakeover " VERSION ": the frame calls are taken by something else - nothing changed"); return TRUE; }
     gfx_patch_slot((DWORD)&vt[3], FN_CC_ACTIVE, (void *)my_cc_active);
     gfx_patch_slot((DWORD)&vt[6], FN_NOP4, (void *)my_cc_update);

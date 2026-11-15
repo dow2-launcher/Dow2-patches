@@ -573,7 +573,7 @@
     "order": 30
   },
   "replaytakeover": {
-    "version": "3",
+    "version": "4",
     "dll": "ReplayTakeover.dll",
     "default": false,
     "name": {

@@ -4,6 +4,34 @@ Every version gets an entry here before it reaches `main`. CI then tags `vX.Y.Z`
 version (`X.Y.0`) it also publishes a GitHub Release with the DLLs and the entries since the previous `X.Y.0`.
 The version of the set lives only in `VERSION`; each DLL still writes its own version to its log.
 
+## 0.2.90 — 2026-11-15
+Replay takeover 4 (store replaytakeover-4, still experiment, off by default) - two bugs of "Continue as" from player noofancy
+(fb 1206, logs 20261115-161650-d9ac4b; he had reported both before: "the squad panel is missing" and "the second replay desyncs").
+- No squad tabs / number keys after the takeover. A replay has no local player, so the skirmish SCAR never gave the player's
+  squads a tab and a control group (Skirmish_Start for the starting squads, Skirmish_GE_SquadCreated -> Skirmish_SetupSquad for
+  new ones: UI_AddSquadTab + Misc_GetEmptyControlGroup / Misc_SetSquadControlGroup; Elite assigns the group in
+  Elite.ui.on_squad_created). Ctrl+N by hand did work. Now right after the takeover the game's own Skirmish_SetupSquad runs
+  for each squad of the new local player without a group - heroes first, then the rest by squad id, as at a match start -
+  through the game's SCAR state (World::GetSimManager -> SimManager::GetScar -> Scar::GetState -> LuaConfig::GetState,
+  luaL_loadbuffer + lua_pcall, between two ticks). Groups are UI state, not the simulation; the replay does not record them,
+  so the player's original numbers cannot be restored - he gets the match-start order.
+- The next replay of the same run out of sync. GameObj::ShutdownGameObj (0x422104) ends a replay with the recorded-game
+  object's slot 2 (settings+0x10C, vtable 0x0108BA30 -> 0x42BE27: empties the queue of recorded orders read ahead, zeroes its
+  tick) only while the game type is 0x800; a continued game had type 4, so the leftover orders of the old replay were played
+  at the start of the next one ("Rejecting a command because it is coming from a player that doesn't own the squad", 390 in the
+  player's log). Now the shutdown of a continued game (hook on the call 0x42224A -> 0x4202EC, "GAME -- Ending mission", before
+  that check) puts back what the takeover changed: game type, GameInfo slot type + AI difficulty, the SimulationController's
+  PlaybackSynchronization and mode (our EchoSynchronization deleted), GameState+0x6C/+0x74. The continued game now ends like
+  a replay: the results screen leads back to Game History.
+- Stand-only keys: TestNoRestore=1 (old behaviour), Probe=1 (state dump at game changes and the shutdown).
+- Stand 1 (Elite 3.2.1, through the menus, stand restored, md5 equal):
+  - 1v1 rt_h2h321, slot 4 at tick 120 and slot 0 at tick 150: tabs "1" hero / "2" squad, keys 1 and 2 select them;
+  - 3v3 rt_test321 slot 4 at tick 200, 5 computers, 60 s, exit, the same replay again: old behaviour 34 rejected orders in
+    the first 20 s; with v4 none until 9:00 of the match - exactly where the same replay, fresh game without any takeover,
+    starts rejecting too (this replay itself does not play clean on the stand after ~9:00: same first order, same tick);
+  - takeover in rt_h2h321 -> rt_test321 (same as the fresh baseline) -> rt_h2h321 to "Playback over": no rejected order,
+    no syncerror file. Vanilla not run (same game code paths, vanilla skirmish.scar has Skirmish_SetupSquad).
+
 ## 0.2.89 — 2026-11-15
 Match marks 2 (store marks-2, experiment, order 1100, off by default, games elite + vanilla + igrework) - the camera point of a
 mark, and the new AI's lines around a mark reach the developers. Was PR #112 (0.2.81 on top of 0.2.80, closed): marks/ did not change on

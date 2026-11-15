@@ -1,0 +1,1 @@
+- Replay takeover 4: after "Continue as ..." your squads now get their squad tabs and number keys (1, 2, 3 ...) as at the start of a match. The next replay watched in the same game session no longer goes out of sync after a takeover.
