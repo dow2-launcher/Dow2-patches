@@ -4,6 +4,18 @@ Every version gets an entry here before it reaches `main`. CI then tags `vX.Y.Z`
 version (`X.Y.0`) it also publishes a GitHub Release with the DLLs and the entries since the previous `X.Y.0`.
 The version of the set lives only in `VERSION`; each DLL still writes its own version to its log.
 
+## 0.2.96 — 2026-11-16
+Parallel Draw unticked for everyone (store id paralleldraw -> paralleldraw_r2, version 3 and ParallelDraw.dll unchanged, default
+false): a player's crash on 16.11 01:33 MSK (Ligt, log package 20261115-233434-92fbdb; 3v3 6p_hades_wastes_redux, two matches
+before it clean). ParallelDraw.log: three EXCEPTION C0000005 on the worker threads at DOW2.exe+275BD7 / +275BDC / +275E19 while
+"building model ...", then WER c0000005 at 0x275bd7 and a 4.2 s STALL of the game thread. Parallel Pose 3 was clean and stays.
+Owner's rule: a crash at players -> off first, the analysis after (ParallelDraw 4 separately).
+- The rename as for PerfLog 0.2.93 (docs/ADDON_RULES.md "Turning an add-on off for everyone"): no launcher has a tick for
+  paralleldraw_r2, so it is off for everyone; the card stays in Experiment and anyone can tick it again. docs/store-texts.json key
+  -> paralleldraw_r2; addons.json key stays `paralleldraw`. Description: "May crash the game - if it does, untick it."
+- Release (rts, as eliterel): rename the id in the live store3/launcher.json under /run/elite-store.lock, sign, verify, then
+  `dow2-patches-deploy`, the s1114c stage script, `elite-release apply paralleldraw_r2`.
+
 ## 0.2.95 — 2026-11-15
 ReplayOpen 3 (store replayopen-3), noofancy fb 1247: "a replay from the launcher, Menu -> Exit Game: the game crashes" (twice; logs
 20261115-213616-ec4779; his add-ons: LobbyStats, Reverse, ReplayOpen 2 - ReplayTakeover / LiveReplay / ReplaySpeed were not loaded).

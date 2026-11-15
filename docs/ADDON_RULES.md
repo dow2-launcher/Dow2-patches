@@ -65,7 +65,8 @@ store **id** (settings.json), so:
   Elite_DLLs, dow2-patches and every launch config. Anyone can tick it again. The key here and in docs/store-texts.json is the
   base id; the deploy finds `<id>_r3` / `<id>_r2` in the store by itself, but the rename itself is done once by hand in the
   live store (launcher.json `id`, sign) before the deploy - see CHANGELOG 0.2.93 for the commands.
-- Done this way: 30.10.2026 (every add-on -> `_r2`, lobbystats / loadingratings -> `_r3`), 15.11.2026 perflog -> perflog_r2.
+- Done this way: 30.10.2026 (every add-on -> `_r2`, lobbystats / loadingratings -> `_r3`), 15.11.2026 perflog -> perflog_r2,
+  16.11.2026 paralleldraw -> paralleldraw_r2 (a crash at a player).
 
 ## What happened (history)
 
