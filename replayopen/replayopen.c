@@ -31,6 +31,11 @@
 // DLL_PROCESS_DETACH, the code places checked for 3.19 (else: logged, nothing hooked), the hooks under the shared patch lock
 // (Local\dow2patch_iat_<pid>, MMFind / LobbyStats / RoomJoin / LiveReplay), every step in ReplayOpen.log.
 // ReplayOpen.ini [ReplayOpen] Enabled=0: off; ConnectingBox=0: no box; Mismatch=play|refuse.
+//
+// ReplayOpen 2 (15.11.2026, siritos fb 1223: "no Connecting box when I loaded a replay - just the menu until the replay started"):
+// ReplayOpen 1 closed the box right before the replay's start, and the game then kept its main menu up for 10-25 s while it read
+// the replay and built the world (stand 15.11: start 16:02:01.5 -> plays 16:02:15.2). The box now stays up from the request to the
+// loading screen (the world's start or its /mp_mc movie), and closes on a failure / cancel; never longer than 60 s after the start.
 #ifndef _WIN32_WINNT
 #define _WIN32_WINNT 0x0600                 // CancelIoEx (Vista+) with older mingw headers
 #endif
@@ -43,7 +48,7 @@
 #include <stdarg.h>
 #include <wchar.h>
 
-#define RO_VERSION "1"
+#define RO_VERSION "2"
 #define G_SETTINGS     0x01335A78         // +0x118 game type (0x800 playback)
 #define G_GAMEOBJ_PTR  0x01335A74         // what the replay start takes in EDX
 #define FN_START_PB    0x0040F526         // the replay of a file (ECX "playback:<name>.rec", EDX 0x01335A74) -> AL
@@ -96,7 +101,7 @@ static CRITICAL_SECTION g_qlk;
 static volatile int g_state, g_inWorld, g_loading;
 static char g_fileU8[400], g_reason[40];
 static wchar_t g_src[MAX_PATH], g_dst[MAX_PATH], g_pbDir[MAX_PATH];
-static DWORD g_reqAt, g_boxAt, g_firstFrame; static int g_boxCfg = 1, g_mismatchRefuse, g_ours;
+static DWORD g_reqAt, g_boxAt, g_firstFrame, g_startAt; static int g_boxCfg = 1, g_mismatchRefuse, g_ours;
 
 #define MAXC 4
 static HANDLE g_outEv; static char *g_oq[32]; static int g_oqH, g_oqN;
@@ -254,13 +259,15 @@ static void game_step(DWORD now) {
         if (connbox_is_open() && now - g_boxAt < 700) return;          // the player sees the box before the screen changes
         unsigned mine = ((unsigned (__cdecl *)(void))FN_DATACRC)();
         if (!copy_rec(mine)) return;
-        connbox_close("the replay loads");
+        // ReplayOpen 2: the box stays up while the game reads the replay with its menu still shown - it goes with the loading screen
         char pb[] = "playback:launcher_replay.rec";
         g_ours = 1;
         char r = ((StartPb_t)FN_START_PB)(pb, (void *)G_GAMEOBJ_PTR);
-        logmsg("replay start: %s", r ? "ok - the game loads it" : "REFUSED by the game");
+        logmsg("replay start: %s", r ? "ok - the game loads it (the Connecting box stays until the loading screen)" : "REFUSED by the game");
         if (!r) { g_ours = 0; ro_fail("start", "the game refused the replay"); return; }
-        set_state(ST_LOAD); ev("loading");
+        g_startAt = now ? now : 1; set_state(ST_LOAD); ev("loading");
+    } else if (g_state == ST_LOAD && connbox_is_open() && !g_inWorld && !g_loading && now - g_startAt > 60000) {
+        connbox_close("no loading screen 60 s after the replay's start");
     } else if (g_state == ST_LOAD && g_inWorld) {
         char *st = ok((void *)G_SETTINGS, 4) ? *(char **)G_SETTINGS : NULL;
         if (st && ok(st, 0x120) && (*(int *)(st + 0x118) & T_PLAYBACK)) { set_state(ST_PLAY); ev("playing"); logmsg("the replay plays"); }

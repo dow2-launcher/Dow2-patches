@@ -38,6 +38,11 @@
 // (0x492EF1, the item of the seat menu) - no click on the lobby screen - made while the Connecting box is still up: the box goes
 // only once the player sits on an observer seat, so he never sees himself on a player's seat. "seat":"direct" in in_lobby; when the
 // call does not take (3 tries, 6 s) the click way of RoomJoin 14 ("seat":"click"). [RoomJoin] DirectSeat=0: the click way only.
+// RoomJoin 16 (15.11.2026, siritos fb 1223): as an observer, the lobby screen's "Select Hero" panel (it comes up over the lobby of
+// every joiner) is confirmed by its own Ready (hero_selection_mc.OnClickAccept) while the Connecting box is still up - an observer's
+// hero does not matter, the player goes from Connecting straight into the lobby on his observer seat. The whole connect is at most
+// 30 s: from the Connecting box (the join started from the main menu) to in_lobby - the room's answer, the lobby screen, the
+// observer seat and the hero included; "timeout" then (a player's seat taken meanwhile is left with Back, as no_obs_slot does).
 // RoomJoin 12 (05.11.2026, owner): NO cover by default - what follows about the cover is only with RoomJoin.ini Cover=1; the join
 // itself is the same, the player sees the game's own menu, its "Connecting" and the lobby screen, the launcher tells the rest.
 // In the game, once it is in its main menu: a cover ("Joining the Game", the room's name, Cancel; the menu under it hidden, so
@@ -71,7 +76,7 @@
 #include <wchar.h>
 #include <wctype.h>
 
-#define RJ_VERSION  "15"
+#define RJ_VERSION  "16"
 #define HOOK_ADDR   0x0045DB6C                    // Invoke (engine -> Flash), this = SFMovie: +4 the movie, +0x18 its fscommand handler
 #define HOOK_RESUME 0x0045DB71
 static const unsigned char INV_PRO[5] = {0xB8, 0x59, 0x70, 0xEF, 0x00};
@@ -115,6 +120,8 @@ static const char *SC_NAME[] = {"unknown", "other", "main", "find_game", "games_
 static volatile int g_screen, g_loading, g_inWorld;
 static volatile int g_maxPlayers, g_myPos = -1; static volatile DWORD g_plAt;   // the lobby screen: max players, my position, its last list
 static char g_panel[160];
+static volatile DWORD g_scrAt;                                    // RoomJoin 16: when the screen came (the lobby screen's hero panel)
+static volatile int g_heroUp; static volatile DWORD g_heroAt;     // RoomJoin 16: the lobby screen's Select Hero panel is up (engine's Show/HideHeroSelect)
 static void *g_fsSelf, *g_fsMovie; static int g_sending;
 static void *g_triedFs[16], *g_triedInv[16]; static int g_ntFs, g_ntInv;     // movies already asked "are you the menu?"
 // the automatch (MMFind / the game's own search) on Find a Game: the engine's search animation as it is sent (-1 not seen),
@@ -127,7 +134,7 @@ static int g_coverWant, g_coverOn, g_uiHidden;
 static int g_coverCfg;
 static void screen_reset(const char *why) {
     if (g_screen != SC_UNKNOWN || g_panel[0]) logmsg("screen forgotten (%s)", why);
-    g_screen = SC_UNKNOWN; g_panel[0] = 0; g_engSearch = -1; g_mmClicked = 0;
+    g_screen = SC_UNKNOWN; g_panel[0] = 0; g_engSearch = -1; g_mmClicked = 0; g_heroUp = 0;
 }
 // a world starts (a match or a replay loads): the menu movie goes with it - never used again (review 04.11 p.5)
 static void box_close(const char *why);               // RoomJoin 13: the game's Connecting box (below)
@@ -224,6 +231,7 @@ static int probe_screen(void) {
     }
     if (found == SC_UNKNOWN) return SC_UNKNOWN;
     if (found != g_screen || strcmp(pth, g_panel)) logmsg("screen asked: %s = %s (%s)", pth, fu, SC_NAME[found]);
+    if (found != g_screen) { g_scrAt = GetTickCount(); g_heroUp = 0; }
     strcpy(g_panel, pth); g_screen = found;
     if (found == SC_MM) g_mmClicked = 1;                              // Find a Game since before we knew: a search may be on - taken as on
     return found;
@@ -718,7 +726,7 @@ static void cover_update(void) {
 }
 
 // ---------------- the join ----------------
-enum { RJ_NONE, RJ_MENU, RJ_JOIN, RJ_LOBBY, RJ_SEAT, RJ_OBSD };
+enum { RJ_NONE, RJ_MENU, RJ_JOIN, RJ_LOBBY, RJ_SEAT, RJ_OBSD, RJ_HERO };
 static int g_rj; static unsigned long long g_rjRoom; static wchar_t g_rjName[64];
 static int g_rjObs, g_seatTries[8], g_seatMoves; static DWORD g_seatAt, g_seatMoveAt;   // RoomJoin 14: as an observer
 // the game's own message boxes while we join (Receive_CreateMessageBox): the text of the latest one, and how many came.
@@ -748,9 +756,20 @@ static void rj_in_lobby(int late) {
     g_okRoom = g_rjRoom; g_okAt = GetTickCount(); g_rj = RJ_NONE; g_coverWant = 0; g_noticeUntil = 0; g_watchRoom = 0;
 }
 static int g_seatLate;
+// RoomJoin 16: the connect's start (the Connecting box: the join from the main menu, or an observer's seat in a room we are in
+// already) - everything up to in_lobby within RJ_LIMIT_MS of it
+#define RJ_LIMIT_MS 30000
+static DWORD g_rjConnAt;
+// RoomJoin 16: an observer sits on his seat - the lobby screen's Select Hero panel next (its Ready under the box), then in_lobby
+static int g_heroTries; static DWORD g_heroSent, g_heroFrom;
+static void obs_seated(DWORD now) {
+    g_rj = RJ_HERO; g_heroTries = 0; g_heroSent = 0; g_heroFrom = now;
+}
 static void rj_ok(int late) {                       // in the room, its lobby screen up: done - or, as an observer, the seat first
+    if (g_rj == RJ_HERO) { rj_in_lobby(g_seatLate); return; }          // RoomJoin 16: seated already, only the hero panel was left
+    if (late) g_rjConnAt = GetTickCount();                             // RoomJoin 16: a late answer - the seat gets its own 30 s
     if (g_rjObs && g_rj != RJ_SEAT && g_rj != RJ_OBSD && g_directCfg && g_directOk) {   // RoomJoin 15: the seat by the straight call, the box up meanwhile
-        box_open();
+        box_open(); if (!g_rjConnAt) g_rjConnAt = GetTickCount();
         logmsg("in the lobby of room %llu%s - now to an observer seat (the straight call, the Connecting box up)", g_rjRoom, late ? " (a late answer)" : "");
         g_rj = RJ_OBSD; g_seatAt = GetTickCount(); g_seatLate = late; g_dTries = 0; g_dCallAt = 0; return;
     }
@@ -818,7 +837,7 @@ static void rj_start(unsigned long long room, const wchar_t *name, int leave, in
             emitf("{\"ev\":\"accepted\",\"room\":%llu}", room); emitf("{\"ev\":\"joining\",\"room\":%llu}", room); return; }
         emitf("{\"ev\":\"failed\",\"room\":%llu,\"reason\":\"busy_join\",\"text\":\"waiting for the previous room's answer\"}", room); return; }
     g_watchRoom = 0;
-    g_rjRoom = room; wcsncpy(g_rjName, name, 63); g_rjName[63] = 0;
+    g_rjRoom = room; wcsncpy(g_rjName, name, 63); g_rjName[63] = 0; g_rjConnAt = 0;
     g_rjObs = obs && (g_slotHooked || (g_directCfg && g_directOk)); memset(g_seatTries, 0, sizeof g_seatTries); g_seatMoves = 0; g_seatMoveAt = 0; g_seatVia = 0;
     if (obs) { g_myPos = -1; g_plAt = 0; if (dj_room() != room) g_maxPlayers = 0; }   // RoomJoin 15: another lobby's max players never taken for this one's
     if (obs && !g_rjObs) { emitf("{\"ev\":\"failed\",\"room\":%llu,\"reason\":\"error\",\"text\":\"no observer seat change in this game (see RoomJoin.log)\"}", room); return; }
@@ -852,6 +871,17 @@ static void rj_step(DWORD now) {
     }
     if (g_rj == RJ_NONE) return;
     if (g_inWorld || g_loading) { rj_fail("busy_match", NULL, 0); return; }
+    // RoomJoin 16 (siritos fb 1223: "a connect takes 15-30 s, let that be the limit"): from the Connecting box to in_lobby at most
+    // 30 s - the Relic sign-in, the room's answer, the lobby screen, an observer's seat and hero; a player's seat in that room is
+    // left with Back (as no_obs_slot), a join still under way in the engine is watched 15 s for a late answer (rj_fail)
+    if (g_rjConnAt && g_rj != RJ_MENU && now - g_rjConnAt > RJ_LIMIT_MS) {
+        int inRoom = g_rj != RJ_JOIN && dj_room() == g_rjRoom;
+        logmsg("not in the lobby %d s after the connect started (%s)", RJ_LIMIT_MS / 1000,
+               g_rj == RJ_JOIN ? (g_rjCalled ? "no answer from the room" : "the join call never made") : g_rj == RJ_LOBBY ? "no lobby screen" : "no observer seat");
+        if (g_rj == RJ_HERO) { rj_in_lobby(g_seatLate); return; }      // on the observer seat already: the hero panel is the player's
+        if (inRoom && g_rjObs) { rj_fail("timeout", NULL, 0); g_dBackAt = now + 400; return; }
+        rj_fail("timeout", g_rj == RJ_JOIN ? L"The room did not answer" : NULL, 0); return;
+    }
     switch (g_rj) {
     case RJ_MENU: {                                                   // the game may still be starting: up to 90 s
         if (!g_rjWalk) { g_rjWalk = 1; emitf("{\"ev\":\"walking\",\"room\":%llu}", g_rjRoom); }
@@ -914,7 +944,7 @@ static void rj_step(DWORD now) {
             if (in) { rj_fail("busy_search", L"The game is in a room of the automatch. Wait, then press Join again", 0); break; }
             stage(L"Joining the Game", L"Opening the lobby: %ls");
             g_mbText[0] = 0; g_mbCount = 0;
-            g_coverWant = 1; g_rj = RJ_JOIN; g_rjAt = now; g_rjCalled = 0;
+            g_coverWant = 1; g_rj = RJ_JOIN; g_rjAt = now; g_rjCalled = 0; g_rjConnAt = now;
             box_open();                                       // RoomJoin 13: where the cover came - the game's own Connecting box
             break;
         }
@@ -967,9 +997,9 @@ static void rj_step(DWORD now) {
             break; }
         if (is_obs_pos(me)) {
             g_seatVia = g_dTries ? 1 : 0;
-            logmsg("observer seat %d (max players %d, %d straight call%s, %lu ms in the room) - the box goes", me, g_maxPlayers, g_dTries, g_dTries == 1 ? "" : "s", now - g_seatAt);
+            logmsg("observer seat %d (max players %d, %d straight call%s, %lu ms in the room) - the hero panel next, then the box goes", me, g_maxPlayers, g_dTries, g_dTries == 1 ? "" : "s", now - g_seatAt);
             if (!g_dTries) g_seatVia = 1;                               // sat there already: nothing to change
-            rj_in_lobby(g_seatLate); break; }
+            obs_seated(now); break; }
         if (g_dCallAt && now - g_dCallAt < 1200) break;                 // the last call: its answer first
         { char b[200]; int n = 0;
           for (int p = 0; p < 8; p++) n += snprintf(b + n, sizeof b - n, " %d:%s%d%s", p, is_obs_pos(p) ? "o" : "p", type[p], ids[p] && ids[p] != ~0ULL ? "*" : "");
@@ -999,7 +1029,7 @@ static void rj_step(DWORD now) {
         if (me < 0) { unsigned long long pid = my_pid(); for (int p = 0; p < 8; p++) if (pid && ids[p] == pid) me = p; }
         if (is_obs_pos(me)) {
             logmsg("observer seat %d (max players %d, %d seat change%s)", me, g_maxPlayers, g_seatMoves, g_seatMoves == 1 ? "" : "s");
-            rj_in_lobby(g_seatLate); break; }
+            obs_seated(now); break; }
         if (g_seatMoveAt && now - g_seatMoveAt < 2500) break;          // the last change: its answer first
         { static DWORD lastLog; if (now - lastLog > 2000) { lastLog = now; char b[200]; int n = 0;
             for (int p = 0; p < 8; p++) n += snprintf(b + n, sizeof b - n, " %d:%s%d%s", p, is_obs_pos(p) ? "o" : "p", type[p], ids[p] && ids[p] != ~0ULL ? "*" : "");
@@ -1012,6 +1042,26 @@ static void rj_step(DWORD now) {
         g_seatTries[target]++; g_seatMoves++; g_seatMoveAt = now;
         logmsg("seat %d -> observer seat %d", me, target);
         seat_move(target);
+        break; }
+    case RJ_HERO: {                                                   // RoomJoin 16: the observer's Select Hero panel, its Ready under the box
+        static DWORD lastH; if (now - lastH < 100) break; lastH = now;
+        if (g_screen != SC_SETUP || dj_room() != g_rjRoom) { logmsg("the lobby went while its hero panel was confirmed"); rj_in_lobby(g_seatLate); break; }
+        if (g_heroUp) {
+            if (g_heroSent && now - g_heroSent < 700) break;              // the last Ready: its answer first
+            if (g_heroTries >= 3) { logmsg("the Select Hero panel stays up after %d Ready - left to the player", g_heroTries); rj_in_lobby(g_seatLate); break; }
+            if (g_heroTries == 1 && connbox_is_open()) box_close("the hero panel's Ready again without the box");   // in case the box holds the panel's commands
+            g_heroTries++; g_heroSent = now;
+            logmsg("the Select Hero panel is up: its Ready for the observer (try %d) - his hero does not matter", g_heroTries);
+            fs(".hero_selection_mc.OnClickAccept", "");
+            break;
+        }
+        if (g_heroSent) {                                             // Ready sent and the panel went
+            logmsg("the Select Hero panel confirmed (%d Ready, %lu ms) - the box goes", g_heroTries, now - g_heroFrom);
+            rj_in_lobby(g_seatLate); break; }
+        // no panel seen yet: it comes with the lobby screen - up to 2.5 s after that screen (and 0.4 s after the seat), else none
+        if ((int)(now - g_scrAt) < 2500 || now - g_heroFrom < 400) break;
+        logmsg("no Select Hero panel on the lobby screen - in the lobby");
+        rj_in_lobby(g_seatLate);
         break; }
     }
 }
@@ -1194,6 +1244,7 @@ static void __fastcall fs_hook(void *self, void *edx, void *movie, const char *c
         if (!strcmp(cmd, "OnLoadMovieComplete") && args && !IsBadReadPtr(args, 6) && !strncmp(args, "/mp_mc", 6) && !g_loading) {
             g_loading = 1; g_coverWant = 0; menu_forget("a match is loading"); }   // 03.11 review: the lobby screen stayed known after the match
         if (!g_sending && g_screen == SC_SETUP && strstr(cmd, ".OnClick")) logmsg("lobby screen: %s", cmd);   // RoomJoin 11: its leave command, for the switch
+        if (g_screen == SC_SETUP && strstr(cmd, "hero_selection_mc.OnClickAccept")) g_heroUp = 0;            // RoomJoin 16: the hero panel's Ready
         if (!g_sending && g_screen == SC_MM && strlen(cmd) > 13 && !strcmp(cmd + strlen(cmd) - 13, ".OnClickStart")) {
             g_mmClicked = 1; logmsg("Start / Cancel Searching pressed on Find a Game"); }
         if (!strcmp(cmd, "OnLoadComplete") && args && !IsBadReadPtr(args, 1) && (movie == g_fsMovie || !g_fsMovie)) {     // which full-screen panel is up
@@ -1207,6 +1258,7 @@ static void __fastcall fs_hook(void *self, void *edx, void *movie, const char *c
                         g_inWorld = 0; g_loading = 0; logmsg("back in the menu (%s)", SC_NAME[sc]);
                         if (!g_fsMovie) menu_seen(movie, self, "a menu panel"); }                          // an unknown panel = SC_OTHER, not the last one (review p.1)
                     if (sc != g_screen) { g_engSearch = -1; g_mmClicked = 0; }     // a new panel: the search state of the old one goes
+                    if (sc != g_screen) { g_scrAt = GetTickCount(); g_heroUp = 0; }
                     strcpy(g_panel, path); g_screen = sc; if (g_rj) logmsg("screen %s", SC_NAME[sc]); }
             }
         }
@@ -1236,6 +1288,11 @@ static char __fastcall inv_hook(void *self, void *edx, const char *method, int f
         g_mbCount++; g_mbAt = GetTickCount();
     }
     // RoomJoin 14: the lobby screen's max players and my row (for the observer seat)
+    // RoomJoin 16: the lobby screen's Select Hero panel (the engine shows / hides it; its calls may come without arguments)
+    if (method && !IsBadReadPtr(method, 23) && !strncmp(method, "Receive_", 8) && strstr(method, "HeroSelect")) {
+        if (!strcmp(method, "Receive_ShowHeroSelect")) { if (!g_heroUp && g_rj) logmsg("the lobby screen's Select Hero panel is up"); g_heroUp = 1; g_heroAt = GetTickCount(); }
+        else if (!strcmp(method, "Receive_HideHeroSelect")) { if (g_heroUp && g_rj) logmsg("the Select Hero panel went"); g_heroUp = 0; }
+    }
     if (method && !IsBadReadPtr(method, 27) && args && count && count < 4096 && !IsBadReadPtr(args, count * sizeof(GFxValue))) {
         if (!strcmp(method, "Receive_SetMaxPlayers") && args[0].type == GFX_NUMBER) {
             int m = (int)args[0].v.num; if (m != g_maxPlayers && g_rjObs) logmsg("the lobby: max players %d", m); g_maxPlayers = m; }

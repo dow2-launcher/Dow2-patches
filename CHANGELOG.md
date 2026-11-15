@@ -4,6 +4,26 @@ Every version gets an entry here before it reaches `main`. CI then tags `vX.Y.Z`
 version (`X.Y.0`) it also publishes a GitHub Release with the DLLs and the entries since the previous `X.Y.0`.
 The version of the set lives only in `VERSION`; each DLL still writes its own version to its log.
 
+## 0.2.91 — 2026-11-15
+RoomJoin 16 (store roomjoin-10) and ReplayOpen 2 (store replayopen-2), siritos fb 1223.
+- RoomJoin 16, "as":"obs": the lobby screen's Select Hero panel (it comes up over the lobby of every joiner; the engine's
+  Receive_ShowHeroSelect / Receive_HideHeroSelect) is confirmed by its own Ready - the fscommand hero_selection_mc.OnClickAccept on the
+  lobby panel - once the player sits on his observer seat, while the Connecting box is still up; the box goes when the panel is gone
+  (no panel 2.5 s after the lobby screen: none; still up after 3 Ready: left to the player). Stands 1 + 2, 15.11 (two Steam accounts,
+  B's custom lobby with observer seats opened): connect 2.2 s, observer seat by one straight call, the hero panel's Ready 60 ms later,
+  the panel gone in 14 ms, in_lobby 3.4 s after the join; the player saw only Connecting, then the lobby on an observer seat. A
+  player's join (no "as") still shows Select Hero (unchanged).
+- RoomJoin 16: the whole connect at most 30 s (RJ_LIMIT_MS) - from the Connecting box (the join from the main menu; an observer's
+  seat in a room the game is in already) to in_lobby: the Relic sign-in, the room's answer (still 25 s by itself, then watched 15 s
+  for a late answer), the lobby screen, the observer seat and the hero; an observer's player seat taken meanwhile is left with Back
+  (as no_obs_slot); a late answer gets its own 30 s. Before: 60-65 s for the sign-in / the call with the box up, and after the room's
+  answer up to 6 + 10 s more for an observer's seat. Stand: B's game frozen (SIGSTOP) - A's join failed "timeout" 25.0 s after the
+  call, the box closed, no late answer, A in the main menu.
+- ReplayOpen 2: the Connecting box stays up from the request to the loading screen (ReplayOpen 1 closed it right before the replay's
+  start, and the game kept its main menu up for the 3+ s it reads the replay - "no Connecting, just the menu until the replay
+  started"); closed on a failure, by the world's start / the /mp_mc movie, at most 60 s after the start. Stand 1, 15.11: the box
+  18:05:45.0 -> the loading screen ~18:05:49 (the front end and the box went with it), the replay played at 18:06:02.
+
 ## 0.2.90 — 2026-11-15
 Replay takeover 4 (store replaytakeover-4, still experiment, off by default) - two bugs of "Continue as" from player noofancy
 (fb 1206, logs 20261115-161650-d9ac4b; he had reported both before: "the squad panel is missing" and "the second replay desyncs").
