@@ -1,0 +1,1 @@
+- Parallel Pose and Parallel Draw now work in vanilla Retribution too ("Vanilla Retribution" in the launcher), not only in Elite: smoother big late-game fights there as well. Same ticks, off by default.

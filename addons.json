@@ -1523,11 +1523,12 @@
     }
   },
   "parallelpose": {
-    "version": "2",
+    "version": "3",
     "dll": "ParallelPose.dll",
     "default": false,
     "games": [
-      "elite"
+      "elite",
+      "vanilla"
     ],
     "category": "experiment",
     "order": 1130,
@@ -1547,11 +1548,12 @@
     }
   },
   "paralleldraw": {
-    "version": "2",
+    "version": "3",
     "dll": "ParallelDraw.dll",
     "default": false,
     "games": [
-      "elite"
+      "elite",
+      "vanilla"
     ],
     "category": "experiment",
     "order": 1131,

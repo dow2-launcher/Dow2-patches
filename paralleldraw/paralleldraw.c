@@ -1,6 +1,6 @@
 // ParallelDraw.dll - DoW2 Retribution 3.19 (DOW2.exe 3.19.10320): the draw packets of the animated models in a render list are
 // built on several CPU cores; the packets are still handed to the renderer (Spooge) by the main thread, in the original order.
-// Add-on paralleldraw-1 (experiment, off by default, Elite only); stand prototype latelag_1114 stage 2 (v7).
+// Add-on paralleldraw-3 (experiment, off by default, Elite and vanilla); stand prototype latelag_1114 stage 2 (v7).
 //
 // How the game draws a scene: the render-list walk 0x0078B730 (stack args: lists, pass, deferred list; eax = view buffer) calls
 // vtable slot 7 (+0x1C) of every render object of the list, in list order: list 0 (with the deferred list), then the deferred
@@ -44,6 +44,10 @@
 // that worker still built (no locks: g_phase 0), and its Leave of the light lock (Enter skipped in the phase) became a real
 // LeaveCriticalSection by a thread that did not own it (Windows: "another thread using EnterCriticalSection may wait indefinitely").
 // The light-lock skip is now remembered per thread at Enter (stack), not looked up from g_phase at Leave.
+// Version 3 (only the version in the log line changed): the add-on is offered for vanilla Retribution too (launcher "Vanilla Retribution": the launcher
+// copies it into dow2-patches\, the launcher's winmm.dll loads it ~0.1 s after the start; Spooge.dll and Platform.dll are
+// static imports of DOW2.exe, so they are in and bound by then). Vanilla runs the same DOW2.exe 3.19.10320, Spooge.dll and
+// Platform.dll (Elite is DOW2.exe -modname Elite) and nothing here depends on the mod: no mod name, ini/log next to the DLL.
 #define _WIN32_WINNT 0x0601
 #include <windows.h>
 #include <stdio.h>
@@ -836,7 +840,7 @@ static void install(void) {
     if (!VirtualProtect(&vt[7], 4, PAGE_EXECUTE_READWRITE, &old)) { logmsg("VirtualProtect AV vtable failed"); return; }
     InterlockedExchange((LONG *)&vt[7], (LONG)hk_s7); VirtualProtect(&vt[7], 4, old, &old);
     AddVectoredExceptionHandler(1, veh);
-    logmsg("ParallelDraw 2: AnimatorVisual slot 7 (0x7525D0) prebuilt at the render-list walk (0x78B730) by the main "
+    logmsg("ParallelDraw 3: AnimatorVisual slot 7 (0x7525D0) prebuilt at the render-list walk (0x78B730) by the main "
            "thread + %d workers (%d CPUs), packets replayed in order; mode %ld, watchdog %d ms", g_nworkers, ncpu, (long)g_mode, g_wd_ms);
 }
 

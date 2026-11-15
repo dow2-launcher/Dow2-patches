@@ -1,5 +1,5 @@
 // ParallelPose.dll - DoW2 Retribution 3.19 (DOW2.exe 3.19.10320): the skeleton poses of all animated models updated in a frame
-// are built on several CPU cores instead of one. Add-on parallelpose-1 (experiment, off by default, Elite only).
+// are built on several CPU cores instead of one. Add-on parallelpose-3 (experiment, off by default, Elite and vanilla).
 //
 // Where the time goes: the Viz manager's update queue 0x0077BB60 runs, for every visual queued this frame (all on-screen and
 // shadow-view models), its update (vtable slot 2) and right after it its "build pose" (slot 3). For AnimatorVisual (vtable
@@ -34,6 +34,9 @@
 // with the NEXT flush's count -> one group posed by two threads at once and g_done counted twice, so the main thread went on while
 // a worker still wrote a pose. (b) A visual seen for the first time (new squad, new model) gets its first pose on the main thread,
 // as ParallelDraw does with cold models: the first pose may fill lazily built data. (c) Watchdog and a crash note (see veh).
+// Version 3 (only the version in the log line changed): the add-on is offered for vanilla Retribution too (launcher "Vanilla Retribution": the launcher
+// copies it into dow2-patches\, the launcher's winmm.dll loads it ~0.1 s after the start). Vanilla runs the same DOW2.exe
+// 3.19.10320 (Elite is DOW2.exe -modname Elite) and nothing here depends on the mod: no mod name, ini/log next to the DLL.
 #include <windows.h>
 #include <stdio.h>
 #include <stdarg.h>
@@ -381,7 +384,7 @@ static void install(void) {
     AddVectoredExceptionHandler(1, veh);
     InterlockedExchange((LONG *)&vt[3], (LONG)hk_pose);
     VirtualProtect(&vt[3], 4, old, &old);
-    logmsg("ParallelPose 2: AnimatorVisual slot 3 (0x751B60) deferred from the Viz queue loop, built after it (0x77BC50) by the main "
+    logmsg("ParallelPose 3: AnimatorVisual slot 3 (0x751B60) deferred from the Viz queue loop, built after it (0x77BC50) by the main "
            "thread + %d workers (%d CPUs); mode %ld, watchdog %d ms", g_nworkers, ncpu, (long)g_mode, g_wd_ms);
 }
 
