@@ -4,6 +4,23 @@ Every version gets an entry here before it reaches `main`. CI then tags `vX.Y.Z`
 version (`X.Y.0`) it also publishes a GitHub Release with the DLLs and the entries since the previous `X.Y.0`.
 The version of the set lives only in `VERSION`; each DLL still writes its own version to its log.
 
+## 0.2.95 — 2026-11-15
+ReplayOpen 3 (store replayopen-3), noofancy fb 1247: "a replay from the launcher, Menu -> Exit Game: the game crashes" (twice; logs
+20261115-213616-ec4779; his add-ons: LobbyStats, Reverse, ReplayOpen 2 - ReplayTakeover / LiveReplay / ReplaySpeed were not loaded).
+- The game unloads its front end inside the replay's start call 0x40F526 ("APP -- Game Start", "Ending FE", "Unloading Front End" are
+  logged before the call returns). ReplayOpen 2 kept the Connecting box up over that call, so the box was always still up when the front
+  end and its FEMessageBoxManager were destroyed - never deactivated ("Connecting box N: no manager to close it" in every ReplayOpen 2
+  log, the player's and the stands'). The game never unloads its front end with a box up; RoomJoin, MMFind, LiveReplay and ReplayOpen 1
+  close theirs first (common/connbox.h). Both of his crashes came right after the postgame screen of such a replay was built
+  (warnings.txt ends at its "Could not find win condition"; ReplayOpen saw no later frame); no WER report, no Windows event.
+- ReplayOpen 3 closes the box right before the start again, as ReplayOpen 1 (it is up at least 0.7 s from the request); the 60 s rule
+  of ReplayOpen 2 is gone with it. The box is no longer seen while the game reads the replay (siritos fb 1223 (d) is back).
+- Not reproduced under Wine: stand 1, Elite 3.2.1.0.0 with his add-ons (released LobbyStats 0.11.0, Reverse 4, ReplayOpen 2), the game
+  started as the launcher does, then the pipe's play, his kind of replay (Elite 2.9.8.4 data 96FD10CA, a real one and a forged one),
+  Menu -> Exit Game -> Yes: the postgame screen and Back to the main menu, no crash, three times. Stand 1 with ReplayOpen 3, no crash:
+  a replay from the launcher, exited; a replay from Game History -> Load Replay, exited; a replay from the launcher, "Continue as"
+  (ReplayTakeover 4, its restore "playback back") and Exit Game. Whether the crash is gone on Windows needs the player.
+
 ## 0.2.94 — 2026-11-15
 New AI 30 (store newai-30, experiment, off by default, Elite only): step 11 of the brain (brain 0.11). EliteAI.dll 0.17 unchanged.
 eliteai branch newai-30 d73d786 = brain 2ec025b with main.ai, mechanics.ai and the vanilla-base sources of strategy_tech_purchase.ai /

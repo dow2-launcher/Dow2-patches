@@ -1,0 +1,1 @@
+- Replay from the launcher (ReplayOpen 3): leaving a replay opened from the launcher (Menu -> Exit Game) could crash the game; the "Connecting" window now closes right before the replay starts loading, as in the first version.

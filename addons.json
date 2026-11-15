@@ -1577,7 +1577,7 @@
     }
   },
   "replayopen": {
-    "version": "2",
+    "version": "3",
     "dll": "ReplayOpen.dll",
     "files": {
       "robridge.exe": "build/robridge.exe"
