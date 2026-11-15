@@ -4,6 +4,22 @@ Every version gets an entry here before it reaches `main`. CI then tags `vX.Y.Z`
 version (`X.Y.0`) it also publishes a GitHub Release with the DLLs and the entries since the previous `X.Y.0`.
 The version of the set lives only in `VERSION`; each DLL still writes its own version to its log.
 
+## 0.2.92 — 2026-11-15
+Parallel Pose 3 and Parallel Draw 3 (store parallelpose-3, paralleldraw-3; still experiment, off by default) - games elite + vanilla
+(were elite only). Owner 15.11: the speed ticks in vanilla as in Elite (the other performance add-ons already were). No change in
+what the DLLs do; only the version in their first log line (3).
+- Vanilla is the same DOW2.exe 3.19.10320 (Elite = DOW2.exe -modname Elite) with the same Spooge.dll / Platform.dll; every hooked
+  site (0x751B60 / 0x77BC50 / Havok thread init; 0x78B730, slot 7 0x7525D0, the cache sites, Spooge's GetShader and Dx9Device+0xEC,
+  DOW2.exe's Platform.dll RecursiveMutex imports) is byte-checked at the start as before. No mod name or Elite path in either DLL:
+  ini and log next to the DLL (dow2-patches\ in vanilla). The launcher's loader loads them ~0.1 s after the start, when Spooge.dll
+  and Platform.dll (static imports of DOW2.exe) are in and bound.
+- Stand 1, vanilla (no -modname), store loader vloader-2 + PerfLog, stand restored (md5 equal):
+  - plain start (DOW2.exe -nomovies, as the launcher): both hooks in ("ParallelPose 3: ... 7 workers", "ParallelDraw 3: ..."),
+    main menu up and alive 150 s, its animated model drawn through both;
+  - vanilla 3v3 replay 6p_arena.2026-01-18 (8065 ticks, -sync_high, CrcTraceAll): without the add-ons and with both, the per-tick
+    CRC logs are identical on all 8066 blocks (ticks 0..8065), "recorded game finished" in both; with both: poses by workers
+    89-95 %, packets built by workers 92-94 % (up to ~250 000 models per 10 s), 0 STALL, 0 EXCEPTION.
+
 ## 0.2.91 — 2026-11-15
 RoomJoin 16 (store roomjoin-10) and ReplayOpen 2 (store replayopen-2), siritos fb 1223.
 - RoomJoin 16, "as":"obs": the lobby screen's Select Hero panel (it comes up over the lobby of every joiner; the engine's
