@@ -902,9 +902,13 @@
     }
   },
   "perflog": {
-    "version": "off",
+    "version": "2",
     "dll": "PerfLog.dll",
     "default": false,
+    "games": [
+      "elite",
+      "vanilla"
+    ],
     "category": "performance",
     "order": 50,
     "name": {

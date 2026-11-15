@@ -1,0 +1,1 @@
+- PerfLog: back on the Add-ons tab (Performance), with its own tick, off for everyone. Tick it only when you want to measure your FPS and send logs; unticked, nothing of it runs in the game.

@@ -490,7 +490,7 @@
       "de": "Das Spiel durchsucht nicht mehr Tausende alter Texte bei jeder Aktualisierung der Oberfläche: mehr FPS."
     }
   },
-  "perflog": {
+  "perflog_r2": {
     "category": "performance",
     "order": 50,
     "name": {
