@@ -5,8 +5,9 @@ version (`X.Y.0`) it also publishes a GitHub Release with the DLLs and the entri
 The version of the set lives only in `VERSION`; each DLL still writes its own version to its log.
 
 ## 0.2.87 — 2026-11-15
-MMFind 0.51 (Automatch v2.0; hand release, as 0.50): a launcher room's start faster and earlier, observers through the native
-automatch behind a switch (siritos fb 1062; report siritos_1114c).
+MMFind 0.51 (Automatch v2.0; hand release: store automatch mmfind-0.51 = the live package mmfind-0.50 with this MMFind.dll):
+a launcher room's start faster and earlier, observers through the native automatch behind a switch (siritos fb 1062; report
+siritos_1114c).
 - Faster walk: no ~3 s wait for "the screen answered" when the menu's own handler is known already (a walk after the first one);
   the army step is short when Find a Game shows the room's army committed (Your Party row): the hero panel's Ready at once and Start
   Searching 0.5 s later (no race / hero change, no 1.8 s pause, no wait for the next Your Party row). Stand 14.11: ticket -> Start
@@ -30,6 +31,12 @@ automatch behind a switch (siritos fb 1062; report siritos_1114c).
   seat came up on the test lobby; the observer's game took the push with team 2 of 2 and joined with team 2 and the automatch
   password; a failed observer join put only him out, the players' match went on. NOT verified: the observer seated and the match
   started with him (needs 2-3 accounts). [MMFind] ObsSlotsTest=K (stands only): K observer seats in every AUTOMATCH room hosted.
+- Stands 1 + 2, 15.11 (two Steam accounts, test lobby / ladder with the live code): Find a Game -> match between the two stands
+  (default ini, twice) and a launcher room 1v1 with go_at (both players armed, Start Searching 229-240 ms after go_at, the match
+  loaded and played) - fine. KEEP RoomObservers OFF: with it on and "obs": 1 in the host's ticket, the HOST's game ends in a fatal
+  error when the room's countdown starts ("GAME -- Player index <n> out of Range", gameinfo.cpp line 75, BugSplat) - twice: with
+  the observer (stand 2) seated, and with the observer seat left empty (a scripted observer). The engine also counted host + observer
+  as the "2 players present" of a 1v1 and started the countdown without the second player. Not for players until that is solved.
 
 ## 0.2.86 — 2026-11-15
 RoomJoin 15 (store roomjoin-9, experiment, off by default): into a lobby as an observer without seeing a player's seat (siritos fb 1062).
@@ -42,6 +49,11 @@ RoomJoin 15 (store roomjoin-9, experiment, off by default): into a lobby as an o
   click way only. Stand 1, 14.11: own custom lobby (observer seats opened by the host), the join as an observer - one call, seat 0 ->
   observer seat 1 in 264 ms under the box, no player's seat shown.
 - [RoomJoin] DebugPipe=1 (stands only): {"cmd":"open_obs"} - the host's "Open All Observer Slots" (0x493396) called straight.
+- Stands 1 + 2, 15.11 (two Steam accounts): stand 1 into stand 2's custom lobby as an observer from the main menu - one straight call,
+  observer seat 1 in 680 ms under the box ("seat":"direct"), the host sees him there. Known issue (RoomJoin 14 and 15): with no free
+  observer seat the event no_obs_slot comes, but the Back pressed on the hero panel only opens the game's "Are you sure you want to
+  leave this multiplayer match?" (Yes = fscommand OnButton1 of _level0.container.message_box_N), nobody answers it, and the player
+  stays in the lobby on a player's seat.
 
 ## 0.2.85 — 2026-11-15
 ReplayOpen 1 (new add-on, store replayopen-1, experiment, off by default, Elite): "Play" of a replay from the launcher (siritos
@@ -56,9 +68,11 @@ ReplayOpen 1 (new add-on, store replayopen-1, experiment, off by default, Elite)
   replay = failed "version" / "bad_file" with the reason; another data checksum = the copy gets this game's checksum and the replay
   starts, the launcher gets {"ev":"data_mismatch","replay":"..","game":".."} (it may go out of sync where the builds' data differ);
   ReplayOpen.ini Mismatch=refuse fails it instead.
+- Stand 1, 15.11: Play from the main menu - the box, the replay of this build playing; a replay of Elite 3.2 (F7C1D0FC) -> data_mismatch
+  and it plays; Play while in a lobby -> failed busy_lobby.
 
 ## 0.2.84 — 2026-11-15
-MMFind 0.50 (Automatch v2.0, hand release mmfind-0.52 = mmfind-0.51 with this MMFind.dll): the game's "Connecting" box while a
+MMFind 0.50 (Automatch v2.0; not shipped on its own - in mmfind-0.51 with MMFind 0.51, see 0.2.87): the game's "Connecting" box while a
 launcher room's match starts; an observer's ticket of a launcher room.
 - The box (common/connbox.h) from Start Searching to the loading screen; closed on every failure / cancel / server cancel and at the
   loading screen, never in a match. Not from the launcher's command on: while a message box is up the game's menu ignores every
@@ -85,6 +99,8 @@ LiveReplay 4 (store livereplay-4, experiment, off by default): Watch at any minu
   Russian DOW2.ucs, gets 550002 "Connecting to the game..."). LiveReplay.ini ConnectingBox=0 / ConnectingText=<id>.
 - No server change needed (dow2-ladder fix/live-replay-cut-answers stays optional): even cut to the tunnel's first burst the answers
   bring the records far faster than 8x plays them.
+- Stand 2, 15.11: Watch of a native match of the two stands at ~2.5 min (test ladder): the box with the scout's line, the replay
+  loaded, catch-up 7.7-8.1x (2065 steps behind -> caught up in ~25 s), then normal speed; sync 536 ok / 0 bad.
 
 ## 0.2.82 — 2026-11-15
 RoomJoin 14 (store roomjoin-8, experiment, off by default) and common/connbox.h (siritos 14.11.2026).
@@ -101,7 +117,7 @@ RoomJoin 14 (store roomjoin-8, experiment, off by default) and common/connbox.h 
   seat (or 6 changes that did not take) -> {"ev":"failed","room":id,"reason":"no_obs_slot"} and Back out of the lobby. The seat menu
   hook is installed only on 3.19's prologue under the shared patch lock; without it a join "as obs" fails at once ("error").
   Status "version":"14" (the launcher sends "as" to 14+ only). _WIN32_WINNT for older mingw headers (CancelIoEx), as MMFind.
-- Stand (stand 1, Elite 3.2.1, one Steam account - the only stand with a working Steam login on 14.11): see the PR.
+- Stand (stand 1, Elite 3.2.1, one Steam account - the only stand with a working Steam login on 14.11): see PR #98.
 
 ## 0.2.81 — 2026-11-15
 Parallel Pose 2 and Parallel Draw 2 (store parallelpose-2, paralleldraw-2; still experiment, off by default, elite only) - a race
