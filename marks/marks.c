@@ -14,11 +14,14 @@
 //     0x40F526 from "playback:<name>.rec"); in a live match the game records into Playback\temp.rec (it is overwritten by the
 //     next match, so save it under a name from the score screen or copy it);
 //   - map, players (slot, name, race, team, kind, AI difficulty) from the match's GameInfo (settings+0x118);
-//   - camera: the ground point the camera looks at and its height (the camera stack of GameObj, as SCAR's Misc_GetCameraPos).
+//   - camera: the ground point the camera looks at - the gameplay camera's own target (2: see camera() below; 1 cast a ray to
+//     the plane y = 0 and was ~(32, 32) off) - the terrain height there and the camera's distance from it.
 // EliteAI.log: only in a live match and only when EliteAI.dll is in the game (the new AI plays only there); the line is
-//   "HH:MM:SS.mmm MARK 3 game 15:26 (tick 9260) ..." appended to <game>\Elite_DLLs\EliteAI.log (where EliteAI keeps it) the same way EliteAI writes its own lines (open,
-//   append, close). No export or call into EliteAI is needed: both files carry the same real clock, so the AI's lines around a
-//   mark are those with the times next to it. In a replay the AI does not run; there the game time is what matches.
+//   "HH:MM:SS.mmm MARK 3 game 15:26 (tick 9260) ...". 2 (15.11.2026): handed to EliteAI.dll 0.17+ through its export
+//   EliteAI_Mark(n, tick, line) - EliteAI writes it into its log itself and keeps its AI lines of 20 s of game before and after
+//   the mark in EliteAI.marks.log (a whole match of the new AI is megabytes; the launcher sends the last 256 KB of a log). An
+//   EliteAI without the export (0.16 and older): the line is appended to <game>\Elite_DLLs\EliteAI.log as in 1 (open, append,
+//   close). In a replay the AI does not run; there the game time is what matches.
 //
 // Controls:
 //   - live match (player or observer, with other people too - a mark changes nothing in the game): a button in the replay
@@ -39,7 +42,7 @@
 #include "../common/gfxui.h"
 #include "../common/topbar.h"
 
-#define VERSION "1"
+#define VERSION "2"
 
 #define G_SETTINGS   0x01335A78u   // +0x110 GameObj (camera), +0x118 GameInfo: +0 game type (0x800 replay), +0x810 slots, +0x814 count
 #define G_WORLD      0x013356A4u   // +0x178 tick
@@ -72,21 +75,48 @@ static char *world(void) { return okp((void *)G_WORLD, 4) && okp(*(char **)G_WOR
 static int world_tick(void) { char *w = world(); return w ? I32(w, 0x178) : -1; }
 static int is_replay(void) { char *st = settings(); return st && (I32(st, 0x118) & T_PLAYBACK); }
 
-// the camera: the top of GameObj's camera stack, ecx = ***(*(settings+0x110)+4) for 0x401B12 (as Misc_GetCameraPos 0x43F6C7);
-// it holds a 4 x 4 matrix at +4: rows right (+4), up (+0x14), forward (+0x24), the eye position (+0x34). Seen 13.11: eye
-// -44.6, 144.2, -220.9, forward 0.5, -0.707, 0.5 (45 degrees down). What it looks at = where the forward ray meets the ground
-// plane y = 0 (the terrain's own height there is not added: a few units off on hills).
-static int camera(float *eye, float *at) {
-    char *st = settings(); if (!st) return 0;
+// the camera (2, 15.11.2026). 1 took the top of GameObj's camera stack (ecx = ***(*(settings+0x110)+4) for 0x401B12, as
+// Misc_GetCameraPos 0x43F6C7) and its eye at +0x34, then cast a ray along +0x24 to the plane y = 0; the testers' "looks at"
+// came out off the map, the real point ~ that eye + (32, 32) by two anchors. The ground is not at y = 0: the eye's height was
+// 242-250 on Kathari Ruins all match long = the terrain's height there (~205) + the camera's own height over its target, so the
+// ray ran ~200 units too far. The camera keeps the point it looks at itself - no ray, no terrain query needed
+// (DOW2.exe 3.19.10320, CameraGameplay vtable 0x0111BD04, RTTI .?AVCameraGameplay@@; the stack's top is CameraGameplay + 8):
+//   + 0x2D0 / 0x2D4 / 0x2D8  the TARGET x, height, z - panning adds to it (0x00BACC10), the height is the terrain's there
+//                            (QueryTerrainHeight), vt + 0xC (0x00BADA00, a camera set from eye + direction) writes it as
+//                            eye + direction * distance; Camera_FocusOnPosition ends here too;
+//   + 0x300                  the distance target -> eye (+ 0x304 the eye, written only by vt + 0xC), + 0x2F8 / 0x2FC orbit / declination
+//                            (the bench, 15.11: distance 55, declination 0.785 = 45 degrees, orbit 3.927 = 225 degrees -> the
+//                            eye is 38.9 sideways from the target, (-27.5, -27.5) in x / z: the anchors' (32, 32) at a little zoom out);
+//   + 0x2C8                  mode (0 = the gameplay camera, 1 = a scripted one).
+// Which camera is on: the camera manager *(0x01335090), its controllers at [+4 .. +8) (8 bytes each, the controller first),
+// the active one has the byte + 0x2BC set - as Camera_GetGameplayCameraTuningValue's 0x00BB3430 finds it (there with a
+// dynamic_cast; here the vtable is compared: CameraGameplay's CameraController base is at + 0). Only reads, no call.
+#define G_CAMMGR     0x01335090u
+#define VT_CAMGAME   0x0111BD04u
+static char *cam_gameplay(void) {
+    char *m = okp((void *)G_CAMMGR, 4) ? *(char **)G_CAMMGR : NULL;
+    if (okp(m, 0x0C)) {
+        char **b = (char **)P32(m, 4), **e = (char **)P32(m, 8);
+        if (okp(b, 8) && e > b && e - b <= 64 * 2 && okp(b, (UINT)((char *)e - (char *)b)))
+            for (char **p = b; p < e; p += 2) {
+                char *c = *p;
+                if (!okp(c, 0x310) || !*(c + 0x2BC)) continue;
+                return *(DWORD *)c == VT_CAMGAME ? c : NULL;      // the active controller: the gameplay camera, or a scripted one
+            }
+    }
+    // the stack's top as 1 read it, when it is the gameplay camera's (+ 8)
+    char *st = settings(); if (!st) return NULL;
     char *a = P32(st, 0x110), *b = okp(a, 8) ? P32(a, 4) : NULL, *c = okp(b, 4) ? *(char **)b : NULL, *d = okp(c, 4) ? *(char **)c : NULL;
-    if (!okp(d, 0x40)) return 0;
+    if (!okp(d, 0x40)) return NULL;
     char *cam = ((char *(__thiscall *)(void *))FN_CAM_BACK)(d);
-    if (!okp(cam, 0x40)) return 0;
-    float *f = (float *)(cam + 0x24); memcpy(eye, cam + 0x34, 12);
-    if (g_debug) { char h[700]; int m = 0; for (int j = 0; j < 0x30; j++) m += snprintf(h + m, sizeof h - m, "%.3f ", ((float *)cam)[j]); logmsg("DEBUG camera %p: %s", cam, h); }
-    if (f[1] < -0.05f && f[1] >= -1.01f) { float t = -eye[1] / f[1]; at[0] = eye[0] + f[0] * t; at[1] = 0; at[2] = eye[2] + f[2] * t; }
-    else { at[0] = eye[0]; at[1] = 0; at[2] = eye[2]; }
-    return 1;
+    return okp(cam - 8, 0x310) && *(DWORD *)(cam - 8) == VT_CAMGAME ? cam - 8 : NULL;
+}
+static int camera(float *at, float *dist) {           // at = x, height, z of the point the camera looks at
+    char *c = cam_gameplay(); if (!c) return 0;
+    memcpy(at, c + 0x2D0, 12); *dist = *(float *)(c + 0x300);
+    if (g_debug) logmsg("DEBUG camera %p: target %.2f %.2f %.2f dist %.2f orbit %.3f decl %.3f eye %.2f %.2f %.2f mode %d",
+                        c, at[0], at[1], at[2], *dist, *(float *)(c + 0x2F8), *(float *)(c + 0x2FC), *(float *)(c + 0x304), *(float *)(c + 0x308), *(float *)(c + 0x30C), I32(c, 0x2C8));
+    return at[0] == at[0] && at[2] == at[2] && at[0] > -100000.0f && at[0] < 100000.0f && at[2] > -100000.0f && at[2] < 100000.0f;
 }
 
 // ---------------- what a mark says about the match ----------------
@@ -156,19 +186,40 @@ static void elite_ai_log(const char *line) {
     SYSTEMTIME t; GetLocalTime(&t);
     fprintf(f, "%02d:%02d:%02d.%03d %s\n", t.wHour, t.wMinute, t.wSecond, t.wMilliseconds, line); fclose(f);
 }
+// 2: the EliteAI.dll that works in this game takes the mark (0.17+: EliteAI_Mark). Elite's injector and dow2-patches may both
+// load an EliteAI.dll; only one of them works (the other stays idle and answers 0), so every module of that name is asked.
+typedef int (__cdecl *EaiMark_t)(int n, int tick, const char *line);
+static int g_eaSaid;
+static int elite_ai_mark(int n, int tick, const char *line) {
+    HMODULE first = GetModuleHandleW(L"EliteAI.dll"); if (!first) return 0;
+    typedef BOOL (WINAPI *Enum_t)(HANDLE, HMODULE *, DWORD, LPDWORD);
+    Enum_t en = (Enum_t)GetProcAddress(GetModuleHandleW(L"kernel32.dll"), "K32EnumProcessModules");
+    HMODULE mods[512]; DWORD need = 0; int k = 0;
+    if (en && en(GetCurrentProcess(), mods, sizeof mods, &need)) k = (int)(need / sizeof(HMODULE)); else { mods[0] = first; k = 1; }
+    if (k > 512) k = 512;
+    for (int i = 0; i < k; i++) {
+        wchar_t p[MAX_PATH]; DWORD l = GetModuleFileNameW(mods[i], p, MAX_PATH);
+        if (l < 12 || _wcsicmp(p + l - 12, L"\\EliteAI.dll")) continue;
+        EaiMark_t f = (EaiMark_t)GetProcAddress(mods[i], "EliteAI_Mark");
+        if (f && f(n, tick, line)) return 1;
+    }
+    return 0;
+}
 static void mark(const char *how) {
     char *st = settings(), *w = world(); int tick = world_tick();
     if (!st || !w || tick < 0 || !I32(st, 0x118)) { logmsg("%s: not in a match - no mark", how); return; }
     int n = ++g_n, rep = is_replay(); double sec = tick / 10.0; int mm = tick / 600, ss = (tick / 10) % 60;
-    char where[400], map[160], pl[1600], cam[128]; float c[3], at[3];
+    char where[400], map[160], pl[1600], cam[128]; float at[3], dist;
     info_where(st, rep, where, sizeof where); info_map(st, map, sizeof map); info_players(st, pl, sizeof pl);
-    if (camera(c, at)) snprintf(cam, sizeof cam, "looks at x %.1f z %.1f (eye %.1f, %.1f, %.1f)", at[0], at[2], c[0], c[1], c[2]); else snprintf(cam, sizeof cam, "?");
+    if (camera(at, &dist)) snprintf(cam, sizeof cam, "looks at x %.1f z %.1f (ground height %.1f, camera distance %.1f)", at[0], at[2], at[1], dist); else snprintf(cam, sizeof cam, "?");
     char head[96]; snprintf(head, sizeof head, "MARK %d | game %d:%02d = %.1f s = tick %d", n, mm, ss, sec, tick);
     logmsg("%s | %s | match since %02d:%02d:%02d | map %s | camera %s | players: %s | by %s", head, where,
            g_matchStart.wHour, g_matchStart.wMinute, g_matchStart.wSecond, map, cam, pl, how);
     if (g_eliteLog && !rep) {
         char l[600]; snprintf(l, sizeof l, "MARK %d game %d:%02d (%.1f s, tick %d) map %s camera %s - Marks.log has the players", n, mm, ss, sec, tick, map, cam);
-        elite_ai_log(l);
+        int ea = elite_ai_mark(n, tick, l);
+        if (!ea) elite_ai_log(l);
+        if (g_debug || g_eaSaid++ < 3) logmsg("MARK %d -> EliteAI: %s", n, ea ? "taken by EliteAI_Mark (EliteAI.log + EliteAI.marks.log)" : GetModuleHandleW(L"EliteAI.dll") ? "no EliteAI_Mark (EliteAI 0.16 or older): appended to EliteAI.log" : "EliteAI.dll not loaded");
     }
     snprintf(g_flashText, sizeof g_flashText, "Mark %d  %d:%02d", n, mm, ss);
     g_flashUntil = qpc() + g_qf * 3; g_flashSeq++;

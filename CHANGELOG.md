@@ -4,6 +4,28 @@ Every version gets an entry here before it reaches `main`. CI then tags `vX.Y.Z`
 version (`X.Y.0`) it also publishes a GitHub Release with the DLLs and the entries since the previous `X.Y.0`.
 The version of the set lives only in `VERSION`; each DLL still writes its own version to its log.
 
+## 0.2.89 — 2026-11-15
+Match marks 2 (store marks-2, experiment, order 1100, off by default, games elite + vanilla + igrework) - the camera point of a
+mark, and the new AI's lines around a mark reach the developers. Was PR #112 (0.2.81 on top of 0.2.80, closed): marks/ did not change on
+main since, so marks.c is that branch's as is; renumbered after 0.2.88 (New AI 29 with EliteAI.dll 0.17, the other half of the pair).
+- Camera: 1 cast a ray from the camera's eye (top of GameObj's camera stack, as Misc_GetCameraPos) to the plane y = 0; the
+  ground is ~200 high on some maps (Kathari Ruins: the eye 242-250 high all match long), so "looks at" came out off the map, by
+  two anchors ~(32, 32) from the eye. 2 reads the point the gameplay camera itself looks at: CameraGameplay (vtable 0x0111BD04,
+  RTTI .?AVCameraGameplay@@) = the active controller of the camera manager *(0x01335090) (as 0x00BB3430 of
+  Camera_GetGameplayCameraTuningValue finds it, the vtable compared instead of a dynamic_cast), + 0x2D0 / 0x2D4 / 0x2D8 its target
+  x / terrain height / z (panning adds to it in 0x00BACC10; vt + 0xC 0x00BADA00 writes it as eye + direction * distance),
+  + 0x300 the distance. Fallback: the camera stack's top - 8 when its vtable is CameraGameplay's; else "?". Reads only, no call.
+  Marks.log: "camera looks at x .. z .. (ground height .., camera distance ..)".
+- EliteAI: the mark goes to EliteAI.dll 0.17+ through its export EliteAI_Mark(n, tick, line) (every module named EliteAI.dll is
+  asked; the idle copy answers 0): EliteAI writes the line into EliteAI.log itself and keeps its lines of 20 s of game before and
+  after the mark in EliteAI.marks.log (<= 240 KB a match; the launcher sends the last 256 KB of a log, and a whole match of the
+  new AI is megabytes). An EliteAI without the export (0.16 and older) or one that answers 0: the line is appended to EliteAI.log
+  as in 1; no EliteAI.dll loaded: nothing written there, as in 1 (elite_ai_log checks GetModuleHandle). EliteAI 0.17 ships in 0.2.88.
+- Bench (fastbench, no UI: Marks' own mark() called from a test thread at fixed ticks, 1v1 live game with the brain): the export
+  taken every time, the camera found (CameraGameplay, distance 55, 45 degrees; the headless bench never moves it: target 0, 0).
+  The step-10 verifier (s10/VERIFY_10_RU) saw Marks 2 marks reach EliteAI.marks.log and the camera point match the HQ within 0.5 m.
+  Not checked yet: the real game - the hotkey / button path is Marks 1's, unchanged.
+
 ## 0.2.88 — 2026-11-15
 New AI 29 (store newai-29, experiment, off by default, Elite only): steps 10 and 10.1 of the brain (brain 0.10.1) and EliteAI.dll 0.17.
 eliteai branch newai-29 d7c3a0d = brain 8682e89 with main.ai, mechanics.ai and the vanilla-base sources of

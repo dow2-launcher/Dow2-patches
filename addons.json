@@ -1446,7 +1446,7 @@
     }
   },
   "marks": {
-    "version": "1",
+    "version": "2",
     "dll": "Marks.dll",
     "default": false,
     "games": [
