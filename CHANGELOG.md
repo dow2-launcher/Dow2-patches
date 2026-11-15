@@ -4,6 +4,28 @@ Every version gets an entry here before it reaches `main`. CI then tags `vX.Y.Z`
 version (`X.Y.0`) it also publishes a GitHub Release with the DLLs and the entries since the previous `X.Y.0`.
 The version of the set lives only in `VERSION`; each DLL still writes its own version to its log.
 
+## 0.2.93 — 2026-11-15
+PerfLog 2 (store perflog_r2 -> perflog-2): the tick is back, Performance, order 50, off by default, its own tick (no requires /
+excludes), games elite + vanilla - the vanilla copy in dow2-patches as for fastbuffers / fastlocstrings. Owner 15.11: "верни
+галочку, она должна отдельно работать, по умолчанию выключена, чтобы не грузить компы чужие лишними логами". No change in what
+the DLL does; only the version in its first log line (2).
+- Why 0.2.59 did not turn it off: version "off" only hides the card (launcher 1.6.x app.js compShown: `(^|-)off$`); the player's
+  saved tick for the id `perflog` stayed true, so sync_components kept the add-on installed and PerfLog.dll in InjectedFiles, and
+  dow2-patches-deploy built `perflog-off` from this repo like any version - the working DLL (67072 bytes, as perflog-1), not a
+  stub like frameprobe-off / fastbuffers-off. Log packages 12-15.11: "perflog: ON (latest perflog-off, installed perflog-off, dll,
+  injected)" and a fresh PerfLog.log from 5 players, 8 with it off.
+- Everyone unticked once: the store id becomes `perflog_r2` (as the 30.10 reset of every add-on). No launcher has a tick for it -
+  default false; drop_orphans removes the old `perflog` component's files, enforce_off / sync_components take PerfLog.dll out of
+  Elite_DLLs and every launch config, sync_vanilla out of dow2-patches. Its card shows again (version no longer "-off"), anyone can
+  tick it. docs/store-texts.json key -> perflog_r2; addons.json key stays `perflog` (the deploy finds `perflog_r2` in the store).
+  docs/ADDON_RULES.md: how to turn an add-on off for everyone (rename the id; "off" alone does not).
+- Release (rts, as eliterel): the rename once by hand in the live store (launcher.json id perflog -> perflog_r2, signed), then
+  `dow2-patches-deploy` (finds perflog_r2, stages perflog-2) and `elite-release apply perflog_r2`. Commands in the PR.
+- Stand 1, 15.11 (dev/perflog_1115/fe3.sh, the launcher's two states emulated, normal start from the main menu, stand restored, md5
+  equal): Elite ticked (PerfLog.dll in Elite_DLLs + InjectedFiles) - PerfLog.dll among the process' modules, "PerfLog 2 (Elite)",
+  a line every 5 s (24 lines in 100 s); Elite unticked (no DLL, not in InjectedFiles) - not loaded, no PerfLog.log; vanilla ticked
+  (dow2-patches + loader 3) - "loaded PerfLog.dll", "PerfLog 2 (vanilla)", 26 lines; vanilla unticked - not loaded, no log.
+
 ## 0.2.92 — 2026-11-15
 Parallel Pose 3 and Parallel Draw 3 (store parallelpose-3, paralleldraw-3; still experiment, off by default) - games elite + vanilla
 (were elite only). Owner 15.11: the speed ticks in vanilla as in Elite (the other performance add-ons already were). No change in

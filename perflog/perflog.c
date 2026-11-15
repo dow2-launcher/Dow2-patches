@@ -25,7 +25,7 @@
 #include <stdarg.h>
 #include <string.h>
 
-#define VERSION "1"
+#define VERSION "2"
 
 #define IAT_SHARK_UPDATE 0x00F88068u
 #define G_SETTINGS   0x01335A78u   // +0x118 game type: 0x800 = playback

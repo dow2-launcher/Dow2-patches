@@ -49,6 +49,24 @@ Launcher 1.5.2: an entry may also have `"requires": [<store id>, ...]` (the tick
 requires dxvk) and `"excludes": [<store id>, ...]` (never together). `games`, `requires` and `excludes` written in addons.json
 go to the store with a deploy; an add-on without them there keeps what the store has.
 
+## Turning an add-on off for everyone (owner 05.11 / 15.11.2026)
+
+"Off for everyone" = everyone's tick goes off, the add-on may come back later. The launcher keeps each player's tick by the
+store **id** (settings.json), so:
+
+- A version `"off"` alone does **not** turn it off. Launcher 1.6.x only hides an entry whose version ends with `off` (its card,
+  app.js compShown); the player's saved tick stays, the sync keeps installing that version and Elite.launchconfig keeps naming
+  the DLL. And `dow2-patches-deploy` builds the add-on from this repo for any version, `off` too: `<id>-off` is the working DLL.
+  That is how PerfLog kept measuring for everyone who had ticked it after 0.2.59 ("perflog: ON (latest perflog-off ...,
+  injected)" in their log packages, 15.11.2026). A stub DLL in `<id>-off` (frameprobe-off, fastbuffers-off) does stop it, but
+  the hidden card can never be unticked.
+- To untick it for everyone: **rename the store id** - `<id>` -> `<id>_r2` (-> `_r3`), keep `"default": false`. Every launcher
+  then has no tick for the new id (= the default, off): drop_orphans removes the old id's files, the off add-on's DLL leaves
+  Elite_DLLs, dow2-patches and every launch config. Anyone can tick it again. The key here and in docs/store-texts.json is the
+  base id; the deploy finds `<id>_r3` / `<id>_r2` in the store by itself, but the rename itself is done once by hand in the
+  live store (launcher.json `id`, sign) before the deploy - see CHANGELOG 0.2.93 for the commands.
+- Done this way: 30.10.2026 (every add-on -> `_r2`, lobbystats / loadingratings -> `_r3`), 15.11.2026 perflog -> perflog_r2.
+
 ## What happened (history)
 
 - Up to 0.9.x LobbyStats.dll carried the lobby ratings, the loading screen ratings, the match clock, the cooldown
