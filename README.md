@@ -478,6 +478,13 @@ frameprobe/ - FrameProbe.dll (off), eliteai/ - EliteAI.dll (store id newai since
       (main.ai: [Lua] VariantByDiff=1 returns the old A / B / C by level); EliteAI.dll 0.16: eliteai_cmd / eliteai_retlock
       (eliteai/retlock.h, the retreat lock ends with its match), NETWORK matches - the station that computes a computer player runs
       the new AI ([EliteAI] Multiplayer=0 turns it off), replay upload of a network match. Non-ork slots still newai-23.1.
+    newai-29 (0.2.88): brain 0.10.1 (steps 10 / 10.1, branch newai-29): map control and the race for victory points against the
+      old layer of other races (far points, a screen beyond the point, DEFEND, lost farms), the army by the enemy's army, allies do
+      not take the same point (80_team.ai), refill at home, no chase into the enemy base, burnas from the ranged stance (netorder.ai
+      mode 16), lootas hold their post and use camo (FACE, mode 17), 'Call da Boyz!' and the hero's globals on a squad (mode 600 + k),
+      own-bomb hazards, gretchin with the Repair Krew repair (no capture jobs); EliteAI.dll 0.17: export EliteAI_Mark for Marks 2
+      (EliteAI.marks.log), a brain-only match is uploaded (BR INIT counts), a host migration keeps the retreat locks. Non-ork slots
+      still newai-23.1.
 
 ## Building
 
