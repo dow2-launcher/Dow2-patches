@@ -493,6 +493,11 @@ frameprobe/ - FrameProbe.dll (off), eliteai/ - EliteAI.dll (store id newai since
       re-ordered or dropped (CapStand), the fist leaves a quiet point (ScreenQuiet), a fight whose enemies all run home is let go
       (FightGone); every boyz squad's first upgrade without the clock (EconUpgEach); the Repair Krew only with a machine of ours
       (GrotKrewVeh). EliteAI.dll 0.17 unchanged. Non-ork slots still newai-23.1.
+    newai-31 (0.2.97): brain-sm a2e3ad3 (branch newai-31): the space marines play the brain too - [Lua] Brain_Races default
+      orks,space_marines (Brain_Races=orks returns newai-30); mod/brain/65_race_sm.ai (SM-1..3: scouts capture in the opening, retreat
+      by health and cost, the purse saves for proper squads, press when the trades are won, the techmarine builds turrets / mines /
+      field ops by the network build command 0x4E - netorder.ai mode 700 + k, free squads join our fight); elite.scar knows the
+      marines' abilities 92-99. The orks play as newai-30. EliteAI.dll 0.17 unchanged. Other races still newai-23.1.
 
 ## Building
 

@@ -4,6 +4,34 @@ Every version gets an entry here before it reaches `main`. CI then tags `vX.Y.Z`
 version (`X.Y.0`) it also publishes a GitHub Release with the DLLs and the entries since the previous `X.Y.0`.
 The version of the set lives only in `VERSION`; each DLL still writes its own version to its log.
 
+## 0.2.97 — 2026-11-15
+New AI 31 (store newai-31, experiment, off by default, Elite only): the SPACE MARINES play the brain too (the owner: "give the testers
+everything"). EliteAI.dll 0.17 unchanged.
+eliteai branch newai-31 bee001c = brain-sm a2e3ad3 (the orks of step 11 exactly as newai-30 - byte for byte, the verifier's check -
+plus space marines SM-1..3 and the verifier's fixes) with main.ai, mechanics.ai and the vanilla-base sources of strategy_tech_purchase.ai /
+strategy_unit_purchase.ai of newai-30 d73d786 (= a3a378a + 66ab6a1 rule set C), as newai-24 .. 30; dispatchers rebuilt by
+tools/vanilla_dispatch.py with ONE release change: [Lua] Brain_Races default "orks" -> "orks,space_marines" (Brain_Races=orks returns
+newai-30's choice: marines on the old layer). 2ec025b..a2e3ad3 did not touch main.ai, mechanics.ai or the vanilla-base sources.
+Served files differing from newai-30: default.ai (the brain with mod/brain/65_race_sm.ai, netorder.ai mode 700 + k, the Brain_Races
+default) and append/scar/elite/elite.scar (+7 lines: the marines' ability names 92-99). Defaults as in the branch: Brain_EconUpkeep,
+Brain_EconMatchTeam, Brain_CapKrew, Brain_Muster, Brain_CapClash = 0.
+- Marines (65_race_sm.ai): scouts as capturers in the opening, retreat by health and by the squad's cost, the purse saves for proper
+  squads, the press when the trades are won, the techmarine builds a heavy bolter turret / proximity mines / field ops by the player's
+  network build command 0x4E (netorder.ai mode 700 + k, data type 0F - read from people's replays; Net_Build=0 turns it off), a free
+  squad joins our fight (A.join; not a fight step 11 calls GONE - the verifier's fix 57dfe0d), the orbital bombardment of tier 3.
+  Verifier's fix 9451ca8: the techmarine's second mine at a point no longer stops the brain.
+- Check (independent verifier, sm3/VERIFY_SM_RU: READY WITH NOTES - "give it to the testers with Brain_Races=orks,space_marines"):
+  32 whole games against the old layer of other races - the marine brain ahead in 27 (SM-3 before the merge 21; the old layer for the
+  marines, Brain=0, 13); against the stock computer 8 : 0; 0 Lua error lines in whole games, short scenes, mid-game scenes, the mirror,
+  against the ork brain and in 3v3; the orks after the merge byte for byte as 2ec025b; 9 of 9 recordings (82 k ticks: whole games, a
+  marine mirror, marines against the ork brain, techmarine scenes with a build command 0x4E sent) play back with no AI with every CRC equal.
+  Stub 215 PASS on the release tree.
+- Notes (not blocking): the techmarine's mines and field ops never seen on the bench (code checked by the stub only); scouts often go
+  back to a point they were just driven off (step 11's 'bad point' marks not read by the SM-1 capturer loop; SM-4); tier 3 'bought' every
+  second while the engine starts it (old, general); a brain Lua error stops the player's tick without a log line (the bench counts
+  error lines only - watch for BR lines ending early). The verifier's marine runs used EliteAI.dll 0.16; this package's 0.17 differs from
+  0.16 only in the marks window, the brain-only upload flag and migration (see 0.2.88), not in what the AI scripts get.
+
 ## 0.2.96 — 2026-11-16
 Parallel Draw unticked for everyone (store id paralleldraw -> paralleldraw_r2, version 3 and ParallelDraw.dll unchanged, default
 false): a player's crash on 16.11 01:33 MSK (Ligt, log package 20261115-233434-92fbdb; 3v3 6p_hades_wastes_redux, two matches

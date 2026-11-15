@@ -42,17 +42,17 @@ do
 		elseif who_has(who) then base, ours = w[1], w[2]; break end
 	end
 	-- BRAIN (branch brain; mod/brain/*.ai, BRAIN_DESIGN_RU.md): [Lua] Brain = 0 (off: nothing changes) | 1 (default since newai-24: a new-AI player
-	-- whose race is in [Lua] Brain_Races - default orks) | all (every new-AI player, whatever its race - bench experiments).
+	-- whose race is in [Lua] Brain_Races - default orks,space_marines since newai-31) | all (every new-AI player, whatever its race - bench experiments).
 	-- A brain player plays the vanilla base with our old layer OFF (main.ai / mechanics.ai passive) and the brain's own rules.
 	local brain = false
 	do
 		local bk = string.lower(tostring(cfg("Brain", "1")))
 		if ours and bk ~= "0" and bk ~= "" then
 			local race = AIPlayer_GetRace(AI_GetPlayer())                -- (default.ai reads the same a few lines below)
-			-- (step 8: the races that play with the brain - [Lua] Brain_Races, a list of the AI's race names, default "orks".
+			-- (step 8: the races that play with the brain - [Lua] Brain_Races, a list of the AI's race names, default "orks,space_marines" since newai-31 (before: "orks").
 			-- A race gets in here when its profile has passed its own check: space_marines has a profile and is NOT in the
 			-- default. string.find with a plain pattern: no gmatch in the game's AI Lua.)
-			local races = "," .. string.lower(tostring(cfg("Brain_Races", "orks"))) .. ","
+			local races = "," .. string.lower(tostring(cfg("Brain_Races", "orks,space_marines"))) .. ","
 			races = string.gsub(races, " ", "")
 			brain = (bk == "all") or (bk == "1" and string.find(races, "," .. tostring(race) .. ",", 1, true) ~= nil)
 			if brain then base, ours = "vanilla", false end
@@ -1743,6 +1743,13 @@ EliteAI_NET_ABILITIES = {
 	[71] = "ability/pvp/race_ork/kommandos/ork_buff_self_infiltration",
 	[72] = "ability/pvp/race_ork/kommando_hero/ork_buff_self_infiltrate",
 	[73] = "ability/pvp/race_marine/scout/sm_buff_self_infiltrate",
+	-- (step SM-1, space marines: numbered from 99 down - the next ork ability takes 74; k stays below 100)
+	[92] = "ability/pvp/race_marine/dreadnought/sm_damage_aoe_charge",
+	[93] = "ability/pvp/race_marine/terminator/sm_teleport_target_terminators",
+	[95] = "ability/pvp/race_marine/techmarine/sm_damage_aoe_knockback",
+	[96] = "ability/pvp/race_marine/force_commander/sm_teleport_target_pack",
+	[98] = "ability/pvp/race_marine/assault_marine/sm_damage_aoe_mercilessstrike",
+	[99] = "ability/pvp/race_marine/tactical_squad/sm_and_they_shall_know_no_fear",
 }
 -- brain step 10: the HERO'S globals that take a squad of ours as their target (mode 600 + k, x = that squad's id). The
 -- command is the player's ability command 0x55 with data type 1A: 'pbg32 00 00 04 id16' - read from people's replays
@@ -1760,6 +1767,16 @@ EliteAI_NET_PLAYER_ABILITIES = {
 	[2] = "ability/pvp/race_ork/globals/ork_damage_target_rokks",
 }
 -- the engine's number of an ability blueprint, looked up once per name (false = the engine does not know it)
+-- (step SM-1) what a squad builds on the brain's order, mode 700 + k (600 + k is the hero's global on a squad, step 10): the player's command 0x4E with the custom data 0F -
+-- the blueprint's number, the place, a second place 1 m on (the way it faces), 00, the point it stands on (none: 0),
+-- the builder's squad id. Read from people's replays (0676f5643102ebf8, a techmarine: '4e .. 0f 23 9b020000 x y z x' y z'
+-- 00 00000000 56c3' - a turret by squad 50006; posts and generators carry the point's entity and no squad). The game
+-- takes the price and checks the place and the requirement itself, as for a human's click.
+EliteAI_NET_BUILD = {
+	[1] = "ebps/pvp/race_marine/buildings/sm_heavy_bolter_turret_tech_marine",
+	[2] = "ebps/projectiles/race_marine/sm_prox_mine_pvp",
+	[3] = "ebps/pvp/race_marine/buildings/sm_techmarine_field_ops",
+}
 local function abil_id(name)
 	if name == nil then return nil end
 	local id = NET.abid[name]
@@ -1896,6 +1913,7 @@ local function by_net(mode)
 	elseif mode >= 100 and mode < 400 then key = "Net_Cast"
 	elseif mode >= 400 and mode < 500 then key = "Net_Global"
 	elseif mode >= 600 and mode < 700 then key = "Net_Global"
+	elseif mode >= 700 and mode < 800 then key = "Net_Build"
 	else return false end
 	local v = KEYS[key]
 	if v == nil then v = (num(key, 1) >= 1); KEYS[key] = v end
@@ -2010,6 +2028,7 @@ local function net_order(id, x, y, z, mode)
 	if type(mode) ~= "number" or type(id) ~= "number" then return end
 	x, y, z = x or 0, y or 0, z or 0
 	relock()
+	if mode == 18 then NET.face_x, NET.face_z = x, z; return end              -- (step SM-1) the way the next building of mode 700 + k faces (a unit vector): a word for this file only
 	if mode == 12 then
 		-- the engine's own retreats off for this player's squads: its AI's retreat commands are not sent (the DLL), not the simulation's switch
 		if num("Net_RetLock", 1) >= 1 and type(_retlock) == "function" then
@@ -2020,6 +2039,15 @@ local function net_order(id, x, y, z, mode)
 			return
 		end
 		return _queue(id, x, y, z, mode)
+	end
+	if mode >= 700 and mode < 800 then
+		-- (step SM-1) build: a network command or nothing - elite.scar has no such order and gets no mark of it
+		if not by_net(mode) or squad_of(id) == nil then return end
+		local eb = abil_id(EliteAI_NET_BUILD[mode - 700])
+		if eb == nil then return end
+		local fx, fz = NET.face_x or 1, NET.face_z or 0
+		if send(3, NET.pid, 78, 15, u32(eb) .. f32(x) .. f32(y) .. f32(z) .. f32(x + fx) .. f32(y) .. f32(z + fz) .. "00" .. "00000000" .. u16(id)) and num("Net_Log", 0) >= 1 then say("cmd", "build", mode, id) end
+		return
 	end
 	if not by_net(mode) then return _queue(id, x, y, z, mode) end           -- the words to elite.scar (9, 10, 11, 13, 15) and a kind switched back by its key
 	if mode >= 600 and mode < 700 then
@@ -8476,9 +8504,15 @@ function Brain.cfg(key, default)
 	if v == nil then return default end
 	return v
 end
+-- (step SM-1) a race may carry its own default of a number: Brain.RACE_NUM[<the AI's race name>][key], filled by the race's
+-- file (65_race_sm.ai). The ini key still wins; a race without a table (orks) reads the default of the call, as before.
 function Brain.num(key, default)
 	local v = tonumber(Brain.cfg("Brain_" .. key, nil))
-	if v == nil then return default end
+	if v == nil then
+		local rn = Brain.RACE_NUM and s_current_race ~= nil and Brain.RACE_NUM[s_current_race] or nil
+		if rn ~= nil and rn[key] ~= nil then return rn[key] end
+		return default
+	end
 	return v
 end
 
@@ -8565,6 +8599,7 @@ Brain.ORD = { MOVE = 1, AMOVE = 2, RETREAT = 3, ATTACK = 4, CAPTURE = 5, REINFOR
 	UNLOAD = 14, STANCE = 16, FACE = 17, ABIL_POS = 100, ABIL_SQUAD = 200, ABIL_SELF = 300 }
 local VERB = { [1] = "MOVE", [2] = "AMOVE", [3] = "RETREAT", [4] = "ATTACK", [5] = "CAPTURE", [6] = "REINFORCE", [7] = "ATTACK_BLD", [8] = "MELEE", [14] = "UNLOAD", [16] = "STANCE", [17] = "FACE" }
 local function verb(mode)
+	if mode >= 700 then return "BUILD" .. (mode - 700) end                    -- (step SM-1: netorder.ai mode 700 + k)
 	if mode >= 300 then return "CAST_SELF" .. (mode - 300) end
 	if mode >= 200 then return "CAST_ON" .. (mode - 200) end
 	if mode >= 100 then return "CAST_AT" .. (mode - 100) end
@@ -8586,6 +8621,9 @@ end
 function Brain.order(u, mode, x, y, z, why)
 	if not _order or u == nil or u.id == nil or mode == nil then return false end
 	x, y, z = x or 0, y or 0, z or 0
+	-- (step SM-1: a race's own word on where a MOVE order really goes - Brain.move_fix(u, x, y, z) -> x, z; 65_race_sm.ai
+	-- keeps the marines' moves out of the buildings of the map and answers with the same place for any other race)
+	if mode == 1 and Brain.move_fix ~= nil then x, z = Brain.move_fix(u, x, y, z) end
 	local now = Brain.now or 0
 	local bk = (mode >= 100) and (u.id .. "|cast") or u.id            -- a cast does not replace the squad's marching order in the book
 	if mode == 16 then bk = u.id .. "|stance" end                    -- (step 10) nor does the stance
@@ -8996,6 +9034,12 @@ Brain.ABILD = {
 	[71] = { kind="self", rng=0, min=0, cd=10, en=10 },   -- race_ork/kommandos/ork_buff_self_infiltration
 	[72] = { kind="self", rng=0, min=0, cd=10, en=0 },   -- race_ork/kommando_hero/ork_buff_self_infiltrate
 	[73] = { kind="self", rng=0, min=0, cd=10, en=10, need={ "troops/sm_scout_infiltration" } },   -- race_marine/scout/sm_buff_self_infiltrate
+	[92] = { kind="pos", rng=60, min=0, cd=60, en=50 },   -- race_marine/dreadnought/sm_damage_aoe_charge
+	[93] = { kind="pos", rng=45, min=0, cd=60, en=0 },   -- race_marine/terminator/sm_teleport_target_terminators
+	[95] = { kind="self", rng=0, min=0, cd=45, en=40, need={ "wargear/arm_tech_bionics" } },   -- race_marine/techmarine/sm_damage_aoe_knockback
+	[96] = { kind="pos", rng=50, min=0, cd=30, en=55, need={ "wargear/acc_force_teleporter_pack" } },   -- race_marine/force_commander/sm_teleport_target_pack
+	[98] = { kind="pos", rng=5, min=0, cd=40, en=30 },   -- race_marine/assault_marine/sm_damage_aoe_mercilessstrike
+	[99] = { kind="self", rng=0, min=0, cd=80, en=0 },   -- race_marine/tactical_squad/sm_and_they_shall_know_no_fear
 }
 
 	end
@@ -9395,6 +9439,12 @@ local function note_hist(W)
 		table.insert(h.s, { t = now, hp = u.hpabs })
 		while table.getn(h.s) > 0 and now - h.s[1].t > 14 do table.remove(h.s, 1) end
 		h.x, h.z, h.last, h.gone = u.x, u.z, now, nil
+		-- (step SM-2: what a point of this squad's health costs - requisition + 2.5 x power over its full health, a hero by
+		-- the price of its revival; read only by P.loss(..., val) for a profile with 'trade_share')
+		if h.kv == nil then
+			local d = u.d
+			if d ~= nil and (d.hp or 0) > 0 then h.kv = ((d.arm == "cmd" and (d.req or 0) <= 0) and 250 or ((d.req or 0) + 2.5 * (d.pow or 0))) / d.hp else h.kv = 0.4 end
+		end
 		keep[u.id] = h
 	end
 	for _, u in ipairs(W.army) do note(u, 1) end
@@ -9416,8 +9466,22 @@ local function note_hist(W)
 	P.hist_ids = Brain.keys(keep)                                       -- (the sums of P.loss go in this order: a float sum must not depend on pairs())
 end
 -- health lost by the side (1 ours / 2 the enemy) within r of x z during the last 'secs'
-function P.loss(side, x, z, r, secs, now)
+function P.loss(side, x, z, r, secs, now, val)
 	local sum = 0
+	if val then
+		-- (step SM-2: the same sum weighed by the price of the health lost)
+		for _, id in ipairs(P.hist_ids or {}) do
+			local h = P.hist[id]
+			if h.side == side and h.x ~= nil and d2(h.x, h.z, x, z) <= r then
+				local first
+				for _, s in ipairs(h.s) do if now - s.t <= secs then first = s; break end end
+				local last = h.s[table.getn(h.s)]
+				if first ~= nil and last ~= nil and first.hp > last.hp then sum = sum + (first.hp - last.hp) * (h.kv or 0.4) end
+				if h.gone ~= nil and now - h.last <= secs then sum = sum + h.gone * (h.kv or 0.4) end
+			end
+		end
+		return sum
+	end
 	for _, id in ipairs(P.hist_ids or {}) do
 		local h = P.hist[id]
 		if h.side == side and h.x ~= nil and d2(h.x, h.z, x, z) <= r then
@@ -9567,6 +9631,13 @@ local function fights(W)
 			c.ratio_all = c.s_all / math.max(c.s_en, 1)
 			c.loss_ours = P.loss(1, c.x, c.z, engage_r + 15, 10, now)
 			c.loss_en = P.loss(2, c.x, c.z, clump_r + 15, 10, now)
+			if Brain.roles ~= nil and Brain.roles.profile ~= nil then
+				local tprof = Brain.roles.profile()
+				if tprof ~= nil and tprof.trade_share ~= nil then                 -- (step SM-2: the losses by what they cost - the marines' judge only)
+					c.lossv_ours = P.loss(1, c.x, c.z, engage_r + 15, 10, now, true)
+					c.lossv_en = P.loss(2, c.x, c.z, clump_r + 15, 10, now, true)
+				end
+			end
 			if pb ~= nil then for _, f in ipairs(CARRY) do c[f] = pb[f] end
 			else P.fseq = (P.fseq or 0) + 1; c.t0, c.key, c.keep = now, "F" .. P.fseq, {} end
 			if c.keep == nil then c.keep = {} end
@@ -10281,6 +10352,7 @@ function E.look(W)
 	local purse = Brain.purse
 	if purse ~= nil and purse.t ~= nil and W.now - purse.t <= 3 then S.req, S.pow, S.red = purse.req, purse.pow, purse.red end   -- the game's own count (elite.scar, mode 13)
 	S.tier, S.researching, S.tier_pbg = tier_look(P)
+	E.tier_now, E.tier_res = S.tier, S.researching                     -- (step SM-2: read by a race's own rules - 65_race_sm.ai SM.red_keep)
 	S.squads, S.hero, S.veh, S.kinds, S.fighting, S.home_fight = 0, nil, 0, {}, 0, false
 	for _, u in ipairs(W.own) do
 		local hero = (u.d ~= nil and u.d.arm == "cmd") or string.find(u.key or "", "heroes/", 1, true) ~= nil
@@ -10463,15 +10535,20 @@ function E.pow_free(S, pow, gear_n)
 end
 
 -- the engine's list of squad upgrades a squad of ours can take now: { pbg, key, req, pow } (wargear of the hero as well)
-local function upgrades_of(aisq)
+-- (step SM-1: 'any' - the marines' plan, P.upg_wait: the upgrades the squad can have, whether or not the purse pays one
+-- this second; 'now' says which. The list of step 4 holds only what can be paid now, so the first AFFORDABLE piece of the
+-- plan was bought - the scouts got the infiltration for 50 while the shotguns of the plan cost 75.)
+local function upgrades_of(aisq, any)
 	local out = {}
 	local n = AIProduction_GetProductionItemCount(s_selfplayer, PITEM_SquadUpgrade)
 	for i = 0, n - 1 do
 		local pbg = AIProduction_GetProductionItemAt(s_selfplayer, PITEM_SquadUpgrade, i)
-		if pbg ~= nil and Task_CountPBG(s_selfplayer, pbg) == 0 and AIProduction_CanAISquadProduce(aisq, PITEM_SquadUpgrade, pbg)
-			and AIProduction_CanAISquadProduceNow(aisq, PITEM_SquadUpgrade, pbg) then
-			local r, p = cost_rp(AIPlayer_GetProductionCost(s_self_modplayer, PITEM_SquadUpgrade, pbg))
-			table.insert(out, { pbg = pbg, key = upg_key(pbg), req = r, pow = p })
+		if pbg ~= nil and Task_CountPBG(s_selfplayer, pbg) == 0 and AIProduction_CanAISquadProduce(aisq, PITEM_SquadUpgrade, pbg) then
+			local can_now = AIProduction_CanAISquadProduceNow(aisq, PITEM_SquadUpgrade, pbg) and true or false
+			if can_now or any then
+				local r, p = cost_rp(AIPlayer_GetProductionCost(s_self_modplayer, PITEM_SquadUpgrade, pbg))
+				table.insert(out, { pbg = pbg, key = upg_key(pbg), req = r, pow = p, now = can_now })
+			end
 		end
 	end
 	return out
@@ -10530,6 +10607,61 @@ function E.update(W)
 	end
 
 	local want = P.army0 + steps(P.army_t, now)                       -- the squads that should stand by the clock
+	-- (step SM-2, the profile's 'army_first' - the marines' plan only; no other profile has the field. A marine squad costs
+	-- 250-450 requisition and the purse of step 4 buys what the bank can pay THIS second: the generators, the upgrades and
+	-- the hero's pieces took every point as it came and 'KEEP unit - nothing the engine can produce fits (0 candidates)'
+	-- stood for minutes - bench sm1f_m, 8 games against the old layer: 3.5 fighting squads with the hero at 5:00 and 3.8
+	-- at 8:00 against the enemy's 6.5 and 8.0, 86 upgrades and 41 generators bought for 39 squads. While the squads on
+	-- the field and on their way are below THE CLOCK'S OWN number - not the number 'the army the enemy has' raises it to -
+	-- the squad comes first: the generators stop at army_first.gens, the tier waits for all but one squad of the clock
+	-- (army_first.tier_late seconds past its hour at most), and the price of the squad is kept from the wargear, the
+	-- upgrades and the further posts (the old AI's AddonVsUnit, rule 1). Brain_EconArmyFirst=0: off.)
+	local want_clock = want
+	local army_first = (P.army_first ~= nil and Brain.num("EconArmyFirst", 1) >= 1) and P.army_first or nil
+	-- Step SM-3 (the profile's 'upkeep' - the marines' plan only; no other profile has the field). THE UPKEEP: every point
+	-- of population above 30 takes 2.55 requisition a minute off the income (ECONOMY_BY_FACTION_RU.md: the same for every
+	-- race, checked against 330 replays), and the HQ alone gives 264 of the 320-370 a minute - a tactical squad costs its
+	-- own price again every twelve minutes. Bench sm2f_c, 8 games: population 40 / 79 / 91 at 0-5 / 5-10 / 10-15 minutes
+	-- (people's marines 31 / 47 / 56), 'income/min 149/40 pop 87/100' at 8:00 - 37-46 % of the income gone against the
+	-- people's 14-22 %, and no room for a machine of tier 2. FEWER SQUADS, BUT FULL ONES. The population the army would
+	-- have with every squad full is counted; while its upkeep is above 'line' (0.25) of the gross income - and the
+	-- population above 'floor' (62: the army of the opening, three fighting squads and the scouts, is never refused) - no
+	-- new squad is ordered: not by the clock, not for the enemy's numbers, not with the floating bank. The money goes into
+	-- the models (a squad short of them goes home for them earlier - 50_army.ai, 'refill'), the upgrades, the hero, the
+	-- tier. ONE squad of a new tier (a machine, a call-in for the red resource) may come above the line - 'tier_line'
+	-- (0.10) more a tier. E.upkeep = { share, full, hi } is read by 50_army.ai. Log: 'KEEP unit - why the upkeep ...',
+	-- the numbers in STATE. OFF BY DEFAULT since the final check of the step (Brain_EconUpkeep=1: on): 32 whole games
+	-- against the old layer of other races, four seeds - with it ahead on tickets in 17, tickets 171 : 99; without it 20,
+	-- 220 : 80, not worse on any seed, better on three; the army at 8-12 minutes 4.9 fighting squads against 5.5-5.7. The
+	-- upkeep does go down (34 -> 37 % of the gross income at 5-10 minutes), but against the computer the squads it saves
+	-- are worth more than the requisition.
+	local upk, upk_hi, upk_tier = nil, false, false
+	E.upkeep = nil
+	if P.upkeep ~= nil and Brain.num("EconUpkeep", 0) >= 1 then
+		local per, free_pop = Brain.num("EconUpkeepPerPop", 2.55), Brain.num("EconUpkeepFreePop", 30)
+		local short = 0
+		for _, u in ipairs(W.own) do
+			local d = u.d
+			if d ~= nil and (d.pop or 0) > 0 and (d.n or 0) > 0 and (u.full or 0) > (u.n or 0) and d.arm ~= "veh" then short = short + (u.full - u.n) * d.pop / d.n end
+		end
+		local popf = S.pop + short
+		local paid = per * math.max(0, S.pop - free_pop)
+		local gross = math.max(S.ireq * 60 + paid, 1)
+		local line = Brain.num("EconUpkeepLine", P.upkeep.line or 0.25) + Brain.num("EconUpkeepTierStep", P.upkeep.tier_step or 0) * (math.min(S.tier, 3) - 1)
+		local full = per * math.max(0, popf - free_pop) / gross
+		upk = { share = paid / gross, full = full, popf = popf, gross = gross, line = line, refill = P.upkeep.refill }
+		upk_hi = (full > line and popf > Brain.num("EconUpkeepFloorPop", P.upkeep.floor or 62) and now >= Brain.num("EconOpeningSecs", 90))
+		upk.hi = upk_hi
+		-- (one squad of the tier we are at, while none of that tier was ordered yet)
+		upk_tier = (upk_hi and S.tier >= 2 and (E.tier_unit or 1) < S.tier and full <= line + Brain.num("EconUpkeepTierLine", P.upkeep.tier_line or 0.10))
+		E.upkeep = upk
+		if upk_hi then
+			want_clock = math.min(want_clock, S.squads + S.pending)
+			Brain.say("ECON", "keep|upkeep", 60, { "KEEP", "unit", "-", "why", "the upkeep: population " .. S.pop .. " (" .. Brain.f0(popf) .. " with every squad full) takes " .. Brain.f0(full * 100) .. " % of the gross income " .. Brain.f0(gross) ..
+				" a minute, the line is " .. Brain.f0(line * 100) .. " % - no new squad: the models, the upgrades, the hero, the tier" .. (upk_tier and " (one squad of tier " .. S.tier .. " may come)" or ""),
+				"squads", S.squads, "bank", rp(S.req, S.pow) }, "upkeep|" .. (upk_tier and 1 or 0))
+		end
+	end
 
 	-- Step 8: RECOVER (Orca's match of 14.11, brain against brain, the same code on both sides: 'bot 2 wiped bot 1 out -
 	-- they are on different levels', mark 9 'one bot has two generators, the other none again'). The log of the loser
@@ -10547,8 +10679,11 @@ function E.update(W)
 	--   Over when one squad short or none and the hero stands.
 	-- Log: 'BR ECON <t> RECOVER why ...' / 'RECOVER over ...'. Brain_EconRecover=0: off.
 	local rec
+	-- (step SM-2: a profile with a clock of its own for this mode - 'recover_t', the marines' only - is 'two squads short'
+	-- by THAT clock: their squad clock runs as fast as the money comes and would hold the mode on all through the opening)
+	local want_rec = (P.recover_t ~= nil) and (P.army0 + steps(P.recover_t, now)) or want
 	do
-		local short = want - (S.squads + S.pending)
+		local short = want_rec - (S.squads + S.pending)
 		local down = (AIResource_GetNumUnconsciousSquads(s_selfplayer) > 0)
 		-- (and the army IS small: the population is at EconRecoverPop (0.55) of the cap or below - four big squads at
 		-- 95 of 100 are no army to rebuild, whatever the clock's count says)
@@ -10560,16 +10695,16 @@ function E.update(W)
 		-- is not counted - are one short of the clock or none and the hero stands, or the population is above
 		-- EconRecoverPopOut (0.65) of the cap. Brain_EconRecoverHyst=0: as in step 8.)
 		if E.recover ~= nil and not rec and Brain.num("EconRecover", 1) >= 1 and Brain.num("EconRecoverHyst", 1) >= 1 then
-			local over = ((want - S.squads <= 1 and not down) or S.pop > Brain.num("EconRecoverPopOut", 0.65) * math.max(S.popmax, 1))
+			local over = ((want_rec - S.squads <= 1 and not down) or S.pop > Brain.num("EconRecoverPopOut", 0.65) * math.max(S.popmax, 1))
 			if now - E.recover.t < Brain.num("EconRecoverMinSecs", 30) or not over then rec = true end
 		end
 		if rec and E.recover == nil then
 			E.recover = { t = now }
-			Brain.log("ECON", "RECOVER", "why", "squads " .. S.squads .. " + " .. S.pending .. " on the way of " .. want .. " by the clock" .. (down and ", the hero is down" or "") ..
+			Brain.log("ECON", "RECOVER", "why", "squads " .. S.squads .. " + " .. S.pending .. " on the way of " .. want_rec .. " by the clock" .. (down and ", the hero is down" or "") ..
 				": the hero, one post, one generator, then the squads - nothing else, and no march to the enemy's half", "bank", rp(S.req, S.pow), "income/min", rp(S.ireq * 60, S.ipow * 60),
 				"gens", S.gens, "posts", S.posts, "pop", S.pop .. "/" .. S.popmax)
 		elseif not rec and E.recover ~= nil then
-			Brain.log("ECON", "RECOVER over", "why", "squads " .. S.squads .. " + " .. S.pending .. " of " .. want .. (down and ", the hero is down" or ", the hero stands"), "lasted", Brain.f0(now - E.recover.t), "s",
+			Brain.log("ECON", "RECOVER over", "why", "squads " .. S.squads .. " + " .. S.pending .. " of " .. want_rec .. (down and ", the hero is down" or ", the hero stands"), "lasted", Brain.f0(now - E.recover.t), "s",
 				"bank", rp(S.req, S.pow), "gens", S.gens, "posts", S.posts)
 			E.recover = nil
 		end
@@ -10716,6 +10851,7 @@ function E.update(W)
 	end
 	-- the squads: how many should stand by the clock, how many do
 	local have = S.squads + S.pending
+	if upk_hi then want = math.min(want, have + (upk_tier and 1 or 0)) end      -- (step SM-3: the upkeep - no squad more, or one of the new tier)
 	local opening = (now < Brain.num("EconOpeningSecs", 90) and have < P.army0)         -- (a takeover in mid-game has no opening)
 	S.opening = opening
 	local function buy_unit(why, wait)
@@ -10760,6 +10896,7 @@ function E.update(W)
 	if S.next_tier_t ~= nil and now >= S.next_tier_t - Brain.num("EconTierSaveSecs", 30) then
 		local rule = Brain.num("EconTechRule", 3)
 		local army_ok = (rule >= 3 and S.squads >= 2) or (rule < 3 and S.squads >= want - 1)
+		if army_first ~= nil and army_ok and S.squads < want_clock - 1 and now < S.next_tier_t + (army_first.tier_late or 120) then army_ok = false end
 		if rec then
 			Brain.say("ECON", "tierwait", 30, { "KEEP", "tier", "-", "why", "recovering: " .. S.squads .. " squads stand of " .. want .. " - the army first" }, "tierrec")
 		elseif army_ok and not S.home_fight then
@@ -10792,6 +10929,7 @@ function E.update(W)
 	-- 7. generators by the clock (one building task at a time; a generator needs a post with room)
 	local gens_want = math.min(steps(P.gen_t, now), plan_num("gen_max", 3))
 	if rec then gens_want = math.min(gens_want, Brain.num("EconRecoverGens", 1)) end
+	if army_first ~= nil and S.squads + S.pending < want_clock then gens_want = math.min(gens_want, army_first.gens or 2) end
 	-- (one request per GenGapSecs: bench s4_x, a live opponent - the request went out every second for a minute and more,
 	-- the bank was not charged and no task stayed: nobody was free to build. The engine charges when the building is placed.)
 	-- (step 5: a generator placed and not yet in the engine's count is counted - S.gens; a request the engine did not place
@@ -10913,7 +11051,9 @@ function E.update(W)
 				end
 				for _, q in ipairs(E.pending) do if q.key == g.key then have_k = have_k + 1 end end
 				if st.watch == nil and S.tier >= (g.tier or 1) and now >= Brain.num("EconCallinFrom", g.from or 0) and have_k < Brain.num("EconCallinMax", g.max or 1)
-					and S.red >= g.red and now - st.t >= (g.recharge or 180) and now - st.no >= Brain.num("EconCallinRetrySecs", 30) and not S.home_fight then
+					and (not upk_hi or not g.keep or (upk_tier and (g.tier or 1) >= S.tier))   -- (step SM-3: the upkeep - a fighting squad for the red resource is a squad)
+					and S.red - ((prof.red_keep ~= nil and prof.red_keep(W, "callin")) or 0) >= g.red   -- (step SM-2: the red resource a race keeps - the marines' only)
+					and now - st.t >= (g.recharge or 180) and now - st.no >= Brain.num("EconCallinRetrySecs", 30) and not S.home_fight then
 					local to = (g.at == "fist" and Brain.army ~= nil and Brain.army.centre) or W.home
 					if to ~= nil then
 						local afford = (S.req - S.keep_req >= g.req + Brain.num("EconCallinFree", g.free or 0) and S.pow - S.keep_pow >= (g.pow or 0)
@@ -10921,7 +11061,13 @@ function E.update(W)
 						local res, pbg = Brain.abilities.callin_look(g)
 						if res == "cannot" and not afford then
 							-- (the price is not there: for the kommandos it is kept - the wish below only keeps; the gretchin wait for free money)
-							if g.keep then wish(S, "callin", g.name, g.req, g.pow or 0, "a squad for the red resource: " .. g.name .. " (" .. Brain.f0(S.red) .. " of the red there)", true, function() end) end
+							-- (step SM-3, bench sm3t_a orb_eld_03b8a0: 'BUY callin terminators ... bank 754/100 n 1' .. 'n 35', one a second -
+							-- the price was there, the POPULATION was not (21 for the terminators), the engine said no, and the wish
+							-- 'bought' nothing and held 650 / 100 of the purse for good. With a profile that counts the upkeep the
+							-- price is kept only while it is the money that is missing. The fix goes with the profile's field, not with
+							-- the key Brain_EconUpkeep: the upkeep is off by default, the bug is not - bench sm3f_noup, 120 such 'buys'.)
+							local money_short = (S.req - S.keep_req < g.req + Brain.num("EconCallinFree", g.free or 0) or S.pow - S.keep_pow < (g.pow or 0))
+							if g.keep and (P.upkeep == nil or money_short) then wish(S, "callin", g.name, g.req, g.pow or 0, "a squad for the red resource: " .. g.name .. " (" .. Brain.f0(S.red) .. " of the red there)", true, function() end) end
 						elseif res == "ok" and not afford then
 							-- (the engine could, our purse keeps the money for something before it: not now)
 						elseif res == "ok" then
@@ -10934,6 +11080,7 @@ function E.update(W)
 								if g.keep then                                              -- (a fighting squad: one of the clock's)
 									table.insert(E.pending, { key = g.key, t = now, had = S.squads })
 									S.pending = S.pending + 1
+									if upk ~= nil and (g.tier or 1) >= S.tier then E.tier_unit = S.tier end   -- (step SM-3: it is the squad of its tier)
 								end
 								Brain.log("ECON", "CALLIN", g.name, "ASKED", targeted and ("at " .. Brain.f0(to.x) .. " " .. Brain.f0(to.z)) or "no place", "- by the AI's own request (Request_PlayerAbility" .. (targeted and "SingleTarget)" or ")"), "n", st.n)
 							end)
@@ -10950,6 +11097,7 @@ function E.update(W)
 	end
 	callins(true)
 	local core_on = (P.late_core ~= nil and Brain.num("EconLateCore", 1) >= 1 and not opening and not tool_first)
+	if upk_hi and not upk_tier then core_on = false end                 -- (step SM-3: the upkeep - no room is made and no squad ordered above the line)
 	local core_stands = false
 	if core_on then
 		local k1 = P.late_order and P.late_order[1] and P.late_order[1].key   -- (the room is kept for the first squad of the order)
@@ -11020,6 +11168,10 @@ function E.update(W)
 		if tier_wait then
 			Brain.say("ECON", "keep|unitwait", 30, { "KEEP", "unit", "-", "why", "the research of tier " .. (S.tier + 1) .. " runs (" .. Brain.f0(now - t_click) .. " s): the next squad is of the new tier",
 				"bank", rp(S.req, S.pow) }, "unitwait")
+		elseif upk_tier then
+			S.tier_only = true                                              -- (step SM-3: above the line of the upkeep only a squad of the new tier - 40_composition.ai)
+			buy_unit("squads " .. S.squads .. " + " .. S.pending .. " on the way: the one squad of tier " .. S.tier .. " above the line of the upkeep", true)
+			S.tier_only = nil
 		else buy_unit("squads " .. S.squads .. " + " .. S.pending .. " on the way, the clock asks " .. want, true) end
 	end
 	callins(false)                                                     -- (8r, second pass: the gretchin, with the money the clock's squad left)
@@ -11029,7 +11181,9 @@ function E.update(W)
 	local unit_kr, unit_kp = S.keep_req - kr, S.keep_pow - kp
 	-- (step 5: the REQUISITION is free for them; the power a squad waits for is kept - or the lootas the clock asks for at
 	-- 150 s would lose their 30 power to every piece of wargear)
-	if Brain.num("EconAddonRule", 3) >= 3 then S.keep_req = kr end
+	local addon_rule = Brain.num("EconAddonRule", 3)
+	if army_first ~= nil and have < want_clock then addon_rule = 1 end       -- (step SM-2: the squad of the clock before the pieces and the upgrades)
+	if addon_rule >= 3 then S.keep_req = kr end
 
 	-- 9. the hero's wargear by the clock: one piece a slot (weapon, armour, accessory), the profile's order
 	-- (money lying idle goes into the hero and the squads first: the clock of the pieces and of the upgrades runs ahead)
@@ -11185,7 +11339,7 @@ function E.update(W)
 					if aisq ~= nil and Task_CountAISquadProduction(aisq) == 0 then
 						-- (step 6, Orca's match 1: 'beamy deffguns with no machine around' - 3 of 7 upgrades; an upgrade the profile
 						-- marks 'veh' is bought only while machines of the enemy are remembered)
-						local c = choose(upgrades_of(aisq), prefs, had, nil, function(pat)
+						local c = choose(upgrades_of(aisq, P.upg_wait), prefs, had, nil, function(pat)
 							local need = P.upg_need and P.upg_need[pat]
 							if need == nil then return true end
 							if need == "veh" then return (en_veh or 0) >= 1 end
@@ -11193,7 +11347,7 @@ function E.update(W)
 							local share = (need == "hinf" and (en_mix.hinf or 0)) or (need == "inf" and (en_mix.inf or 0)) or 0
 							return (en_seen or 0) > 0 and share >= Brain.num("CompNeedShare", 0.4)
 						end)
-						if c ~= nil and E.pow_free(S, c.pow) then best, best_c, best_aisq = u, c, aisq end
+						if c ~= nil and c.now ~= false and E.pow_free(S, c.pow) then best, best_c, best_aisq = u, c, aisq end   -- (P.upg_wait: the piece of the plan that cannot be paid yet is waited for)
 					end
 				end
 			end
@@ -11221,15 +11375,19 @@ function E.update(W)
 	local fgap = Brain.num("EconFloatGapSecs", 60)
 	if free_req >= 1.5 * Brain.num("EconFloatReq", 500) then fgap = fgap / 3 end
 	if not opening and free_req >= Brain.num("EconFloatReq", 500) and now - E.t_unit >= fgap
-		and have < want + Brain.num("EconFloatSquads", 2) + (S.crisis and 1 or 0) and not tier_wait and not tool_first then
+		and have < want + Brain.num("EconFloatSquads", 2) + (S.crisis and 1 or 0) and not tier_wait and not tool_first and not upk_hi then
 		S.float_buy = true
 		buy_unit("the bank floats (" .. Brain.f0(S.req) .. " requisition, " .. Brain.f0(S.keep_req) .. " of it kept)", false)
 		S.float_buy = nil
 	end
 
-	Brain.say("ECON", "state", 60, { "STATE", "units", E.n.unit, "veh", E.n.veh, "gens", S.gens, "posts", S.posts, "tier", S.tier .. (S.researching and "+" or ""),
+	local state = { "STATE", "units", E.n.unit, "veh", E.n.veh, "gens", S.gens, "posts", S.posts, "tier", S.tier .. (S.researching and "+" or ""),
 		"gear", E.n.gear, "upg", E.n.upg, "reinf", E.n.reinf, "revive", E.n.revive, "squads", S.squads, "of", want, "bank", rp(S.req, S.pow),
-		"income/min", rp(S.ireq * 60, S.ipow * 60), "pop", S.pop .. "/" .. S.popmax, "red", S.red and Brain.f0(S.red) or "?" }, "state")
+		"income/min", rp(S.ireq * 60, S.ipow * 60), "pop", S.pop .. "/" .. S.popmax, "red", S.red and Brain.f0(S.red) or "?" }
+	if upk ~= nil then                                                  -- (step SM-3: what the population costs)
+		for _, w in ipairs({ "upkeep", Brain.f0(upk.share * 100) .. "%", "full", Brain.f0(upk.full * 100) .. "%", "popfull", Brain.f0(upk.popf), "gross", Brain.f0(upk.gross), upk.hi and "ABOVE" or "below" }) do table.insert(state, w) end
+	end
+	Brain.say("ECON", "state", 60, state, "state")
 end
 
 	end
@@ -11378,6 +11536,20 @@ function C.pick(W, S, E)
 	if n_tur > 0 and Brain.num("CompTurretAv", 1) >= 1 then en_veh = (en_veh or 0) + n_tur end
 	local opening_i = E.n.unit + 1
 	local open_key = (S.opening and P.opening) and P.opening[opening_i] or nil
+	-- (step SM-1, P.opening_by_kind - the marines' plan only: the opening is a list of KINDS that must stand, not of orders
+	-- to give. A squad of the list that stands already or is on its way - above the starters, P.starter_kinds - is not
+	-- ordered again. On the bench the brain takes a human's seat at 0:05 with his first order in the queue, and the
+	-- opening by the count of the brain's own orders repeated it: two tactical squads and no scouts in 24 games of 24.)
+	if S.opening and P.opening ~= nil and P.opening_by_kind then
+		open_key = nil
+		local need = {}
+		for _, k in ipairs(P.opening) do
+			need[k] = (need[k] or 0) + 1
+			local have_k = (S.kinds[k] or 0) - ((P.starter_kinds and P.starter_kinds[k]) or 0)
+			for _, q in ipairs(E.pending) do if q.key == k then have_k = have_k + 1 end end
+			if open_key == nil and have_k < need[k] then open_key = k end
+		end
+	end
 	local mel, rng, av, brk, top, setups = 0, 0, 0, 0, 0, 0
 	local breakers = P.breakers or {}
 	for _, u in ipairs(W.own) do
@@ -11420,6 +11592,22 @@ function C.pick(W, S, E)
 	if S.pow >= 2 * hi then powk = Brain.num("CompPowIdleK", 0.4) end
 	-- a machine is due: people's machines are 10-15 % of their orders; none so far among VehDueOrders (4) orders at tier 2+
 	local veh_due = (S.tier >= 2 and S.veh == 0 and E.n.unit >= Brain.num("CompVehDueOrders", 3) and E.n.veh < Brain.num("CompVehMinShare", 0.12) * (E.n.unit + 1))
+	-- (step SM-1, P.vs - the marines' plan only: a kind's worth against an enemy that mostly SHOOTS or mostly CHARGES - the
+	-- share of the infantry remembered, by health, whose stance is melee. The value above is health x damage per cost: it
+	-- does not see what a jump onto shooters or a heavy bolter in front of a mob is worth.)
+	local mel_share
+	if P.vs ~= nil then
+		local mw, aw = 0, 0
+		for _, id in ipairs(Brain.keys(C.mem)) do
+			local e = C.mem[id]
+			local ed = Brain.UNITS[e.key]
+			if ed ~= nil and ed.arm ~= "veh" and ed.arm ~= "bld" and not e.veh then
+				aw = aw + e.w
+				if ed.mel == 1 then mw = mw + e.w end
+			end
+		end
+		if aw > 0 then mel_share = mw / aw end
+	end
 	local best, n, parts = nil, 0, {}
 	local cnt = AIProduction_GetBuildableSquadCount(s_selfplayer)
 	for i = 0, cnt - 1 do
@@ -11465,6 +11653,11 @@ function C.pick(W, S, E)
 			if en_setup >= 1 and brk == 0 and breakers[key] then
 				v = v * Brain.num("CompSetupK", 2.5); why = why .. ", set-up teams seen (" .. en_setup .. ") and nothing of ours breaks them"
 			end
+			if mel_share ~= nil and P.vs[key] ~= nil then
+				local r = P.vs[key]
+				if r.shooters ~= nil and mel_share <= Brain.num("CompVsShootersMax", 0.35) then v = v * r.shooters; why = why .. ", the enemy mostly shoots (" .. Brain.f0(mel_share * 100) .. " % of its infantry charges)"
+				elseif r.mobs ~= nil and mel_share >= Brain.num("CompVsMobsMin", 0.6) then v = v * r.mobs; why = why .. ", the enemy mostly charges (" .. Brain.f0(mel_share * 100) .. " % of its infantry)" end
+			end
 			-- Step 10 (P2.10, Orca fb 1138 / 1144; the people's ork armies - ORK_COMBAT_HUMANS_VS_BOT_RU.md: 0.6 stormboy squads
 			-- a player, 8-9 % of the army's time; the brain: not one in 36 games - CompMeleeK marks every mob down and the
 			-- x 2.5 came only against set-up teams, where the stikkbommas took it). THE INITIATOR: one squad of the
@@ -11486,6 +11679,13 @@ function C.pick(W, S, E)
 			-- whose trade is machines (the profile's role 'av') waits until one is seen, or until the hour machines are
 			-- likely (CompAvLikelySecs 480) - then one.
 			if d.setup == 1 and Brain.num("CompSetupCap", 1) >= 1 and (setups >= 2 or (setups >= 1 and S.squads - setups < Brain.num("CompSetup2Squads", 5))) then v = 0 end
+			-- (step SM-1, P.max_kind: no more squads of a kind than the plan allows - the marines' scouts are capturers, two
+			-- squads of them are enough: the brain of step 8 bought 47 in 24 games as 'strength per cost' and lost 194 models of them)
+			if P.max_kind ~= nil and P.max_kind[key] ~= nil then
+				local stand = (S.kinds[key] or 0)
+				for _, q in ipairs(E.pending) do if q.key == key then stand = stand + 1 end end
+				if stand >= P.max_kind[key] then v = 0 end
+			end
 			local prow = Brain.roles.profile().units[key]
 			if prow ~= nil and prow.role == "av" and en_veh == 0 and (W.now < Brain.num("CompAvLikelySecs", 480) or av >= 1) and Brain.num("CompAvNeedsVeh", 1) >= 1 then v = 0 end
 			-- a squad whose power is not there within UnitPowSecs, or is the tier's, is not waited for: the next best is taken
@@ -11504,6 +11704,7 @@ function C.pick(W, S, E)
 			-- (17 of 30 before). People stop adding tier 1 squads near their tier 3: the sixth squad IS the nobz.)
 			local reserve_all = (S.squads >= Brain.num("CompReserveSquads", 5) and S.tier >= 2 and not S.crisis and Brain.num("CompReserveClock", 1) >= 1)
 			if (S.float_buy or reserve_all) and (S.pop_reserve or 0) > 0 and not (P.late_core and P.late_core[key]) and (d.pop or 0) > (S.popmax or 0) - (S.pop or 0) - S.pop_reserve then v = 0 end
+			if S.tier_only and (d.t or 1) < S.tier then v = 0 end              -- (step SM-3, 30_economy.ai: above the line of the upkeep only a squad of the tier we are at)
 			if open_key ~= nil then
 				if key == open_key then v, why = 1000, "the people's opening" else v = 0 end
 			end
@@ -11722,6 +11923,7 @@ local function go_home(u, W, why)
 	end
 	A.st[u.id] = { mode = "retreat", t = Brain.now, walk = true }
 end
+A.retreat, A.go_home = retreat, go_home                              -- (step SM-1: for a race's own rules, 65_race_sm.ai)
 
 -- A squad that WALKS away from the enemy (a loner going back to the fist, a lost fight left on foot, the support sent
 -- to our point behind) and takes losses on the way gets the retreat order (step 3; bench 13.11, f_1c56ef_6m28: sluggas
@@ -11835,6 +12037,12 @@ local function survive(u, W, taken)
 			"hp", f2(u.hp), "models", u.n .. "/" .. u.full, "fight", (u.fight and u.fight.key) or "-")
 		A.st[u.id] = { mode = "retreat", t = now, not_ours = true }
 		return
+	end
+	-- (step SM-1: the race's own rule of survival, if its profile has one - prof.survive(u, W, taken) -> true: the squad is
+	-- seen to. The marines' scouts and set-up teams, 65_race_sm.ai. No other profile has the field.)
+	do
+		local prof = Brain.roles.profile()
+		if prof ~= nil and prof.survive ~= nil and prof.survive(u, W, taken) then return end
 	end
 	if not u.hit then return end
 	local F = u.fight
@@ -11979,14 +12187,36 @@ local function judge(F, W)
 	--   bad: TradeBadK (2) x + 150 -> a fight 'stronger on paper' is a HOLD (nobody is called in, the squads that lose
 	--     models fast are sent home by the survive rule - which does not apply to a pressed fight).
 	local lo, le = F.loss_ours or 0, F.loss_en or 0
+	-- Step SM-2 (the profile's 'trade_share' - the marines' only; no other profile has the field). The lines of the trade
+	-- are absolute health - 200 lost in 10 s, 4 x the enemy's + 150 - and were set on ork mobs, where 200 health are two
+	-- boys of thirty. A marine squad is three models of 350 health that cost 150 each: one volley at one squad passed the
+	-- lines ('routed on the trade' 47 and 'burnt ground' 108 verdict lines in 8 games of sm1f_m, 558 of the 776 STEP /
+	-- AVOID lines with ONE squad of ours). With the field the lines are a SHARE of our health in the fight as it was
+	-- before the losses (fix: the least loss that is looked at; pad: the allowance on top of K x the enemy's loss), never
+	-- below the absolute ones, and the enemy's loss is weighed by WHAT IT COSTS (10_perception.ai P.loss with 'val':
+	-- requisition + 2.5 x power per point of health, a hero by its revival) against what ours cost - 200 health of
+	-- guardsmen for 200 of tactical marines is no even trade. Brain_TradeShare=0: the absolute lines.
+	local tfmin, tpad, tmin, lev = Brain.num("TradeFixMin", 200), 150, Brain.num("TradeMin", 150), le
+	do
+		local tprof = Brain.roles.profile()
+		local ts = tprof and tprof.trade_share or nil
+		if ts ~= nil and Brain.num("TradeShare", 1) >= 1 then
+			local h0 = lo
+			for _, u in ipairs(F.ours) do h0 = h0 + (u.hpabs or 0) end
+			tfmin = math.max(tfmin, Brain.num("TradeShareFix", ts.fix or 0.25) * h0)
+			tpad = math.max(tpad, Brain.num("TradeSharePad", ts.pad or 0.15) * h0)
+			tmin = math.max(tmin, tpad)
+			if lo > 0 and (F.lossv_ours or 0) > 0 and F.lossv_en ~= nil then lev = F.lossv_en / (F.lossv_ours / lo) end
+		end
+	end
 	local machine = false
 	for _, u in ipairs(F.ours) do if u.veh then machine = true end end
 	F.trade = nil
-	if Brain.num("TradeFix", 1) >= 1 and F.age >= Brain.num("TradeFixSecs", 12) and lo >= Brain.num("TradeFixMin", 200) then
+	if Brain.num("TradeFix", 1) >= 1 and F.age >= Brain.num("TradeFixSecs", 12) and lo >= tfmin then
 		local scrap = false
 		for _, u in ipairs(F.ours) do if u.mel and u.ed ~= nil and u.ed <= Brain.num("ScrapD", 8) then scrap = true end end
-		if lo > Brain.num("TradeRoutK", 4) * le + 150 and (not scrap or F.age >= Brain.num("TradeRoutScrapSecs", 20)) then F.trade = "rout"
-		elseif lo > Brain.num("TradeBadK", 2) * le + 150 then F.trade = "bad" end
+		if lo > Brain.num("TradeRoutK", 4) * lev + tpad and (not scrap or F.age >= Brain.num("TradeRoutScrapSecs", 20)) then F.trade = "rout"
+		elseif lo > Brain.num("TradeBadK", 2) * lev + tpad then F.trade = "bad" end
 		if F.trade == "rout" and r < Brain.num("TradeRoutMaxRatio", 3) then
 			zone_note(F, W, lo, le)
 			F.call = nil
@@ -11996,7 +12226,7 @@ local function judge(F, W)
 	local zq = A.zone_at(F.x, F.z)
 	-- (a turret's circle stops a fight only when the trade is already bad: a fight that goes well next to a turret goes on)
 	if zq ~= nil and zq.turret ~= nil and F.trade == nil then zq = nil end
-	if zq ~= nil and not machine and r < Brain.num("ZonePressRatio", 2) and F.trade ~= "rout" and le <= lo then
+	if zq ~= nil and not machine and r < Brain.num("ZonePressRatio", 2) and F.trade ~= "rout" and lev <= lo then
 		F.call = nil
 		if zq.turret ~= nil then return "step", "under the enemy's turret at " .. zq.turret.key .. ": not without a machine or twice its strength" end
 		return "step", "burnt ground (routed here " .. f0(W.now - zq.t) .. " s ago, " .. zq.n .. " x): not again without a machine or twice its strength"
@@ -12007,7 +12237,7 @@ local function judge(F, W)
 	end
 	if r >= even then
 		if F.age >= Brain.num("TradeSecs", 10) and ra < Brain.num("TradeRatioAll", 1.0)
-			and F.loss_ours > Brain.num("TradeK", 1.5) * F.loss_en + Brain.num("TradeMin", 150) then
+			and F.loss_ours > Brain.num("TradeK", 1.5) * lev + tmin then
 			return "step", "bleeding: we lose more than the enemy and are no stronger"
 		end
 		return "hold", "even fight"
@@ -12068,6 +12298,12 @@ end
 local function engage(u, F, W)
 	local roles = Brain.roles
 	local role = roles.of(u)
+	-- (step SM-1: the race's own way to fight with this squad, if its profile has one - prof.engage(u, role, F, W) -> true:
+	-- the squad has its order. 65_race_sm.ai. No other profile has the field.)
+	do
+		local prof = roles.profile()
+		if prof ~= nil and prof.engage ~= nil and prof.engage(u, role, F, W) then return end
+	end
 	-- Step 6: grenades and the hero's abilities first (70_abilities.ai B.on_fight); a throw is not cancelled by a new order
 	if Brain.abilities.on_fight ~= nil and Brain.abilities.on_fight(u, role, F, W) == "busy" then return end
 	-- Step 10 (Orca fb 1100 mark 7 'it throws a grenade and then walks into it itself'): OUR OWN BOMB. A cast at a place
@@ -12329,7 +12565,10 @@ local function loner(F, W, taken, v)
 	local now, K = W.now, F.keep
 	local n_ours = table.getn(F.ours)
 	local n_en = table.getn(F.en) + (F.ghosts or 0)
-	local alone = (n_ours == 1 and n_en >= Brain.num("LonerEnemy", 2) and F.ratio < Brain.num("Win", 1.3))
+	-- (step SM-2: LonerRatio - the line below which one squad against two is 'alone'; by default the Win line as before.
+	-- The marines set it to the Even line, 65_race_sm.ai: their army is few strong squads, one of them that is no weaker
+	-- than the two it met fights them - bench sm1f_m: 384 AVOID lines in 8 games, 'ratio 1.14 with_support 3.94 ... WAITS')
+	local alone = (n_ours == 1 and n_en >= Brain.num("LonerEnemy", 2) and F.ratio < Brain.num("LonerRatio", Brain.num("Win", 1.3)))
 	local was = (F.verdict == "avoid")
 	local vhold = Brain.num("VerdictHoldSecs", 4)                        -- every verdict stands this long, AVOID too (see fight())
 	local stood = now - (F.verdict_t or now)
@@ -12656,7 +12895,12 @@ local function fight(F, W, taken)
 	end
 	if v == "step" then
 		local step_d, hold = Brain.num("StepD", 25), Brain.num("StepHoldSecs", 8)
+		-- (step SM-1: prof.on_step(u, F, W, fb) -> true: the race's rule has seen to this squad instead of the step back -
+		-- a marine set-up team that stands in range covers the others' step. No other profile has the field.)
+		local prof_step = Brain.roles.profile()
+		prof_step = prof_step and prof_step.on_step or nil
 		for _, u in ipairs(F.ours) do
+			if not taken[u.id] and prof_step ~= nil and prof_step(u, F, W, fb) then taken[u.id] = true end
 			if not taken[u.id] then
 				taken[u.id] = true
 				local st = A.st[u.id]
@@ -12717,6 +12961,183 @@ local function fight(F, W, taken)
 			local e0, n0 = eff0_of(u)
 			taken[u.id] = true; A.st[u.id] = { mode = "behind", t = now, tx = fb.x, tz = fb.z, eff0 = e0, n0 = n0 }
 			Brain.order(u, O.MOVE, fb.x, fb.y, fb.z, { "fight lost near, not in it: walk to", fb.key, F.key })
+		end
+	end
+end
+
+-- ---- step SM-3: A FREE SQUAD GOES TO OUR FIGHT ------------------------------------------------------------------------
+-- (The profile's 'join_fight' - the marines' only; no other profile has the field.) Bench sm2f_c / sm2f_b_s1, 16 games
+-- against the old layer (tools/sm3_where.py): in the seconds a fight of ours against two enemy squads or more was on,
+-- 29 % of our fighting squads stood within 45 m of it, 29-32 % at 45-80 m, 28-33 % at 80-160 m - a fight was called
+-- to only from SupportR (80 m), the plan left a fight farther than 60 m from the fist 'to its squads', and the free
+-- squads meanwhile marched to a point ('fist MARCH together 2/3 ... to take' 105 m from 'F15 HOLD even fight ours 4
+-- enemy 5', which was lost eleven seconds later) or weighed the fight's enemy ALONE: 'fist STAND together 1/1 ... the
+-- enemy seen ahead is stronger' in 125 of the 164 STAND / BACK lines.
+-- A squad of the army that is free this tick - in no fight, not on its way home, fit (JoinMinEff 0.5 of its strength,
+-- a machine above MachineHomeHP), no squad of the rear - and stands within JoinReachD (150 m) of a fight of ours with a
+-- fighting squad in it is that fight's:
+--   the fight is pressed or held and not won without it (with the support below JoinWonRatio 1.3, or it trades badly):
+--     the nearest of them go there until the fight stands at JoinEnoughRatio (1.6) with them (attack-move to the
+--     enemy's centre; a machine to our infantry there) - within SupportR a squad is the fight's support and counts in
+--     the verdict by the rules that were; the others stay free (the points, the fist);
+--   the fight is being left (STEP / LEAVE / AVOID) and would be even WITH every squad that can come (JoinEvenRatio 1.0):
+--     they come - the verdict turns when they are near;
+--   it would be lost with them too: they do not walk into it one by one and do not stand in front of it - they go to
+--     our point behind that fight, where its squads are walking to (GATHER): the fist is whole again there.
+-- A squad with a capture job (not a capturer - those keep the map) comes as well unless its point 'burns': it is on
+-- the point and capturing, the point is a victory point while the race presses (RaceJobsK), or our farm that was lost;
+-- not in the opening, not into a fight that is won on paper (the Win line). While the race is at alarm (RaceAlarmK)
+-- only a fight at a victory point or at home calls - the plan's rule. Nobody is called into the enemy's base.
+-- Called by A.update after the fights, before the refill, the capture jobs and the fist. Log: 'BR ARMY <t> fight <F>
+-- JOIN | GATHER n <squads> why ...', orders 'join our fight ...' / 'gather behind ...'. [Brain_JoinFight=0: off]
+function A.join(W, taken)
+	local prof = Brain.roles.profile()
+	local jf = prof and prof.join_fight or nil
+	if jf == nil or Brain.num("JoinFight", 1) < 1 or table.getn(W.fights) == 0 then return end
+	local now, roles, P, C = W.now, Brain.roles, Brain.perception, Brain.capture
+	local reach = Brain.num("JoinReachD", jf.reach or 150)
+	local opening = (now < Brain.num("OpeningSecs", 150))
+	local rk = Brain.plan.rk or 1
+	local alarm = (rk >= Brain.num("RaceAlarmK", 2.5))
+	local fl = {}
+	for _, F in ipairs(W.fights) do
+		local core = 0
+		for _, w in ipairs(F.ours) do if not roles.is_rear(roles.of(w)) then core = core + 1 end end
+		local ok = (F.base == nil and F.verdict ~= nil and core > 0 and table.getn(F.en) > 0)
+		-- (verifier, the merge with step 11: a fight that is GONE this tick - fight() above, F.keep.gone: every enemy runs home or
+		-- stands at its base, nobody of ours shot at - calls nobody; its own squads were let go to the map)
+		if ok and Brain.num("FightGone", 1) >= 1 and F.keep ~= nil and F.keep.gone == now then ok = false end
+		if ok and alarm then
+			ok = (W.home ~= nil and d2(F.x, F.z, W.home.x, W.home.z) <= Brain.num("PlanFightHomeR", 70))
+			for _, p in ipairs(W.pts) do if p.vp and d2(F.x, F.z, p.x, p.z) <= Brain.num("PlanFightVpR", 40) then ok = true end end
+		end
+		if ok and A.base_of(F.x, F.z, W, Brain.num("BaseKeepR", 55) + 15) ~= nil then ok = false end
+		if ok then table.insert(fl, { F = F, j = {}, jobs = {} }) end
+	end
+	if table.getn(fl) == 0 then return end
+	for _, u in ipairs(W.army) do
+		local st = A.st[u.id]
+		local role = roles.of(u)
+		if not taken[u.id] and u.fight == nil and not u.retreating and not roles.is_rear(role) and role ~= "transport"
+			and not (st ~= nil and (st.mode == "retreat" or st.mode == "heal"))
+			and ((u.veh and u.hp >= Brain.num("MachineHomeHP", 0.5)) or (not u.veh and u.eff >= Brain.num("JoinMinEff", jf.min_eff or 0.5))) then
+			local best, bd
+			for _, q in ipairs(fl) do
+				local d = d2(u.x, u.z, q.F.x, q.F.z)
+				if d <= reach and (bd == nil or d < bd) then best, bd = q, d end
+			end
+			if best ~= nil then
+				local job = C.jobs[u.id]
+				if job == nil then table.insert(best.j, u)
+				elseif not opening then
+					-- (a capture job that does not burn)
+					local burns = (u.capturing or job.at or (Brain.plan.farm_lost ~= nil and Brain.plan.farm_lost(job, now)))
+					if not burns and rk >= Brain.num("RaceJobsK", 1.5) then
+						for _, p in ipairs(W.pts) do if p.key == job.key and p.vp then burns = true end end
+					end
+					if not burns then table.insert(best.jobs, u) end
+				end
+			end
+		end
+	end
+	for _, q in ipairs(fl) do
+		local F = q.F
+		local nj, njobs = table.getn(q.j), table.getn(q.jobs)
+		if nj + njobs > 0 then
+			-- the enemy as the verdict counts it (what was seen there seconds ago at a discount), ours with everybody who can come
+			local s_en = F.s_en or 0
+			local gh = {}
+			for _, g in ipairs(W.ghosts) do if d2(g.x, g.z, F.x, F.z) <= Brain.num("ClumpR", 35) + 15 then table.insert(gh, g) end end
+			if table.getn(gh) > 0 then s_en = s_en + Brain.num("GhostK", 0.5) * P.strength(gh, P.mix_of(F.ours)) end
+			local all = {}
+			for _, w in ipairs(F.ours) do table.insert(all, w) end
+			for _, w in ipairs(F.support) do table.insert(all, w) end
+			for _, w in ipairs(q.j) do table.insert(all, w) end
+			local mix_en = P.mix_of(F.en)
+			local r_free = P.strength(all, mix_en) / math.max(s_en, 1)
+			for _, w in ipairs(q.jobs) do table.insert(all, w) end
+			local r_all = P.strength(all, mix_en) / math.max(s_en, 1)
+			local v = F.verdict
+			local taking = (v == "press" or v == "hold")
+			local what, why, with_jobs
+			if taking then
+				if (F.ratio_all or 0) < Brain.num("JoinWonRatio", jf.won or 1.3) or F.trade ~= nil then
+					what, why = "JOIN", "our fight " .. v .. " (with the support " .. f2(F.ratio_all or 0) .. "): a free squad within " .. f0(reach) .. " m goes there, with all of them " .. f2(r_all)
+					with_jobs = ((F.ratio or 0) < A.win_line(W))
+				end
+			elseif r_all >= Brain.num("JoinEvenRatio", jf.even or 1.0) then
+				what, why = "JOIN", "our fight " .. v .. " (ratio " .. f2(F.ratio or 0) .. ") is even with every squad that can come (" .. f2(r_all) .. "): they come"
+				with_jobs = (r_free < Brain.num("JoinEvenRatio", jf.even or 1.0))
+			elseif nj > 0 then
+				-- (a point of ours behind that fight; with none - 'home' - they stay the fist's: a fit squad does not leave the map for a fight it is not in)
+				local fb0 = fallback(F, W)
+				if fb0 ~= nil and fb0.key ~= "home" then
+					what, why = "GATHER", "our fight " .. v .. " (ratio " .. f2(F.ratio or 0) .. ") is lost with every squad that can come too (" .. f2(r_all) .. "): they meet its squads at our point behind it, " .. fb0.key
+				end
+			end
+			if what ~= nil then
+				local list = {}
+				-- (as many as the fight needs, the nearest first: bench sm3m2_a against sm3m2_nojoin, 28 mid-game scenes - with
+				-- every free squad within reach called to every fight that was not won by 1.6 the points held went 0.21 down.
+				-- A fight we take gets squads until it stands at JoinEnoughRatio (1.6) with them; the others stay free.)
+				local enough = Brain.num("JoinEnoughRatio", jf.enough or 1.6)
+				if what == "JOIN" and taking then
+					table.sort(q.j, function(a, b)
+						local da, db = d2(a.x, a.z, F.x, F.z), d2(b.x, b.z, F.x, F.z)
+						if da ~= db then return da < db end
+						return a.id < b.id
+					end)
+					local got = {}
+					for _, w in ipairs(F.ours) do table.insert(got, w) end
+					for _, w in ipairs(F.support) do table.insert(got, w) end
+					for _, w in ipairs(q.j) do
+						if P.strength(got, mix_en) / math.max(s_en, 1) >= enough then break end
+						table.insert(got, w); table.insert(list, w)
+					end
+				else
+				for _, w in ipairs(q.j) do table.insert(list, w) end
+				end
+				if what == "JOIN" and with_jobs then
+					for _, w in ipairs(q.jobs) do
+						C.release(w, "called to our fight " .. F.key .. " " .. v .. " within " .. f0(reach) .. " m: its point does not burn (ratio " .. f2(F.ratio or 0) .. ", with everybody " .. f2(r_all) .. ")")
+						table.insert(list, w)
+					end
+				end
+				if table.getn(list) > 0 then
+					A.stats.join = (A.stats.join or 0) + 1
+					Brain.say("ARMY", "join|" .. F.key, Brain.num("FightLogSecs", 5), { "fight", F.key, what, "n", table.getn(list), "why", why, "ours", table.getn(F.ours), "enemy", table.getn(F.en),
+						"support", table.getn(F.support), "at", f0(F.x), f0(F.z) }, what .. "|" .. table.getn(list))
+				end
+				if what == "JOIN" then
+					local ix, iz, ik = 0, 0, 0
+					for _, w in ipairs(F.ours) do
+						local wr = roles.of(w)
+						if not roles.is_machine(wr) and not roles.is_rear(wr) then ix, iz, ik = ix + w.x, iz + w.z, ik + 1 end
+					end
+					for _, u in ipairs(list) do
+						taken[u.id] = true
+						A.st[u.id] = { mode = "join", t = now }
+						local d = d2(u.x, u.z, F.x, F.z)
+						if roles.is_machine(roles.of(u)) and ik > 0 and Brain.num("JoinBehind", 1) >= 1 then
+							Brain.order(u, O.MOVE, ix / ik, u.y, iz / ik, { "join our fight behind our infantry", F.key, v, "away", f0(d) })
+						else
+							Brain.order(u, O.AMOVE, F.x, u.y, F.z, { "join our fight", F.key, v, "away", f0(d), "ratio", f2(F.ratio or 0), "with everybody", f2(r_all) })
+						end
+					end
+				else
+					local fb = fallback(F, W)
+					if fb ~= nil then
+						for _, u in ipairs(list) do
+							local e0, n0 = eff0_of(u)
+							taken[u.id] = true
+							if d2(u.x, u.z, fb.x, fb.z) > Brain.num("ArriveR", 20) then
+								A.st[u.id] = { mode = "behind", t = now, tx = fb.x, tz = fb.z, eff0 = e0, n0 = n0 }
+								Brain.order(u, O.MOVE, fb.x, fb.y, fb.z, { "gather behind our fight", F.key, v, "at", fb.key, "- lost with us too:", f2(r_all) })
+							end
+						end
+					end
+				end
+			end
 		end
 	end
 end
@@ -13622,6 +14043,12 @@ function A.update(W)
 	end
 	-- (every squad of ours, builders too: with the engine's own retreat switched off - Brain_RetreatLock, elite.scar - nobody
 	-- else will send a dying squad home)
+	-- (step SM-1: the race's own second, if its profile has one - prof.tick(W, taken): what it tracks and orders before the
+	-- common rules look at the squads. 65_race_sm.ai. No other profile has the field.)
+	do
+		local prof = Brain.roles.profile()
+		if prof ~= nil and prof.tick ~= nil then prof.tick(W, taken) end
+	end
 	for _, u in ipairs(W.own) do survive(u, W, taken) end
 	if Brain.capture.stick ~= nil then Brain.capture.stick(W, taken) end   -- (step 10: a capturer about to have its point stays on it)
 	A.assault(W, taken)
@@ -13639,6 +14066,7 @@ function A.update(W)
 			end
 		end
 	end
+	A.join(W, taken)                                                    -- (step SM-3: a free squad goes to our fight - a profile with 'join_fight' only)
 	-- Step 10 (the coordinator, 15.11 - ECONOMY_BY_FACTION_RU.md / ORK_COMBAT_HUMANS_VS_BOT_RU.md: people's ork squads are
 	-- on the retreat 10-13 % of the time and 21-27 % of what they spend goes into reinforcements; the brain: 1-4 % and
 	-- 4-6 % - more squads, 33-37 % less damage a squad, a third and more of the money in upgrades. 'Fewer squads, but
@@ -13650,13 +14078,20 @@ function A.update(W)
 	-- went home only when it was dying under fire).
 	if Brain.num("Refill", 1) >= 1 and W.now - (A.refill_t or -1000) >= Brain.num("RefillGapSecs", 25) then
 		local field, worst = 0, nil
+		-- (step SM-3: while the upkeep is above the line of the purse - 30_economy.ai E.upkeep, a profile with 'upkeep' only -
+		-- a squad goes home for its models earlier, at the profile's 'refill' share: a full squad before a new one)
+		local refill_frac = Brain.num("RefillFrac", 0.5)
+		do
+			local up = Brain.economy ~= nil and Brain.economy.upkeep or nil
+			if up ~= nil and up.hi and up.refill ~= nil then refill_frac = Brain.num("RefillFracUpkeep", up.refill) end
+		end
 		for _, u in ipairs(W.army) do
 			local st = A.st[u.id]
 			local role = Brain.roles.of(u)
 			local away = (u.retreating or (st ~= nil and (st.mode == "retreat" or st.mode == "heal")))
 			if not away and not Brain.roles.is_rear(role) and not u.veh then field = field + 1 end
 			if not taken[u.id] and not away and u.can_ret and not u.hit and u.fight == nil and not u.home and (u.dhome or 0) > Brain.num("HomeR", 40) + 20
-				and (u.full or 0) >= 3 and u.n <= math.floor(Brain.num("RefillFrac", 0.5) * u.full) and not Brain.roles.is_rear(role)
+				and (u.full or 0) >= 3 and u.n <= math.floor(refill_frac * u.full) and not Brain.roles.is_rear(role)
 				and not (u.key ~= nil and string.find(u.key, "/heroes/", 1, true) ~= nil) and (u.ed == nil or u.ed > Brain.num("RefillSafeR", 50)) then
 				if worst == nil or u.n / u.full < worst.n / worst.full then worst = u end
 			end
@@ -13773,6 +14208,7 @@ local function can_capture(u, any_hp)
 	-- A worker is no capturer: it is a squad of the rear (60_roles.ai R.is_rear) and walks behind the fist as the mek's
 	-- helpers do. [Lua] Brain_CapWorker=1 returns step 8.1 (for the comparison only).
 	if role == "worker" and Brain.num("CapWorker", 0) >= 1 then return hp_ok end
+	if role == "capturer" then return hp_ok end        -- (step SM-1: the marines' scouts - a squad of the rear whose work the points are)
 	-- (step 10: by the attributes the gretchin DO capture once they carry the Repair Krew - the passive
 	-- gretchin/gretchin_infiltrate sets capture_enable_squad_modifier 1 with the upgrade ork_gretchin_repair_krew; the
 	-- purse buys it for them (60_roles.ai upg). Such a squad is a capturer - and the first choice for a point far from the
@@ -13952,6 +14388,9 @@ local function pick(p, free, rank, n, max_d, core_ok, hero_ok, far)
 				if is_hero(u) then if d <= hero_d and not far then hero = u end
 				elseif Brain.roles.of(u) == "worker" and (Brain.num("CapWorker", 0) >= 1 or far or Brain.num("CapKrewFirst", 1) >= 1) then
 local s = d - 2000                                        -- (step 8.1: a worker - the gretchin - before any fighting squad)
+					if bs == nil or s < bs then best, bs = u, s end
+				elseif Brain.roles.of(u) == "capturer" then
+					local s = d - 2000                                        -- (step SM-1: a capturer - the scouts - before any fighting squad)
 					if bs == nil or s < bs then best, bs = u, s end
 				elseif core_ok or not core then
 					local s = d + (core and 1000 or 0)                        -- (an outer squad before a core one, then the nearest)
@@ -14163,6 +14602,28 @@ else
 	local free = {}
 	for _, u in ipairs(W.army) do if not taken[u.id] then table.insert(free, u) end end
 	table.sort(free, function(a, b) return a.id < b.id end)
+	-- Step SM-3 (the profile's 'capturer_leaves' - the marines' only). Bench sm2f_c, 8 games: 383 capture jobs begun, 153
+	-- done - and 89 jobs of the scouts ended 'in a fight': with an enemy within CapFightR the capturer is the fight's, its
+	-- job is gone, and while that fight is pressed or held it stands RearBehindD behind our infantry until the enemy is
+	-- LeaveR away. A capturer in a fight of ours that we press or hold, with a fighting squad of ours in it, that is not
+	-- shot at and has no enemy within CapturerLeaveD (30 m), goes back to its work: the next point (as always: none with
+	-- the enemy at it). Log: 'BR CAP <t> squad <id> LEAVES <fight> ...'. Brain_CapturerLeave=0: off.
+	local leaving = {}
+	do
+		local lprof = Brain.roles.profile()
+		if lprof ~= nil and lprof.capturer_leaves and Brain.num("CapturerLeave", 1) >= 1 then
+			for _, u in ipairs(W.army) do
+				local st, F = A.st[u.id], u.fight
+				if taken[u.id] and C.jobs[u.id] == nil and Brain.roles.of(u) == "capturer" and F ~= nil and (F.verdict == "press" or F.verdict == "hold")
+					and st ~= nil and st.mode == "fight" and not u.hit and not u.retreating and (u.ed or 999) > Brain.num("CapturerLeaveD", 30) then
+					local core = 0
+					for _, w in ipairs(F.ours) do if not Brain.roles.is_rear(Brain.roles.of(w)) then core = core + 1 end end
+					if core > 0 then table.insert(free, u); leaving[u.id] = F.key end
+				end
+			end
+			table.sort(free, function(a, b) return a.id < b.id end)
+		end
+	end
 	if table.getn(free) == 0 then return end
 	-- a squad found capturing, no enemy in sight near it: it finishes (a job of its own)
 	local rest = {}
@@ -14271,8 +14732,87 @@ local want = 1
 	local race_jobs = (Brain.num("Race", 1) >= 1 and rk >= Brain.num("RaceJobsK", 1.5) and n_army >= 3 and not opening)
 	if race_jobs then max_side = math.min(math.max(max_side + 1, 2), Brain.num("CapJobsRace", 3), n_army - 1) end
 	if in_fight then max_side = math.min(max_side, (race_jobs and rk >= Brain.num("RaceAlarmK", 2.5)) and 3 or (W.vp.losing and 2 or 1)) end
+	-- Step SM-2 (the profile's 'keep_fist' - the marines' only; no other profile has the field): the points are the
+	-- capturers' work, the fist keeps its squads. Bench sm1f_m, 8 games against the old layer: the army was the hero, a
+	-- tactical squad, the devastators and two scout squads, and with a side job, a far job and a post for the set-up team
+	-- 'fist ... together 1/1' stood in 165 of the 243 STAND / BACK lines - one squad at a time met the enemy's five.
+	-- Every capturer alive takes the place of one side job of the fighting squads, and the far job of step 10 is theirs
+	-- while one lives; with no capturer left the tactical squads capture as any race's do. Not in the free opening (nobody
+	-- of the enemy seen yet: every squad takes a point). Brain_CapKeepFist=0: off.
+	local capn, quiet_d = 0, nil
+	do
+		local kprof = Brain.roles.profile()
+		if kprof ~= nil and kprof.keep_fist and Brain.num("CapKeepFist", 1) >= 1 then
+			for _, u in ipairs(W.army) do if Brain.roles.of(u) == "capturer" then capn = capn + 1 end end
+			if not free_open then max_side = math.max(0, max_side - capn) end
+		end
+		-- Step SM-3 (the profile's 'quiet_caps' - the marines' only). With 'keep_fist' the map was two scout squads: the
+		-- fighting squads captured 4-5 % of their seconds where the old layer of marines captures 12 % (tools/sm3_idle.py,
+		-- 16 games), 3.1-3.5 points held against 4.1-4.4 - and a fist that has nobody in front of it stood 'beyond the
+		-- point' while one squad captured. WHILE IT IS QUIET - no fight of ours within the reach of 50_army.ai A.join of the
+		-- fist, nobody of the enemy seen (or remembered CapQuietGhostSecs) within CapQuietR (100 m) of it, no push - the
+		-- free fighting squads take the points around: CapJobsQuiet (2) at a time, never the last one, a point within
+		-- CapQuietD (100 m) of the squad, the fist's inner squads too. The fist is whole again the second it matters: a
+		-- squad whose point does not burn is called to any fight of ours within reach (A.join). Brain_CapQuiet=0: off.
+		local qc = kprof ~= nil and kprof.quiet_caps or nil
+		if qc ~= nil and Brain.num("CapQuiet", 1) >= 1 and not free_open and not opening and not in_fight and Brain.plan.push == nil then
+			local quiet = true
+			local qr, reach_j = Brain.num("CapQuietR", qc.r or 100), Brain.num("JoinReachD", (kprof.join_fight and kprof.join_fight.reach) or 150)
+			for _, e in ipairs(W.en) do if not e.retreating and d2(e.x, e.z, cx, cz) <= qr then quiet = false; break end end
+			if quiet then for _, g in ipairs(W.ghosts) do if g.age <= Brain.num("CapQuietGhostSecs", 10) and d2(g.x, g.z, cx, cz) <= qr then quiet = false; break end end end
+			-- (a fight of ours in reach that calls nobody - pressed and won without them, JoinWonRatio - does not end the quiet)
+			if quiet then
+				local won = Brain.num("JoinWonRatio", (kprof.join_fight and kprof.join_fight.won) or 1.3)
+				for _, F in ipairs(W.fights) do
+					if d2(F.x, F.z, cx, cz) <= reach_j and not (F.verdict == "press" and (F.ratio_all or 0) >= won and F.trade == nil) then quiet = false; break end
+				end
+			end
+			if quiet then
+				local fighters = 0
+				for _, u in ipairs(free) do
+					local role = Brain.roles.of(u)
+					if C.jobs[u.id] == nil and role ~= "capturer" and not is_hero(u) and can_capture(u) then fighters = fighters + 1 end
+				end
+				local qn = math.min(Brain.num("CapJobsQuiet", qc.jobs or 2), fighters - 1)
+				if qn > max_side then max_side = qn end
+				if qn > 0 then quiet_d = Brain.num("CapQuietD", qc.d or 100) end
+			end
+		end
+	end
+	-- Step SM-1: THE CAPTURERS (role "capturer" - the marines' scouts; no other race has one). A capturer always has a point:
+	-- the one worth most per metre of ITS way (not the fist's), anywhere within CapturerMaxD, one squad a point, never a
+	-- point with the enemy at it or under an enemy's base. Its job is not one of the fist's side jobs (they are counted
+	-- below without it): the fist keeps its squads, the map is taken by the squads whose work it is. People: 24 capture
+	-- episodes in 10 minutes, 85 % of them by one squad (human_baseline_1113, space_marines 1v1).
+	for _, u in ipairs(free) do
+		if C.jobs[u.id] == nil and (not taken[u.id] or leaving[u.id] ~= nil) and Brain.roles.of(u) == "capturer" and can_capture(u) and Brain.num("Capturer", 1) >= 1 then
+			local bp, bs
+			for _, p in ipairs(W.pts) do
+				local d = d2(u.x, u.z, p.x, p.z)
+				if not p.ours and C.on_point(p.key) == 0 and not p.us_cap and d <= Brain.num("CapturerMaxD", 260) and not hq_near(p) and not danger(p, W, danger_r) then
+					local worth = (p.vp and Brain.num("ObjVP", 3)) or (p.pow and Brain.num("ObjPow", 2)) or Brain.num("ObjReq", 1)
+					-- (the worth of a point as the side jobs of step 10 count it: the race for tickets, our lost farm)
+					local farm = (Brain.plan.farm_lost ~= nil and Brain.plan.farm_lost(p, now))
+					if Brain.num("Race", 1) >= 1 then
+						if p.vp then worth = worth * rk * (p.enemy and Brain.num("RaceEnemyVpK", 1.2) or 1)
+						elseif farm then worth = worth * Brain.num("ObjFarmK", 3)
+						elseif rk > 1 then worth = worth * math.max(1 / rk, Brain.num("RaceOtherMinK", 0.25)) end
+					elseif p.vp and (W.vp.losing or W.vp.behind) then worth = worth * Brain.num("ObjBehindK", 1.5) end
+					local s = worth / (Brain.num("ObjDist0", 40) + d)
+					if bs == nil or s > bs then bp, bs = p, s end
+				end
+			end
+			if bp ~= nil then
+				if leaving[u.id] ~= nil then
+					C.stats.left = (C.stats.left or 0) + 1
+					Brain.log("CAP", "squad", u.id, Brain.short(u.key), "LEAVES", leaving[u.id], "why", "a capturer behind a fight of ours that goes well, not shot at, the enemy " .. f0(u.ed or 0) .. " m away: back to its work", "point", bp.key)
+				end
+				go(u, bp, "capturer")
+			end
+		end
+	end
 	local side = 0
-	for _, j in pairs(C.jobs) do if j.why ~= "fist objective" and j.why ~= "map control" then side = side + 1 end end   -- (a count; the far job of step 10 is counted apart)
+	for _, j in pairs(C.jobs) do if j.why ~= "fist objective" and j.why ~= "map control" and j.why ~= "capturer" then side = side + 1 end end   -- (a count; the far job of step 10 is counted apart)
 	local guard = 0
 	-- Step 11: THE RUNNERS (the head of this file: what the old layer does). Instead of the side jobs and the one far job:
 	--   HOW MANY - by the army: one from 2 squads, two from CapRunAt2 (4), three from CapRunAt3 (7), four from CapRunAt4
@@ -14365,7 +14905,9 @@ local want = 1
 					elseif rk > 1 then worth = worth * math.max(1 / rk, Brain.num("RaceOtherMinK", 0.25)) end
 				elseif p.vp and (W.vp.losing or W.vp.behind) then worth = worth * Brain.num("ObjBehindK", 1.5) end
 				-- the way of the squad that would go, not of the fist: a squad coming from home takes the point on its way
-				local u = pick(p, free, rank, n_army, Brain.num("CapSquadMaxD", 120) * reach, free_open, hero_ok)
+				local u
+				if quiet_d ~= nil then u = pick(p, free, rank, n_army, math.min(Brain.num("CapSquadMaxD", 120) * reach, quiet_d), true, hero_ok)   -- (step SM-3: while it is quiet)
+				else u = pick(p, free, rank, n_army, Brain.num("CapSquadMaxD", 120) * reach, free_open, hero_ok) end
 				if u ~= nil and team ~= nil and team.yields ~= nil and team.yields(p, d2(u.x, u.z, p.x, p.z)) then u = nil end   -- (R51: an ally's)
 				if u ~= nil then
 					local s = worth / (Brain.num("ObjDist0", 40) + d2(u.x, u.z, p.x, p.z))
@@ -14387,7 +14929,7 @@ local want = 1
 	-- (4) squads in the army - 3 when the race presses (RaceJobsK). Brain_CapFar=0: off.
 	local far_n = 0
 	for _, j in pairs(C.jobs) do if j.why == "map control" then far_n = far_n + 1 end end        -- (a count)
-	if not run_on and Brain.num("CapFar", 1) >= 1 and far_n < Brain.num("CapFarJobs", 1) and now >= Brain.num("CapFarFrom", 120) and not opening
+	if not run_on and Brain.num("CapFar", 1) >= 1 and far_n < Brain.num("CapFarJobs", 1) and now >= Brain.num("CapFarFrom", 120) and not opening and capn == 0
 		and n_army >= ((rk >= Brain.num("RaceJobsK", 1.5)) and 3 or Brain.num("CapFarArmy", 4)) then
 		local bp, bs
 		for _, p in ipairs(W.pts) do
@@ -14860,7 +15402,9 @@ function R.of(u)
 end
 function R.is_melee(role) return role == "melee" or role == "jump" or role == "hero_melee" end
 function R.is_machine(role) return role == "walker" or role == "vehicle" or role == "transport" or role == "artillery" end
-function R.is_rear(role) return role == "support" or role == "worker" end
+-- (step SM-1: "capturer" - the marines' scouts, 65_race_sm.ai: a squad of the rear that CAN capture and is the first to be
+-- sent to a point (55_capture.ai). No other race's profile names the role.)
+function R.is_rear(role) return role == "support" or role == "worker" or role == "capturer" end
 
 -- the squad a melee squad charges: within ChargeR; shooters and set-up teams before melee squads (a mob in their face is
 -- what they fear), never a vehicle (a choppa does a tenth to armour); the nearest of the best kind
@@ -14892,6 +15436,739 @@ end
 
 	end
 	eliteai_brain_60_roles()
+end
+
+-- ===== EliteAI brain/65_race_sm.ai =====
+do
+	local function eliteai_brain_65_race_sm()
+-- BRAIN 65_race_sm: SPACE MARINES (race 2), step SM-1. Everything that is the marines' own lives here: the numbers of their
+-- plan, the roles, the casts, the globals and the four rules the common code asks a race for (60_roles.ai keeps the table
+-- of step 8; this file changes and extends it when it loads, after 60_roles.ai and before 70_abilities.ai).
+-- A marine plays with the brain only with [Lua] Brain_Races=...,space_marines (the dispatcher; default: orks only).
+--
+-- What the common code asks a race's profile for (every one optional; the orks have none of them):
+--   Brain.RACE_NUM[race][key]     the race's default of a number (00_core.ai Brain.num; the ini key still wins)
+--   prof.tick(W, taken)           once a second before the common rules (50_army.ai A.update)
+--   prof.survive(u, W, taken)     -> true: the race's rule has seen to the squad (50_army.ai survive)
+--   prof.engage(u, role, F, W)    -> true: the squad has its order in the fight (50_army.ai engage)
+--   prof.on_step(u, F, W, fb)     -> true: instead of the step back (50_army.ai fight, verdict STEP)
+--   Brain.move_fix(u, x, y, z)    -> x, z: where a MOVE order really goes (00_core.ai Brain.order)
+--   econ.opening_by_kind, econ.starter_kinds, econ.max_kind (40_composition.ai);  role "capturer" (55_capture.ai)
+--
+-- People (sm_baseline_1115/SM_BASELINE.md: 345 player-matches of marines, 1v1, VP control / 500, Elite 3.x):
+--   opening  tactical 0:03 > scouts 0:37 (46 %) > post 1:07 > generator 2:43 / shotguns 1:29-3:15 > the third squad 3:33
+--            (assault 54 %, devastators 22 %) > generators 4:00, 4:55 > tier 2 at 7:19 > the fourth squad 8:58 (dreadnought
+--            23 %, rhino 24 %, devastators 16 %) > the fifth 12:58 > tier 3 at 14:13 in 47 % of the games of 15+ min
+--   capture  the first order at 0:05; 17 capture orders at 7 different points in the first two minutes, by every squad
+--            (scouts 45 %, the hero 28 %, tactical 25 %); later the scouts give 41-33 % of them
+--   retreats 3.2-3.8 a squad in 10 minutes, the same for scouts and tactical squads
+--   abilities (a match): jump 5.7, shotgun blast 3.9, heal 3.7, kraken bolts 3.1, battle cry 2.1, frag grenade 1.8,
+--            infiltration 1.1, repair 0.9; globals in 60 % of the matches: For the Emperor (commander, at 7:50), the
+--            drop pod (29 %, at 11:49), the heroes' revival and Angels of Death (apothecary), terminators at 19:33
+-- Log: 'BR SM <t> <what> ...'. Keys: [Lua] Brain_<Key>; every rule here has one (the value that returns the code before
+-- the step is in brackets at the rule).
+
+local R = Brain.roles
+local P = R and R.PROFILES and R.PROFILES.space_marines or nil
+if P == nil then return end
+local d2 = Brain.d2
+local O = Brain.ORD
+local K = R.ABIL
+Brain.sm = { track = {}, setup = {}, said = {}, st = { kite = 0, cap_ret = 0, setup_ret = 0, hold = 0, cover_step = 0, lead = 0, lead_ret = 0, nochase = 0, heal = 0, fix = 0 } }
+local SM = Brain.sm
+local function num(k, d) return Brain.num(k, d) end
+local function f0(v) return Brain.f0(v) end
+local function f2(v) return Brain.f2(v) end
+local TAC, SCOUT, ASM, DEV = "race_marine/troops/sm_tactical_marine", "race_marine/troops/sm_scout_marine", "race_marine/troops/sm_assault_marine", "race_marine/troops/sm_devastator"
+local FC, FCT, APO, TM = "race_marine/heroes/sm_force_commander", "race_marine/heroes/sm_force_commander_terminator", "race_marine/heroes/sm_apothecary", "race_marine/heroes/sm_techmarine"
+
+-- ---- the new ability numbers (elite.scar EliteAI_MECH_ABILITIES / netorder.ai EliteAI_NET_ABILITIES; Brain.ABILD rows) -----
+K.SM_ATSKNF, K.SM_ASM_STRIKE, K.SM_FC_TELEPORT, K.SM_TM_KNOCKBACK, K.SM_TERM_TELEPORT, K.SM_VDREAD_CHARGE = 99, 98, 96, 95, 93, 92
+
+-- ---- the numbers that are the marines' own ---------------------------------------------------------------------------
+Brain.RACE_NUM = Brain.RACE_NUM or {}
+Brain.RACE_NUM.space_marines = {
+	-- the opening: until the enemy is seen every squad, the hero too, takes a point of its own (people: 7 points ordered in
+	-- the first two minutes; the brain of step 8 held 1.35 points in the first three minutes, the old layer 2.71) [0]
+	CapOpeningFree = 1,
+	-- a fight in which every enemy squad runs home gets no order after them [0] (SM.engage; the charge itself does not
+	-- follow a squad that runs by the common rule of step 10, 50_army.ai A.no_chase)
+	NoChase = 1,
+	-- (the crowd on the point and the worth of a victory point when behind are the common rules of step 10 after the merge
+	-- with brain fbeda12: A.screen, L.race_k - the marines' own numbers TakeScreenD / ObjBehindK / RaceAlarmTickets of the
+	-- first version of this step are gone)
+	-- the bank floats from 400 requisition [500]: see E.army_t below
+	EconFloatReq = 400,
+	-- ---- step SM-2 (the value in brackets is the common default = the code before the step) ----
+	-- a squad the bank cannot pay yet is a candidate, its requisition too [1: only when the power is short], when its
+	-- price comes in within 150 s [45]: with 250-450 a squad the purse has to SAVE for it (E.army_first below)
+	CompWaitShort = 2, CompUnitReqSecs = 150,
+	-- the second set-up team with four other squads standing [5]: devastators are the marines' cheapest strength (250 / 30)
+	CompSetup2Squads = 4,
+	-- one squad against two is 'alone' (AVOID) only when it is weaker than the Even line [the Win line, 1.3]
+	LonerRatio = 0.8,
+	-- a fight is pressed and an enemy seen near is attacked from 1.15 of its strength [1.3]: the marines win their trades
+	-- (bench sm1f_m: 2.2 enemy models for one of ours) and stood - 187 STAND and 56 BACK against 60 ATTACK
+	Win = 1.15,
+	-- the devastators walk with the fist until eight squads stand [4]: a post takes a third of a small army away
+	SetupPostArmy = 8,
+	-- burnt ground is remembered 45 s [90] and pressed again from 1.5 of its strength [2]
+	ZoneSecs = 45, ZonePressRatio = 1.5,
+}
+
+-- ---- the roles ----------------------------------------------------------------------------------------------------------
+-- The scouts are capturers: a squad of the rear that takes the points (55_capture.ai), keeps out of a mob's reach and
+-- leaves a fight early. In the 24 games of the brain of step 8 the scouts fought in the line: 22 squads of 72 died (the
+-- old layer lost 9 of 42), nearly all of them on the retreat that was ordered at 0.25-0.42 of their strength.
+P.units[SCOUT] = { role = "capturer" }
+P.units["race_marine/troops/sm_terminator_assault"] = { role = "melee" }
+
+-- ---- the plan of the purse --------------------------------------------------------------------------------------------
+local E = P.econ
+E.opening = { TAC, SCOUT }
+E.opening_by_kind = true                               -- (40_composition.ai: a kind that stands or is on its way is not ordered again)
+E.starter_kinds = { [SCOUT] = 1 }
+E.max_kind = { [SCOUT] = 2 }                           -- the starters and one squad more: capturers, not an army
+-- the third squad of people is the assault squad (54 %) or the devastators (22 %): the jump against an enemy that shoots,
+-- the heavy bolter against one that charges (40_composition.ai P.vs)
+E.vs = { [ASM] = { shooters = 2.2 }, [DEV] = { mobs = 1.2 } }
+E.initiator = { [ASM] = true }                         -- (step 10, 40_composition.ai: one squad whose jump opens the charge is wanted from 4:00 with four squads standing)
+-- people order the third squad at 3:33, the fourth at 8:58, the fifth at 12:58 (4 / 5 / 5-6 squads stand at 5 / 10 / 15
+-- minutes) - and with that clock the brain stood with 5.2 squads at 6:00 and 330 requisition idle against the old layer's
+-- 6.5 squads (bench sm1f_a / sm1f_k0, 8 games against the old layer of other races: 0 : 7 against 3 : 1). A computer
+-- opponent spends everything on squads; the purse may not idle against it: one squad more from 5:30, and the bank
+-- 'floats' from 400 requisition, not 500.
+-- Step SM-2. That clock (one squad more at 3:00, 5:30, 9:00, 14:00) and a purse that buys what the bank holds this second
+-- gave 3.5 fighting squads with the hero at 5:00 and 3.8 at 8:00 (two more were scouts) against 6.5 and 8.0 of the old
+-- layer of other races, and 4.0 / 5.0 of the old layer of marines (tools/sm2_army.py on sm1f_m / sm1f_k0). The income
+-- of a slot of level 2 is 340 a minute: what it pays by 5:00 above the opening, a post and two generators is four squads
+-- - the clock asks for them as fast as the money comes (the squad before the upgrade: E.army_first); that is 87 of the 100
+-- population, so one squad more only at 10:00 (a machine of tier 2). The clock counts the scouts too (army0 = 3: the tactical squad and two
+-- scout squads; a scout squad that died is not bought again before the fighting squads - E.max_kind and the worth).
+E.army_t = { 90, 140, 190, 240, 600 }
+-- the squad of the clock before the pieces, the upgrades and the third generator; the tier waits for all but one squad
+-- of the clock, two minutes past its hour at most (30_economy.ai) [Brain_EconArmyFirst=0]
+E.army_first = { gens = 2, tier_late = 120 }
+-- RECOVER (30_economy.ai: the army is two squads short of the clock - the hero, one post, one generator, then squads only,
+-- no global away from home) keeps the clock of step SM-1: with the fast clock above it would be on all through the opening
+E.recover_t = { 180, 330, 540, 840 }
+E.post_t = { 50, 240, 400 }                            -- people: 1:07, 4:02, 6:03
+E.gen_t = { 110, 200, 300, 420 }; E.gen_max = 4        -- people: 2:43, 4:00, 4:55, 6:50 by the median (1:38-3:59 the first) - 2 / 3 / 4 by 5 / 10 / 15 minutes
+E.gear_t = { 270, 570, 700 }                           -- people: 0 / 1 / 2 / 3 pieces by 5 / 10 / 15 / 20 minutes (the first at 4:21-5:01)
+-- the hero's pieces in the people's order (one a slot; a piece of a tier not reached yet is passed over)
+E.gear[FC] = { "arm_force_artificer_armour", "wp_force_power_sword", "wp_force_two_handed_hammer", "acc_force_teleporter_pack", "acc_force_iron_halo",
+	"wp_force_sword_and_storm_shield", "arm_force_pneumatically_enhanced_armour", "acc_force_sacred_standard" }
+E.gear[APO] = { "acc_apoth_purification_rites", "wp_apoth_sanguine_chainsword", "arm_apoth_gyro_stabilized_armour", "wp_apoth_anointed_power_axe",
+	"acc_apoth_toxin_grenades", "wp_apoth_master_crafted_bolter", "arm_apoth_armour_of_the_apothecarion", "acc_apoth_improved_medical_equipment" }
+-- (the techmarine: the artificer armour before the bionics people take more often - it is what lets it lay mines)
+E.gear[TM] = { "wp_tech_master_crafted_bolter", "arm_tech_artificer_armour", "acc_tech_orbs_of_omnissiah", "arm_tech_bionics", "arm_tech_signum_armor",
+	"wp_tech_plasma_gun", "acc_tech_refractor_field" }
+-- the squads' upgrades in the people's order: shotguns (74 % of the matches, at 3:15), the scouts' sergeant (64 %, 4:38),
+-- the flamer (48 %), the sergeants of the assault and tactical squads (46 % / 41 %, 9:39-10:22), melta bombs, the
+-- infiltration of the scouts (23 %, 9:16)
+E.upg_first = 90; E.upg_every = 100; E.upg_max = 10
+E.upg_wait = true                                      -- (30_economy.ai: the piece of the plan is waited for, not the first that can be paid)
+E.upg[SCOUT] = { "sm_shotgun", "sm_scout_squad_sergeant", "sm_scout_infiltration" }
+E.upg[TAC] = { "sm_missile_launcher", "sm_plasma_gun", "sm_flamer", "sm_tactical_squad_sergeant" }
+E.upg[ASM] = { "sm_assault_squad_sergeant", "melta_bombs" }
+E.upg["race_marine/troops/sm_sternguard_veteran"] = {}
+E.upg["race_marine/troops/sm_terminator"] = { "sm_cyclone_missile_launcher", "sm_assault_cannon" }
+E.upg["race_marine/troops/sm_terminator_assault"] = { "sm_lightning_claws" }
+
+-- ---- the globals of Elite 3.2.1 (ability/pvp/race_marine/globals; who has which - ebps/pvp/race_marine/heroes/*) ----------
+--   every hero   sm_spawn_drop_pod            tier 2: 450 requisition + 35 power + 150 red, at a place - sternguard veterans
+--                sm_spawn_terminators         tier 3: 650 + 100 + 350 red, recharge 420 s, at a place - terminators
+--                sm_damage_aoe_orbital_...    tier 3: 500 red, recharge 120 s, at a place - the orbital bombardment
+--   commander    sm_buff_target_damage        'For the Emperor!': 50 red, recharge 90 s, on a squad of ours
+--                sm_spawn_assault_terminators tier 3: 650 + 100 + 350 red
+--   apothecary   sm_buff_aoe_invincibility    'Angels of Death', tier 2: 200 red, recharge 120 s, 15 s, no target
+--                sm_heal_aoe_reviveheroes     150 red, recharge 180 s, no target: the fallen heroes stand up
+--   techmarine   sm_buff_aoe_repair           'Blessing of the Omnissiah': 100 red, recharge 100 s, 30 s: machines and
+--                                             buildings mend;  sm_spawn_venerable_dreadnought tier 3: 600 + 75 + 300 red
+-- The fight's global (70_abilities.ai B.global, the AI's own request: Request_PlayerAbility / ...SingleTarget at our squad
+-- nearest to the enemy) is chosen by the hero when it is first seen (SM.tick); the squads for the red resource are
+-- call-ins (30_economy.ai 8r); the bombardment goes by B.global_pos at a set-up team in a fight of ours or at a turret.
+SM.GLOBAL = {
+	[FC] = { pat = "sm_buff_target_damage", red = 50, recharge = 90 }, [FCT] = { pat = "sm_buff_target_damage", red = 50, recharge = 90 },
+	[APO] = { pat = "sm_buff_aoe_invincibility", red = 200, recharge = 120 },
+}
+P.global_req, P.global_red, P.global_recharge = 0, 50, 90
+P.callins = {
+	{ pat = "sm_spawn_drop_pod", key = "race_marine/troops/sm_sternguard_veteran", name = "sternguard (drop pod)", req = 450, pow = 35, red = 150, recharge = 60, tier = 2, max = 1, from = 540, at = "fist", keep = true, pop = 20, key_on = "EconCallinPod" },
+	{ pat = "sm_spawn_terminators", key = "race_marine/troops/sm_terminator", name = "terminators", req = 650, pow = 100, red = 350, recharge = 420, tier = 3, max = 1, from = 840, at = "fist", keep = true, pop = 21, key_on = "EconCallinTerm" },
+	{ pat = "sm_spawn_venerable_dreadnought", key = "race_marine/vehicles/sm_venerable_dreadnought", name = "venerable dreadnought", req = 600, pow = 75, red = 300, recharge = 420, tier = 3, max = 1, from = 840, at = "fist", keep = true, pop = 18, key_on = "EconCallinVen" },
+}
+-- (step SM-2: bench sm2t_a1, orb_imp_193720: 500 of the red at tier 3 for two minutes and no target - the common rule asks
+-- for a set-up team or two squads within 10 m of each other. The bombardment covers a wide circle: enemy infantry that
+-- has stood 3 s within 18 m of each other with 900 health between them - one fresh squad of marines, two of anything.)
+P.global_pos = { { k = 3, pat = "sm_damage_aoe_orbital", red = 500, recharge = 120, clump_n = 1, clump_r = 18, clump_hp = 900, tier = 3 } }
+-- ---- step SM-2: what the common code reads of the profile besides ------------------------------------------------------
+-- the lines of the trade as a share of our health in the fight, the enemy's loss by its price (50_army.ai judge)
+P.trade_share = { fix = 0.25, pad = 0.15 }
+-- the points are the capturers' work: a scout squad alive takes the place of a side job of the fist (55_capture.ai)
+P.keep_fist = true
+-- ---- step SM-3 ----------------------------------------------------------------------------------------------------------
+-- a free squad goes to our fight (50_army.ai A.join): within 'reach' m of a fight of ours that is not won without it
+-- ('won': with the support at 1.3) - the nearest squads, until it stands at 'enough' with them - or that would be even
+-- with everybody ('even'); else they gather behind it
+P.join_fight = { reach = 150, won = 1.3, enough = 1.6, even = 1.0, min_eff = 0.5 }
+-- while it is quiet the free fighting squads take the points around (55_capture.ai): two at a time, within 100 m
+P.quiet_caps = { jobs = 2, r = 100, d = 100 }
+-- a capturer does not stand behind a fight of ours that goes well: not shot at, it takes the next point (55_capture.ai)
+P.capturer_leaves = true
+-- the upkeep (30_economy.ai; OFF by default since the final check of SM-3 - Brain_EconUpkeep=1): no new squad while the army, every squad full, costs more than 'line' of the gross income
+-- ('tier_step' more a tier: 0.25 / 0.30 / 0.35 - people's marines pay 14 / 21 / 28 % at 5-10 / 10-15 / 15+ minutes) and
+-- stands above 'floor' population; one squad of a new tier may come 'tier_line' above the line; a squad goes home for
+-- its models at 'refill' of them (two of three, two of four) while the upkeep is above the line
+E.upkeep = { line = 0.25, tier_step = 0.05, floor = 62, tier_line = 0.10, refill = 0.67 }
+-- THE RED RESOURCE THAT IS KEPT (70_abilities.ai B.global, 30_economy.ai call-ins: they spend only what is above it).
+-- Step SM-1: the bombardment (500) and the heroes' revival (150) never came - 'For the Emperor!' (50) and 'Angels of
+-- Death' (200) went out as soon as the red was there, 79 of it in the bank on the average (people hold 240-460 at 13-16
+-- minutes; the old layer casts the bombardment at 20+ minutes).
+--   the apothecary: 150 for the revival while it is not recharging (its hero is the one that falls);
+--   from the click of tier 3 on: 500 for the bombardment until it has gone out, then SmOrbitalFreeSecs (300 s) free for
+--   the terminators and the fight's globals, then again.
+-- Step SM-3: the bombardment went out once in 56 whole games of SM-2, and 24-27 times in 8 games a fight's global was
+-- refused for it ('KEPT why the red resource is kept'). The 500 are kept only when they are REALLY COMING: tier 3 is
+-- there (the research done, not clicked) and the red resource stands at SmOrbitalFromRed (400) or more; below that the
+-- fight's globals and the squads for the red resource take it. And not for ever: SmOrbitalWaitSecs (150 s) with the
+-- 500 in hand and no cast - the reserve is free until the red resource has been below the line again.
+-- [Brain_SmOrbitalFromRed=0 with Brain_SmOrbitalClick=1: as in SM-2]
+-- [Brain_SmRedKeep=0: nothing is kept]
+function SM.red_keep(W, what)
+	if num("SmRedKeep", 1) < 1 then return 0, "-" end
+	local E2 = Brain.economy
+	local tier = (E2 ~= nil and E2.tier_now) or 1
+	local t3 = (tier >= 3 or (num("SmOrbitalClick", 0) >= 1 and tier == 2 and E2 ~= nil and E2.tier_res))
+	-- (it 'has gone out' when the red resource went with it: SM.tick looks 4 s after the request - SM.orb_took)
+	local took = SM.orb_took or -1000
+	local red = Brain.purse and Brain.purse.red or nil
+	local from = num("SmOrbitalFromRed", 400)
+	if red ~= nil and from > 0 then
+		if red < from then SM.orb_full_t, SM.orb_stale = nil, nil
+		elseif red >= num("SmOrbitalRed", 500) then
+			SM.orb_full_t = SM.orb_full_t or W.now
+			if W.now - SM.orb_full_t >= num("SmOrbitalWaitSecs", 150) and not SM.orb_stale then
+				SM.orb_stale = true
+				Brain.log("SM", "GLOBAL", "sm_damage_aoe_orbital", "RESERVE FREE", "why", "the red resource stood at " .. f0(red) .. " for " .. f0(W.now - SM.orb_full_t) .. " s and nothing to bombard: the fight's globals and the call-ins may take it")
+			end
+		end
+		if red < from or SM.orb_stale then t3 = false end
+	end
+	if t3 and W.now - took >= num("SmOrbitalFreeSecs", 300) then return num("SmOrbitalRed", 500), "the orbital bombardment (500) comes first at tier 3 with " .. f0(from) .. " of the red or more in hand" end
+	if SM.hero_key == APO and W.now - (SM.t_glob_cast or -1000) >= 180 and what ~= "revive" then return num("SmReviveRed", 150), "the heroes' revival (150) is the apothecary's first global" end
+	return 0, "-"
+end
+P.red_keep = SM.red_keep
+
+-- ---- the casts ---------------------------------------------------------------------------------------------------------
+-- (windows, recharge, energy and the upgrade a cast needs: Brain.ABILD, from the attributes; a line names only whom it is
+-- for. 'need' here = what the attributes ask for through an entity of the squad - the sergeant - and the table cannot see.)
+local C = P.casts
+C[TAC] = {
+	{ k = K.SM_ATSKNF, at = "any", max = 60, sup = true, need = { "troops/sm_tactical_squad_sergeant" }, name = "and they shall know no fear" },
+	{ k = K.SM_TAC_KRAKEN, at = "any", max = 38, name = "kraken bolts" } }
+C[SCOUT] = {
+	{ k = K.SM_SCOUT_SHOTGUN, at = "melee", name = "shotgun blast" },
+	{ k = K.SM_GRENADE, kind = "pos", at = "setup", need = { "troops/sm_scout_squad_sergeant" }, name = "frag grenade", ff = true },
+	{ k = K.SM_GRENADE, kind = "pos", at = "clump", need = { "troops/sm_scout_squad_sergeant" }, name = "frag grenade", ff = true },
+	{ k = K.SM_SCOUT_SHOTGUN, at = "inf", name = "shotgun blast" } }
+C[ASM] = {
+	{ k = K.SM_ASM_MELTA, at = "veh", name = "melta bomb" },
+	{ k = K.SM_ASM_STRIKE, kind = "pos", at = "near", max = 5, need = { "troops/sm_assault_squad_sergeant" }, name = "merciless strike" } }
+C[TM] = {
+	{ k = K.SM_TM_KNOCKBACK, at = "melee", max = 7, name = "bionics blast" },
+	{ k = K.SM_TM_SHOT, at = "tough", name = "high-powered shot" },
+	{ k = K.SM_TM_MARK, at = "tough", name = "mark target" },
+	{ k = K.SM_TM_EMP, at = "veh", name = "haywire" } }
+-- the jump as the opener (R.melee_target: a set-up team first, then shooters); the commander's teleport pack the same way
+P.charge[FC] = { { k = K.SM_FC_TELEPORT, min = 20, max = 46, name = "teleport" } }
+P.charge["race_marine/troops/sm_terminator_assault"] = { { k = K.SM_TERM_TELEPORT, min = 18, max = 43, name = "teleport" } }
+-- a grenade for a squad that MOVES (the doctrine, 4: 'grenades ahead of the enemy - where it will come - and under a squad
+-- that retreats'): thrown at the place the squad will be in 'lead' seconds by its measured speed (SM.tick). A squad that
+-- stands gets it by the common rule (C above). [Brain_LeadCast=0]
+P.lead_casts = {
+	[SCOUT] = { { k = K.SM_GRENADE, kind = "pos", need = { "troops/sm_scout_squad_sergeant" }, name = "frag grenade", lead = 1.8 } },
+	[APO] = { { k = K.SM_APO_TOXIN, kind = "pos", name = "toxin grenade", lead = 1.8 } },
+	["race_marine/troops/sm_librarian"] = { { k = K.SM_LIB_SMITE, kind = "pos", name = "smite", lead = 1.2 } },
+}
+-- the scouts' infiltration (the upgrade of tier 2): a capturer walks hidden - out of a fight only, as the lootas' camo
+P.stealth = { [SCOUT] = { k = K.SM_SCOUT_CAMO, name = "infiltration", idle = true, cd = 30, tries = 3 } }
+
+-- ---- small things ------------------------------------------------------------------------------------------------------
+local function say_once(key, hold, parts)
+	local now = Brain.now or 0
+	local s = SM.said[key]
+	if s ~= nil and now - s < hold then return end
+	SM.said[key] = now
+	Brain.log("SM", table.concat(parts, " "))
+end
+-- the nearest enemy that is not running home, and the nearest mob among them (melee by its data row)
+local function nearest(u, W)
+	local ne, nd, me, md
+	for _, e in ipairs(W.en) do
+		if not e.retreating then
+			local d = d2(u.x, u.z, e.x, e.z)
+			if nd == nil or d < nd then ne, nd = e, d end
+			if e.mel and not e.veh and (md == nil or d < md) then me, md = e, d end
+		end
+	end
+	return ne, nd, me, md
+end
+local function is_hero(u) return u.key ~= nil and string.find(u.key, "/heroes/", 1, true) ~= nil end
+
+-- ---- a MOVE order does not end inside a building (Orca fb 1127: 'the shootas are stuck in a house' - the step back went
+-- to a place where a building stands, a move order to a building is an order to enter it, the brain called the squad
+-- out, the next step went to the same place). The place of a MOVE that lies within MoveFixR of a building of the map is
+-- shifted MoveFixOut from its middle, to the side the squad comes from. Marines only. [Brain_MoveFix=0]
+function SM.building_near(x, y, z, r)
+	if type(World_GetEntitiesNearPoint) ~= "function" or type(EGroup_CreateIfNotFound) ~= "function" or type(EGroup_Clear) ~= "function"
+		or type(EGroup_CountSpawned) ~= "function" or type(EGroup_GetSpawnedEntityAt) ~= "function" or type(Entity_GetPosition) ~= "function"
+		or type(Entity_IsBuilding) ~= "function" or type(Entity_GetBlueprintName) ~= "function" or type(Player_FromId) ~= "function" or type(World_Pos) ~= "function" or OT_Neutral == nil
+		or s_selfplayerid == nil then return nil end
+	local pl = Player_FromId(s_selfplayerid)
+	if pl == nil then return nil end
+	local eg = EGroup_CreateIfNotFound("eliteai_sm_eg")
+	EGroup_Clear(eg)
+	World_GetEntitiesNearPoint(pl, eg, World_Pos(x, y or 0, z), r, OT_Neutral)
+	local best, bd
+	for i = 1, EGroup_CountSpawned(eg) do
+		local e = EGroup_GetSpawnedEntityAt(eg, i)
+		-- (bench sm1_probe1: Entity_IsBuilding is true for every object of the map - ferns, rubble, walls, the points. What a
+		-- squad can enter is a blueprint of a 'buildings' folder: ebps\world_objects\jungle_objects\buildings\common_4slot_01)
+		local nm = (e ~= nil) and string.lower(tostring(Entity_GetBlueprintName(e))) or ""
+		if num("MoveFixProbe", 0) >= 1 and e ~= nil then say_once("probe|" .. nm, 600, { "probe", nm, "building", tostring(Entity_IsBuilding(e)) }) end
+		if e ~= nil and string.find(nm, "buildings", 1, true) ~= nil and string.find(nm, "world_objects", 1, true) ~= nil and Entity_IsBuilding(e) == true then
+			local p = Entity_GetPosition(e)
+			if p ~= nil and p.x ~= nil then
+				local d = d2(p.x, p.z, x, z)
+				if bd == nil or d < bd then best, bd = { x = p.x, z = p.z }, d end
+			end
+		end
+	end
+	EGroup_Clear(eg)
+	return best, bd
+end
+Brain.move_fix = function(u, x, y, z)
+	if s_current_race ~= "space_marines" or num("MoveFix", 1) < 1 or u == nil or u.x == nil then return x, z end
+	if d2(u.x, u.z, x, z) < 2 then return x, z end                      -- (an order to stand where it stands)
+	local b, bd = SM.building_near(x, y, z, num("MoveFixR", 7))
+	if b == nil then return x, z end
+	local dx, dz = u.x - b.x, u.z - b.z
+	local dl = math.sqrt(dx * dx + dz * dz)
+	if dl < 1 then dx, dz, dl = x - b.x, z - b.z, math.max(bd, 0.01) end
+	if dl < 0.01 then dx, dz, dl = 1, 0, 1 end
+	local out = num("MoveFixOut", 11)
+	local nx, nz = b.x + dx / dl * out, b.z + dz / dl * out
+	SM.st.fix = SM.st.fix + 1
+	say_once("fix|" .. u.id, 20, { "move", u.id, Brain.short(u.key), "SHIFTED", f0(x), f0(z), ">", f0(nx), f0(nz), "why", "a building of the map stands", f0(bd), "m from the place: a move order there is an order to enter it" })
+	return nx, nz
+end
+
+-- ---- once a second ------------------------------------------------------------------------------------------------------
+function SM.tick(W, taken)
+	local now = W.now
+	-- the measured speed of every enemy squad seen (ids and numbers only; kept 4 s without a sight)
+	local tr = SM.track
+	for _, e in ipairs(W.en) do
+		local t = tr[e.id]
+		if t ~= nil and now > t.t and now - t.t <= 2.5 then
+			local dt = now - t.t
+			local vx, vz = (e.x - t.x) / dt, (e.z - t.z) / dt
+			t.vx, t.vz = 0.5 * (t.vx or vx) + 0.5 * vx, 0.5 * (t.vz or vz) + 0.5 * vz
+			t.x, t.z, t.t = e.x, e.z, now
+		elseif t == nil or now > t.t then
+			tr[e.id] = { x = e.x, z = e.z, t = now }
+		end
+	end
+	for _, id in ipairs(Brain.keys(tr)) do if now - tr[id].t > 4 then tr[id] = nil end end
+	-- the fight's global is the hero's
+	local hero
+	for _, u in ipairs(W.own) do if is_hero(u) then hero = u end end
+	if hero ~= nil and SM.hero_key ~= hero.key then
+		SM.hero_key = hero.key
+		local g = SM.GLOBAL[hero.key]
+		P.global_fight = g and g.pat or nil
+		if g ~= nil then P.global_red, P.global_recharge = g.red, g.recharge end
+		Brain.abilities.global_has = nil
+		Brain.log("SM", "hero", Brain.short(hero.key), "the fight's global:", g and g.pat or "none of this hero is cast in a fight")
+	end
+	local B = Brain.abilities
+	-- the apothecary heals out of a fight too (in one: the common cast 'heal' of the profile)
+	if hero ~= nil and hero.key == APO and not hero.retreating and not taken[hero.id] and hero.fight == nil and num("HealIdle", 1) >= 1 then
+		local c = B.spec({ k = K.SM_APO_HEAL, name = "heal" })
+		if B.ready(hero, c.k, c.cd) and B.energy_ok(hero, c) then
+			local t, td
+			for _, w in ipairs(W.own) do
+				local d = d2(hero.x, hero.z, w.x, w.z)
+				if w.id ~= hero.id and not w.veh and not w.retreating and w.hp <= num("HealIdleHP", 0.7) and d <= c.max and (t == nil or w.hp < t.hp) then t, td = w, d end
+			end
+			if t ~= nil and B.cast(hero, c.k, "squad", t.id, 0, 0, c.cd, { "cast", "heal", "at", "ally", t.id, Brain.short(t.key), "hp", f2(t.hp), "dist", f0(td), "out of a fight" }) then
+				SM.st.heal = SM.st.heal + 1
+			end
+		end
+	end
+	-- the bombardment: did it go out? The AI's request is no promise (bench sm2t_b, orb_eld_03b8a0: 'CAST ... red 513' at
+	-- tier 2 and the red resource stood at 513). SmOrbitalWatchSecs (4 s) after a request the red resource must be 250
+	-- below the most it was in the seconds before: then it took (SM.orb_took - the kept red is free for a while, SM.red_keep);
+	-- else the request is forgotten and may be made again after the common gap.
+	do
+		local g = B.gpos and B.gpos[3] or nil
+		local pr = Brain.purse
+		local red = pr and pr.red or nil
+		SM.red_hist = SM.red_hist or {}
+		if red ~= nil then table.insert(SM.red_hist, red); if table.getn(SM.red_hist) > 4 then table.remove(SM.red_hist, 1) end end
+		if g ~= nil and (g.took or -1000) > 0 and g.took ~= SM.orb_seen and red ~= nil then
+			if SM.orb_watch == nil or SM.orb_watch.t ~= g.took then
+				local top = red
+				for _, v in ipairs(SM.red_hist) do if v > top then top = v end end
+				SM.orb_watch = { t = g.took, red = top }
+			end
+			if now - g.took >= num("SmOrbitalWatchSecs", 4) then
+				local w = SM.orb_watch
+				SM.orb_seen, SM.orb_watch = w.t, nil
+				if red <= w.red - 250 then
+					SM.orb_took = w.t
+					Brain.log("SM", "GLOBAL", "sm_damage_aoe_orbital", "TOOK", "why", "the red resource went", f0(w.red), ">", f0(red), "in", f0(now - w.t), "s")
+				else
+					g.took = -1000
+					Brain.log("SM", "GLOBAL", "sm_damage_aoe_orbital", "FAILED", "why", "the red resource stands at", f0(red), "(" .. f0(w.red) .. " before)", f0(now - w.t), "s after the request: it may be asked again")
+				end
+			end
+		end
+	end
+	SM.tech(W, taken, hero)
+	-- the hero's own globals that are no answer to a fight (the AI's own request; the engine checks the price and the recharge)
+	if hero == nil or now - (SM.t_glob or -100) >= num("SmGlobalSecs", 5) then
+		SM.t_glob = now
+		SM.hero_globals(W, hero)
+	end
+	Brain.every("sm_stats", num("StatsSecs", 30), function()
+		local s = SM.st
+		Brain.log("SM", "stats", "kite", s.kite, "capturer_retreats", s.cap_ret, "setup_retreats", s.setup_ret, "setup_holds", s.hold, "setup_covers_step", s.cover_step,
+			"lead_casts", s.lead, "at_retreating", s.lead_ret, "not_followed", s.nochase, "heals_idle", s.heal, "moves_shifted", s.fix, "globals", SM.glob_n or 0)
+	end)
+end
+
+-- ---- THE TECHMARINE BUILDS AND MENDS ---------------------------------------------------------------------------------------
+-- Elite 3.2.1 (ebps/pvp/race_marine/buildings, ebps/projectiles/race_marine):
+--   1 sm_heavy_bolter_turret_tech_marine   200 requisition + 30 power + 35 red, 15 s, 5 population
+--   2 sm_prox_mine_pvp                     40 of the hero's energy, 6 s; needs the artificer armour (the first armour of E.gear)
+--   3 sm_techmarine_field_ops              200 + 25 + 50 red, 25 s, 3 population (the forward post: reinforcing in the field)
+-- The engine's own request (Request_Construction, BS_Defend) is accepted and builds nothing (step 8: 183 requests, 0
+-- buildings), so the order is the player's own build command, as a human gives it: netorder.ai mode 700 + k (the facing
+-- goes first, word 18). The game takes the price and refuses a bad place or a missing requirement by itself.
+-- When: the techmarine is fit, out of any fight, nobody of the enemy within TechEnemyR, and it stands near a point of
+-- ours. Where: a turret TechTurretD beyond a victory or power point of ours towards the enemy, one a point, two in all;
+-- mines on the enemy's side of the point, TechMineD out, at most TechMines remembered; the field post once, from tier 2's
+-- hour, with idle requisition. What was built is remembered by its place and hour (the AI state has no list of its
+-- player's buildings that this code could read without a guess). While it walks to the place and builds, the
+-- techmarine is not the fist's. [Brain_TechBuild=0]
+SM.built, SM.tech_no = {}, {}
+local BUILD = {
+	{ k = 1, name = "turret", req = 200, pow = 30, red = 35, pop = 5, max = 2, life = 480, from = 240, own_r = 25, off = 7, free = 150 },
+	{ k = 2, name = "mine", req = 0, pow = 0, red = 0, pop = 0, max = 4, life = 240, from = 150, own_r = 5, off = 11, energy = 40, need = { "wargear/arm_tech_artificer_armour" } },
+	{ k = 3, name = "field post", req = 200, pow = 25, red = 50, pop = 3, max = 1, life = 900, from = 540, own_r = 60, off = -6, free = 300 },
+}
+function SM.tech(W, taken, hero)
+	if hero == nil or hero.key ~= TM or num("TechBuild", 1) < 1 then return end
+	local now = W.now
+	local B = Brain.abilities
+	local job = SM.job
+	if job ~= nil then
+		local why
+		if hero.retreating then why = "it retreats"
+		elseif hero.hit and not hero.builds then why = "it is shot at"
+		elseif job.started and not hero.builds then
+			table.insert(SM.built, { k = job.k, x = job.x, z = job.z, t = now, key = job.key })
+			Brain.log("SM", "tech", "BUILT", job.name, "at", f0(job.x), f0(job.z), "in", f0(now - job.t), "s", "at the point", job.key)
+			SM.job = nil
+		elseif not job.started and hero.builds then job.started = true
+		elseif not job.started and now - job.t > num("TechWalkSecs", 14) then why = "the build did not start in " .. f0(now - job.t) .. " s (the place, the price or a requirement)" end
+		if why ~= nil then
+			SM.tech_no[job.k] = now
+			Brain.log("SM", "tech", "DROPPED", job.name, "at", f0(job.x), f0(job.z), "why", why)
+			SM.job = nil
+		end
+		if SM.job ~= nil then taken[hero.id] = true end
+		return
+	end
+	-- to mend a machine of ours that stands hurt near, out of a fight (the profile's repair works at home only)
+	if not taken[hero.id] and hero.fight == nil and not hero.hit and not hero.retreating then
+		for _, v in ipairs(W.own) do
+			if v.veh and v.id ~= hero.id and v.fight == nil and not v.hit and v.hp < num("RepairHP", 0.9) and d2(hero.x, hero.z, v.x, v.z) <= num("TechRepairR", 40) then
+				taken[hero.id] = true
+				Brain.army.st[hero.id] = { mode = "repair", key = v.id, t = now }
+				B.cast(hero, 1, "squad", v.id, 0, 0, num("RepairEverySecs", 8), { "repair", v.id, Brain.short(v.key), "hp", f2(v.hp), "in the field" })
+				return
+			end
+		end
+	end
+	if taken[hero.id] or hero.fight ~= nil or hero.hit or hero.retreating or hero.hp < num("TechMinHP", 0.6) or hero.builds then return end
+	if now - (SM.t_tech or -100) < num("TechSecs", 3) then return end
+	SM.t_tech = now
+	for _, e in ipairs(W.en) do if d2(e.x, e.z, hero.x, hero.z) <= num("TechEnemyR", 60) then return end end
+	local keep = {}
+	for _, b in ipairs(SM.built) do
+		local life = 240
+		for _, q in ipairs(BUILD) do if q.k == b.k then life = q.life end end
+		if now - b.t < life then table.insert(keep, b) end
+	end
+	SM.built = keep
+	local pr = Brain.purse
+	local req, pow, red
+	if pr ~= nil and pr.t ~= nil and now - pr.t <= 3 then req, pow, red = pr.req, pr.pow, pr.red
+	elseif type(cache) == "table" and type(cache.resources) == "table" then req, pow, red = cache.resources.requisition or 0, cache.resources.power or 0, nil end   -- (the red resource is not known here: the game checks it)
+	if req == nil then return end
+	local room = (type(cache) == "table") and ((cache.max_population_personnel or 0) - (cache.current_population_personnel or 0)) or 0
+	for _, q in ipairs(BUILD) do
+		local n = 0
+		for _, b in ipairs(SM.built) do if b.k == q.k then n = n + 1 end end
+		local ok = (n < num("TechMax" .. q.k, q.max) and now >= num("TechFrom" .. q.k, q.from) and now - (SM.tech_no[q.k] or -1000) >= num("TechRetrySecs", 60)
+			and req >= q.req + (q.free or 0) and pow >= q.pow and (q.red <= 0 or red == nil or red >= q.red) and room >= q.pop)
+		if ok and q.need ~= nil then ok = B.has(hero, { k = "build" .. q.k, need = q.need }) end
+		if ok and q.energy ~= nil and hero.sq ~= nil and type(Squad_GetEnergy) == "function" then
+			local e = Squad_GetEnergy(hero.sq)
+			ok = (type(e) ~= "number") or e >= q.energy
+		end
+		if ok then
+			-- the point of ours near the techmarine: a victory point before a power point before any other
+			local bp, bs
+			for _, p in ipairs(W.pts) do
+				local d = d2(hero.x, hero.z, p.x, p.z)
+				if p.ours and d <= num("TechPointR", 45) and (q.k ~= 1 or p.vp or p.pow) then
+					local taken_p = false
+					for _, b in ipairs(SM.built) do if b.k == q.k and d2(b.x, b.z, p.x, p.z) <= q.own_r + math.abs(q.off) and (q.k ~= 2 or b.key == p.key and (b.n or 1) >= 2) then taken_p = true end end   -- (verifier: b.n is nil until a second mine is ordered at the point - nil >= 2 was a Lua error that stopped the brain's tick)
+					local s = d - (p.vp and 100 or 0) - (p.pow and 50 or 0)
+					if not taken_p and (bs == nil or s < bs) then bp, bs = p, s end
+				end
+			end
+			local hq, hd
+			if bp ~= nil then for _, h in ipairs(W.ehq or {}) do local d = d2(bp.x, bp.z, h.x, h.z); if hd == nil or d < hd then hq, hd = h, d end end end
+			if bp ~= nil and hq ~= nil and hd > 1 then
+				local fx, fz = (hq.x - bp.x) / hd, (hq.z - bp.z) / hd
+				local at_p = 0
+				for _, b in ipairs(SM.built) do if b.k == q.k and b.key == bp.key then at_p = at_p + 1 end end
+				local side = (q.k == 2) and (at_p - 0.5) * 8 or 0        -- (the second mine of a point lies 8 m beside the first)
+				local x, z = bp.x + fx * q.off - fz * side, bp.z + fz * q.off + fx * side
+				-- (step SM-2, the build command against people's replays - sm2/research_4e: 173 turrets, 150 mines and 20 field
+				-- posts of techmarines in 2141 replays. The layout is the same in all of them. A turret's second place is
+				-- where the cursor was dragged to (0.8-69 m from the first, the engine's own computer sends one metre: so do
+				-- we); a mine's and a post's is the place + (0, 0, 1) in every command of every person - so is ours now.)
+				if q.k == 1 then Brain.signal(18, fx, 0, fz) else Brain.signal(18, 0, 0, 1) end
+				if Brain.order(hero, 700 + q.k, x, hero.y, z, { "build", q.name, "at our", (bp.vp and "victory point" or (bp.pow and "power point" or "point")), bp.key, "facing the enemy's base" }) then
+					SM.job = { k = q.k, name = q.name, x = x, z = z, t = now, key = bp.key }
+					for _, b in ipairs(SM.built) do if b.key == bp.key and b.k == q.k then b.n = (b.n or 1) + 1 end end
+					taken[hero.id] = true
+					SM.st.build = (SM.st.build or 0) + 1
+					Brain.log("SM", "tech", "BUILD", q.name, "at", f0(x), f0(z), "why", "out of a fight at our point " .. bp.key .. ", nobody of the enemy within " .. f0(num("TechEnemyR", 60)) .. " m; " .. n .. " of " .. q.max .. " stand",
+						"bank", f0(req) .. "/" .. f0(pow), "red", f0(red or 0), "pop room", room)
+					return
+				end
+			end
+		end
+	end
+end
+
+-- Larraman's Blessing (apothecary: the fallen hero stands up for 150 of the red resource instead of the HQ's price) and
+-- the Blessing of the Omnissiah (techmarine: a machine of ours hurt in a fight). [Brain_SmGlobals=0]
+function SM.hero_globals(W, hero)
+	if num("SmGlobals", 1) < 1 or type(AIAbility_GetPlayerCount) ~= "function" or type(AIAbility_GetPlayerAt) ~= "function" or type(PBG_GetName) ~= "function"
+		or type(AIPlayer_CanPlayerCastAbility) ~= "function" or type(Request_PlayerAbility) ~= "function" or TGROUP_PlayerAbility == nil or TPRIORITY_PlayerAbility == nil then return end
+	local want, why
+	if (W.down or 0) > 0 and SM.hero_key == APO then
+		SM.t_down = SM.t_down or W.now
+		if W.now - SM.t_down >= num("SmReviveSecs", 6) then want, why = "sm_heal_aoe_reviveheroes", "the hero is down for " .. f0(W.now - SM.t_down) .. " s: it stands up where it fell" end
+	else SM.t_down = nil end
+	if want == nil and SM.hero_key == TM then
+		for _, v in ipairs(W.own) do
+			if v.veh and v.fight ~= nil and v.hp <= num("SmRepairHP", 0.6) and not v.retreating then want, why = "sm_buff_aoe_repair", "the machine " .. Brain.short(v.key) .. " is at " .. f2(v.hp) .. " of its health in a fight" end
+		end
+	end
+	if want == nil then return end
+	local pbg
+	for i = 0, (AIAbility_GetPlayerCount(s_selfplayer) or 0) - 1 do
+		local p = AIAbility_GetPlayerAt(s_selfplayer, i)
+		if p ~= nil and string.find(string.gsub(string.lower(tostring(PBG_GetName(p))), "\\", "/"), want, 1, true) ~= nil then pbg = p end
+	end
+	if pbg == nil or AIPlayer_CanPlayerCastAbility(s_selfplayer, pbg) ~= true then
+		say_once("glob|no|" .. want, 60, { "GLOBAL", want, "CANNOT", "why", pbg == nil and "not in the engine's list of this player's abilities" or "the engine says it cannot be cast now (the red resource or its recharge)", "- wanted:", why })
+		return
+	end
+	if W.now - (SM.t_glob_cast or -100) < num("SmGlobalGapSecs", 30) then return end
+	SM.t_glob_cast = W.now
+	if type(AIAbility_IsTargeted) == "function" and AIAbility_IsTargeted(pbg) == true then
+		local at = hero or W.home
+		if at == nil or type(Request_PlayerAbilitySingleTarget) ~= "function" or type(World_Pos) ~= "function" then return end
+		Request_PlayerAbilitySingleTarget(s_selfplayer, TGROUP_PlayerAbility, TPRIORITY_PlayerAbility, pbg, World_Pos(at.x, at.y or 0, at.z))
+	else
+		Request_PlayerAbility(s_selfplayer, TGROUP_PlayerAbility, TPRIORITY_PlayerAbility, pbg)
+	end
+	SM.glob_n = (SM.glob_n or 0) + 1
+	Brain.log("SM", "GLOBAL", want, "CAST", "why", why, "- by the AI's own request")
+end
+
+-- ---- survival: the capturers and the set-up teams -------------------------------------------------------------------------
+-- A capturer (scouts: three models, 420 health) [Brain_Capturer=0 with the role back to "ranged" is the code before]:
+--   * shot at and below CapturerRetEff (0.6) of its strength - it retreats: it has to live through the run home;
+--   * a mob within CapturerMeleeR (18 m) and no fight of ours to stand behind - it walks out of the mob's way
+--     (CapturerKiteD 25 m, away from the mob and towards home); the point is taken again when the mob is gone.
+-- A set-up team with a mob ON it (SetupMeleeR 9 m) and below SetupMeleeEff (0.8): it retreats - devastators in a melee
+-- neither shoot nor live (the common rule waits for 0.42).
+function SM.survive(u, W, taken)
+	if not u.can_ret then return false end
+	local role = R.of(u)
+	local A = Brain.army
+	if role == "capturer" and num("Capturer", 1) >= 1 then
+		local ne, nd, me, md = nearest(u, W)
+		if u.hit and u.eff < num("CapturerRetEff", 0.6) then
+			taken[u.id] = true
+			SM.st.cap_ret = SM.st.cap_ret + 1
+			A.retreat(u, { "a capturer under fire", "eff", f2(u.eff), "hp", f2(u.hp), "models", u.n .. "/" .. u.full, "enemy at", f0(nd or -1), "fight", (u.fight and u.fight.key) or "-" })
+			return true
+		end
+		local F = u.fight
+		local backed = false                                            -- a fight of ours with fighting squads in it: the scouts stand behind them
+		if F ~= nil then
+			for _, w in ipairs(F.ours) do
+				local wr = R.of(w)
+				if w.id ~= u.id and not R.is_rear(wr) and (F.verdict == "press" or F.verdict == "hold") then backed = true end
+			end
+		end
+		if md ~= nil and md <= num("CapturerMeleeR", 18) and not backed and W.home ~= nil then
+			taken[u.id] = true
+			local st = A.st[u.id]
+			if st == nil or st.mode ~= "kite" or W.now - st.t >= num("CapturerKiteSecs", 4) then
+				local ax, az = u.x - me.x, u.z - me.z
+				local al = math.max(math.sqrt(ax * ax + az * az), 0.01)
+				local hx, hz = W.home.x - u.x, W.home.z - u.z
+				local hl = math.max(math.sqrt(hx * hx + hz * hz), 0.01)
+				local vx, vz = ax / al + 0.6 * hx / hl, az / al + 0.6 * hz / hl
+				local vl = math.max(math.sqrt(vx * vx + vz * vz), 0.01)
+				local step = num("CapturerKiteD", 25)
+				st = { mode = "kite", t = W.now, tx = u.x + vx / vl * step, tz = u.z + vz / vl * step }
+				A.st[u.id] = st
+				SM.st.kite = SM.st.kite + 1
+				Brain.log("SM", "squad", u.id, Brain.short(u.key), "KITE", "why", "a mob (" .. Brain.short(me.key) .. ") is " .. f0(md) .. " m away and no fight of ours to stand behind: out of its way", "eff", f2(u.eff))
+			end
+			Brain.order(u, O.MOVE, st.tx, u.y, st.tz, { "capturer: out of the mob's way", me.id, Brain.short(me.key), "at", f0(md) })
+			return true
+		end
+		return false
+	end
+	if role == "setup" and num("SetupMelee", 1) >= 1 and u.hit then
+		local ne, nd, me, md = nearest(u, W)
+		if md ~= nil and md <= num("SetupMeleeR", 9) and u.eff < num("SetupMeleeEff", 0.8) then
+			taken[u.id] = true
+			SM.st.setup_ret = SM.st.setup_ret + 1
+			A.retreat(u, { "a set-up team with a mob on it", me.id, Brain.short(me.key), "at", f0(md), "eff", f2(u.eff), "models", u.n .. "/" .. u.full, "fight", (u.fight and u.fight.key) or "-" })
+			return true
+		end
+	end
+	return false
+end
+
+-- ---- in a fight -------------------------------------------------------------------------------------------------------------
+function SM.engage(u, role, F, W)
+	local now = W.now
+	local B = Brain.abilities
+	-- 1. nobody stands in this fight but squads that run home: they are not followed (Orca fb 1138: 'the chase to the
+	-- enemy's base'). A mob is told to stand; a shooter fires at what is in its range without an order. [Brain_NoChase=0]
+	if num("NoChase", 0) >= 1 then
+		local live = 0
+		for _, e in ipairs(F.en) do if not e.retreating then live = live + 1 end end
+		if live == 0 and table.getn(F.en) > 0 then
+			SM.st.nochase = SM.st.nochase + 1
+			say_once("nochase|" .. F.key, 15, { "fight", F.key, "NOT FOLLOWED", "why", "every enemy squad of it (" .. table.getn(F.en) .. ") runs home: no order after them" })
+			if R.is_melee(role) then Brain.order(u, O.MOVE, u.x, u.y, u.z, { "the enemy runs home: not followed", F.key }) end
+			return true
+		end
+	end
+	-- 2. a grenade at the place a moving squad will be at
+	local lc = P.lead_casts and P.lead_casts[u.key] or nil
+	if lc ~= nil and num("LeadCast", 1) >= 1 and not (B.busy[u.id] ~= nil and now - B.busy[u.id] < num("CastBusySecs", 2)) then
+		for _, c0 in ipairs(lc) do
+			local c = B.spec(c0)
+			if B.ready(u, c.k, c.cd) and B.has(u, c) and B.energy_ok(u, c) then
+				local best, bs, bx, bz
+				for _, e in ipairs(F.en) do
+					local t = SM.track[e.id]
+					local arm = (e.d and e.d.arm) or (e.veh and "veh" or "inf")
+					if t ~= nil and t.vx ~= nil and arm ~= "veh" and arm ~= "bld" and arm ~= "cmd" and not e.veh and (e.n or 1) >= num("LeadMinModels", 3) then
+						local sp = math.sqrt(t.vx * t.vx + t.vz * t.vz)
+						if sp >= num("LeadMinSpeed", 2.5) and sp <= 12 then
+							local px, pz = e.x + t.vx * c0.lead, e.z + t.vz * c0.lead
+							local d = d2(u.x, u.z, px, pz)
+							local ok = (d <= c.max and d >= (c.min or 0))
+							if ok then for _, w in ipairs(W.own) do if w.id ~= u.id and d2(w.x, w.z, px, pz) <= num("CastFfR", 6) + 2 then ok = false; break end end end
+							if ok and (bs == nil or (e.n or 1) > bs) then best, bs, bx, bz = e, (e.n or 1), px, pz end
+						end
+					end
+				end
+				if best ~= nil and B.cast(u, c.k, "pos", bx, best.y or u.y, bz, c.cd, { "cast", c.name, "ahead of", best.id, Brain.short(best.key), best.retreating and "that runs home" or "that walks", "lead", c0.lead, "s",
+					"models", best.n, F.key, tostring(F.verdict) }) then
+					SM.st.lead = SM.st.lead + 1
+					if best.retreating then SM.st.lead_ret = SM.st.lead_ret + 1 end
+					B.n_cast = (B.n_cast or 0) + 1
+					B.busy[u.id] = now
+					return true
+				end
+			end
+		end
+	end
+	-- 3. a set-up team stands where its gun reaches: no order while the enemy is in range (an order makes it pack the
+	-- gun up - Orca fb 1095, Malum fb 1165: 'the lootas pack and unpack all the time instead of taking a position'); out of
+	-- range - ONE attack-move to a place SetupShortD short of its range, not again for SetupMoveSecs. No walk to cover.
+	-- [Brain_SetupHold=0]
+	if role == "setup" and num("SetupHold", 1) >= 1 then
+		if B.on_fight ~= nil then B.on_fight(u, role, F, W) end          -- (its own casts: focused fire - a cast on itself, no order to move)
+		local rng = (u.d ~= nil and u.d.rng > 0) and u.d.rng or 45
+		local st = SM.setup[u.id]
+		if st == nil then st = {}; SM.setup[u.id] = st end
+		local ne, nd
+		for _, e in ipairs(F.en) do
+			if not e.retreating then local d = d2(u.x, u.z, e.x, e.z); if nd == nil or d < nd then ne, nd = e, d end end
+		end
+		if nd ~= nil and nd <= rng - 2 then
+			if not st.held then
+				st.held = true
+				SM.st.hold = SM.st.hold + 1
+				Brain.log("SM", "squad", u.id, Brain.short(u.key), "HOLDS", "why", "the enemy is " .. f0(nd) .. " m away, in the gun's range " .. f0(rng) .. ": it stands and fires, no order", F.key, tostring(F.verdict))
+			end
+			return true
+		end
+		st.held = nil
+		if st.moved ~= nil and now - st.moved < num("SetupMoveSecs", 10) then return true end
+		local tx, tz = F.x, F.z
+		if ne ~= nil and nd > 1 then
+			local k = (rng - num("SetupShortD", 8)) / nd
+			tx, tz = ne.x + (u.x - ne.x) * k, ne.z + (u.z - ne.z) * k
+		end
+		st.moved = now
+		Brain.order(u, O.AMOVE, tx, u.y, tz, { "set-up team: to a place", f0(num("SetupShortD", 8)), "m inside its range", f0(rng), "enemy at", f0(nd or -1), F.key, tostring(F.verdict) })
+		return true
+	end
+	return false
+end
+
+-- the step back of a fight we are losing: a set-up team in range with no mob near covers it
+function SM.on_step(u, F, W, fb)
+	if R.of(u) ~= "setup" or num("SetupHold", 1) < 1 then return false end
+	local rng = (u.d ~= nil and u.d.rng > 0) and u.d.rng or 45
+	local ne, nd, me, md = nearest(u, W)
+	if nd ~= nil and nd <= rng - 2 and nd >= num("SetupStepMinD", 22) and (md == nil or md > num("SetupStepMeleeR", 20)) then
+		SM.st.cover_step = SM.st.cover_step + 1
+		say_once("cstep|" .. u.id, 10, { "squad", u.id, Brain.short(u.key), "COVERS", "why", "the step back of " .. F.key .. ": the enemy is " .. f0(nd) .. " m away, in range, no mob within " .. f0(num("SetupStepMeleeR", 20)) .. " m - it stands and fires" })
+		Brain.army.st[u.id] = { mode = "fight", t = W.now }
+		return true
+	end
+	return false
+end
+
+P.tick, P.survive, P.engage, P.on_step = SM.tick, SM.survive, SM.engage, SM.on_step
+
+	end
+	eliteai_brain_65_race_sm()
 end
 
 -- ===== EliteAI brain/70_abilities.ai =====
@@ -15188,7 +16465,10 @@ function B.global_pos(W)
 	for _, g in ipairs(list) do
 		local st = B.gpos[g.k]
 		if st == nil then st = { t = -1000, took = -1000 }; B.gpos[g.k] = st end
-		if (purse.red or 0) >= Brain.num("GlobalPosRed", g.red or 500) and W.now - st.t >= Brain.num("GlobalPosGapSecs", 30) and W.now - st.took >= (g.recharge or 120) then
+		-- (step SM-2: the entry's own tier - 'tier'; the marines' bombardment is of tier 3 and the engine's 'can cast' said yes
+		-- at tier 2 with the red resource in hand: bench sm2t_b, orb_eld_03b8a0 - a request that nothing came of)
+		if (purse.red or 0) >= Brain.num("GlobalPosRed", g.red or 500) and W.now - st.t >= Brain.num("GlobalPosGapSecs", 30) and W.now - st.took >= (g.recharge or 120)
+			and (g.tier == nil or ((Brain.economy ~= nil and Brain.economy.tier_now) or 1) >= g.tier) then
 			-- whom
 			local t, why
 			local function clear(x, z)
@@ -15218,11 +16498,12 @@ function B.global_pos(W)
 							if not e.retreating and not e.veh and (e.still or 0) >= Brain.num("GlobalPosClumpSecs", 3) then
 								local sx, sz, n, hp = 0, 0, 0, 0
 								for _, o in ipairs(F.en) do
-									if not o.retreating and not o.veh and (o.still or 0) >= Brain.num("GlobalPosClumpSecs", 3) and Brain.d2(e.x, e.z, o.x, o.z) <= Brain.num("GlobalPosClumpR", 10) then
+									if not o.retreating and not o.veh and (o.still or 0) >= Brain.num("GlobalPosClumpSecs", 3) and Brain.d2(e.x, e.z, o.x, o.z) <= Brain.num("GlobalPosClumpR", g.clump_r or 10) then
 										sx, sz, n, hp = sx + o.x, sz + o.z, n + 1, hp + (o.hpabs or 0)
 									end
 								end
-								if n >= Brain.num("GlobalPosClumpN", 2) and (best_hp == nil or hp > best_hp) and clear(sx / n, sz / n) then
+								-- (step SM-2: the entry's own clump - 'clump_n', 'clump_r', 'clump_hp'; the marines' bombardment, 65_race_sm.ai)
+								if n >= Brain.num("GlobalPosClumpN", g.clump_n or 2) and hp >= (g.clump_hp or 0) and (best_hp == nil or hp > best_hp) and clear(sx / n, sz / n) then
 									best_hp = hp
 									t, why = { x = sx / n, y = e.y, z = sz / n }, n .. " squads of the enemy standing together in our fight " .. F.key .. " (health " .. Brain.f0(hp) .. ")"
 								end
@@ -15733,6 +17014,15 @@ function B.global(W)
 			"ours", table.getn(no_F.ours), "enemy", table.getn(no_F.en), "lost10s", Brain.f0(no_F.loss_ours or 0) .. ":" .. Brain.f0(no_F.loss_en or 0), "age", Brain.f0(no_F.age) }, no_F.key .. "|" .. no_why)
 	end
 	if best == nil then return end
+	-- (step SM-2: the red resource a race keeps for something dearer - the profile's red_keep(W, what) -> amount, why; the
+	-- marines' bombardment and the heroes' revival, 65_race_sm.ai. No other profile has the field.)
+	if prof.red_keep ~= nil and Brain.purse ~= nil and Brain.purse.red ~= nil then
+		local keep, kwhy = prof.red_keep(W, "fight")
+		if (keep or 0) > 0 and Brain.purse.red - (prof.global_red or 0) < keep then
+			Brain.say("ABIL", "global|KEPTRED", 60, { "GLOBAL", pat, "KEPT", "why", "the red resource (" .. Brain.f0(Brain.purse.red) .. ") is kept: " .. tostring(kwhy), "fight", best.key }, tostring(kwhy))
+			return
+		end
+	end
 	-- step 4: by the game's own command (elite.scar mode 400+k -> Cmd_PlayerAbility) with the purse the game counts. Bench
 	-- 13.11: 'Waaagh!' costs 200 requisition AND 200 of the red resource (Elite 3.2.1); Relic's can-cast said no 99 times
 	-- of 99 because the REQUISITION was not there (the purchase scripts spend it as it comes), not the red resource.
