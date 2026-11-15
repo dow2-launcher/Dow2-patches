@@ -456,7 +456,7 @@
     "order": 40
   },
   "roomjoin": {
-    "version": "9",
+    "version": "10",
     "dll": "RoomJoin.dll",
     "files": {
       "rjbridge.exe": "build/rjbridge.exe"
@@ -1571,7 +1571,7 @@
     }
   },
   "replayopen": {
-    "version": "1",
+    "version": "2",
     "dll": "ReplayOpen.dll",
     "files": {
       "robridge.exe": "build/robridge.exe"

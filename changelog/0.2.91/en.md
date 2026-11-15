@@ -1,0 +1,2 @@
+- Lobby join (RoomJoin 16): joining as an observer no longer shows the Select Hero screen - the game confirms the hero itself under the "Connecting" window (an observer's hero does not matter) and opens the lobby at once. A connect takes at most 30 seconds, then the join is called off with its reason.
+- Replay from the launcher (ReplayOpen 2): the "Connecting" window stays until the replay starts loading - no more "hanging" in the main menu.
