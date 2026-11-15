@@ -1,0 +1,1 @@
+- Match marks 2 (experiment, for testers): the camera point of a mark is now the spot the camera really looks at (it was off the map); with the new AI each mark also keeps the AI's log of 20 seconds before and after it in a small file of its own, so it reaches the developers with the logs.

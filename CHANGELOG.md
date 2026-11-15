@@ -4,6 +4,25 @@ Every version gets an entry here before it reaches `main`. CI then tags `vX.Y.Z`
 version (`X.Y.0`) it also publishes a GitHub Release with the DLLs and the entries since the previous `X.Y.0`.
 The version of the set lives only in `VERSION`; each DLL still writes its own version to its log.
 
+## 0.2.81 — 2026-11-15
+Match marks 2 (store marks-2, experiment, order 1100, off by default, games elite + vanilla + igrework) - the camera point of a
+mark, and the new AI's lines around a mark reach the developers.
+- Camera: 1 cast a ray from the camera's eye (top of GameObj's camera stack, as Misc_GetCameraPos) to the plane y = 0; the
+  ground is ~200 high on some maps (Kathari Ruins: the eye 242-250 high all match long), so "looks at" came out off the map, by
+  two anchors ~(32, 32) from the eye. 2 reads the point the gameplay camera itself looks at: CameraGameplay (vtable 0x0111BD04,
+  RTTI .?AVCameraGameplay@@) = the active controller of the camera manager *(0x01335090) (as 0x00BB3430 of
+  Camera_GetGameplayCameraTuningValue finds it, the vtable compared instead of a dynamic_cast), + 0x2D0 / 0x2D4 / 0x2D8 its target
+  x / terrain height / z (panning adds to it in 0x00BACC10; vt + 0xC 0x00BADA00 writes it as eye + direction * distance),
+  + 0x300 the distance. Fallback: the camera stack's top - 8 when its vtable is CameraGameplay's; else "?". Reads only, no call.
+  Marks.log: "camera looks at x .. z .. (ground height .., camera distance ..)".
+- EliteAI: the mark goes to EliteAI.dll 0.17+ through its export EliteAI_Mark(n, tick, line) (every module named EliteAI.dll is
+  asked; the idle copy answers 0): EliteAI writes the line into EliteAI.log itself and keeps its lines of 20 s of game before and
+  after the mark in EliteAI.marks.log (<= 240 KB a match; the launcher sends the last 256 KB of a log, and a whole match of the
+  new AI is megabytes). An EliteAI without the export (0.16 and older): the line is appended to EliteAI.log as in 1.
+- Bench (fastbench, no UI: Marks' own mark() called from a test thread at fixed ticks, 1v1 live game with the brain): the export
+  taken every time, the camera found (CameraGameplay, distance 55, 45 degrees; the headless bench never moves it: target 0, 0).
+  Not checked yet: the real game - the hotkey / button path is Marks 1's, unchanged; the camera point against a real view.
+
 ## 0.2.80 — 2026-11-15
 Parallel Draw (store paralleldraw-1, new, experiment order 1131, off by default, games elite only; vanilla and IG Rework not tested) -
 late 3v3 fights, stage 2 of research latelag_1114 (STAGE2_RU.md).
