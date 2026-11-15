@@ -145,6 +145,13 @@ EliteAI_MECH_ABILITIES = {
 	[71] = "ability/pvp/race_ork/kommandos/ork_buff_self_infiltration",
 	[72] = "ability/pvp/race_ork/kommando_hero/ork_buff_self_infiltrate",
 	[73] = "ability/pvp/race_marine/scout/sm_buff_self_infiltrate",
+	-- (step SM-1, space marines: numbered from 99 down - the next ork ability takes 74; k stays below 100)
+	[92] = "ability/pvp/race_marine/dreadnought/sm_damage_aoe_charge",
+	[93] = "ability/pvp/race_marine/terminator/sm_teleport_target_terminators",
+	[95] = "ability/pvp/race_marine/techmarine/sm_damage_aoe_knockback",
+	[96] = "ability/pvp/race_marine/force_commander/sm_teleport_target_pack",
+	[98] = "ability/pvp/race_marine/assault_marine/sm_damage_aoe_mercilessstrike",
+	[99] = "ability/pvp/race_marine/tactical_squad/sm_and_they_shall_know_no_fear",
 }
 EliteAI_MechAbilityIDs = {}
 local function mech_ability(k)
