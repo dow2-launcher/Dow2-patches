@@ -8458,7 +8458,7 @@ do
 --  * every decision writes one reason line: Brain.say / Brain.order. A scene's timeline must explain itself.
 
 Brain = {}
-Brain.VERSION = "0.10.1"
+Brain.VERSION = "0.11"
 Brain.RACES = { orks = true, space_marines = true }              -- the races that have a profile (60_roles.ai). Which of them PLAY with the brain is the dispatcher's: [Lua] Brain_Races (default orks)
 Brain.on = (type(EliteAI_MODE) == "table" and EliteAI_MODE.brain == true)
 
@@ -9822,6 +9822,10 @@ local function point_score(p, cx, cz, W)
 	-- Step 6 (the race, R14): behind on tickets while the enemy holds more victory points than we do - the fist's objective
 	-- is a victory point, not the requisition point next door (bench s6_l8_0, 24 games: 100 of 972 TAKE objectives in that
 	-- state were power / requisition points; the side captures of 55_capture.ai go on). Not in a power crisis.
+	-- (step 11, the old layer's 'Goal point X it was ours: taken back': a point of ours that was lost on our side not long
+	-- ago - 55_capture.ai C.lost - is worth ObjLostK (1.5) x to the fist as well; its capturer is sent before any other.
+	-- Brain_ObjLostK=1: off.)
+	if not farm and Brain.capture ~= nil and Brain.capture.lost ~= nil and Brain.capture.lost(p, W) then worth = worth * Brain.num("ObjLostK", 1.5) end
 	if farm then worth = worth * Brain.num("ObjFarmK", 3)                                                      -- (step 10: our farm, lost not long ago)
 	elseif Brain.num("Race", 1) >= 1 then
 		if not p.vp and not crisis and rk > 1 then worth = worth * math.max(1 / rk, Brain.num("RaceOtherMinK", 0.25)) end
@@ -10095,7 +10099,9 @@ function L.update(W)
 	-- 1. a fight we are holding or winning: the fist goes there
 	local bf
 	for _, F in ipairs(W.fights) do
-		if (F.verdict == "press" or F.verdict == "hold") then
+		-- (step 11: a fight whose every enemy runs home or stands at its base - 50_army.ai, F.keep.gone - pulls nobody)
+		local gone = (F.keep ~= nil and F.keep.gone ~= nil and now - F.keep.gone <= Brain.num("PlanSecs", 5) + 1)
+		if (F.verdict == "press" or F.verdict == "hold") and not gone then
 			if fight_pulls(F, c, W) then
 				if bf == nil or F.s_en > bf.s_en then bf = F end
 			else
@@ -11128,10 +11134,15 @@ function E.update(W)
 	if late_upg and now - (E.t_upg or -1000) >= Brain.num("EconLateUpgSecs", 30) then upg_want = math.max(upg_want, E.n.upg + 1) end
 	-- (step 10: the upgrade that makes a worker squad a capturer - the gretchin's Repair Krew, the profile's 'cap_upg' -
 	-- is bought as soon as the squad stands, before the clock's next upgrade. Brain_GrotKrew=0: never.)
+	-- (step 11, Malum fb 1233 'why did the ork buy the repair gretchin when there was nothing to repair - it could have saved
+	-- for the rock drop': the Krew no longer captures anything (step 10.1, CapKrew 0) - it only repairs. It is bought, by
+	-- this rule or by the clock below, only while a machine of ours stands (S.veh); without one the 65 requisition and
+	-- the clock's slot go to the fighting squads, the money to the globals. Brain_GrotKrewVeh=0: as step 10.1.)
+	local krew_ok = (Brain.num("GrotKrewVeh", 1) < 1 or (S.veh or 0) >= 1)
 	local krew_u
 	do
 		local prof = Brain.roles.profile()
-		if prof ~= nil and prof.cap_upg ~= nil and Brain.num("GrotKrew", 1) >= 1 then
+		if prof ~= nil and prof.cap_upg ~= nil and Brain.num("GrotKrew", 1) >= 1 and krew_ok then
 			for _, u in ipairs(W.own) do
 				if prof.cap_upg[u.key] ~= nil and P.upg[u.key] ~= nil and not u.retreating and (E.upg[u.id] or { n = 0 }).n == 0
 					and not (Brain.capture ~= nil and Brain.capture.krew ~= nil and Brain.capture.krew(u)) then krew_u = u; break end
@@ -11139,12 +11150,31 @@ function E.update(W)
 		end
 		if krew_u ~= nil then upg_want = math.max(upg_want, E.n.upg + 1) end
 	end
+	-- (step 11, Malum fb 1233 'the second shootas and sluggas were given no wargear'. His game of fb 1225: the second
+	-- slugga got its burna at 5:12, the second shoota its big shoota at 7:51 - the clock gives one upgrade in
+	-- upg_every (110 s) to the squad with the fewest, and the hero's pieces, the Krew and the first squads' nob leaders
+	-- share it. A line squad of the profile's 'upg_each' (the boyz) that has stood EconUpgEachSecs (30 s) without any
+	-- upgrade gets its first one now, ahead of the clock (the clock then waits until it catches up; the same purse
+	-- rules, the tier's power guard). Brain_EconUpgEach=0: as step 10.1.)
+	local each_u
+	if krew_u == nil and P.upg_each ~= nil and Brain.num("EconUpgEach", 1) >= 1 and now >= P.upg_first then
+		E.seen = E.seen or {}
+		for _, u in ipairs(W.own) do
+			if P.upg_each[u.key] then
+				E.seen[u.id] = E.seen[u.id] or now
+				if each_u == nil and not u.retreating and (E.upg[u.id] or { n = 0 }).n == 0 and now - E.seen[u.id] >= Brain.num("EconUpgEachSecs", 30) then each_u = u end
+			end
+		end
+		if each_u ~= nil then upg_want = math.max(upg_want, E.n.upg + 1) end
+	end
 	if E.n.upg < upg_want and not rec then
 		local best, best_c, best_aisq
 		for _, u in ipairs(W.own) do
 			local prefs = P.upg[u.key]
 			if prefs ~= nil and P.upg_key ~= nil and P.upg_key[u.key] ~= nil and Brain.num(P.upg_key[u.key], 1) < 1 then prefs = nil end
+			if prefs ~= nil and not krew_ok and P.upg_key ~= nil and P.upg_key[u.key] == "GrotKrew" then prefs = nil end   -- (step 11: no machine of ours, no Krew)
 			if krew_u ~= nil and u.id ~= krew_u.id then prefs = nil end
+			if each_u ~= nil and not (P.upg_each[u.key] and (E.upg[u.id] or { n = 0 }).n == 0) then prefs = nil end   -- (step 11: a boyz squad without any first)
 			if prefs ~= nil and (en_veh or 0) >= 1 and P.upg_veh ~= nil and P.upg_veh[u.key] ~= nil then prefs = P.upg_veh[u.key] end
 			if prefs ~= nil and not u.retreating then
 				local had = E.upg[u.id] or { n = 0 }
@@ -11169,7 +11199,8 @@ function E.update(W)
 			end
 		end
 		if best ~= nil then
-			wish(S, "upg", Brain.short(best_c.key), best_c.req, best_c.pow, "upgrade " .. (E.n.upg + 1) .. " of " .. upg_want .. " by the clock for " .. best.id .. " " .. Brain.short(best.key), false, function()
+			local why = (each_u ~= nil) and ("the first upgrade of a boyz squad that has none, ahead of the clock (" .. (E.n.upg + 1) .. ") for ") or ("upgrade " .. (E.n.upg + 1) .. " of " .. upg_want .. " by the clock for ")
+			wish(S, "upg", Brain.short(best_c.key), best_c.req, best_c.pow, why .. best.id .. " " .. Brain.short(best.key), false, function()
 				Request_AISquadProduction(best_aisq, TGROUP_AddOns, TPRIORITY_AddOns, PITEM_SquadUpgrade, best_c.pbg)
 				local had = E.upg[best.id] or { n = 0 }
 				had.n = had.n + 1; had[best_c.key] = true
@@ -12524,6 +12555,31 @@ local function fight(F, W, taken)
 		for _, u in ipairs(F.support) do taken[u.id] = true end
 		return
 	end
+	-- Step 11 (Malum fb 1220 'it walks about next to the points and stands'; Orca fb 1189 'no standing except to gather').
+	-- Bench, 12 games of step 10.1 (s11/idlewhy.py): the largest single reason of a squad standing idle in the field -
+	-- 1900 of 11300 such squad-seconds - was the order 'not chased: it runs home / it is N m from its HQ': the enemy of
+	-- the fight had left, the squads stayed the fight's members for as long as that enemy was in sight (5-40 s a time,
+	-- 172 times) and stood where they were. A fight we press or hold in which EVERY enemy is one that is not chased
+	-- (A.no_chase: it runs home, it stands at its base, the fight drifted there) and none of ours is shot at is GONE:
+	-- its squads are nobody's this tick - the capture jobs and the fist take them (the plan does not make such a fight
+	-- the fist's objective, the fist does not weigh such an enemy: 20_plan.ai, fist() below). Brain_FightGone=0: as step 10.1.
+	F.keep.gone = nil
+	if (v == "press" or v == "hold") and Brain.num("FightGone", 1) >= 1 and table.getn(F.en) > 0 and F.base == nil then
+		local gone = true
+		for _, e in ipairs(F.en) do
+			local dn
+			for _, u in ipairs(F.ours) do local d = d2(u.x, u.z, e.x, e.z); if dn == nil or d < dn then dn = d end end
+			if A.no_chase(e, F, W, dn) == nil then gone = false; break end
+		end
+		if gone then for _, u in ipairs(F.ours) do if u.hit then gone = false; break end end end
+		if gone then
+			F.keep.gone = now
+			A.stats.gone = (A.stats.gone or 0) + 1
+			Brain.say("ARMY", "fgone|" .. F.key, 30, { "fight", F.key, "GONE", "why", "every enemy of it runs home or stands at its base and nobody of ours is shot at: its squads go on with the map",
+				"ours", table.getn(F.ours), "enemy", table.getn(F.en), "at", f0(F.x), f0(F.z) }, "gone")
+			return
+		end
+	end
 	if v == "press" or v == "hold" then
 		-- the capturers that are called (judge: F.call): their job ends with the true reason, they come as support
 		if F.call ~= nil then
@@ -13206,9 +13262,23 @@ local function fist(W, taken)
 		-- AMOVE ... attack together: the fist was at the edge' with the orders refused and the fist left standing)
 		if Brain.num("BaseKeep", 1) >= 1 and not (Brain.plan ~= nil and Brain.plan.assault_open()) and A.base_of(x, z, W, Brain.num("BaseKeepR", 55) - 10) ~= nil then return end
 		if d2(x, z, cx, cz) > threat_r and d2(x, z, obj.x, obj.z) > Brain.num("ThreatObjR", 40) then return end
+		-- (step 11: a clump whose every squad runs home is nobody the fist stands in front of or goes for; one whose every
+		-- squad is not chased for another reason - it stands at its base - is still weighed (the fist does not walk into
+		-- it when it is the stronger), but the fist does not ATTACK it: the squads would be stopped at once by the chase
+		-- rule and stand there. Brain_FightGone=0: as before)
+		local nochase = false
+		if Brain.num("FightGone", 1) >= 1 then
+			local all, runs = true, true
+			for _, e in ipairs(en) do
+				if A.no_chase(e, F, W, 999) == nil then all = false; break end
+				if not e.retreating then runs = false end
+			end
+			if all and runs then return end
+			nochase = all
+		end
 		local s_en = k * P.strength(en, P.mix_of(inside))
 		if th_s == nil or s_en > th_s then
-			th, th_s = { x = x, z = z, n = table.getn(en), ghost = (k < 1), en = en, F = F }, s_en
+			th, th_s = { x = x, z = z, n = table.getn(en), ghost = (k < 1), en = en, F = F, nochase = nochase }, s_en
 			th_ratio = P.strength(inside, P.mix_of(en)) / math.max(s_en, 1)
 			-- (step 7: the enemy of a fight of ours is weighed against the fist AND our squads that fight it - a squad back
 			-- from the base stood where it was, 'the enemy ahead is stronger', while its fist was holding that enemy)
@@ -13261,7 +13331,7 @@ local function fist(W, taken)
 	if th ~= nil and th_ratio >= even_now and Brain.num("Stage", 1) >= 1 and table.getn(th.en) >= Brain.num("StageMinEnemy", 1) then
 		local keep = stage_keep(th.en)
 		local to_obj = (d2(th.x, th.z, obj.x, obj.z) <= keep + Brain.num("StageObjPad", 15))
-		local attack = (th_ratio >= A.win_line(W) and not th.ghost and d2(th.x, th.z, cx, cz) <= threat_r)
+		local attack = (th_ratio >= A.win_line(W) and not th.ghost and not th.nochase and d2(th.x, th.z, cx, cz) <= threat_r)
 		if to_obj or attack then
 			stage_cand = {}
 			for _, u in ipairs(list) do
@@ -13315,7 +13385,7 @@ local function fist(W, taken)
 				return
 			end
 			-- the gate is open: everybody that was staged goes in now
-			if th_ratio >= A.win_line(W) and not th.ghost and d2(th.x, th.z, cx, cz) <= threat_r then
+			if th_ratio >= A.win_line(W) and not th.ghost and not th.nochase and d2(th.x, th.z, cx, cz) <= threat_r then
 				for _, u in ipairs(stage_cand) do
 					A.st[u.id] = { mode = "attack", t = now }
 					Brain.order(u, O.AMOVE, th.x, u.y, th.z, { "attack together: the fist was at the edge", ready .. "/" .. sn, "ratio", f2(th_ratio) })
@@ -13330,7 +13400,7 @@ local function fist(W, taken)
 			say("MARCH", "together from the edge of the enemy's reach: " .. obj.why)
 			return
 		end
-		if th_ratio >= A.win_line(W) and not th.ghost and not burnt and d2(th.x, th.z, cx, cz) <= threat_r and frac >= fist_frac then
+		if th_ratio >= A.win_line(W) and not th.ghost and not th.nochase and not burnt and d2(th.x, th.z, cx, cz) <= threat_r and frac >= fist_frac then
 			for _, u in ipairs(inside) do
 				A.st[u.id] = { mode = "attack", t = now }
 				Brain.order(u, O.AMOVE, th.x, u.y, th.z, { "attack: stronger than the enemy seen", "ratio", f2(th_ratio) })
@@ -13718,6 +13788,81 @@ local function can_capture(u, any_hp)
 	if roles.is_machine(role) or roles.is_rear(role) or role == "setup" then return false end
 	return hp_ok
 end
+-- ---- step 11: MAP CONTROL as the old layer plays it ---------------------------------------------------------------
+-- The same 36 games (s10/scen_r12, seeds 0-2), the ork side, the harness' own lines (s11/mapctl.py): the OLD layer
+-- (Brain=0) is ahead on tickets in 21, the brain of step 10.1 in 11. Per game-minute the old layer takes 1.5-1.6 points,
+-- the brain 1.0; it holds 2.2-2.9 requisition points, the brain 1.0-1.3; a point it lost is its again in 81 % of the
+-- cases (median 120 s), the brain's in 60-64 % (150 s); its squads stand idle away from home 7-8 % of their seconds,
+-- the brain's 15-17 %. What it does differently (mod/mechanics.ai, vanilla strategy_resourcing.ai, its own log):
+--   TWO squads are in the engine's capture tasks all game long (1.8 on average from the first minute to the last), one
+--   to three RUNNERS on top of them once the army has six squads - a third to a half of its squads do nothing but go
+--   from point to point; each takes the point NEAREST to ITSELF (a victory point counts 30 m nearer, a point of ours
+--   lost a moment ago comes before any other) and the next one the moment the first is its; no target with an enemy at
+--   it, seen at it a moment ago, or with an enemy force next to the straight way there;
+--   its army leaves ONE squad on the point it comes to and walks on to the next ('next while X is captured').
+-- The brain: one side job for an army of three to five squads (two from six) within 130 m of the fist, one far job,
+-- the point 'worth most per metre' - a victory point 200 m away before a requisition point at 45 m; the capturer came
+-- back to the fist after every point; the fist stood as a screen until its own capturer had finished; a squad sent to
+-- an enemy's power point with a post on it stood there with a capture order the engine does not take (1300 s in 12
+-- games). Step 11 takes the old layer's rules over - each behind a key ([Lua] Brain_<Key>, the value that returns
+-- step 10.1 after '='): CapRun=0 (the runners), CapRaze=0 (the post on the point), CapStand=0 (a capturer that
+-- stands), ScreenQuiet=0 (the fist walks on), CapLost=0 / ObjLostK=1 (a point of ours that was lost).
+C.was = {}                                                              -- point key -> the last second it was ours
+C.bad = {}                                                              -- point key -> { t, secs }: a capturer of ours was turned away from it
+C.posts = {}                                                            -- point key -> { x, y, z, t }: the enemy's post seen on the point (memory)
+local function seg_d(px, pz, ax, az, bx, bz)                             -- the distance of a place to the stretch a-b
+	local vx, vz = bx - ax, bz - az
+	local l2 = vx * vx + vz * vz
+	if l2 < 1 then return d2(px, pz, ax, az) end
+	local t = ((px - ax) * vx + (pz - az) * vz) / l2
+	if t < 0 then t = 0 elseif t > 1 then t = 1 end
+	return d2(px, pz, ax + vx * t, az + vz * t)
+end
+-- a point of ours that was lost not long ago (CapLostSecs 180 s) on OUR side of the map (within CapLostHomeR 110 m of
+-- home, or nearer to home than to any HQ of the enemy): taken back before any other point (the old layer's MapLostSecs)
+-- (Opus, Malum fb 1233 items 4 and 9: 'the ork sees its key point being taken and does nothing', 'it stands next to the
+-- key point and does not take it'. A VICTORY point of ours lost not long ago is taken back wherever it stands - the
+-- middle one of a 1v1 map is often a few metres nearer the enemy's HQ. Its runner is not a squad of the fist's core
+-- (the second value: false) - the fist itself weighs it ObjLostK x. Brain_CapLostVp=0: our side only, as Fable's code.)
+function C.lost(p, W)
+	if Brain.num("CapLost", 1) < 1 or p.ours then return false end
+	local t = C.was[p.key]
+	if t == nil or W.now - t > Brain.num("CapLostSecs", 180) then return false end
+	if W.home == nil then return true, true end
+	local dh = d2(p.x, p.z, W.home.x, W.home.z)
+	if dh <= Brain.num("CapLostHomeR", 110) then return true, true end
+	for _, h in ipairs(W.ehq or {}) do
+		if d2(p.x, p.z, h.x, h.z) < dh then return (p.vp == true and Brain.num("CapLostVp", 1) >= 1), false end
+	end
+	return true, true
+end
+function C.is_bad(key, now)
+	local b = C.bad[key]
+	return b ~= nil and now - b.t < b.secs
+end
+local function mark_bad(key, now, secs)
+	local b = C.bad[key]
+	if b == nil or now - b.t >= b.secs or secs >= b.secs then C.bad[key] = { t = now, secs = secs } end
+end
+-- an enemy force next to the straight way from the squad to the point (the old layer's way_blocked): two squads or
+-- more within CapRunPathR (35 m) of it, or one that is no weaker than the squad; what was seen GhostCapSecs ago counts
+function C.way_blocked(u, p, W)
+	local r, near = Brain.num("CapRunPathR", 35), {}
+	for _, e in ipairs(W.en) do if not e.retreating and seg_d(e.x, e.z, u.x, u.z, p.x, p.z) <= r then table.insert(near, e) end end
+	local gs = Brain.num("GhostCapSecs", 10)
+	for _, g in ipairs(W.ghosts) do if g.age <= gs and seg_d(g.x, g.z, u.x, u.z, p.x, p.z) <= r then table.insert(near, g) end end
+	local n = table.getn(near)
+	if n == 0 then return false, 0 end
+	if n >= 2 then return true, n end
+	local P = Brain.perception
+	return P.strength(near, P.mix_of({ u })) >= P.strength({ u }, P.mix_of(near)) * Brain.num("CapRunPathK", 1.0), n
+end
+-- is the point threatened - an enemy squad seen within r of it, or remembered there for 'secs'
+local function threat_at(x, z, W, r, secs)
+	for _, e in ipairs(W.en) do if not e.retreating and d2(e.x, e.z, x, z) <= r then return true end end
+	for _, g in ipairs(W.ghosts) do if g.age <= secs and d2(g.x, g.z, x, z) <= r then return true end end
+	return false
+end
 -- the jobs on a point
 function C.on_point(key)
 	local n = 0
@@ -13732,6 +13877,11 @@ function C.covered(key)
 		-- stays the fist's objective - the fist stands beyond it, towards the enemy, until the point is ours; with
 		-- Brain_Screen=0 the fist goes on to the next point the moment its capturer stands on this one, as before)
 		local kept = (j.why == "fist objective" and j.keep and Brain.num("Screen", 1) >= 1 and Brain.num("ScreenKeep", 1) >= 1)
+		-- (step 11, the old layer's 'Goal point B next while A is captured': the screen is kept only while an enemy is seen
+		-- within ScreenThreatR (70 m) of the point or was seen there ScreenThreatSecs (20 s) ago; at a quiet point the one
+		-- squad captures and the fist walks on to the next objective. Brain_ScreenQuiet=0: the fist waits, as step 10.)
+		if kept and Brain.num("ScreenQuiet", 1) >= 1 and Brain.W ~= nil
+			and not threat_at(j.x, j.z, Brain.W, Brain.num("ScreenThreatR", 70), Brain.num("ScreenThreatSecs", 20)) then kept = false end
 		if j.key == key and not kept and (j.at or j.why ~= "fist objective") then return true end   -- a side point has its squad on the way: not the fist's business
 	end
 	return false
@@ -13747,6 +13897,9 @@ local function drop(id, u, why, done)
 	C.jobs[id] = nil
 	if done then C.stats.done = C.stats.done + 1 else C.stats.dropped = C.stats.dropped + 1 end
 	if done and j.hero then C.stats.hero_done = C.stats.hero_done + 1 end
+	-- (step 11: a capturer whose point is ours gets its next point in the same tick, not CapSecs later - in between the
+	-- fist's 'join the fist' turned it round)
+	if done and Brain.num("CapRun", 1) >= 1 then C.t_pick = -100 end
 	Brain.log("CAP", "point", j.key, done and "DONE" or "DROP", "squad", id, u and Brain.short(u.key) or "?", "why", why, "secs", f0(Brain.now - j.t))
 	if u ~= nil and Brain.army.st[id] ~= nil and Brain.army.st[id].mode == "cap" then Brain.army.st[id] = nil end
 end
@@ -13840,6 +13993,28 @@ end
 function C.update(W, taken)
 	local now = W.now
 	local A = Brain.army
+	-- (step 11) the memory of the points: ours a moment ago (C.lost); the enemy's post seen on a point (50_army.ai's W.blds:
+	-- a post within RazeSeeR of a squad of ours) is remembered while the point is the enemy's - until a squad of ours
+	-- stands next to the place and does not see it any more
+	for _, p in ipairs(W.pts) do
+		if p.ours then C.was[p.key] = now end
+		if C.posts[p.key] ~= nil and not p.enemy then C.posts[p.key] = nil end
+	end
+	for _, b in ipairs(W.blds or {}) do
+		if b.post then
+			for _, p in ipairs(W.pts) do
+				if p.enemy and d2(b.x, b.z, p.x, p.z) <= Brain.num("CapPostR", 10) then C.posts[p.key] = { x = b.x, y = b.y, z = b.z, t = now } end
+			end
+		end
+	end
+	for _, key in ipairs(Brain.keys(C.posts)) do
+		local po = C.posts[key]
+		if now - po.t > Brain.num("CapPostGoneSecs", 12) then
+			for _, u in ipairs(W.own) do if d2(u.x, u.z, po.x, po.z) <= Brain.num("CapPostSeeR", 25) then C.posts[key] = nil; break end end
+		end
+	end
+	local run_on = (Brain.num("CapRun", 1) >= 1)
+	local bad_secs = Brain.num("CapBadSecs", 40)
 	-- 1. the jobs that are running (by squad id, in order)
 	local ids = {}
 	for id in pairs(C.jobs) do table.insert(ids, id) end
@@ -13884,7 +14059,13 @@ function C.update(W, taken)
 		if u == nil then C.jobs[id] = nil; C.stats.dropped = C.stats.dropped + 1
 		elseif taken[id] and A.st[id] ~= nil and A.st[id].mode == "cap" and j.stuck and u.capturing then
 			-- (step 10: held on its point by C.stick this tick)
-		elseif taken[id] then drop(id, u, A.why_taken(u), false)
+		elseif taken[id] then
+			-- (step 11: a capturer that a fight took, or that walks back from a group, within CapBadR of its point - that point
+			-- is nobody's target for CapBadSecs, the old layer's 'bad point': the next capturer is not sent into the same enemy)
+			local wt = A.why_taken(u)
+			if run_on and p ~= nil and d2(u.x, u.z, p.x, p.z) <= Brain.num("CapBadR", 70) and (string.find(wt, "in a fight", 1, true) == 1 or string.find(wt, "alone against", 1, true) == 1
+				or string.find(wt, "it retreats", 1, true) == 1 or string.find(wt, "the retreat", 1, true) == 1) then mark_bad(j.key, now, bad_secs) end
+			drop(id, u, wt, false)
 elseif clash ~= nil and not j.at and not u.capturing and d2(u.x, u.z, clash.x, clash.z) <= Brain.num("CapClashD", 160) then
 			drop(id, u, "the first clash: called to the fight " .. clash.key .. " (" .. table.getn(clash.ours) .. " against " .. table.getn(clash.en) .. ")", false)
 			C.stats.called = C.stats.called + 1
@@ -13893,8 +14074,16 @@ elseif clash ~= nil and not j.at and not u.capturing and d2(u.x, u.z, clash.x, c
 			C.stats.called = C.stats.called + 1; C.stats.muster = (C.stats.muster or 0) + 1
 		elseif p == nil then drop(id, u, "the point is gone", false)
 		elseif p.ours then drop(id, u, "the point is ours", true)
-		elseif danger(p, W, Brain.num("CapAbortR", 40)) and not u.capturing then drop(id, u, "the enemy is at the point", false)
-		elseif now - j.t > Brain.num("CapMaxSecs", 90) + (j.walk or 0) then drop(id, u, "took too long", false)
+		elseif danger(p, W, Brain.num("CapAbortR", 40)) and not u.capturing then
+			if run_on then mark_bad(j.key, now, bad_secs) end
+			drop(id, u, "the enemy is at the point", false)
+		elseif now - j.t > Brain.num("CapMaxSecs", 90) + (j.walk or 0) + (j.raze and Brain.num("CapRazeSecs", 60) or 0) then
+			if run_on then mark_bad(j.key, now, Brain.num("CapBadLongSecs", 90)) end
+			drop(id, u, "took too long", false)
+		-- (step 11, the old layer's 'runner drops <point>: enemy force on the way': checked every tick of the walk)
+		elseif run_on and j.why ~= "fist objective" and not j.at and not u.capturing and C.way_blocked(u, p, W) then
+			mark_bad(j.key, now, bad_secs)
+			drop(id, u, "an enemy force stands next to the way to the point", false)
 		-- (step 10, R51: an ally got there first - 80_team.ai; a squad that is capturing already goes on)
 		elseif not u.capturing and not j.at and Brain.team ~= nil and Brain.team.yields ~= nil and Brain.team.yields(p, d2(u.x, u.z, p.x, p.z)) then
 			drop(id, u, "the point is an ally's: " .. tostring(select_why(p, d2(u.x, u.z, p.x, p.z))), false)
@@ -13903,7 +14092,67 @@ else
 			A.st[id] = { mode = "cap", t = now }
 			local d = d2(u.x, u.z, p.x, p.z)
 			j.at = (d <= Brain.num("CapAtR", 12))
-			if not u.capturing then
+			-- Step 11: A CAPTURER THAT STANDS (Malum fb 1220: 'it walks about next to the points and stands'). Bench, 12 games
+			-- of step 10.1 (s11/capstand.py): 131 standings of 6 s and more with the capture order as the squad's last one,
+			-- 1323 s - 980 of them at a power point of the enemy: the point carries the enemy's POST (the listening post, 'the
+			-- node') and cannot be taken while the post stands; the engine does not take the capture order, the squad stood
+			-- where the order found it (7 m, 31 m, 40 m from the point) and got the same order every 10 s until 'took too long'.
+			--   CapRaze: the post is known (seen now or remembered) and the squad is within CapRazeR (30 m) of it - the order
+			--     is 'attack that building' until it is gone, then the capture; the job's time grows by CapRazeSecs.
+			--   CapStand: the squad has a job, is not capturing, was not shot at and did not move for CapStandSecs (6 s) -
+			--     the reason is looked for and written ('BR CAP ... STAND ... why <reason> -> <what is done>'):
+			--       another squad of ours is taking the point            -> the job ends;
+			--       it stands away from the point with the capture order -> it WALKS to the point (a post we have not seen
+			--         yet shows itself there), then the capture order again;
+			--       it stands on the point                               -> the order book forgets the order, it is sent again;
+			--       CapStandMax (3) such tries                           -> the job ends, the point is nobody's target for
+			--         CapBadLongSecs (90 s).
+			-- Brain_CapRaze=0, Brain_CapStand=0: as step 10.1.
+			local moved = (j.sx == nil or d2(u.x, u.z, j.sx, j.sz) > Brain.num("CapStandD", 3))
+			if moved or u.capturing or u.hit then j.sx, j.sz, j.st0 = u.x, u.z, now end
+			local stood = now - (j.st0 or now)
+			local po = (Brain.num("CapRaze", 1) >= 1) and C.posts[p.key] or nil
+			if u.capturing then j.walk_in = nil
+			elseif po ~= nil and d2(u.x, u.z, po.x, po.z) <= Brain.num("CapRazeR", 30) then
+				if not j.raze then
+					j.raze = now
+					C.stats.raze = (C.stats.raze or 0) + 1
+					Brain.log("CAP", "point", j.key, "RAZE", "squad", id, Brain.short(u.key), "why", "the enemy's post stands on the point: it cannot be taken until the post is gone - the post first", "dist", f0(d))
+				end
+				j.sx, j.sz, j.st0 = u.x, u.z, now
+				Brain.order(u, O.ATTACK_BLD, po.x, po.y, po.z, { "capture job: the enemy's post on", p.key, "comes down first", "dist", f0(d) })
+			elseif Brain.num("CapStand", 1) >= 1 and stood >= Brain.num("CapStandSecs", 6) then
+				j.stand_n = (j.stand_n or 0) + 1
+				j.sx, j.sz, j.st0 = u.x, u.z, now
+				C.stats.stand = (C.stats.stand or 0) + 1
+				local head = { "point", j.key, "STAND", "squad", id, Brain.short(u.key), "why" }
+				local function say(why, act)
+					local parts = {}
+					for _, w in ipairs(head) do table.insert(parts, w) end
+					table.insert(parts, why); table.insert(parts, "->"); table.insert(parts, act)
+					table.insert(parts, "dist"); table.insert(parts, f0(d)); table.insert(parts, "stood"); table.insert(parts, f0(stood)); table.insert(parts, "try"); table.insert(parts, j.stand_n)
+					Brain.say("CAP", "stand|" .. id, 1, parts, tostring(now) .. "|" .. j.stand_n)   -- (one line; no unpack in the game's Lua)
+				end
+				if p.us_cap then
+					say("another squad of ours is taking the point", "the job ends")
+					drop(id, u, "stands: another squad of ours is taking the point", false)
+				elseif j.stand_n > Brain.num("CapStandMax", 3) then
+					say("it has the capture order and neither walks nor captures, " .. f0(Brain.num("CapStandMax", 3)) .. " tries", "the job ends, the point is left for " .. f0(Brain.num("CapBadLongSecs", 90)) .. " s")
+					mark_bad(j.key, now, Brain.num("CapBadLongSecs", 90))
+					drop(id, u, "stands and cannot take the point", false)
+				elseif not j.at then
+					say("it stands away from the point with the capture order (the engine does not take it: a post on the point?)", "it walks to the point")
+					j.walk_in = true
+					Brain.order(u, O.MOVE, p.x, p.y, p.z, { "capture job: walk to the point", p.key, "- the capture order was not taken", "dist", f0(d) })
+				else
+					say("it stands on the point and does not capture", "the capture order again")
+					Brain.forget(id)
+					Brain.order(u, O.CAPTURE, p.x, p.y, p.z, { "capture", kind_of(p), j.why, "dist", f0(d), "(again: it stood)" })
+				end
+			elseif j.walk_in and not j.at then
+				Brain.order(u, O.MOVE, p.x, p.y, p.z, { "capture job: walk to the point", p.key, "- the capture order was not taken", "dist", f0(d) })
+			else
+				j.walk_in = nil
 				Brain.order(u, O.CAPTURE, p.x, p.y, p.z, { "capture", kind_of(p), j.why, "dist", f0(d) })
 			end
 		end
@@ -13987,9 +14236,15 @@ local want = 1
 			-- (step 10, P1.3 'one capturer on the point, the army beyond it': with the screen of 50_army.ai the point has ONE
 			-- capturer unless the race presses hard - RaceTwoK 3)
 			if want == 2 and Brain.num("Screen", 1) >= 1 and rk < Brain.num("RaceTwoK", 3) then want = 1 end
+			-- (step 11: with the fist walking on from a quiet point - C.covered - its capturers stay behind it: CapFistJobs (2)
+			-- of them at a time, the old layer's MapCappers)
+			local fist_jobs = 0
+			for _, j in pairs(C.jobs) do if j.why == "fist objective" then fist_jobs = fist_jobs + 1 end end   -- (a count)
 			while C.on_point(p.key) < want do
+				if Brain.num("ScreenQuiet", 1) >= 1 and fist_jobs >= Brain.num("CapFistJobs", 2) then break end
 				local u = pick(p, free, rank, n_army, Brain.num("CapFistD", 45) + fist_r, true, hero_ok)
 				if u == nil then break end
+				fist_jobs = fist_jobs + 1
 				if C.on_point(p.key) >= 1 then C.stats.two = C.stats.two + 1 end
 				go(u, p, "fist objective")
 			end
@@ -14019,7 +14274,81 @@ local want = 1
 	local side = 0
 	for _, j in pairs(C.jobs) do if j.why ~= "fist objective" and j.why ~= "map control" then side = side + 1 end end   -- (a count; the far job of step 10 is counted apart)
 	local guard = 0
-	while side < max_side and guard < 4 do
+	-- Step 11: THE RUNNERS (the head of this file: what the old layer does). Instead of the side jobs and the one far job:
+	--   HOW MANY - by the army: one from 2 squads, two from CapRunAt2 (4), three from CapRunAt3 (7), four from CapRunAt4
+	--     (9) (the old layer: two squads in the engine's capture tasks and one to three runners from an army of six);
+	--     by the map: one more while less than CapRunPoorShare (a third) of the points is ours, all squads but one while
+	--     NONE is ours ('the fist does not keep the squads by itself when we have no points'); one more when the race
+	--     presses (RaceJobsK); never more than the points that can be gone for, nor all squads; the core of the fist
+	--     (its inner half) stays as before - so half of the army at most. A fight as the fist's objective does not
+	--     lower the number (the army module calls a capturer when its fight is lost without it) - CapRunInFight=0: it does.
+	--   WHERE - the point nearest to the SQUAD that would go (not 'worth per metre from the fist'): a victory point counts
+	--     CapRunVpM (30 m) x the race nearer, a power point CapRunPowM (80 m) nearer in a power crisis, our lost farm
+	--     CapRunFarmM (200 m), a point of ours that was lost on our side 1000 m (C.lost: before any other - and its
+	--     capturer may be a squad of the core); a point that carries a post we know CapRunPostM (30 m) farther.
+	--     Any distance up to CapRunMaxD (400 m); the fist's own objective too, while the fist is not next to it.
+	--   NOT - a point with an enemy at it (CapDangerR), an enemy's point where an enemy was seen CapRunSeenSecs (20 s) ago
+	--     within CapRunSeenR (40 m), a way with an enemy force next to it (C.way_blocked), a point a capturer was turned
+	--     away from CapBadSecs (40 s) ago, under a base, a turret's circle, an ally's.
+	--   The capturer whose point is ours gets the next one in the same tick (drop() above).
+	-- Log: 'BR CAP <t> point <key> START squad ... why runner|lost point ...', 'BR CAP <t> runners want N ...' on change.
+	-- Brain_CapRun=0: the side jobs and the far job of step 10.1.
+	if run_on then
+		local n_all, n_ours, open = 0, 0, {}
+		for _, p in ipairs(W.pts) do
+			n_all = n_all + 1
+			if p.ours then n_ours = n_ours + 1 elseif not hq_near(p) then table.insert(open, p) end
+		end
+		local want = 0
+		if n_army >= Brain.num("CapRunAt4", 9) then want = 4 elseif n_army >= Brain.num("CapRunAt3", 7) then want = 3
+		elseif n_army >= Brain.num("CapRunAt2", 4) then want = 2 elseif n_army >= 2 then want = 1 end
+		local poor = (not opening and n_all > 0 and n_ours / n_all < Brain.num("CapRunPoorShare", 0.34))
+		if poor and n_army >= 3 then want = want + 1 end
+		if not opening and n_all > 0 and n_ours == 0 and Brain.num("CapRunNone", 1) >= 1 then want = math.max(want, n_army - 1) end
+		if opening then want = math.max(want, max_side) end                 -- (the opening of step 3: all but one squad, CapJobsOpening at most)
+		if race_jobs then want = want + 1 end
+		if Brain.plan.push ~= nil then want = math.min(want, Brain.num("PushRunJobs", 2)) end
+		if in_fight and Brain.num("CapRunInFight", 1) < 1 then want = math.min(want, max_side) end
+		want = math.max(math.min(want, table.getn(open), n_army - 1), 0)
+		local run_n = 0
+		for _, j in pairs(C.jobs) do if j.why ~= "fist objective" then run_n = run_n + 1 end end   -- (a count)
+		Brain.say("CAP", "runners", 60, { "runners", "want", want, "now", run_n, "army", n_army, "points ours", n_ours, "of", n_all, "open", table.getn(open),
+			poor and "poor" or "-", opening and "opening" or "-", "race", Brain.f2(rk) }, want .. "|" .. (poor and 1 or 0))
+		local E = Brain.economy
+		local crisis = (E ~= nil and E.crisis and (E.pow_pts or 0) == 0)
+		local fist_at = Brain.num("CapFistD", 45) + Brain.num("CapRunFistPad", 30)
+		while run_n < want and guard < 6 do
+			guard = guard + 1
+			local best, bc
+			for _, p in ipairs(open) do
+				if C.on_point(p.key) == 0 and not p.us_cap and not C.is_bad(p.key, now) and not danger(p, W, danger_r)
+					and not (obj ~= nil and obj.kind == "take" and obj.key == p.key and d2(cx, cz, p.x, p.z) <= fist_at)
+					and not (p.enemy and threat_at(p.x, p.z, W, Brain.num("CapRunSeenR", 40), Brain.num("CapRunSeenSecs", 20))) then
+					local lost, ours_side = C.lost(p, W)
+					local farm = (Brain.plan.farm_lost ~= nil and Brain.plan.farm_lost(p, now))
+					local u = pick(p, free, rank, n_army, Brain.num("CapRunMaxD", 400), (lost and ours_side) or free_open, hero_ok)
+					if u ~= nil and team ~= nil and team.yields ~= nil and team.yields(p, d2(u.x, u.z, p.x, p.z)) then u = nil end   -- (R51: an ally's)
+					if u ~= nil and C.way_blocked(u, p, W) then u = nil end
+					if u ~= nil then
+						local c = d2(u.x, u.z, p.x, p.z)
+						if p.vp then c = c - Brain.num("CapRunVpM", 30) * math.min(rk, Brain.num("CapRunVpRaceMax", 3)) end
+						if lost then c = c - 1000 end
+						if farm then c = c - Brain.num("CapRunFarmM", 200) end
+						if p.pow and crisis then c = c - Brain.num("CapRunPowM", 80) end
+						if C.posts[p.key] ~= nil then c = c + Brain.num("CapRunPostM", 30) end
+						if bc == nil or c < bc or (c == bc and p.key < best.p.key) then best, bc = { p = p, u = u, lost = lost }, c end
+					end
+				end
+			end
+			if best == nil then break end
+			C.stats.run = (C.stats.run or 0) + 1
+			if best.lost then C.stats.lost = (C.stats.lost or 0) + 1 end
+			go(best.u, best.p, best.lost and "lost point" or "runner")
+			run_n = run_n + 1
+		end
+		side, max_side = run_n, want
+	end
+	while not run_on and side < max_side and guard < 4 do
 		guard = guard + 1
 		local bp, bs
 		for _, p in ipairs(W.pts) do
@@ -14058,7 +14387,7 @@ local want = 1
 	-- (4) squads in the army - 3 when the race presses (RaceJobsK). Brain_CapFar=0: off.
 	local far_n = 0
 	for _, j in pairs(C.jobs) do if j.why == "map control" then far_n = far_n + 1 end end        -- (a count)
-	if Brain.num("CapFar", 1) >= 1 and far_n < Brain.num("CapFarJobs", 1) and now >= Brain.num("CapFarFrom", 120) and not opening
+	if not run_on and Brain.num("CapFar", 1) >= 1 and far_n < Brain.num("CapFarJobs", 1) and now >= Brain.num("CapFarFrom", 120) and not opening
 		and n_army >= ((rk >= Brain.num("RaceJobsK", 1.5)) and 3 or Brain.num("CapFarArmy", 4)) then
 		local bp, bs
 		for _, p in ipairs(W.pts) do
@@ -14083,7 +14412,8 @@ local want = 1
 	Brain.every("cap_stats", Brain.num("StatsSecs", 30), function()
 		Brain.log("CAP", "stats", "started", C.stats.started, "hero", C.stats.hero, "two", C.stats.two, "adopted", C.stats.adopted,
 			"done", C.stats.done, "dropped", C.stats.dropped, "side_now", side, "side_max", max_side, "given", C.count, "given_hero", C.hero_n,
-			"hero_done", C.stats.hero_done, "called", C.stats.called, "far", C.stats.far or 0, "stuck", C.stats.stuck or 0, "race", Brain.f2(rk))
+			"hero_done", C.stats.hero_done, "called", C.stats.called, "far", C.stats.far or 0, "stuck", C.stats.stuck or 0, "race", Brain.f2(rk),
+			"run", C.stats.run or 0, "lost", C.stats.lost or 0, "raze", C.stats.raze or 0, "stand", C.stats.stand or 0)
 	end)
 end
 
@@ -14172,6 +14502,8 @@ R.PROFILES = {
 			upg_veh = { ["race_ork/troops/ork_nob_squad"] = { "ork_nob_leader_nobz", "ork_nob_hammers", "ork_nob_kit" } },
 			upg_first = 75, upg_every = 110, upg_max = 10,   -- people: 10 squad upgrades a match (7-15), big shoota / burna among the first 8 purchases
 			upg_key = { ["race_ork/troops/ork_gretchin"] = "GrotKrew" },   -- (step 10) a squad's upgrades behind a key of their own
+			-- (step 11, Malum fb 1233) the line squads whose first upgrade does not wait for the clock (30_economy.ai, EconUpgEach)
+			upg_each = { ["race_ork/troops/ork_shoota"] = true, ["race_ork/troops/ork_slugga"] = true },
 			upg = {
 				["race_ork/troops/ork_shoota"] = { "ork_big_shoota", "ork_nob_leader_shoota" },
 				["race_ork/troops/ork_slugga"] = { "ork_burna", "ork_nob_leader" },
