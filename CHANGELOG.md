@@ -4,6 +4,29 @@ Every version gets an entry here before it reaches `main`. CI then tags `vX.Y.Z`
 version (`X.Y.0`) it also publishes a GitHub Release with the DLLs and the entries since the previous `X.Y.0`.
 The version of the set lives only in `VERSION`; each DLL still writes its own version to its log.
 
+## 0.2.94 — 2026-11-15
+New AI 30 (store newai-30, experiment, off by default, Elite only): step 11 of the brain (brain 0.11). EliteAI.dll 0.17 unchanged.
+eliteai branch newai-30 d73d786 = brain 2ec025b with main.ai, mechanics.ai and the vanilla-base sources of strategy_tech_purchase.ai /
+strategy_unit_purchase.ai of newai-29 d7c3a0d (= newai-28 06f5cff = a3a378a + 66ab6a1 rule set C), exactly as newai-24 .. 29; dispatchers
+rebuilt by tools/vanilla_dispatch.py. Step 11 (8682e89..2ec025b) touched only mod/brain (and default.ai): not main.ai, mechanics.ai, the
+vanilla-base sources, elite.scar or the DLL. Against newai-29 one served file changes: default.ai (the brain chunks 0.10.1 -> 0.11); the
+built default.ai has Brain.num("EconMatchTeam", 0) - the army by the enemy's army counts the whole enemy team, as in newai-29.
+- Map control as the old layer plays it (Fable's code, kept as is): runners instead of the side / far capture jobs - 1 from 2 squads, 2 from
+  4, 3 from 7, 4 from 9, +1 while we hold under a third of the points; each takes the point nearest to itself and the next one the same tick;
+  not a point with an enemy on it or 20 s before, nor past an enemy force, nor one we were driven off (CapRun). A point of ours lost
+  <= 180 s ago goes first (CapLost, ObjLostK; a victory point on either side of the middle - CapLostVp, Malum fb 1233 items 4 / 9). The
+  enemy's post seen on a point is razed first (CapRaze, ATTACK_BLD). A capturer standing 6 s is re-ordered or dropped (CapStand). The fist
+  screens only while an enemy is within 70 m of the point (ScreenQuiet). A fight whose enemies all run home or stand at their base and
+  shoot at nobody of ours lets its squads go (FightGone).
+- Malum fb 1233: every boyz squad's first upgrade without waiting for the clock (EconUpgEach: shootas, sluggas); the Repair Krew only with
+  a machine of ours (GrotKrewVeh; Krew purchases in 36 games 16 -> 3). Brain.VERSION 0.11.
+- Every rule behind its [Lua] Brain_<key>; =0 returns 10.1 (all of them off at once: 4 of 12 against 3 of 12, 7 of 12 games end alike).
+- Check (independent verifier, s11/VERIFY_11_RU: READY WITH NOTES, keys stay on): 0 Lua error lines in 36 brain games, 12 Brain=0, 12
+  with the step-11 keys off, 6 3v3 / mirror games and 49 short scenes; 4 of 4 games (3v3 and a mirror among them) play back with no AI with
+  every CRC equal. scen_r12 seeds 0-2 (36 games against the old layer of other races): ahead 23 (verifier) / 24 (author) of 36; newai-29
+  (8682e89) 8-9; the old layer playing orks (Brain=0) 22. Squads lost ours : theirs 42 : 162 (8682e89 61 : 161, Brain=0 115 : 163).
+  Stub 192 PASS on the release tree. Not verified: a real network match with 0.11 (no new command kinds: ATTACK_BLD, MOVE, CAPTURE).
+
 ## 0.2.93 — 2026-11-15
 PerfLog 2 (store perflog_r2 -> perflog-2): the tick is back, Performance, order 50, off by default, its own tick (no requires /
 excludes), games elite + vanilla - the vanilla copy in dow2-patches as for fastbuffers / fastlocstrings. Owner 15.11: "верни

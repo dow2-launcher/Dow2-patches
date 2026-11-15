@@ -488,6 +488,11 @@ frameprobe/ - FrameProbe.dll (off), eliteai/ - EliteAI.dll (store id newai since
       own-bomb hazards, gretchin with the Repair Krew repair (no capture jobs); EliteAI.dll 0.17: export EliteAI_Mark for Marks 2
       (EliteAI.marks.log), a brain-only match is uploaded (BR INIT counts), a host migration keeps the retreat locks. Non-ork slots
       still newai-23.1.
+    newai-30 (0.2.94): brain 0.11 (step 11, branch newai-30): map control as the old layer plays it - runners to the nearest points
+      (CapRun), lost points first (CapLost / CapLostVp), the enemy's post on a point razed (CapRaze), a capturer that stands is
+      re-ordered or dropped (CapStand), the fist leaves a quiet point (ScreenQuiet), a fight whose enemies all run home is let go
+      (FightGone); every boyz squad's first upgrade without the clock (EconUpgEach); the Repair Krew only with a machine of ours
+      (GrotKrewVeh). EliteAI.dll 0.17 unchanged. Non-ork slots still newai-23.1.
 
 ## Building
 
