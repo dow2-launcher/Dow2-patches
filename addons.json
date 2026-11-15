@@ -1545,5 +1545,29 @@
       "fr": "Gros combats de fin de partie plus fluides : l'animation des modèles est répartie sur plusieurs cœurs du processeur. Expérimental ; n'affecte que l'image, pas la synchronisation.",
       "de": "Flüssigere große Gefechte im späten Spiel: Die Modellanimation wird auf mehrere CPU-Kerne verteilt. Experimentell; betrifft nur die Darstellung, nicht die Synchronisation."
     }
+  },
+  "paralleldraw": {
+    "version": "1",
+    "dll": "ParallelDraw.dll",
+    "default": false,
+    "games": [
+      "elite"
+    ],
+    "category": "experiment",
+    "order": 1131,
+    "name": {
+      "en": "Parallel Draw",
+      "ru": "Parallel Draw",
+      "es": "Parallel Draw",
+      "fr": "Parallel Draw",
+      "de": "Parallel Draw"
+    },
+    "description": {
+      "en": "Smoother big late-game fights: the models are prepared for drawing on several CPU cores instead of one. Works on its own or together with Parallel Pose. Experimental; looks only, no effect on sync.",
+      "ru": "Плавнее поздние массовые бои: подготовка моделей к отрисовке идёт на нескольких ядрах процессора, а не на одном. Работает отдельно или вместе с Parallel Pose. Экспериментально; только картинка, на синхронизацию не влияет.",
+      "es": "Batallas grandes más fluidas al final de la partida: la preparación de los modelos para el dibujado se reparte entre varios núcleos del procesador. Funciona sola o junto con Parallel Pose. Experimental; solo afecta a la imagen, no a la sincronización.",
+      "fr": "Gros combats de fin de partie plus fluides : la préparation des modèles pour l'affichage est répartie sur plusieurs cœurs du processeur. Fonctionne seul ou avec Parallel Pose. Expérimental ; n'affecte que l'image, pas la synchronisation.",
+      "de": "Flüssigere große Gefechte im späten Spiel: Die Modelle werden auf mehreren CPU-Kernen für das Zeichnen vorbereitet. Funktioniert allein oder zusammen mit Parallel Pose. Experimentell; betrifft nur die Darstellung, nicht die Synchronisation."
+    }
   }
 }
