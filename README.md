@@ -510,6 +510,12 @@ frameprobe/ - FrameProbe.dll (off), eliteai/ - EliteAI.dll (store id newai since
       type is not bought again, tactics against setup teams (kommando nob stun grenade, mek teleport, deff dread, weirdboy Warp Vomit /
       Warpath, shoota kommandos Luv da Dakka + smoke), second-node generators; elite.scar / netorder.ai know the ork abilities 74-78.
       The space marines play as newai-31. EliteAI.dll 0.17 unchanged. Other races still newai-23.1.
+    newai-33 (0.2.101): brain-s13 0f64054 (branch newai-33): step 13 / brain 0.13 for both races - points when behind, own generators
+      not razed, T3 only when it pays plus a squad of each new tier, jumps only into our fight and not under the enemy base, a hero under
+      focus fire retreats; marines: set-up teams not jerked by orders (SetupOwn), scouts' wargear, kiting, seen turrets (HQ turrets
+      within 45 m not counted, verifier M1), first wargear / turret early; orks: painboy (ability 79), trukk with slugga riders
+      (netorder.ai modes 19 / 20), reviving an ally's hero (mode 21), the nest of setup teams. EliteAI.dll 0.17 unchanged. Other races
+      still newai-23.1.
 
 ## Building
 
