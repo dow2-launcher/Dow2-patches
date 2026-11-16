@@ -522,7 +522,7 @@
     "order": 20
   },
   "livereplay": {
-    "version": "4",
+    "version": "5",
     "dll": "LiveReplay.dll",
     "files": {
       "lrbridge.exe": "build/lrbridge.exe"
@@ -1577,7 +1577,7 @@
     }
   },
   "replayopen": {
-    "version": "3",
+    "version": "4",
     "dll": "ReplayOpen.dll",
     "files": {
       "robridge.exe": "build/robridge.exe"

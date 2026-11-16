@@ -1,0 +1,1 @@
+- Replay from the launcher (ReplayOpen 4) and Live replay (LiveReplay 5): right after the game starts, the "Connecting" window now comes within about a second instead of after 10 seconds in the menu, and a second press of Watch on the same replay no longer says "busy".

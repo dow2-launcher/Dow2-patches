@@ -50,6 +50,12 @@
 // Localizer, so in the game's language; a language without it: 550002) - LiveReplay.ini ConnectingBox=0 / ConnectingText=<id>.
 // The ladder's route needs no change for this: a cut answer is already used as far as it goes (LiveReplay 3), and even cut to the
 // tunnel's first burst (24 KB per ~0.5 s) it brings the records far faster than 8x plays them (stand: a 13.5-min 3v3 = 1.3 KB/s).
+// LiveReplay 5 (16.11.2026, with ReplayOpen 4; RESEARCH_TECH_RU.md 1.5): after a cold start the box waited 10 s of frames and the
+// start 3 s without any screen known (Elite's loader brings the add-ons in after the menu's first panel, whose OnLoadComplete was
+// all the screen came from) - on a cold start "Watch" often showed no box at all. The menu is now learnt as RoomJoin learns it
+// (common/menu.h, shared source: the menu movie from its fscommands, the screen asked from it every 250 ms, mouse moves over the
+// menu while none comes, the movie forgotten by its own destructor): the box comes as soon as the screen is known (~1 s), stays
+// up at least 0.7 s, and is closed right before the start 0x40F526 as before. The 10 s / 3 s stay as the fallback without a screen.
 #ifndef _WIN32_WINNT
 #define _WIN32_WINNT 0x0600                 // CancelIoEx (Vista+) with older mingw headers
 #endif
@@ -63,7 +69,7 @@
 #include <stdarg.h>
 #include <wchar.h>
 
-#define LR_VERSION "4"
+#define LR_VERSION "5"
 // ---- DOW2.exe 3.19
 #define G_SETTINGS     0x01335A78         // +0x118 game type (0x800 playback)
 #define G_GAMEOBJ_PTR  0x01335A74         // what the replay start takes in EDX ([+4] = the settings)
@@ -153,7 +159,7 @@ static unsigned *g_crc; static unsigned g_crcN;     // tick -> the players' crc 
 static wchar_t g_file[MAX_PATH];
 static DWORD g_startAt;
 // LiveReplay 4: the game's own "Connecting" box (common/connbox.h) from the accepted watch to the start of the replay's loading
-static int g_boxCfg = 1, g_boxText = BOX_SCOUT, g_boxTried; static DWORD g_firstFrame;
+static int g_boxCfg = 1, g_boxText = BOX_SCOUT, g_boxTried; static DWORD g_firstFrame, g_boxAt, g_menuAt;
 // LiveReplay 4: the catch-up really at CatchUpSpeed (8x): SimulationController runs at most one tick per drawn frame, so 4x of
 // LiveReplay 3 was as fast as the frames came (players' logs 09.11: "1500 steps behind" took 22 min = 1.1x). While it catches up,
 // passes between two shown frames skip the visual update and the draw (the call sites of ReplaySpeed's 8x, chained with them),
@@ -414,29 +420,14 @@ static void skip_hook(int on) {
     patch_unlock(mx);
 }
 
-// ---------------- the menu (which full-screen panel is up: as RoomJoin) ----------------
-enum { SC_UNKNOWN, SC_OTHER, SC_MAIN, SC_MM, SC_LIST, SC_SETUP };
-static const char *SC_NAME[] = {"unknown", "other", "main", "find_game", "games_list", "lobby"};
-static volatile int g_screen;
-static int url_screen(const char *u) {
-    return strstr(u, "main_menu.gfx") ? SC_MAIN : strstr(u, "matchmaking.gfx") ? SC_MM : strstr(u, "game_list_movie.gfx") ? SC_LIST
-         : strstr(u, "game_setup_movie.gfx") ? SC_SETUP : SC_OTHER;
-}
+// ---------------- the menu (LiveReplay 5: common/menu.h - the menu movie and the screen as RoomJoin learns them) ----------------
+#define MENU_LOG logmsg
+#include "../common/menu.h"
 static void __fastcall fs_hook(void *self, void *edx, void *movie, const char *cmd, const char *args) {
     if (cmd && !IsBadReadPtr(cmd, 1)) {
         if (!strcmp(cmd, "OnLoadMovieComplete") && args && !IsBadReadPtr(args, 6) && !strncmp(args, "/mp_mc", 6)) g_loading = 1;
-        if (!strcmp(cmd, "OnLoadComplete") && args && !IsBadReadPtr(args, 1)) {
-            const char *nm = strstr(args, "name:="), *url = strstr(args, "url:=");
-            if (nm && url) {
-                const char *e = strchr(nm, ';'); int len = e ? (int)(e - nm - 6) : 0;
-                if (len >= 9 && !strncmp(nm + 6 + len - 9, ".panel_mc", 9)) {
-                    int sc = url_screen(url);
-                    if (sc != SC_OTHER && (g_inWorld || g_loading)) { g_inWorld = 0; g_loading = 0; }
-                    if (sc != g_screen) logmsg("screen %s", SC_NAME[sc]);
-                    g_screen = sc;
-                }
-            }
-        }
+        int sc = menu_on_fscmd(self, movie, cmd, args, g_inWorld || g_loading);
+        if (sc >= 0 && sc != SC_OTHER && (g_inWorld || g_loading)) { g_inWorld = 0; g_loading = 0; }
     }
     g_fsOrig(self, edx, movie, cmd, args);
 }
@@ -607,15 +598,22 @@ static void catch_up(char *sr, int cur, int behind) {
 }
 static void box_want(void) {                                          // the Connecting box while the watch is fetched (front end only)
     if (!g_boxCfg || g_boxTried || connbox_is_open() || g_inWorld || g_loading) return;
-    if (g_screen == SC_SETUP) return;                                // a lobby: not ours to cover
-    // no full-screen panel seen (LiveReplay came in after the menu's first panel): the front end once the game has run 10 s of
-    // frames without a world (at its very start the front end may still be coming up: no box then, the watch still goes on)
-    if (g_screen == SC_UNKNOWN && (!g_firstFrame || GetTickCount() - g_firstFrame < 10000)) return;
-    g_boxTried = 1; connbox_open(g_boxText, "a live replay is fetched");
+    DWORD now = GetTickCount();
+    // LiveReplay 5: the screen as RoomJoin learns it (common/menu.h): asked from the menu movie, mouse moves over the menu after
+    // 0.8 s without one; the old rule (10 s of frames without a world) only while no screen is known
+    if (menu_scr == SC_UNKNOWN) {
+        menu_tick(now, now - g_startAt > 800);
+        if (menu_mv && !g_menuAt) { g_menuAt = now ? now : 1; logmsg("the menu movie known %lu ms after the watch", now - g_startAt); menu_cursor_back(); }
+    }
+    if (menu_scr == SC_SETUP) return;                                // a lobby: not ours to cover
+    if (menu_scr == SC_UNKNOWN && (!g_firstFrame || now - g_firstFrame < 10000)) return;
+    g_boxTried = 1; g_boxAt = now;
+    logmsg("screen %s %lu ms after the watch - the box", SC_NAME[menu_scr], now - g_startAt);
+    connbox_open(g_boxText, "a live replay is fetched");
 }
 static void start_watch(const char *match, const char *base) {
     if (g_inWorld || g_loading) { snprintf(g_match, sizeof g_match, "%s", match); set_state(ST_FAILED, "busy_match"); return; }
-    if (g_screen == SC_SETUP) { snprintf(g_match, sizeof g_match, "%s", match); set_state(ST_FAILED, "busy_lobby"); return; }
+    if (menu_scr == SC_SETUP) { snprintf(g_match, sizeof g_match, "%s", match); set_state(ST_FAILED, "busy_lobby"); return; }
     LONG me = InterlockedIncrement(&g_session);
     EnterCriticalSection(&g_qlk);
     snprintf(g_match, sizeof g_match, "%s", match); snprintf(g_base, sizeof g_base, "%s", base);
@@ -624,7 +622,7 @@ static void start_watch(const char *match, const char *base) {
     LeaveCriticalSection(&g_qlk);
     g_fileReady = 0; g_live = 0; g_waiting = 0; g_cuDone = 0; g_syncOk = g_syncBad = 0; g_syncFirstBad = -1; g_crcLogged = 0;
     if (g_cuFast || g_skipHooked) cu_off(NULL, "a new watch");
-    g_cuFast = 0; g_boxTried = 0; g_lastTick = -1;
+    g_cuFast = 0; g_boxTried = 0; g_boxAt = 0; g_menuAt = 0; g_lastTick = -1;
     g_startAt = GetTickCount();
     logmsg("watch %s from %s", match, base);
     set_state(ST_FETCH, NULL);
@@ -640,10 +638,10 @@ static void game_step(void) {
     if ((g_cuFast || g_skipHooked) && !(g_live && our_playback())) cu_off(NULL, "the replay is not ours / over");
     if (g_state == ST_FETCH && g_fileReady) {
         if (g_inWorld || g_loading) { set_state(ST_FAILED, "busy_match"); g_session++; return; }
-        if (g_screen == SC_SETUP) { set_state(ST_FAILED, "busy_lobby"); g_session++; return; }
-        // no panel seen yet (Elite's loader brings the add-ons in once the front end runs - its first panel may be up already):
-        // the menu after 3 s of frames without a world
-        if (g_screen == SC_UNKNOWN && now - g_startAt < 3000) return;
+        if (menu_scr == SC_SETUP) { set_state(ST_FAILED, "busy_lobby"); g_session++; return; }
+        // no screen known yet (LiveReplay 5: asked from the menu movie, ~1 s after a cold start): the menu after 3 s of frames
+        if (menu_scr == SC_UNKNOWN && now - g_startAt < 3000) return;
+        if (connbox_is_open() && now - g_boxAt < 700) return;            // LiveReplay 5: the player sees the box before the screen changes
         connbox_close("the replay loads");                               // LiveReplay 4: up to the start of the loading
         g_live = 1;
         file_fix_datacrc();
@@ -683,6 +681,7 @@ static void __stdcall upd_hook(float dt) {
         else if (c.what == CMD_STOP && g_state == ST_FETCH) { g_session++; set_state(ST_IDLE, NULL); logmsg("stop (the launcher): no replay"); }
         else if (c.what == CMD_STOP) logmsg("stop (the launcher): %s - nothing to stop (a replay that plays is left in the game)", ST_NAME[g_state]);
     }
+    menu_frame(GetTickCount(), g_inWorld || g_loading);
     game_step();
 }
 
@@ -711,7 +710,7 @@ static void status_line(char *b, int cap) {
     EnterCriticalSection(&g_qlk);
     _snprintf(b, cap - 1, "{\"ev\":\"status\",\"ver\":\"" LR_VERSION "\",\"pid\":%lu,\"state\":\"%s\",\"match\":\"%s\",\"reason\":\"%s\",\"screen\":\"%s\","
               "\"in_world\":%s,\"waiting\":%s,\"records\":%ld,\"steps\":%ld,\"sync_ok\":%ld,\"sync_bad\":%ld}\n",
-              GetCurrentProcessId(), ST_NAME[g_state], g_match, g_state == ST_FAILED ? g_reason : "", SC_NAME[g_screen],
+              GetCurrentProcessId(), ST_NAME[g_state], g_match, g_state == ST_FAILED ? g_reason : "", SC_NAME[menu_scr],
               g_inWorld ? "true" : "false", g_waiting ? "true" : "false", g_avail, g_availTicks, g_syncOk, g_syncBad);
     LeaveCriticalSection(&g_qlk);
     b[cap - 1] = 0;
