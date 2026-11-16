@@ -4,6 +4,36 @@ Every version gets an entry here before it reaches `main`. CI then tags `vX.Y.Z`
 version (`X.Y.0`) it also publishes a GitHub Release with the DLLs and the entries since the previous `X.Y.0`.
 The version of the set lives only in `VERSION`; each DLL still writes its own version to its log.
 
+## 0.2.102 — 2026-11-16
+MMFind 0.52 (Automatch v2.0; hand release: store automatch mmfind-0.52 = the live package mmfind-0.51 with this MMFind.dll): the
+seamless walk of a launcher room's start (siritos, variant A of the report siritos_1115 SEAMLESS_JOIN; stage 2 - straight to the
+loading screen without the main menu - postponed). The launcher-room observer fix of draft PR #129 is NOT in it (it goes to 0.53).
+- The main menu's Find a Game button (MainMenuForm::OnClickMatchMaking 0x473A18) ignores every click while a message box is up -
+  the only step of the walk that needs the menu. MMFind 0.52 does what that button does by a direct call: the game's own
+  WaitForMatchMakingTransition (ctor 0x471809: hosts the player's party, then switches to Find a Game) run by OUR "Connecting" box
+  (0xAD6020 with the object as its process; its tick 0x4718C0 wrapped, its RLink listener 0x471C29 passed events only while the party
+  is being hosted - the stand 15.11 crashes of the prototype). The box is up from the launcher's command in the main menu to the
+  loading screen; Find a Game, mode / race / hero, the hero panel's Ready and Start Searching run under it (their handlers never
+  look at boxes). From Start Searching on it is 0.51's native automatch path.
+- Only when: the code at every place called is 3.19's; the game is signed in to the lobby service (RLink, (*0x1335030)->vtbl[0x28]
+  ()->vtbl[0x40]() - a cold start waits for it); the account may go online (0x470FA7 = 0, otherwise the game would ask its "Play
+  against CPU?"). Otherwise 0.51's walk (menu commands, the box from Start Searching) and a log line. [MMFind] SeamlessWalk=0 (or
+  ConnectingBox=0): 0.51's walk always.
+- A cancel / failure while the transition still runs: the box goes with the transition's end (closing it then would delete the
+  object while the party is hosted and leave the mouse off), 15 s at most, then closed anyway and the mouse turned on; then Back to
+  the main menu as 0.51. A walk back out of Find a Game (the army again) closes the box and enters again.
+- Pipe: the status line has "seamless":true|false (on and the code matched); new failed reason "walk_failed" (the game's own
+  transition failed - it shows its own error box). Events unchanged: accepted -> walking -> army -> (armed) -> searching -> matched
+  -> in_room -> loading, or failed.
+- No 3 s wait for "the menu answered" before the seamless walk (the menu's handler is needed later, on Find a Game, whose
+  OnLoadComplete brings it).
+- Stands 16.11 (stand 1 + stand 2, two Steam accounts, test ladder + test lobby): launcher room 1v1 from the main menu with go_at
+  (box ~0.2 s after the ticket, Find a Game under it 0.8-1.4 s later, armed 3.7-3.9 s, search at go_at, matched, loading, match
+  played and left) - both hosts, both guests, also without go_at; cancel inside the transition and after "armed" (box gone, main
+  menu, mouse clicks work); cold start by ticket (the ticket 0.35 s after the main menu: "not signed in yet - waiting" 0.5 s, then
+  the box, match loaded); a plain Find a Game search by mouse (no box, as 0.51); SeamlessWalk=0 on one stand (0.51 walk, mixed
+  match loaded).
+
 ## 0.2.101 — 2026-11-16
 New AI 33 (store newai-33, experiment, off by default, Elite only): step 13 of the brain (0.13) - both races (the race for points,
 own generators, tier 3 when it pays, jumps), the space marines (recovery, reinforcement cap, scouts' wargear, kiting, seen turrets),

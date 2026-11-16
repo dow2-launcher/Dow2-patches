@@ -1,0 +1,1 @@
+- Automatch (MMFind 0.52): a match from a launcher room starts without leaving the "Connecting" window - it shows up in the main menu right after the launcher's command and stays until the match loads, while the game opens Find a Game, sets the army and starts the search under it. A search started by hand in the game is unchanged.
