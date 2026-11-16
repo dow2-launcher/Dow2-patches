@@ -505,6 +505,11 @@ frameprobe/ - FrameProbe.dll (off), eliteai/ - EliteAI.dll (store id newai since
       by health and cost, the purse saves for proper squads, press when the trades are won, the techmarine builds turrets / mines /
       field ops by the network build command 0x4E - netorder.ai mode 700 + k, free squads join our fight); elite.scar knows the
       marines' abilities 92-99. The orks play as newai-30. EliteAI.dll 0.17 unchanged. Other races still newai-23.1.
+    newai-32 (0.2.99): brain-32 cb98c4e (branch newai-32): step 12 of the orks, the owner's doctrine - build order by tiers
+      (T1 shootas + lootas, early T2 while calm; T2 tankbustas / stikkbommaz / weirdboy; T3 tank -> nobz -> battlewagon), a killed squad
+      type is not bought again, tactics against setup teams (kommando nob stun grenade, mek teleport, deff dread, weirdboy Warp Vomit /
+      Warpath, shoota kommandos Luv da Dakka + smoke), second-node generators; elite.scar / netorder.ai know the ork abilities 74-78.
+      The space marines play as newai-31. EliteAI.dll 0.17 unchanged. Other races still newai-23.1.
 
 ## Building
 
