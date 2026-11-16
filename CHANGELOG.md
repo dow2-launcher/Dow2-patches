@@ -4,6 +4,31 @@ Every version gets an entry here before it reaches `main`. CI then tags `vX.Y.Z`
 version (`X.Y.0`) it also publishes a GitHub Release with the DLLs and the entries since the previous `X.Y.0`.
 The version of the set lives only in `VERSION`; each DLL still writes its own version to its log.
 
+## 0.2.100 — 2026-11-16
+ReplayOpen 4 (store replayopen-4) and LiveReplay 5 (store livereplay-5), siritos 16.11: "a replay from the launcher hangs ~15 s in the
+menu, then Connecting and at once the loading" (research reports/siritos_1116/RESEARCH_TECH_RU.md 1.1-1.6).
+- Cause: after a cold start ReplayOpen 3 knew the screen only from a panel's OnLoadComplete, which Elite's loader sends before it
+  loads the add-ons; the screen stayed "unknown" and the request waited 10 s of frames (every player's log: "play" -> the box 10.0 s).
+  LiveReplay 4 had the same rule for its box (10 s) and started the replay after 3 s without any box.
+- New shared SOURCE header common/menu.h (each add-on keeps its own DLL and state, docs/ADDON_RULES.md): RoomJoin 16's way of knowing
+  the menu - the menu movie from any of its fscommands (or a movie with _level0.display_item), the screen asked from the movie every
+  250 ms (GetVariable of panel1..3_mc.panel_mc._visible/_url), WM_MOUSEMOVE posted over the menu while no command comes (the game's
+  window in front), the movie forgotten by its own destructor (vtable 0x0104BBFC slot 0 wrapped, chained with RoomJoin's wrap under
+  Local\dow2patch_iat_<pid>). RoomJoin itself is unchanged (its own copy, as released).
+- ReplayOpen 4: the box as soon as the screen is known, up >= 0.7 s, still closed right before the start 0x40F526 (ReplayOpen 3, fb
+  1247); the 10 s of frames only as the fallback when no screen is found. The same file again while it waits / loads / plays =
+  "accepted" (+ "loading" / "playing"), not "busy"; another file is refused without touching the state of the one under way (before,
+  a "play" during a replay set the state to failed and its "over" never came). Status line: "menu": the menu movie is known.
+- LiveReplay 5: the box as soon as the screen is known, up >= 0.7 s, closed right before the start as before; 10 s / 3 s only as the
+  fallback.
+- Stand 1 (Wine, Elite 3.2.1.0.0, the pipe driven as the launcher; RoomJoin 16 / roomjoin-10 loaded too, and once without it):
+  ReplayOpen 3 cold start: "play" -> box 10.008 s. ReplayOpen 4 cold start: box 0 ms after the request is taken (the menu movie found
+  0.8-1.0 s after the add-on loads, as RoomJoin finds it), 0.5 s after the pipe's command; warm (main menu / Game History): 0 ms.
+  LiveReplay 4 cold start: no box at all, the start 3.0 s after the watch; LiveReplay 5: box 0 ms after the watch, start 0.7 s later.
+  Replays played and were left with Menu -> Exit Game -> postgame -> Continue, then the next one opened, up to 4 in one process
+  (ro_same, ro_96 = Elite 2.9.8.4 data like fb 1247's) - no crash; cancel / stop with the box up (cold and warm) close the box and the
+  menu answers; a live replay (fake_live.py) left and watched again, then a replay file after it. Not tested on Windows.
+
 ## 0.2.99 — 2026-11-16
 New AI 32 (store newai-32, experiment, off by default, Elite only): step 12 of the ORKS - the owner's doctrine (build order by tiers,
 "a killed squad is not bought again", tactics against setup teams, the weirdboy, kommandos). The owner: "give the testers everything".

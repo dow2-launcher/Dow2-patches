@@ -9,7 +9,8 @@
 //   launcher -> game  {"cmd":"play","file":"<full path of the .rec, or a name in the game's Playback folder>"}
 //                     {"cmd":"status"}   {"cmd":"cancel"}
 //   game -> launcher  {"ev":"status","ver":"1","pid":n,"state":"idle|waiting|loading|playing|failed","file":"...","reason":"...",
-//                       "screen":"main|find_game|games_list|lobby|other|unknown","in_world":b}   (on connect and on "status")
+//                       "screen":"main|find_game|games_list|lobby|other|unknown","in_world":b,"menu":b}   (on connect and on "status";
+//                       "menu" (ReplayOpen 4): the menu movie is known)
 //                     {"ev":"accepted","file":"..."}  {"ev":"loading","file":"..."}  {"ev":"playing","file":"..."}  {"ev":"over","file":"..."}
 //                     {"ev":"data_mismatch","file":"...","replay":"<hex>","game":"<hex>"}   (see below; the replay still starts)
 //                     {"ev":"failed","file":"...","reason":"not_found|bad_file|version|data_mismatch|busy_match|busy_lobby|busy|start|
@@ -48,6 +49,17 @@
 // "Could not find win condition", ReplayOpen never saw the next frame). Not reproduced under Wine (stand 1, the player's add-ons and
 // Elite 3.2.1.0.0, his kind of replay - Elite 2.9.8.4 data 96FD10CA): the box is closed again before the start, as ReplayOpen 1 did
 // (it is up from the request for at least 0.7 s while the game is in its menu).
+//
+// ReplayOpen 4 (16.11.2026, siritos: "Watch on a replay: ~15 s in the menu, then Connecting and at once the loading"; players' logs:
+// "play" -> the box exactly 10.0 s later, every time after a cold start): Elite's loader brings the add-ons in after the menu's
+// first panel is up, so its OnLoadComplete was never seen, the screen stayed "unknown" and the request waited 10 s of frames.
+// The menu is now learnt as RoomJoin learns it (common/menu.h, shared source): the menu movie from any of its fscommands (or a
+// movie that has _level0.display_item), the screen asked from the movie every 250 ms, a few mouse moves over the menu while no
+// command comes (the game's window in front), the movie forgotten by its own destructor. The box comes as soon as the screen is
+// known (~1 s after a cold start), is up >= 0.7 s, and is still closed right before the start 0x40F526 (ReplayOpen 3, fb 1247).
+// The 10 s of frames stay only as the fallback when no screen is found. The same file again while it starts / loads / plays
+// = "accepted" (and the state's event), not "busy" (the launcher's second Watch, tester 16.11 08:49:11); another file stays busy
+// and no longer changes the state of the one under way. The status line says "menu": the menu movie is known.
 #ifndef _WIN32_WINNT
 #define _WIN32_WINNT 0x0600                 // CancelIoEx (Vista+) with older mingw headers
 #endif
@@ -60,7 +72,7 @@
 #include <stdarg.h>
 #include <wchar.h>
 
-#define RO_VERSION "3"
+#define RO_VERSION "4"
 #define G_SETTINGS     0x01335A78         // +0x118 game type (0x800 playback)
 #define G_GAMEOBJ_PTR  0x01335A74         // what the replay start takes in EDX
 #define FN_START_PB    0x0040F526         // the replay of a file (ECX "playback:<name>.rec", EDX 0x01335A74) -> AL
@@ -111,7 +123,7 @@ static CRITICAL_SECTION g_qlk;
 static volatile int g_state, g_inWorld, g_loading;
 static char g_fileU8[400], g_reason[40];
 static wchar_t g_src[MAX_PATH], g_dst[MAX_PATH], g_pbDir[MAX_PATH];
-static DWORD g_reqAt, g_boxAt, g_firstFrame; static int g_boxCfg = 1, g_mismatchRefuse, g_ours;
+static DWORD g_reqAt, g_boxAt, g_firstFrame, g_menuAt; static int g_boxCfg = 1, g_mismatchRefuse, g_ours;
 
 #define MAXC 4
 static HANDLE g_outEv; static char *g_oq[32]; static int g_oqH, g_oqN;
@@ -175,29 +187,14 @@ static int iat_hook(DWORD slot, void *fn, void **orig) {
     patch_unlock(mx); return r;
 }
 
-// ---------------- the menu (which full-screen panel is up: as RoomJoin / LiveReplay) ----------------
-enum { SC_UNKNOWN, SC_OTHER, SC_MAIN, SC_MM, SC_LIST, SC_SETUP };
-static const char *SC_NAME[] = {"unknown", "other", "main", "find_game", "games_list", "lobby"};
-static volatile int g_screen;
-static int url_screen(const char *u) {
-    return strstr(u, "main_menu.gfx") ? SC_MAIN : strstr(u, "matchmaking.gfx") ? SC_MM : strstr(u, "game_list_movie.gfx") ? SC_LIST
-         : strstr(u, "game_setup_movie.gfx") ? SC_SETUP : SC_OTHER;
-}
+// ---------------- the menu (ReplayOpen 4: common/menu.h - the menu movie and the screen as RoomJoin learns them) ----------------
+#define MENU_LOG logmsg
+#include "../common/menu.h"
 static void __fastcall fs_hook(void *self, void *edx, void *movie, const char *cmd, const char *args) {
     if (cmd && !IsBadReadPtr(cmd, 1)) {
         if (!strcmp(cmd, "OnLoadMovieComplete") && args && !IsBadReadPtr(args, 6) && !strncmp(args, "/mp_mc", 6)) g_loading = 1;
-        if (!strcmp(cmd, "OnLoadComplete") && args && !IsBadReadPtr(args, 1)) {
-            const char *nm = strstr(args, "name:="), *url = strstr(args, "url:=");
-            if (nm && url) {
-                const char *e = strchr(nm, ';'); int len = e ? (int)(e - nm - 6) : 0;
-                if (len >= 9 && !strncmp(nm + 6 + len - 9, ".panel_mc", 9)) {
-                    int sc = url_screen(url);
-                    if (sc != SC_OTHER && (g_inWorld || g_loading)) { g_inWorld = 0; g_loading = 0; }
-                    if (sc != g_screen && g_state == ST_WAIT) logmsg("screen %s", SC_NAME[sc]);
-                    g_screen = sc;
-                }
-            }
-        }
+        int sc = menu_on_fscmd(self, movie, cmd, args, g_inWorld || g_loading);
+        if (sc >= 0 && sc != SC_OTHER && (g_inWorld || g_loading)) { g_inWorld = 0; g_loading = 0; logmsg("back in the menu (%s)", SC_NAME[sc]); }
     }
     g_fsOrig(self, edx, movie, cmd, args);
 }
@@ -246,26 +243,47 @@ typedef struct { int what; wchar_t file[MAX_PATH]; char u8[400]; } QCmd;
 enum { CMD_PLAY = 1, CMD_CANCEL };
 static QCmd g_cq[4]; static int g_cqH, g_cqN;
 static void play_req(const QCmd *c, DWORD now) {
-    if (g_state == ST_WAIT) { char f[820]; js_esc(f, sizeof f, c->u8); emitf("{\"ev\":\"failed\",\"file\":\"%s\",\"reason\":\"busy\",\"text\":\"another replay is starting\"}", f); return; }
+    if (g_state == ST_WAIT || g_state == ST_LOAD || g_state == ST_PLAY) {
+        char f[820]; js_esc(f, sizeof f, c->u8);
+        if (!strcmp(c->u8, g_fileU8)) {                              // ReplayOpen 4: the same file again - it goes on, nothing new
+            logmsg("play: %s again (%s) - it goes on", g_fileU8, ST_NAME[g_state]);
+            ev("accepted"); if (g_state != ST_WAIT) ev(g_state == ST_LOAD ? "loading" : "playing"); return; }
+        if (g_state == ST_WAIT) { emitf("{\"ev\":\"failed\",\"file\":\"%s\",\"reason\":\"busy\",\"text\":\"another replay is starting\"}", f); return; }
+        if (g_state == ST_LOAD) { emitf("{\"ev\":\"failed\",\"file\":\"%s\",\"reason\":\"busy\",\"text\":\"another replay is loading\"}", f); return; }
+        // a replay of ours plays: as before (busy_match), but the one that plays keeps its state (its "over" still comes)
+        logmsg("play: %s - refused, a replay plays", c->u8);
+        emitf("{\"ev\":\"accepted\",\"file\":\"%s\"}", f);
+        emitf("{\"ev\":\"failed\",\"file\":\"%s\",\"reason\":\"busy_match\",\"text\":\"the game is in a match or a replay\"}", f); return;
+    }
     snprintf(g_fileU8, sizeof g_fileU8, "%s", c->u8);
     if (wcschr(c->file, L'\\') || wcschr(c->file, L'/') || wcschr(c->file, L':')) { wcsncpy(g_src, c->file, MAX_PATH - 1); g_src[MAX_PATH - 1] = 0; }
     else { _snwprintf(g_src, MAX_PATH, L"%ls\\%ls", g_pbDir, c->file); g_src[MAX_PATH - 1] = 0; }
     logmsg("play: %s", g_fileU8);
     ev("accepted");
     if (g_inWorld || g_loading) { ro_fail("busy_match", "the game is in a match or a replay"); return; }
-    if (g_screen == SC_SETUP) { ro_fail("busy_lobby", "the game is in a lobby"); return; }
+    if (menu_scr == SC_SETUP) { ro_fail("busy_lobby", "the game is in a lobby"); return; }
     if (GetFileAttributesW(g_src) == INVALID_FILE_ATTRIBUTES) { char t[40]; snprintf(t, sizeof t, "error %lu", GetLastError()); ro_fail("not_found", t); return; }
-    set_state(ST_WAIT); g_reqAt = now; g_boxAt = 0;
+    set_state(ST_WAIT); g_reqAt = now; g_boxAt = 0; g_menuAt = 0;
+    logmsg("the menu: %s, screen %s", menu_mv ? "movie known" : "movie not known yet", SC_NAME[menu_scr]);
 }
 static void game_step(DWORD now) {
     if (!g_firstFrame) g_firstFrame = now ? now : 1;
     if (g_state == ST_WAIT) {
         if (g_inWorld || g_loading) { ro_fail("busy_match", "a match or replay started meanwhile"); return; }
-        if (g_screen == SC_SETUP) { ro_fail("busy_lobby", "the game went into a lobby"); return; }
-        // the menu: a full-screen panel seen, or (Elite loads the add-ons after the menu's first panel: usually none seen) 10 s of frames
-        if (g_screen == SC_UNKNOWN && now - g_firstFrame < 10000) return;
+        if (menu_scr == SC_SETUP) { ro_fail("busy_lobby", "the game went into a lobby"); return; }
         if (now - g_reqAt > 120000) { ro_fail("timeout", "the game's menu did not come in 2 minutes"); return; }
-        if (g_boxCfg && !g_boxAt) { g_boxAt = now; if (g_screen != SC_UNKNOWN || now - g_firstFrame >= 10000) connbox_open(0, "a replay from the launcher starts"); }
+        // ReplayOpen 4: the menu as RoomJoin learns it (common/menu.h): the movie from its commands, the screen asked from it,
+        // mouse moves over the menu after 0.8 s without a movie; the old 10 s of frames only while no screen is known
+        if (menu_scr == SC_UNKNOWN) {
+            menu_tick(now, now - g_reqAt > 800);
+            if (menu_mv && !g_menuAt) { g_menuAt = now ? now : 1; logmsg("the menu movie known %lu ms after the request", now - g_reqAt); menu_cursor_back(); }
+            if (menu_scr == SC_UNKNOWN) {
+                if (now - g_firstFrame < 10000 || (menu_mv && now - g_menuAt < 4000)) return;
+                if (!g_boxAt) logmsg("no screen known (%s) - taken as the menu after %lu ms of frames (the fallback)", menu_mv ? "the movie shows no panel" : "no menu movie", now - g_firstFrame);
+            }
+        }
+        if (g_boxCfg && !g_boxAt) { g_boxAt = now; logmsg("screen %s %lu ms after the request - the box", SC_NAME[menu_scr], now - g_reqAt); connbox_open(0, "a replay from the launcher starts"); }
+        if (!g_boxAt) g_boxAt = now;
         if (connbox_is_open() && now - g_boxAt < 700) return;          // the player sees the box before the screen changes
         unsigned mine = ((unsigned (__cdecl *)(void))FN_DATACRC)();
         if (!copy_rec(mine)) return;
@@ -294,6 +312,7 @@ static void __stdcall upd_hook(float dt) {
         else if (c.what == CMD_CANCEL && g_state == ST_WAIT) { logmsg("cancel (the launcher)"); ro_fail("cancelled", ""); }
         else if (c.what == CMD_CANCEL) logmsg("cancel (the launcher): %s - nothing to cancel (a replay that loads or plays is left in the game)", ST_NAME[g_state]);
     }
+    menu_frame(now, g_inWorld || g_loading);
     game_step(now);
     if (connbox_is_open() && (g_inWorld || g_loading)) connbox_close("a world loads");
 }
@@ -322,8 +341,8 @@ static int cli_write(Cli *c, const char *s) {
 }
 static void status_line(char *b, int cap) {
     char f[820]; EnterCriticalSection(&g_qlk); js_esc(f, sizeof f, g_fileU8);
-    _snprintf(b, cap - 1, "{\"ev\":\"status\",\"ver\":\"" RO_VERSION "\",\"pid\":%lu,\"state\":\"%s\",\"file\":\"%s\",\"reason\":\"%s\",\"screen\":\"%s\",\"in_world\":%s}\n",
-              GetCurrentProcessId(), ST_NAME[g_state], f, g_state == ST_FAILED ? g_reason : "", SC_NAME[g_screen], g_inWorld ? "true" : "false");
+    _snprintf(b, cap - 1, "{\"ev\":\"status\",\"ver\":\"" RO_VERSION "\",\"pid\":%lu,\"state\":\"%s\",\"file\":\"%s\",\"reason\":\"%s\",\"screen\":\"%s\",\"in_world\":%s,\"menu\":%s}\n",
+              GetCurrentProcessId(), ST_NAME[g_state], f, g_state == ST_FAILED ? g_reason : "", SC_NAME[menu_scr], g_inWorld ? "true" : "false", menu_mv ? "true" : "false");
     LeaveCriticalSection(&g_qlk);
     b[cap - 1] = 0;
 }

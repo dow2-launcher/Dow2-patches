@@ -250,13 +250,13 @@ $(OUT)/UnitStats.dll: unitstats/unitstats.c common/gfxui.h | $(OUT)
 	$(CC) $(CFLAGS) -shared -o $@ unitstats/unitstats.c -static-libgcc -Wl,--exclude-all-symbols
 
 # 06.11.2026: watch a running match of our servers as a growing replay (the spectator's side; the servers build the replay)
-$(OUT)/LiveReplay.dll: livereplay/livereplay.c common/connbox.h | $(OUT)
+$(OUT)/LiveReplay.dll: livereplay/livereplay.c common/connbox.h common/menu.h | $(OUT)
 	$(CC) $(CFLAGS) -shared -o $@ $< -lwinhttp -lshell32 -static-libgcc
 # its pipe for a launcher outside Wine (Linux), shipped with the add-on as Elite_DLLs/lrbridge.exe
 $(OUT)/lrbridge.exe: roomjoin/rjbridge.c | $(OUT)
 	$(CC) $(CFLAGS) -DPIPE_PREFIX='L"EliteLiveReplay"' -o $@ $< -static-libgcc
 # 14.11.2026 (siritos): "Play" of a replay from the launcher - the game's Connecting box, then the replay (its own add-on)
-$(OUT)/ReplayOpen.dll: replayopen/replayopen.c common/connbox.h | $(OUT)
+$(OUT)/ReplayOpen.dll: replayopen/replayopen.c common/connbox.h common/menu.h | $(OUT)
 	$(CC) $(CFLAGS) -shared -o $@ $< -lshell32 -static-libgcc -Wl,--exclude-all-symbols
 $(OUT)/robridge.exe: roomjoin/rjbridge.c | $(OUT)
 	$(CC) $(CFLAGS) -DPIPE_PREFIX='L"EliteReplayOpen"' -o $@ $< -static-libgcc
