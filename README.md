@@ -519,6 +519,10 @@ frameprobe/ - FrameProbe.dll (off), eliteai/ - EliteAI.dll (store id newai since
     newai-34 (0.2.104): EliteAI.dll 0.18 (eliteai branch newai-34): the "NEW AI A/B/C" lobby labels also in network lobbies (the
       test of load_hook for a network match: mp_game() && mp_on() && cmd_ready()), and a match-start line on every station of a
       network match: who computes each computer. Brain and Lua as newai-33.
+    newai-35 (0.2.105): brain 0.14 (eliteai branch newai-35 = brain-s14 + the verifier's M1, merged with newai-34): step 14 for both
+      races - points from the first minute, generators on every power point, the army past the clock, the push earlier, the orks'
+      choice after tier 2 with the price saved (M1), stikkbommas before tankbustas, stormboyz, gretchin only to repair, field repair,
+      hero wargear by the enemy, calmer set-up teams and vehicles. EliteAI.dll 0.18 unchanged. Victory point games only.
 
 ## Building
 
