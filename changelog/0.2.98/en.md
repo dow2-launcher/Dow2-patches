@@ -1,0 +1,1 @@
+- Parallel Draw 4: fixes the crash testers hit in big fights (two worker threads read the same material table while a third one changed it); if something still goes wrong while models are being prepared, the game draws them itself and keeps running instead of crashing.

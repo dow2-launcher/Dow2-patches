@@ -1,0 +1,1 @@
+- Parallel Draw: unticked for everyone after a crash in a late 3v3. It is still in the Experiment section; tick it again only if you want to test it - it may crash the game.

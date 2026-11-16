@@ -4,6 +4,39 @@ Every version gets an entry here before it reaches `main`. CI then tags `vX.Y.Z`
 version (`X.Y.0`) it also publishes a GitHub Release with the DLLs and the entries since the previous `X.Y.0`.
 The version of the set lives only in `VERSION`; each DLL still writes its own version to its log.
 
+## 0.2.98 — 2026-11-16
+ParallelDraw 4 (store paralleldraw_r2 -> paralleldraw-4; experiment, off by default, Elite + vanilla). The crash of 16.11 01:33 MSK
+(Ligt, log package 20261115-233434-92fbdb, 3v3 6p_hades_wastes_redux, ~9 min of game): three EXCEPTION C0000005 on the workers at
+DOW2.exe+275BD7 / +275BDC / +275E19 (data 00350035, 9504DEEE, D8626900), WER at 0x275bd7, a 4.2 s STALL (the three workers never
+came back).
+- Cause (ParallelDraw's own, versions 2 and 3): 0x675BD0 is the 3x4 matrix product (ecx = the binding's matrix, eax = source,
+  edx = destination) in the copy loop of the material binding table 0x6C2880. The table belongs to a material and is shared by
+  every model with it: a sorted vector of 0x14-byte nodes ((src layout, dst layout) -> vector of {src offset, dst offset, binding}
+  0xC); a miss inserts a node at its sorted place (0x6C31F0: the nodes after it are shifted - their entry vectors copied and the
+  old ones freed - or the whole node vector is reallocated when full); a dirty table is sorted and its duplicates erased at the
+  next lookup (0x6C3440). ParallelDraw held the reader lock only up to the copy loop (0x6C2B10), so a worker could walk a node /
+  entry vector that another thread's miss had just shifted or freed: garbage esi -> the three pointers (0x00350035 = UTF-16 text
+  in reused memory). Misses in the parallel phase need a model already seen meeting a new layout pair (stand, replay start with
+  ColdPar: 418 in 7 min; normal mode far fewer), and the window is a few microseconds - rare, as the player's two clean matches.
+- Fix: the reader lock is held until 0x6C2880 returns (the copy loop is pure arithmetic, no lock taken inside, so no new lock
+  order), also around its second call 0x6C1DE5 (0x6C1DD0).
+- Safety net: every build runs under a guard (pd_call). A fatal exception inside it (access violation, illegal instruction,
+  division by zero; not in ntdll / kernel32 / ParallelDraw.dll, not while waiting on a lock) no longer reaches the game's crash
+  handler: the vectored handler resumes the thread at the guard with its stack, fs:0 SEH list and FPU state, the build's locks
+  (ours and the game locks it entered) are given back, its records dropped, the model and the rest of that walk are built by the
+  game's own code on the main thread, and the workers stay off for the rest of the session ("build abandoned" in the log).
+- Stand-only ini keys: MatOld (version 3 lock placement), MatSleep, ColdPar, FaultTest / FaultKeep (a worker's copy loop reads
+  the null page inside DOW2.exe every N-th time). Stats line: material misses / sorts in the phase, abandoned builds.
+- Stand 1 (replay 712753c35d44c7e1, Parallel Pose 3 on, CrcTraceAll -sync_high, restored with md5 equal after every run, game stopped; dev/pd4_1116):
+  - T3, version 4 as shipped, late 3v3: fast-forward to 18:00, then rendered to the end (35:33): CrcTrace 21336 of 21336 ticks
+    equal to stage 2 r2; no EXCEPTION, no STALL; 98 material misses in the parallel phase (now under the lock), rebuilt 0,
+    unconsumed 0, overflow 0.
+  - T4, the abandoned-build path: FaultTest=3000 + FaultKeep=1 (a worker's copy loop reads 0x14 inside DOW2.exe at 0x6C2B20),
+    replay start to 14:00: 11678 builds abandoned and drawn by the game, the game kept running, models on screen, no STALL,
+    nothing reached the crash handler; CrcTrace 8648 of 8648 equal.
+  - T1 / T2, stress from the replay start (ColdPar=1, MatSleep=1): with the version 3 lock placement (MatOld=1) the crash was not
+    reproduced in 7 min; version 4: 418 misses in the phase, no EXCEPTION. CrcTrace equal (8517 / 8515 ticks).
+
 ## 0.2.97 — 2026-11-15
 New AI 31 (store newai-31, experiment, off by default, Elite only): the SPACE MARINES play the brain too (the owner: "give the testers
 everything"). EliteAI.dll 0.17 unchanged.
