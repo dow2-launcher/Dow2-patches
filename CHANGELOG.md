@@ -4,6 +4,29 @@ Every version gets an entry here before it reaches `main`. CI then tags `vX.Y.Z`
 version (`X.Y.0`) it also publishes a GitHub Release with the DLLs and the entries since the previous `X.Y.0`.
 The version of the set lives only in `VERSION`; each DLL still writes its own version to its log.
 
+## 0.2.105 — 2026-11-16
+New AI 35 (store newai-35, experiment, off by default, Elite only): step 14 of the brain (0.14) for both races + the verifier's
+must-fix M1; EliteAI.dll 0.18 unchanged. Made and checked in victory point games only. Every other race still newai-23.1.
+eliteai branch newai-35 5feed02 = brain-s14 40530e6 (step 14 e27b784 + the verifier's M1, VERIFY_14_RU section 4,
+s14v/logs/m1_fix2.diff) merged with newai-34 47b4ceb: dll/ byte-equal to 47b4ceb, mod/brain/ and the stub byte-equal to 40530e6,
+main.ai / mechanics.ai / vanilla-base purchase sources / append / data as newai-34 (newai-31 bee001c), [Lua] Brain_Races default
+"orks,space_marines". Served files differing from newai-34: default.ai only (= newai-34's + exactly brain-s13 0f64054 -> 40530e6's
+change to it).
+- Step 14 (every rule behind a [Lua] Brain_ key): map control (CapDed / CapNear / CapOpenFight, generators on every power point
+  EconGenAll, posts), the army grows past the clock (EconGrow: the clock is a floor), the push before its hour (PushEarly), the red
+  spent (HeroGlobalSpend, GlobalRedRichCry); the orks after tier 2 choose again among what the engine can produce and save the price
+  (CompStarve, EconReinfStarve), stikkbommas before tankbustas vs set-up teams (DocT2Threat), stormboyz (DocStormRanged), the enemy's
+  generator hit when a capture is turned away (CapRazeGen), the armour's last place remembered (AvMem), gretchin only to repair
+  vehicles, the kommando nob melee after the knife, the mek's flank teleport, hero abilities; set-up teams one approach one position;
+  hero wargear by the enemy's class; field repair; vehicle orders calmer.
+- M1 (verifier): the saved price of a squad after tier 2 is kept from the refills, generators / posts ahead of the clock, upgrades and
+  the hero's pieces (Brain_CompStarveKeep, default 1; 0 = e27b784). The verifier's 14 brain-vs-brain games: games with a pause of
+  200 s or more without a new squad after tier 2: 5 -> 2 of 14 (newai-33: 4) - fewer, not none.
+- Check: stub 336 PASS, 0 FAIL on newai-35. Fastbench, the packaged tree with DLL 0.18 (n35_bb, 4 starts of s13/scen_bb): 0 Lua errors;
+  the BR ORD lines of all 4 games byte-equal to the verifier's M1 run v14fix2_bb (DLL 0.17); CRC of 2 recordings (s14 pball method:
+  rebuilt from the command log, played back without AI) - ce79e0 9555 of 9555 ticks, 71b806 12057 of 12057, differ 0. The verifier
+  (VERIFY_14_RU): READY after M1. Not stand-tested.
+
 ## 0.2.104 — 2026-11-16
 New AI 34 (store newai-34, experiment, off by default, Elite only): EliteAI.dll 0.18 - the "NEW AI A/B/C" lobby labels stay in
 network lobbies, and every station of a network match logs who computes each computer. The brain and every Lua file served are
