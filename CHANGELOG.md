@@ -4,6 +4,26 @@ Every version gets an entry here before it reaches `main`. CI then tags `vX.Y.Z`
 version (`X.Y.0`) it also publishes a GitHub Release with the DLLs and the entries since the previous `X.Y.0`.
 The version of the set lives only in `VERSION`; each DLL still writes its own version to its log.
 
+## 0.2.107 — 2026-11-16
+New AI 36 (store newai-36, experiment, off by default, Elite only): step 15 of the brain (0.15) + the verifier's must-fix M1;
+EliteAI.dll 0.18 unchanged. Victory point games only. Every other race still newai-23.1.
+eliteai branch newai-36 44a0d90 = brain-s15 (step 15, code 17b5775, HANDOFF 0804aa0, on newai-35 5feed02) + the verifier's M1
+(VERIFY_15_RU, s15v/logs/m1_trukkfirst.diff: Brain_DocTrukkFirst default 0 - at tier 2 the owner's order machines -> tankbustas,
+many set-up teams -> stikkbommas, then the trukk; stub scene 109 checks both values). The optional W1 is not applied. dll/ byte-equal
+to newai-34 47b4ceb; main.ai, mechanics.ai, vanilla-base purchase sources, append, data as newai-35. Served files differing from
+newai-35: default.ai only (regenerated, byte-equal to the verifier's v15m1 snapshot).
+- Step 15: tankbustas need a real remembered enemy vehicle (the techmarine's turret no longer counts, CompAvRealVeh); the marines
+  pick squads and upgrades by the enemy (more tacticals, shotguns vs mobs, fewer snipers); devastators post 13 m in front of the
+  point facing the enemy with a re-setup cooldown; no orders into base-turret range without a tanking vehicle; the trukk drives
+  through turret range and is ridden only when healthy; one squad defends against one capturer; the low-ticket alarm keeps the army
+  and the capturers on the victory points; the ork capturer is not the lone slugga mob; the mek's teleport is ordered once more;
+  the marines' generator asked again after a razed post.
+- Not fixed (in the store text too): the orks hold about 1 of 3 VPs and lose the late fights; the marines rarely reach T3; squads
+  can still be dragged under base turrets while chasing.
+- Check: stub 350 PASS, 0 FAIL. Fastbench n36_bb (the packaged tree, DLL 0.18, 4 starts of s13/scen_bb): 0 Lua errors; BR ORD of
+  all 4 games byte-equal to the verifier's M1 run v15m1_bb; CRC of 2 recordings (pball): ce79e0 9283 of 9283 ticks, 71b806 9572 of
+  9572, differ 0. Verifier (VERIFY_15_RU): release as newai-36 after M1. Not stand-tested.
+
 ## 0.2.106 — 2026-11-16
 Match marks 3 (store marks-3) and Match speed 4 (store matchspeed-4) - both experiment, off by default, games elite + vanilla +
 igrework: the top-left row (MatchSpeed's pause / speed, Marks' mark button; common/topbar.h) is placed where the game really draws
