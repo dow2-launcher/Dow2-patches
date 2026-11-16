@@ -214,7 +214,7 @@ elitemaps/ - **EliteMaps.dll** (EliteMaps 1, vanilla only)
     the new room's first map) becomes the previous / first vanilla map. Names of Elite's maps from the archives' tables.
     EliteMaps 3: that guard only with EliteMaps.ini BlockPublic=1 (owner: public rooms too); by default no hook.
 
-matchspeed/ - **MatchSpeed.dll** (MatchSpeed 3)
+matchspeed/ - **MatchSpeed.dll** (MatchSpeed 4)
     Speed of a live match = sim ticks per second through the sim rate interface *(*(0x01335720)+8)+0x68 (vtable 0x0108DFAC +0x28
     set / +0x2C get, as ReplaySpeed): 10 = x1, 20 = x2, 40 = x4 (nudged up to +15 % while a small shortfall remains: each drawn frame
     drops the rest of an interval), 0.0001 = paused (the simulation and the AI stand; camera, minimap, selection work).
@@ -234,8 +234,16 @@ matchspeed/ - **MatchSpeed.dll** (MatchSpeed 3)
     Ctrl+P pause. Hooks: that movie's per-frame update and input (chained with Marks) and the Menu button's per-frame update
     (0x0110C55C, the keys when that movie stands). MatchSpeed.ini: Enabled, Button, Hotkeys, Scale (100 = the replay panel's
     size), OffsetX / OffsetY. -DMS_TEST (stands only): a replay's slot table is judged and logged as if live, never acted on.
+    MatchSpeed 4 / Marks 3 (topbar 2, 16.11.2026): the row's place comes from the game's own layout of both movies - slot 6
+    (+0x18) of the top movie's form (0x00B46BE0: 1600 x 1200 times the interface scale, centred in the window) and of the
+    replay / observer panel's (0x00B4D950: 600 x 320 times the scale, at the window's top left), hooked chained and only read -
+    and is put at the replay panel's pause button, just under the observer's camera panel, in that panel's scale. topbar 1
+    took the top movie as fitted into the window, true only up to 1200 lines without UI Scale: at 2560 x 1440 with UI Scale
+    (133 %) the row sat at the window's y -3, under the observer panel (AI tester, fb 1489-1500). The top movie draws only inside
+    its stage, so where it does not reach the window's top left (1440p and up without UI Scale, ultra-wide) the row goes right /
+    down to the stage's corner - never up, so never under the observer panel.
 
-marks/ - **Marks.dll** (Marks 2, "Match marks")
+marks/ - **Marks.dll** (Marks 3, "Match marks")
     For the AI testers: a button and Ctrl+M (Marks.ini Hotkey=) write the current moment of a live match (player or observer,
     with other people too - nothing in the game changes) or of a replay into Marks.log next to the DLL: real time, game time
     (World+0x178 tick, 0.1 s each: m:ss, seconds, tick), live / replay and the .rec played (*(settings+0xEC4) "PLAYBACK:x.rec"),

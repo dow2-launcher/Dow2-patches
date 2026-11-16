@@ -47,7 +47,11 @@
 //   does not reach the world.
 //   MatchSpeed 2 (13.11.2026, AI testers): the buttons were on the left edge of the minimap frame (MatchSpeed 1) - awkward
 //   there, and every click on them also went to the minimap and moved the camera to the map's corner.
-// Hooks: the top movie's per-frame update and input (form vtable 0x01116478 slots +0x10 / +0x0C, chained with Marks) and, for
+// MatchSpeed 4 (16.11.2026, AI tester fb 1489-1500, 2560 x 1440 with UI Scale on): the buttons sat under the observer's camera
+//   panel, only their tops showing; their place now comes from the game's own layout of the movies (common/topbar.h): just
+//   under the observer's panel at any resolution and UI scale.
+// Hooks: the top movie's per-frame update and input (form vtable 0x01116478 slots +0x10 / +0x0C, chained with Marks), the layout
+//   of that movie and of the replay panel (slots +0x18 of 0x01116478 / 0x011119F4, chained, only read) and, for
 //   the keys when that movie stands, the Menu button's per-frame update (0x0110C55C, chained).
 // Rules: docs/UI_RULES.md (only the game's own movie, nothing touches Direct3D), docs/ADDON_RULES.md.
 // MatchSpeed.ini [MatchSpeed]: Enabled, Button, Hotkeys, Scale (button size, % of the 40 x 40 texture: 100 = the replay
@@ -59,7 +63,7 @@
 #include "../common/gfxui.h"
 #include "../common/topbar.h"
 
-#define VERSION "3"
+#define VERSION "4"
 
 #define G_SETTINGS   0x01335A78u   // +0x118 game type (0x800 playback), +0x118+0x810 slots, +0x814 count
 #define G_SESSION    0x01335678u   // *(*G_SESSION + 4) & 0x558: online
@@ -273,9 +277,18 @@ typedef void (__thiscall *Upd_t)(char *form, float dt);
 static Upd_t o_top, o_menu; static TbInput_t o_input;
 static void *g_mv; static int g_made, g_tries, g_lbWas, g_press = -1, g_shown = -1, g_overAny;
 static int g_hover[2] = {-1, -1}, g_down[2] = {-1, -1}, g_on[2] = {-1, -1}, g_icon[2] = {-1, -1};
-static LONGLONG g_madeAt, g_refreshAt, g_topAt;
+static LONGLONG g_madeAt, g_refreshAt, g_topAt; static LONG g_laySeq;
 static const char *BTN[2] = { "_root.ms_btn.ms_pause", "_root.ms_btn.ms_speed" };
 static const char *const ICONS[2][4] = { { "large_btn_pause", "large_btn_play", NULL }, { "large_btn_ff", "large_btn_ff_4x", "large_btn_ff_4", NULL } };   // ff_4x is the game's "2x", ff_4 its "4x"
+// the row's place: from the game's own layout of the top movie and the replay / observer panel (common/topbar.h), again
+// whenever the game lays them out anew (resolution, UI scale)
+static void place(void *mv) {
+    char how[160]; double px, py, sz; tb_place(mv, g_scale, 0, g_offX, g_offY, &px, &py, &sz, how);
+    gfx_setvar(mv, "_root.ms_btn._xscale", gv_num(sz / TB_BTN * 100)); gfx_setvar(mv, "_root.ms_btn._yscale", gv_num(sz / TB_BTN * 100));
+    gfx_setvar(mv, "_root.ms_btn._x", gv_num(px)); gfx_setvar(mv, "_root.ms_btn._y", gv_num(py));
+    logmsg("top movie %p: buttons at %.1f,%.1f (%.1f each; offset %g,%g; %s)", mv, px, py, sz, g_offX, g_offY, how);
+    g_laySeq = tb_layout_seq();
+}
 static void make_buttons(void *mv) {
     if (!gfx_exists(mv, "ms_btn")) { GfxVal a[2] = { gv_str("ms_btn"), gv_num(15910) }; gfx_invoke(mv, "_root.createEmptyMovieClip", NULL, a, 2); }
     if (!gfx_exists(mv, "ms_btn")) { logmsg("top movie %p: could not make the button clip", mv); g_made = -1; return; }
@@ -286,10 +299,7 @@ static void make_buttons(void *mv) {
     gfx_setvar(mv, "_root.ms_btn.ms_speed._x", gv_num(TB_BTN * (1 + TB_GAP)));
     { GfxVal a = gv_str("_root.ms_btn"), r; memset(&r, 0, sizeof r); gfx_invoke(mv, "Receive_RegisterDefaultCallbacks", &r, &a, 1);
       if (!(r.type == GV_BOOL && r.v.b)) logmsg("mouse callbacks on the buttons NOT registered"); }
-    double px, py, sz; tb_place(mv, g_scale, 0, g_offX, g_offY, &px, &py, &sz);
-    gfx_setvar(mv, "_root.ms_btn._xscale", gv_num(sz / TB_BTN * 100)); gfx_setvar(mv, "_root.ms_btn._yscale", gv_num(sz / TB_BTN * 100));
-    gfx_setvar(mv, "_root.ms_btn._x", gv_num(px)); gfx_setvar(mv, "_root.ms_btn._y", gv_num(py));
-    logmsg("top movie %p: buttons at %.1f,%.1f (%.1f each; offset %g,%g)", mv, px, py, sz, g_offX, g_offY);
+    place(mv);
     g_made = 1; g_shown = -1;
 }
 static void set_icon(void *mv, int b, int i) {
@@ -306,6 +316,7 @@ static void buttons(void *mv, int front) {
     if (g_made == 0 || (g_made == 1 && !gfx_exists(mv, "ms_btn"))) { g_tries++; g_madeAt = now; make_buttons(mv); }
     if (g_made != 1) return;
     if (g_shown != 1) { gfx_setvar(mv, "_root.ms_btn._visible", gv_bool(1)); g_shown = 1; }
+    if (tb_layout_seq() != g_laySeq) place(mv);
     if (now - g_refreshAt > g_qf) { g_refreshAt = now; for (int b = 0; b < 2; b++) g_hover[b] = g_down[b] = g_on[b] = g_icon[b] = -1; }
     int shown = front && tb_getbool(mv, "_root._visible");
     int lb = shown && key(GetSystemMetrics(SM_SWAPBUTTON) ? VK_RBUTTON : VK_LBUTTON);
@@ -351,8 +362,10 @@ static void install(void) {
     int m = gfx_hook_slot(TB_SLOT_UPD, TB_UPD_FN, (void *)hk_top, (void **)&o_top);
     int in = m && gfx_hook_slot(TB_SLOT_INPUT, TB_INPUT_FN, (void *)hk_input, (void **)&o_input);
     int k = gfx_hook_slot(MENU_VT_UPD, NULLSUB_RET4, (void *)hk_menu, (void **)&o_menu);
-    logmsg("MatchSpeed %s: x1 / x2 / x4 and pause in matches without other people; buttons %s, hotkeys %s%s%s", VERSION,
+    int lay = m && g_button ? tb_install_layout() : 3;
+    logmsg("MatchSpeed %s: x1 / x2 / x4 and pause in matches without other people; buttons %s%s, hotkeys %s%s%s", VERSION,
            !m ? "NOT hooked (top movie slot differs)" : !g_button ? "off" : in ? "at the top" : "at the top (input slot differs: a click may reach the world)",
+           lay == 3 ? "" : " (a movie's layout slot differs: its place by the game's formula)",
            g_hotkeys ? "Ctrl+= / Ctrl+- / Ctrl+P" : "off", !k ? " (Menu button slot differs: keys only with the top movie)" : "",
            g_testSeq[0] ? " - TEST sequence set" : "");
 }

@@ -1,0 +1,1 @@
+- Match marks 3 and Match speed 4 (experiment, for testers): the buttons at the top left (pause, speed, mark) no longer hide under the observer's camera panel. With UI Scale on (or at another resolution) they were drawn under the panel with only their tops showing; now they always sit just below it, where the replay panel has its pause button, at the panel's size.

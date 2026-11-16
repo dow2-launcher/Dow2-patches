@@ -31,6 +31,10 @@
 //     ReplaySpeed's 8x / Max stay where they are; right of the panel the movie's stage ends and nothing is drawn);
 //   - hotkey Ctrl+M by default (not bound in the game's keydefaults.lua, Elite's or vanilla's); Marks.ini Hotkey= another one.
 //   Feedback: the button flashes gold and a short text "Mark 3  15:26" shows next to it for 3 s - in the game's own movie.
+// 3 (16.11.2026, AI tester fb 1489-1500, 2560 x 1440 with UI Scale on): the live button sat under the observer's camera panel
+//   (the ^ - v < person buttons and the fog-of-war list), only its top showing - topbar 1 took the top movie as fitted into
+//   the window, true only at 800 lines without UI Scale. Now the row's place comes from the game's own layout of the top
+//   movie and of the replay / observer panel (common/topbar.h): just under the observer's panel, at any resolution and scale.
 // Rules: docs/UI_RULES.md (only the game's own movies, nothing touches Direct3D), docs/ADDON_RULES.md (its own DLL and tick).
 // Marks.ini [Marks]: Enabled, Button, ReplayButton, Hotkey (Ctrl+M; "Ctrl+Shift+K", "F11", "Insert", "0" = off), Scale (85),
 //   OffsetX / OffsetY, EliteAILog (1).
@@ -42,7 +46,7 @@
 #include "../common/gfxui.h"
 #include "../common/topbar.h"
 
-#define VERSION "2"
+#define VERSION "3"
 
 #define G_SETTINGS   0x01335A78u   // +0x110 GameObj (camera), +0x118 GameInfo: +0 game type (0x800 replay), +0x810 slots, +0x814 count
 #define G_WORLD      0x013356A4u   // +0x178 tick
@@ -256,7 +260,7 @@ static const char *const ICONS[3] = { "img://data:UI/textures/space_marines/hud/
 #define PANEL_BTN_Y 5.0
 typedef struct {
     const char *root, *btn, *txt;          // "_root.mk_btn" / "_root.mk_btn.mk_mark" / "_root.mk_btn.mk_txt"
-    void *mv; int made, tries, shown, hover, down, on, lbWas, press, over, slot, flashSeq; LONGLONG madeAt, slotAt;
+    void *mv; int made, tries, shown, hover, down, on, lbWas, press, over, slot, flashSeq; LONG laySeq; LONGLONG madeAt, slotAt;
 } Btn;
 static Btn g_top = { "_root.mk_btn", "_root.mk_btn.mk_mark", "_root.mk_btn.mk_txt", 0 },
            g_pb = { "_root.playback_panel_mc.mk_btn", "_root.playback_panel_mc.mk_btn.mk_mark", "_root.playback_panel_mc.mk_btn.mk_txt", 0 };
@@ -287,17 +291,19 @@ static void make(void *mv, Btn *b, int replay) {
     }
     b->made = 1; b->shown = -1;
 }
-// live: after Match speed's two buttons when they are shown (checked twice a second), else first in the row
+// live: after Match speed's two buttons when they are shown (checked twice a second), else first in the row; placed again
+// when the game lays the movies out anew (resolution, UI scale; common/topbar.h)
 static void place_top(void *mv, Btn *b, LONGLONG now) {
     if (now - b->slotAt < g_qf / 2 && b->slot >= 0) return;
     b->slotAt = now;
     int slot = gfx_exists(mv, "ms_btn") && tb_getbool(mv, "_root.ms_btn._visible") ? 2 : 0;
-    if (slot == b->slot) return;
-    double px, py, sz; tb_place(mv, g_scale, slot, g_offX, g_offY, &px, &py, &sz);
+    LONG seq = tb_layout_seq();
+    if (slot == b->slot && seq == b->laySeq) return;
+    char how[160]; double px, py, sz; tb_place(mv, g_scale, slot, g_offX, g_offY, &px, &py, &sz, how);
     gfx_setvar(mv, "_root.mk_btn._xscale", gv_num(sz / TB_BTN * 100)); gfx_setvar(mv, "_root.mk_btn._yscale", gv_num(sz / TB_BTN * 100));
     gfx_setvar(mv, "_root.mk_btn._x", gv_num(px)); gfx_setvar(mv, "_root.mk_btn._y", gv_num(py));
-    logmsg("top movie %p: mark button at %.1f,%.1f (%.1f; place %d in the row%s)", mv, px, py, sz, slot, slot ? ", after Match speed" : "");
-    b->slot = slot;
+    logmsg("top movie %p: mark button at %.1f,%.1f (%.1f; place %d in the row%s; %s)", mv, px, py, sz, slot, slot ? ", after Match speed" : "", how);
+    b->slot = slot; b->laySeq = seq;
 }
 static void drive(void *mv, Btn *b, int replay, int want) {
     LONGLONG now = qpc(); char p[128];
@@ -359,9 +365,10 @@ static void install(void) {
     int in = t && gfx_hook_slot(TB_SLOT_INPUT, TB_INPUT_FN, (void *)hk_input, (void **)&o_input);
     int pb = gfx_hook_slot(PANEL_SLOT, TB_UPD_FN, (void *)hk_panel, (void **)&o_panel);
     int m = gfx_hook_slot(MENU_VT_UPD, TB_UPD_FN, (void *)hk_menu, (void **)&o_menu);
-    logmsg("Marks %s: hotkey %s; button: live %s, replay %s; EliteAI.log %s%s", VERSION, g_hkName,
+    int lay = t && g_button ? tb_install_layout() : 3;
+    logmsg("Marks %s: hotkey %s; button: live %s%s, replay %s; EliteAI.log %s%s", VERSION, g_hkName,
            !g_button ? "off" : !t ? "NOT hooked (top movie slot differs)" : in ? "at the top" : "at the top (input slot differs)",
-           !g_replayButton ? "off" : pb ? "in the replay panel" : "NOT hooked (replay panel slot differs)", g_eliteLog ? "on" : "off",
+           lay == 3 ? "" : " (a movie's layout slot differs: its place by the game's formula)", !g_replayButton ? "off" : pb ? "in the replay panel" : "NOT hooked (replay panel slot differs)", g_eliteLog ? "on" : "off",
            !m ? " (Menu button slot differs: the hotkey only with a button movie)" : "");
 }
 

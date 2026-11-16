@@ -15,7 +15,8 @@
 // is read like everywhere else in our add-ons (GetAsyncKeyState with the game in front, the clip's _xmouse / _ymouse).
 // Several add-ons chain on both slots (gfx_hook_slot); each answers for its own buttons only.
 //
-// Layout: one row at the top left, where a replay's panel has its pause / speed buttons (an observer's own panel sits above it).
+// Layout: one row at the top left, where a replay's panel has its pause / speed buttons: just under the observer's camera panel
+// (the same movie as the replay panel, see tb_place), on the screen as that panel is - whatever the resolution and UI scale.
 // Places in the row: MatchSpeed 0, 1 (pause, speed); Marks after MatchSpeed's when those are shown, else at 0.
 #ifndef TOPBAR_H
 #define TOPBAR_H
@@ -81,14 +82,52 @@ static int tb_mouse_over(void *mv, const char *btn) {
     snprintf(p, sizeof p, "%s._ymouse", btn); if (!tb_getnum(mv, p, &y)) return 0;
     return x >= 0 && y >= 0 && x < TB_BTN && y < TB_BTN;
 }
-// the row's place on the host's stage. The game shows its full-screen HUD movies with scaleMode showAll: 1600 x 1200 fitted into
-// the window, so one stage unit = max(1600 / width, 1200 / height) pixels^-1 and the stage is centred (on 16:10 1280 x 800:
-// 1.5 units a pixel, the window's left edge at x -160 - measured with the cursor, 13.11). The movie draws only inside its stage
-// (seen: a text past the stage edge of a smaller movie is cut). The replay panel's movie has the same scale, anchored at the
-// window's top left; its pause button is at 211, 58 there (panel 202, 53 + button 9, 5). The row starts at that point - in the
-// host's units the window's top left + (211, 58) - and is kept inside the stage (an ultra-wide window: further right).
-#define TB_LEFT 211.0
+// the row's place (topbar 2, 16.11.2026). Where a HUD movie really is on the screen is the game's own layout, vtable slot 6
+// (+0x18) of its form: layout(screen w, screen h, k, &x, &y, &w, &h) - w / h come in as the movie's own stage size and go out
+// times scale = 0x00B7C130(screen h, k) = clamp(h / 1200 * uiscale * k, 0.5, 1.0) (UIScale.dll replaces that function:
+// S * k, 0.25 ... 4.0). Then
+//   resource_notifications (0x00B46BE0): 1600 x 1200 * scale, CENTRED in the window (x = (W - w) / 2, y = (H - h) / 2);
+//   playback_panel_v2      (0x00B4D950): 600 x 320 * scale, at the window's top left (0, 0) - the replay panel AND the
+//     observer's camera panel (the ^ - v < person buttons and the fog-of-war list, the row above the replay's pause / speed row;
+//     a live observer has only that row).
+// topbar 1 took the host as fitted into the window (showAll), which is true only at 800 lines without UIScale (1280 x 800:
+// scale 0.667, x = px * 1.5 - 160); at 1440p with UIScale (auto 133 %, AI tester fb 1489-1500) the host is 2133 x 1600
+// pixels centred, the row landed at the window's y -3 and the observer panel covered it (its buttons 0 ... 50 pixels).
+// Now both layouts are read where the game makes them (slot 6 of both forms, chained: the game's result is only copied), and
+// the row is put where the replay panel has its pause button - panel (211, 58), just under the observer's row - in pixels of
+// the panel's own scale, then turned into the host's units. Not laid out yet (the DLL came after): the game's formula with
+// k = 1, the panel at (0, 0) with the host's scale. The movie draws only inside its stage, so the row is kept inside it
+// (a host smaller than the window, e.g. 1440p without UIScale: 1600 x 1200 in the middle - the row goes right / down, never up).
+#define TB_LEFT 211.0                     // the replay panel's pause button in its movie (panel 202, 53 + button 9, 5)
 #define TB_TOP  58.0
+#define TB_HOST_W 1600.0                  // resource_notifications' stage
+#define TB_HOST_H 1200.0
+#define TB_SLOT_LAYOUT  (TB_FORM_VT + 0x18)
+#define TB_LAYOUT_FN    0x00B46BE0u
+#define TB_PANEL_VT     0x011119F4u
+#define TB_PANEL_LAYOUT (TB_PANEL_VT + 0x18)
+#define TB_PANEL_LAY_FN 0x00B4D950u
+typedef void (__thiscall *TbLayout_t)(char *form, int sw, int sh, float k, int *x, int *y, int *w, int *h);
+static TbLayout_t tb_oHostLay, tb_oPanelLay;
+static int tb_host[5], tb_panel[5];       // x, y, w, h in window pixels as the game laid the movie out, + its stage width; w 0 = not seen
+static volatile LONG tb_laySeq;           // +1 on every change: the row is placed again
+static int tb_in(int *w) { return !IsBadReadPtr(w, 4) ? *w : 0; }
+static void tb_keep(int *r, int w0, int *x, int *y, int *w, int *h) {
+    if (IsBadReadPtr(x, 4) || IsBadReadPtr(y, 4) || IsBadReadPtr(w, 4) || IsBadReadPtr(h, 4) || *w <= 0 || *h <= 0 || w0 <= 0) return;
+    if (r[0] != *x || r[1] != *y || r[2] != *w || r[3] != *h || r[4] != w0) { r[0] = *x; r[1] = *y; r[2] = *w; r[3] = *h; r[4] = w0; InterlockedIncrement(&tb_laySeq); }
+}
+static void __thiscall tb_hk_host_lay(char *f, int sw, int sh, float k, int *x, int *y, int *w, int *h) {
+    int w0 = tb_in(w); tb_oHostLay(f, sw, sh, k, x, y, w, h); tb_keep(tb_host, w0, x, y, w, h);
+}
+static void __thiscall tb_hk_panel_lay(char *f, int sw, int sh, float k, int *x, int *y, int *w, int *h) {
+    int w0 = tb_in(w); tb_oPanelLay(f, sw, sh, k, x, y, w, h); tb_keep(tb_panel, w0, x, y, w, h);
+}
+// hook both layouts (each add-on with the row: chained, gfx_hook_slot); 1 = host's, 2 = panel's
+static int tb_install_layout(void) {
+    return gfx_hook_slot(TB_SLOT_LAYOUT, TB_LAYOUT_FN, (void *)tb_hk_host_lay, (void **)&tb_oHostLay)
+         | gfx_hook_slot(TB_PANEL_LAYOUT, TB_PANEL_LAY_FN, (void *)tb_hk_panel_lay, (void **)&tb_oPanelLay) << 1;
+}
+static LONG tb_layout_seq(void) { return tb_laySeq; }
 static HWND g_tbWnd;
 static BOOL CALLBACK tb_enum(HWND h, LPARAM lp) {
     DWORD pid = 0; GetWindowThreadProcessId(h, &pid); RECT r;
@@ -101,15 +140,24 @@ static int tb_client(LONG *w, LONG *h) {
     if (!g_tbWnd || !GetClientRect(g_tbWnd, &r) || r.right < 200 || r.bottom < 200) return 0;
     *w = r.right; *h = r.bottom; return 1;
 }
-// scale % of the 40 x 40 texture (100 = the replay panel's own size), slot = place in the row
-static void tb_place(void *mv, double scale, int slot, double offX, double offY, double *px, double *py, double *sz) {
+// scale % of the 40 x 40 texture (100 = the replay panel's own size), slot = place in the row; px / py / sz in the host's units;
+// how (may be NULL, 160 bytes) = what the place came from, for the log
+static void tb_place(void *mv, double scale, int slot, double offX, double offY, double *px, double *py, double *sz, char *how) {
     (void)mv;
-    LONG w = 1280, h = 800; tb_client(&w, &h);
-    double u = 1600.0 / w > 1200.0 / h ? 1600.0 / w : 1200.0 / h, x0 = 800 - w * u / 2, y0 = 600 - h * u / 2;
-    *sz = TB_BTN * scale / 100;
-    double x = x0 + TB_LEFT, y = y0 + TB_TOP;
+    double hx, hy, hs, pX = 0, pY = 0, ps; const char *src;
+    if (tb_host[2] > 0) { hx = tb_host[0]; hy = tb_host[1]; hs = (double)tb_host[2] / tb_host[4]; src = "laid out"; }
+    else {                                   // the game's formula with k = 1 (without UIScale)
+        LONG w = 1280, h = 800; tb_client(&w, &h);
+        hs = h / 1200.0; if (hs < 0.5) hs = 0.5; if (hs > 1.0) hs = 1.0;
+        hx = (w - TB_HOST_W * hs) / 2; hy = (h - TB_HOST_H * hs) / 2; src = "game formula";
+    }
+    if (tb_panel[2] > 0) { pX = tb_panel[0]; pY = tb_panel[1]; ps = (double)tb_panel[2] / tb_panel[4]; } else ps = hs;
+    *sz = TB_BTN * scale / 100 * ps / hs;    // the replay panel's button size on the screen
+    double x = (pX + TB_LEFT * ps - hx) / hs, y = (pY + TB_TOP * ps - hy) / hs;
     if (x < 4) x = 4; if (y < 4) y = 4;
     *px = x + slot * *sz * (1 + TB_GAP) + offX;
     *py = y + offY;
+    if (how) snprintf(how, 160, "host %s %.0f,%.0f x%.3f (stage %d), panel %s %.0f,%.0f x%.3f (stage %d)", src, hx, hy, hs, tb_host[4],
+                      tb_panel[2] > 0 ? "laid out" : "as host", pX, pY, ps, tb_panel[4]);
 }
 #endif
