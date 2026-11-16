@@ -452,9 +452,18 @@ static void (__stdcall *p_pushinteger)(void *L, int n);
 static int (__stdcall *p_tointeger)(void *L, int idx);
 static int g_cmdState;                           // 0 not looked at, 1 usable, -1 not usable (the reason is in the log once)
 static long g_cmdSent, g_cmdRefused;
+// 0.18: relabel() asks it too, from the thread that draws the lobby - the first answer is worked out once, under g_lk, so a
+// second thread never sees a state half set (cmd_probe only answers; g_cmdState is written once, here). Nothing here depends on the game's state: SimEngine.dll
+// is an import of DOW2.exe (loaded before this DLL), its exports, the exe's bytes and the Lua calls (DllMain) are there from
+// the start - so the answer in a lobby is the answer the match gets.
+static int cmd_probe(void);
 static int cmd_ready(void) {
     if (g_cmdState) return g_cmdState > 0;
-    HMODULE se = GetModuleHandleA("SimEngine.dll"); g_cmdState = -1;
+    EnterCriticalSection(&g_lk); if (!g_cmdState) g_cmdState = cmd_probe() ? 1 : -1; LeaveCriticalSection(&g_lk);
+    return g_cmdState > 0;
+}
+static int cmd_probe(void) {
+    HMODULE se = GetModuleHandleA("SimEngine.dll");
     if (!se) { logmsg("NET cmd: SimEngine.dll not loaded"); return 0; }
     p_wdcSquad = (WdcObj)GetProcAddress(se, "?WorldDoCommandSquad@@YGPAVWorldCommand@@K_NPBVPlayer@@PBVSquad@@@Z");
     p_wdcEntity = (WdcObj)GetProcAddress(se, "?WorldDoCommandEntity@@YGPAVWorldCommand@@K_NPBVPlayer@@PBVEntity@@@Z");
@@ -465,7 +474,7 @@ static int cmd_ready(void) {
     if (IsBadReadPtr((void *)FN_AIP_GETLOCAL, 16) || memcmp((void *)FN_AIP_GETLOCAL, AIP_GETLOCAL_BYTES, 16)) {
         logmsg("NET cmd: DOW2.exe differs at %08X (not 3.19.10320) - the orders stay on the SCAR path", FN_AIP_GETLOCAL); return 0; }
     if (!p_pushinteger || !p_tointeger) { logmsg("NET cmd: no lua_pushinteger / lua_tointeger"); return 0; }
-    g_cmdState = 1; logmsg("NET cmd: ready (the AI player's orders go as network commands: WorldDoCommand* + CommandProxy::DoCommand)");
+    logmsg("NET cmd: ready (the AI player's orders go as network commands: WorldDoCommand* + CommandProxy::DoCommand)");
     return 1;
 }
 // ---- 0.16: MULTIPLAYER (the owner, 14.11.2026: the new AI may be tried in network games) ---------------------------------
@@ -534,11 +543,33 @@ static void mp_watch(int pid) {                  // a network match: has the eng
       snprintf(h, sizeof h, "MP: AI player %d is %s (world tick %d)", pid, c == 1 ? "COMPUTED BY THIS STATION - the new AI orders for it" : c == 0 ? "computed by another station - nothing is ordered for it here" : "in no slot - nothing is ordered for it", w ? *(int *)((char *)w + 0x178) : -1);
       mp_slots_line(h); }
 }
+// 0.18: WHO COMPUTES WHICH COMPUTER, in plain words, on EVERY station of a network match - also one that computes none, or has
+// the new AI off (until 0.17 only a station that computed a computer AND ran the new AI wrote the slot table, so a computer
+// left to a station without the new AI was seen nowhere). Written at the match's first SCAR script (load_hook; the AI players
+// are made after it, so this is the slot table's owner - the station the engine makes each AI on) and again by a station that
+// gets an AI script of ours, in its new log of the match (mp_match_line). Slot types (logs of 15.11): 0 a human here, 3 a
+// human elsewhere, 1 a computer simulated here, 4 a computer simulated elsewhere, 7 empty. Reads only; integers and compares.
+static void mp_who_line(const char *when) {
+    MpSlot s[16]; unsigned lo, hi; int n = mp_slots(s, 16, &lo, &hi); char b[1000]; int k = 0, ai = 0; b[0] = 0;
+    int on = mp_on() && cmd_ready();
+    for (int i = 0; i < n && k < (int)sizeof b - 160; i++) {
+        if (s[i].type != 1 && s[i].type != 4) continue;
+        int here = s[i].lo == lo && s[i].hi == hi && !(lo == 0xFFFFFFFF && hi == 0xFFFFFFFF), by = -1; ai++;
+        for (int j = 0; j < n; j++) if (j != i && s[j].type != 1 && s[j].type != 4 && s[j].type != 7 && s[j].pid && s[j].lo == s[i].lo && s[j].hi == s[i].hi) { by = s[j].pid; break; }
+        k += snprintf(b + k, sizeof b - k, " [computer player %d team %d -> station %08X%08X (%s", s[i].pid, s[i].team, s[i].hi, s[i].lo, here ? "THIS station" : "another station");
+        if (by >= 0) k += snprintf(b + k, sizeof b - k, ", the station of human player %d", by);
+        else k += snprintf(b + k, sizeof b - k, ", no human slot of that station");
+        k += snprintf(b + k, sizeof b - k, ")%s]", here ? (on ? ": the NEW AI plays it" : ": Elite's AI plays it - the new AI is off here") : "");
+    }
+    logmsg("MP match start: who computes the computers (%s; game type %lX; this station %08X%08X, the new AI here %s):%s%s", when, game_type(), hi, lo,
+           on ? "ON" : !mp_on() ? "OFF ([EliteAI] Multiplayer=0)" : "OFF (no network commands with this exe)", ai ? b : " no computer in the slots", ai ? "; a computer on another station plays the AI of THAT station's EliteAI (the new AI only if it has it on)" : "");
+}
 static void mp_match_line(int fresh) {           // an AI script of ours is given in a network match: the engine makes an AI here
     cmd_ready();
     void *w = (p_gWorld && *p_gWorld && !IsBadReadPtr(*p_gWorld, 0x17C)) ? *p_gWorld : NULL; int tick = w ? *(int *)((char *)w + 0x178) : -1; char h[400];
     if (fresh) { memset(g_mpSeen, 0, sizeof g_mpSeen);
         snprintf(h, sizeof h, "MP: a NETWORK match with the new AI (game type %lX, world tick %d): this station computes computer players - their orders go to every station as network commands; OTHER STATIONS NEED MoveLoopFix (Melee freeze fix) or this add-on: without it a client can hang in the engine's melee freeze where this machine does not. [EliteAI] Multiplayer=0 turns this off", game_type(), tick);
+        mp_who_line("this station's log of the match");   // 0.18: the line of the first SCAR script went into the log before the rotation
     } else snprintf(h, sizeof h, "MP: the engine makes an AI player on this station (world tick %d%s)", tick, tick > 600 ? ": mid-match - the AI simulation MIGRATED here, the new AI takes it over" : "");
     mp_slots_line(h);
 }
@@ -739,7 +770,18 @@ static int __stdcall load_hook(void *L, LuaReader reader, void *data, const char
         char b[400]; int n = 0;                        // are made; any game type) - no retreat lock of the match before outlives it
                                                        // (0.17: or an AI player is made mid-match - retlock.h ret_scar_load)
         for (const char *s = chunkname; *s && n < 398; s++) b[n++] = (*s == '/') ? '\\' : (char)tolower((unsigned char)*s);
-        b[n] = 0; if (strstr(b, "simulation\\scar\\")) ret_scar_load();   // 0.17: a new match only (a migration keeps the locks)
+        b[n] = 0; if (strstr(b, "simulation\\scar\\")) { ret_scar_load();   // 0.17: a new match only (a migration keeps the locks)
+            // 0.18: every station of a network match says who computes each computer - once per burst of SCAR loads (a match's
+            // start; the engine loads SCAR again when it makes an AI player mid-match = a migration). The wall clock only picks
+            // when the LOG line is written.
+            static DWORD lastScar; DWORD now = GetTickCount();
+            if (mp_game() && (!lastScar || now - lastScar > LOG_MATCH_GAP_MS)) {
+                cmd_ready();                                 // (p_gWorld for the tick; it only looks at the exe)
+                void *w = (p_gWorld && *p_gWorld && !IsBadReadPtr(*p_gWorld, 0x17C)) ? *p_gWorld : NULL; int tick = w ? *(int *)((char *)w + 0x178) : -1;
+                mp_who_line(tick > 600 ? "a SCAR script mid-match: an AI player is made again, e.g. a migration" : "the match's first SCAR script");
+            }
+            lastScar = now ? now : 1;
+        }
     }
     // 0.16: a network match is in too (see MULTIPLAYER above) - unless [EliteAI] Multiplayer=0, or the engine calls of
     // eliteai_cmd are not there (another exe: the orders would have to go through SCAR, on this machine only)
@@ -834,7 +876,14 @@ static GetStrV o_getv; static GetStrB o_getb; static ConvId o_conv; static LsAss
 static void relabel(int id, LocString *ls) {
     const wchar_t *w = NULL; int v;
     if (id >= 555026 && id <= 555028) v = id - 555026; else if (id >= 555035 && id <= 555037) v = id - 555035; else return;
-    if (!single_player()) return;                    // online lobbies: Elite's AI - no "new AI" label
+    // 0.18 (fb 1370/1374/1379/1381/1389, COOP_RESET_RU.md): a NETWORK lobby gets the label too. Until 0.17 a second human in
+    // a custom lobby made the game type a network one and the labels fell back to "Hard Computer" (back again when he left),
+    // though 0.16 plays the new AI in network matches. The test is load_hook's own for a network match - mp_game() the type
+    // (the lobby has it already: Malum's "Start game" button), mp_on() EliteAI.ini, cmd_ready() the exe's engine calls
+    // (nothing of the match's state: true in the lobby iff it will be true at the match's start) - so the label shows exactly
+    // where a computer this station computes plays the new AI. The label is this machine's only; who computes which
+    // computer is in the log at the match's start ("MP match start: who computes the computers").
+    if (!single_player() && !(mp_game() && mp_on() && cmd_ready())) return;
     const wchar_t *orig = p_cstr(ls, NULL); int ru = 0;
     for (const wchar_t *c = orig; c && *c; c++) if (*c >= 0x400 && *c < 0x500) { ru = 1; break; }
     static const wchar_t *add_en[3] = { L"Add NEW AI A", L"Add NEW AI B", L"Add NEW AI C" };
@@ -1040,7 +1089,7 @@ typedef struct { wchar_t host[64]; volatile LONG refs; volatile int ok; volatile
 static void rp_unref(RpProbe *p) { if (!InterlockedDecrement(&p->refs)) free(p); }
 static DWORD WINAPI rp_probe(LPVOID a) {                    // GET /replay/api/by_lobby/<x>: the site answers "{}" (404) at once
     RpProbe *p = a; DWORD t0 = GetTickCount(), code = 0, sz = sizeof code, m; char out[64]; int n = 0;
-    HINTERNET s = WinHttpOpen(L"EliteAI/0.17", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, NULL, NULL, 0);
+    HINTERNET s = WinHttpOpen(L"EliteAI/0.18", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, NULL, NULL, 0);
     if (s) {
         WinHttpSetTimeouts(s, RP_CHECK_MS, RP_CHECK_MS, RP_CHECK_MS, RP_CHECK_MS);
         HINTERNET c = WinHttpConnect(s, p->host, INTERNET_DEFAULT_HTTPS_PORT, 0);
@@ -1058,7 +1107,7 @@ static DWORD WINAPI rp_probe(LPVOID a) {                    // GET /replay/api/b
 static DWORD rp_post(const wchar_t *host, const char *buf, DWORD size, const char *fname, char *out, int cap, DWORD tmoRecv) {
     wchar_t hdr[400]; _snwprintf(hdr, 400, L"Content-Type: application/octet-stream\r\nX-Filename: %hs\r\nX-Lobby: newai\r\n", fname);
     DWORD code = 0, sz = sizeof code, m; int n = 0; out[0] = 0;
-    HINTERNET s = WinHttpOpen(L"EliteAI/0.17", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, NULL, NULL, 0); if (!s) return 0;
+    HINTERNET s = WinHttpOpen(L"EliteAI/0.18", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, NULL, NULL, 0); if (!s) return 0;
     WinHttpSetTimeouts(s, 4000, 4000, 30000, (int)tmoRecv);       // the site parses the replay before it answers
     HINTERNET c = WinHttpConnect(s, host, INTERNET_DEFAULT_HTTPS_PORT, 0);
     HINTERNET r = c ? WinHttpOpenRequest(c, L"POST", L"/replay/api/upload", NULL, NULL, NULL, WINHTTP_FLAG_SECURE) : NULL;
@@ -1212,7 +1261,7 @@ BOOL WINAPI DllMain(HINSTANCE h, DWORD reason, LPVOID _) {
     GetModuleFileNameW(NULL, g_dir, MAX_PATH); wchar_t *s = wcsrchr(g_dir, L'\\'); if (s) wcscpy(s + 1, L"Elite_DLLs\\");
     _snwprintf(g_ini, MAX_PATH, L"%lsEliteAI.ini", g_dir);
     g_verbose = GetPrivateProfileIntW(L"EliteAI", L"Verbose", 0, g_ini);
-    logmsg("EliteAI 0.17 start (single player, and network matches for the computers this station computes; a log per match of the new AI: EliteAI.log, the match before in EliteAI.prev.log; the AI's lines around each mark of Marks.dll: EliteAI.marks.log), hook %s", install() ? "installed" : "NOT installed");
+    logmsg("EliteAI 0.18 start (single player, and network matches for the computers this station computes - the lobby labels too; a log per match of the new AI: EliteAI.log, the match before in EliteAI.prev.log; the AI's lines around each mark of Marks.dll: EliteAI.marks.log), hook %s", install() ? "installed" : "NOT installed");
     install_labels();
     int mg = mlg_install();
     logmsg("move loop guard (DOW2.exe 009141A0 / 009144F3): %s", mg == 1 ? "installed" : mg == 0 ? "MoveLoopFix.dll is active, not needed"

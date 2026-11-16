@@ -516,6 +516,9 @@ frameprobe/ - FrameProbe.dll (off), eliteai/ - EliteAI.dll (store id newai since
       within 45 m not counted, verifier M1), first wargear / turret early; orks: painboy (ability 79), trukk with slugga riders
       (netorder.ai modes 19 / 20), reviving an ally's hero (mode 21), the nest of setup teams. EliteAI.dll 0.17 unchanged. Other races
       still newai-23.1.
+    newai-34 (0.2.104): EliteAI.dll 0.18 (eliteai branch newai-34): the "NEW AI A/B/C" lobby labels also in network lobbies (the
+      test of load_hook for a network match: mp_game() && mp_on() && cmd_ready()), and a match-start line on every station of a
+      network match: who computes each computer. Brain and Lua as newai-33.
 
 ## Building
 

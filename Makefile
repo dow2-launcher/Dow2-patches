@@ -93,6 +93,7 @@ clean:
 # EliteAI 0.14 (14.11.2026): one log per match of the new AI (rotation only when such a match starts), no build change
 # EliteAI 0.16 (14.11.2026): network commands of the AI player (eliteai_cmd), the retreat lock (eliteai/retlock.h), network matches
 # EliteAI 0.17 (15.11.2026): the AI's lines around each mark of Marks 2 (export EliteAI_Mark, EliteAI.marks.log), no build change
+# EliteAI 0.18 (16.11.2026): the new AI's lobby labels in network lobbies, who computes each computer in the log, no build change
 $(OUT)/EliteAI.dll: eliteai/eliteai.c eliteai/moveloop_guard.h eliteai/retlock.h | $(OUT)
 	$(CC) $(CFLAGS) -shared -o $@ $< -lwinhttp -lshell32 -static-libgcc
 
