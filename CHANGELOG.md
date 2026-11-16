@@ -4,6 +4,35 @@ Every version gets an entry here before it reaches `main`. CI then tags `vX.Y.Z`
 version (`X.Y.0`) it also publishes a GitHub Release with the DLLs and the entries since the previous `X.Y.0`.
 The version of the set lives only in `VERSION`; each DLL still writes its own version to its log.
 
+## 0.2.103 — 2026-11-16
+MMFind 0.53 (Automatch v2.0; hand release: store automatch mmfind-0.53 = the live package mmfind-0.51 with this MMFind.dll) = the
+released MMFind 0.52 (seamless walk, PR #130) + the launcher-room observer seats of draft PR #129 (built on 0.51 and numbered 0.52
+there; ported onto 0.52, conflicts only in the header, the status line and the ini reads) + SirItos' fix for an observer dropped
+while loading. Reports: reports/siritos_1116/OBSERVERS_RU.md, OBSERVERS_TECH_RU.md (the seats), OBSERVERS_053_RU.md (this version).
+- Observer seats (as #129): every 0.53 game puts a slot of team >= 2 on its side in its own GameInfo copy (0x4464C5); the host moves
+  the empty observer seats to their side before the countdown (0x4491B3), holds it while a player's seat is empty and never sends a
+  start that would break GameInfo (0x4491E7); mm/native "obs_seats":2, status "room_obs" true only with all four patches in;
+  [MMFind] RoomObservers on by default (inert without "obs" / "watch" in the tickets and the ladder's flag). The ladder lets an
+  observer in only when every game of the match says obs_seats (dow2-ladder draft PR #21; the released 0.52 does not say it).
+- An observer the host dropped while the match loaded (late: the players' games wait ~35 s, then drop him) stayed on "Waiting for
+  players" until he closed the game: his session is gone, the loading ends ("SetLocalLoadingDone - Local user not found"), GameObj's
+  frame 0x4240F5 keeps the load panel for ever (+0x19C, no turn will come). 0.53: a launcher-room observer (either path, never a
+  player) whose match has loaded (GameObj+4 -> +0x34 == 5) with the load panel up and whose match session is gone (the match's
+  MatchInfo can no longer be copied) for 3 s leaves the match the way the game's own "end the game" does (OnQuitForSteamFinal
+  0x427289: LeaveMatchAndParty 0x464E35, GameApp 0x40F255) with the end state 0xF (GameApp+0xF78): the front end shows the main
+  menu with the game's own notice "Host Disconnected - The host has disconnected. You will now be returned to the Main Menu."
+  (0x45A54B case 2; every language). Pipe: failed reason "dropped_loading" (after "loading"). Every address is checked first.
+- Not in this DLL: "Waiting for <observer> / Don't wait" for ~3 min at the players when an observer leaves mid-match is the relay
+  server's (battle_relay keeps any leaver 170 s as "away") - dow2-ladder draft PR #24, not deployed.
+- Stands 16.11 (stand 1 + stand 2, two Steam accounts, Wine, test ladder with dow2-ladder #21 + test lobby; ObsTestAI fills the
+  missing second player with a computer): room 1v1 host + player + an empty observer seat (the 15.11 crash case), seamless with
+  go_at - loads, plays, result; host + AI + a live observer - he sits in his seat, observer view, no desync, his leave mid-match does
+  not stop the game (the relay's "Waiting for" shows, as expected before #24); the observer's game stopped 60 s after the start -
+  the host drops him and plays on, the observer finishes loading and 3 s later leaves by himself: failed dropped_loading, the main
+  menu with "Host Disconnected"; the next room right after (that notice still up) - seamless, loads, plays; cancel inside the
+  transition - box closed, main menu; plain automatch by mouse - no box, loads, plays; SeamlessWalk=0 on stand 2 - mixed room loads.
+  No OUTOFSYNC / FATAL, no new syncerror files. Not tested: three live accounts, 2v2/3v3, Windows.
+
 ## 0.2.102 — 2026-11-16
 MMFind 0.52 (Automatch v2.0; hand release: store automatch mmfind-0.52 = the live package mmfind-0.51 with this MMFind.dll): the
 seamless walk of a launcher room's start (siritos, variant A of the report siritos_1115 SEAMLESS_JOIN; stage 2 - straight to the
