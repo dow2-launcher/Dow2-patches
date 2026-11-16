@@ -4,6 +4,31 @@ Every version gets an entry here before it reaches `main`. CI then tags `vX.Y.Z`
 version (`X.Y.0`) it also publishes a GitHub Release with the DLLs and the entries since the previous `X.Y.0`.
 The version of the set lives only in `VERSION`; each DLL still writes its own version to its log.
 
+## 0.2.99 — 2026-11-16
+New AI 32 (store newai-32, experiment, off by default, Elite only): step 12 of the ORKS - the owner's doctrine (build order by tiers,
+"a killed squad is not bought again", tactics against setup teams, the weirdboy, kommandos). The owner: "give the testers everything".
+EliteAI.dll 0.17 unchanged. The space marines play as newai-31; every other race still newai-23.1.
+eliteai branch newai-32 a858a2d = brain-32 cb98c4e (brain-sm a2e3ad3 = newai-31's brain + merge of brain-s12 43a34dd, step 12 / brain 0.12,
++ the verifier's two fixes: 6bbf666 the marines keep newai-31's values of step 12's four common rules via Brain.RACE_NUM.space_marines,
+cb98c4e the mek called to a fight as support gets no order while its teleport goes off) with main.ai, mechanics.ai and the vanilla-base
+sources of strategy_tech_purchase.ai / strategy_unit_purchase.ai of newai-31 bee001c (= newai-30 d73d786), as newai-24 .. 31;
+dispatchers rebuilt by tools/vanilla_dispatch.py, [Lua] Brain_Races default "orks,space_marines" kept. a2e3ad3..cb98c4e did not touch
+main.ai, mechanics.ai or the vanilla-base sources. Served files differing from newai-31: default.ai (the brain: mod/brain/45_doctrine.ai,
+75_tactics.ai, netorder.ai abilities 74-78) and append/scar/elite/elite.scar (+6 lines: the ork abilities 74-78).
+- Orks (45_doctrine.ai, 75_tactics.ai; Brain_Doctrine=0 / Brain_Tactics=0 return step 11): T1 two shootas + lootas, few upgrades and
+  T2 at 360 s while calm; T2 tankbustas vs vehicles, stikkbommaz vs >= 2 setup teams, else a weirdboy; T3 tank -> nobz -> battlewagon;
+  a killed squad type is scored x0.02 (DocLost); tactics vs setup teams with >= 2 of our squads near: kommando nob infiltrate + stun
+  grenade + melee, mek teleport (ability 74) behind the setup, deff dread charge, weirdboy Warp Vomit / Warpath behind the boyz,
+  shoota kommandos Luv da Dakka (77, 5 red) and smoke (78); second-node generators (EconGenNode, orks only); step 11 verifier's three
+  notes (EconUpgEach, CapLostMaxD / CapLostCoreFight, CapRazeDone). Off by default: DocTrukk (step 13), DocT2Above, DocRoomRefill.
+- Check (independent verifier, newai_1110/VERIFY_12_RU.md: READY WITH NOTES): orks after the merge byte for byte as brain-s12 (15 control
+  scenes, 12+12 mass-setup scenes, 31 single scenes); marines after 6bbf666 as newai-31; scen_r12 seeds 0-2: ahead 18 of 36 (author 20,
+  noise of the old layer), squads lost 37 : 151; 0 Lua errors in 512 scenes and games; 10 recordings play back with every CRC equal (9 to
+  the end, 1 to the bench watchdog). Stub 267 PASS, 0 FAIL on the release tree.
+- Notes (not blocking): an unexecuted mek teleport still starts the melee phase (the mek walks alone to the setup for 12 s); Warpath
+  "off" can be eaten by the order book; the nob's walk-up timer is not reset after a good grenade; the "calm" T1 in team games compares
+  the whole enemy team with one player (early T2 mostly 1v1 only); the ork brain loses to the marine brain 0 : 3.
+
 ## 0.2.98 — 2026-11-16
 ParallelDraw 4 (store paralleldraw_r2 -> paralleldraw-4; experiment, off by default, Elite + vanilla). The crash of 16.11 01:33 MSK
 (Ligt, log package 20261115-233434-92fbdb, 3v3 6p_hades_wastes_redux, ~9 min of game): three EXCEPTION C0000005 on the workers at
