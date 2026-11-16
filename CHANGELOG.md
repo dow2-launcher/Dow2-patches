@@ -4,6 +4,32 @@ Every version gets an entry here before it reaches `main`. CI then tags `vX.Y.Z`
 version (`X.Y.0`) it also publishes a GitHub Release with the DLLs and the entries since the previous `X.Y.0`.
 The version of the set lives only in `VERSION`; each DLL still writes its own version to its log.
 
+## 0.2.104 — 2026-11-16
+New AI 34 (store newai-34, experiment, off by default, Elite only): EliteAI.dll 0.18 - the "NEW AI A/B/C" lobby labels stay in
+network lobbies, and every station of a network match logs who computes each computer. The brain and every Lua file served are
+byte-equal to newai-33 (57 of 57 served files compared with eliteai newai-34 HEAD; eliteai c70089a..47b4ceb touches only
+dll/eliteai.c, a new test and HANDOFF.md).
+eliteai branch newai-34 47b4ceb = newai-33 c70089a + EliteAI.dll 0.18.
+- Testers fb 1370 / 1374 / 1379 / 1381 / 1389 (analysis newai_1110/COOP_RESET_RU.md): with a second human in a custom lobby the
+  computer slots read "Hard Computer" again and "NEW AI C" came back when he left. The slot's difficulty never changed - the game type
+  becomes a network one and relabel() returned at `if (!single_player())`, left from 0.7; 0.16 let the new AI into network matches
+  but not the labels. Now `if (!single_player() && !(mp_game() && mp_on() && cmd_ready())) return;` - load_hook's own test for a
+  network match. mp_game() is the game type (already network in a lobby with two humans), mp_on() [EliteAI] Multiplayer, cmd_ready()
+  only SimEngine.dll's exports (an import of DOW2.exe, loaded before the DLL), the exe's bytes and the Lua calls set in DllMain - none
+  of it depends on the match, so the label shows in a lobby exactly where a computer computed by this station will play the new AI.
+  cmd_ready() is worked out once under the log lock (cmd_probe), since the lobby's thread asks it too; "NET cmd: ready" is now written
+  at the first network lobby instead of the match start.
+- New line `MP match start: who computes the computers (...)` on every station of a network match - also one that computes none or
+  has the new AI off (until 0.17 only a station running the new AI for a computer wrote the slot table): per computer slot its
+  station, THIS / another station, the human slot of that station (or none: an observer), and here whether the new AI or Elite's AI
+  plays it. Written at the match's first SCAR script (once per burst of loads; again mid-match when an AI player is made anew = a
+  migration) and again in the new match log of a station that computes a computer. Reads only; integers and compares.
+- Check: test/lobby_label_test.c (eliteai.c against a faked slot table, MinGW + Wine) 19 PASS, with Multiplayer=0 17 PASS; retlock
+  24, marks 23, replay_brain 8 PASS. Built with this Makefile's flags: 32-bit PE, no warning. Fastbench, the release tree with
+  DLL 0.18 (n34_bbtm, bb_kom_tm_paletoothgor, brain vs brain 0:05 .. game over 16:33): 'EliteAI 0.18 start', the slot line, BR INIT for
+  both, 0 Lua errors, the 2373 BR ORD lines byte-equal to newai-33's n33_bbtm (DLL 0.17). Not checked on a stand - no live lobby
+  (single player or network) seen with 0.18.
+
 ## 0.2.103 — 2026-11-16
 MMFind 0.53 (Automatch v2.0; hand release: store automatch mmfind-0.53 = the live package mmfind-0.51 with this MMFind.dll) = the
 released MMFind 0.52 (seamless walk, PR #130) + the launcher-room observer seats of draft PR #129 (built on 0.51 and numbered 0.52
