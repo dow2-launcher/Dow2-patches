@@ -53,6 +53,19 @@
 //   into the room's match as a watcher of team = number of teams; the host's MMFind ("obs": K in its ticket) builds the AUTOMATCH
 //   room with K observer seats of their own team (the slot builder call 0x5FC922, research 04.11 lm7/lm8). Not verified with
 //   2-3 accounts - see the report siritos_1114c.
+//
+// 0.52 (16.11.2026, siritos: variant A of the report siritos_1115 SEAMLESS_JOIN): the seamless walk of a launcher room's start.
+// The main menu's Find a Game button (MainMenuForm::OnClickMatchMaking 0x473A18) is the only step of the walk a message box
+// blocks; MMFind now does what that button does by a direct call - the game's own WaitForMatchMakingTransition (hosts the
+// player's party, then switches to Find a Game), run by OUR "Connecting" box: the box is up from the launcher's command (main
+// menu) to the loading screen, Find a Game, the army and Start Searching happen under it (their handlers never look at boxes).
+// From Start Searching on it is the native automatch path of 0.51; a search the player starts himself is unchanged.
+// - Only when the code is 3.19's (the transition, its vtables, the box call, the RLink sign-in check), the game is signed in to
+//   the lobby service (a cold start waits for it) and the account may go online (0x470FA7 = 0; else the game would ask its
+//   "Play against CPU?"): otherwise the 0.51 walk (menu commands, the box from Start Searching), with a log line.
+// - [MMFind] SeamlessWalk=0: the 0.51 walk always. The status line says "seamless":true when the seamless walk is on and the
+//   code matched. New failed reason "walk_failed": the game could not open Find a Game (its party; it shows its own error).
+// - Events unchanged: accepted -> walking -> army -> (armed) -> searching -> matched -> in_room -> loading, or failed.
 // Hooks: Invoke 0x45DB6C (engine -> Flash, to read lists and to show our status), fscommand handler 0x681AB0 (Flash -> engine, to
 // catch the button and to send menu commands), Shark.dll shark::update (main-thread tick).
 #ifndef _WIN32_WINNT
@@ -229,8 +242,8 @@ static char g_natLobby[48], g_natWhy[96], g_natLastCancel[32];
 // what to do, "MMFind 0.45", the queue and who is online. Shown from the moment the screen opens (a peek at mm/native: the ladder
 // answers as for Start Searching and changes nothing; again every 20 s and on a match type change while the screen is open), after
 // the click by what really happened. [MMFind] ShowMode=1 (default) / 0 = off, Lang=auto (the game's own text: Cyrillic = Russian) / ru / en.
-#define MMF_VER "0.51"
-#define MMF_VER_W L"0.51"
+#define MMF_VER "0.52"
+#define MMF_VER_W L"0.52"
 static int g_showMode = 1, g_langCfg = -1, g_lang = -1, g_modeProbe;
 static double g_mx = 1065, g_my = 590, g_msz = 30;           // panel units, see mode_make
 static volatile int g_peekWant, g_peekAns; static volatile DWORD g_peekLast; static char g_peekWhy[96];
@@ -1291,6 +1304,141 @@ static int game_boxes(int close, const char *why) {
     for (int i = 0; i < n && i < 8; i++) if (ids[i] != connbox_id) { k++; if (close) connbox_close_id(ids[i], why); }
     return k;
 }
+// ---------------- 0.52: the seamless walk - Find a Game under the Connecting box (report siritos_1115 SEAMLESS_JOIN, variant A) ----------------
+// MainMenuForm::OnClickMatchMaking (0x473A18) is the ONLY step of the walk that a message box blocks: it returns at once when the
+// manager lists any box ("ignored. There is a message box."); Find a Game's own handlers (OnClickStart 0x476358, OnSelectDropDownItem
+// 0x47783A, OnClickBack 0x4760B0) and the hero panel's (OnSelectHero 0x4889C2, OnClickAccept 0x488AED ...) never look at boxes.
+// Past the check the button does three things (0x473A56..0x473B36): 0x470FA7 (0 = may go online; 1/2 = its "Play against CPU?"-like
+// question instead), new WaitForMatchMakingTransition (0xC bytes, ctor 0x471809 stdcall(obj); it turns the mouse off until the
+// transition is complete) and a message box that RUNS that object (0xAD6020 stdcall(mgr, &title, &text, 0, 0, proc, 0, 0) -> box
+// id; the manager calls proc->vtbl[1] every frame as thiscall(proc, box id) with ret 4, a 3 closes the box and deletes proc through
+// vtbl[0]). The object hosts the player's party (advertisement/host SESSION_MATCH_KEY; its RLink listener at obj+4 gets the answer),
+// keeps the party's id (0x47F4C5 -> 0x12BD840) and switches the front end to "matchmaking" (Find a Game).
+// The game's own box says 562070 "Please wait..."; ours says 550001/550002 (as connbox.h) and its process is the same object with
+// its vtable copied and slot 1 ours: the object's tick until Find a Game is up, then the box STAYS (returns 0) until MMFind closes it
+// (the match loads / the start is over) - one box from the launcher's command to the loading screen.
+// Stand 15.11 (prototype 0.51-seam): run2 - a tick without the box-id argument crashed the game (EIP 0); run3 - the listener took the
+// AUTOMATCH room's own "hosting done" too and switched to "matchmaking" again inside the match's room: ours passes events on only
+// while the party is being hosted, and only for the current object.
+#define SEAM_FN_NEW     0x00DAA9B6        // operator new (cdecl, the import thunk)
+#define SEAM_FN_CTOR    0x00471809        // WaitForMatchMakingTransition::ctor, stdcall(obj) -> obj
+#define SEAM_FN_TICK    0x004718C0        // its tick, thiscall(obj, box id), ret 4: 0 go on, 3 done (state 2 = success, 3 = failure)
+#define SEAM_FN_LISTEN  0x00471C29        // its RLink listener, stdcall(listener, event), ret 8
+#define SEAM_FN_ONLINE  0x00470FA7        // may this account go online (cdecl): 0 yes
+#define SEAM_FN_BOX     0x00AD6020        // the message box with a process
+#define SEAM_FN_LEADER  0x005FC270        // WorldwideAutomatchService::IsPartyLeader - only for the code check of the sign-in call
+#define SEAM_VT         0x01094C84        // the object's vtable {0x471CE9 dtor, 0x4718C0 tick}
+#define SEAM_LVT        0x01094C90        // its listener's vtable {0x4752E5, 0x471C29}
+#define SEAM_MOUSE      0x01335088        // [this]+0x15: mouse input on (the ctor turns it off, the transition's end turns it on)
+static int g_seamCfg = 1;                 // [MMFind] SeamlessWalk=0: the 0.51 walk always
+static int g_seamCode = -1;               // -1 not checked, 0 not 3.19's (never seamless), 1 fine
+// 0 not yet, 1 the transition runs under our box, 2 Find a Game up (the box kept), 3 failed (the game's own error box),
+// 4 the 0.51 walk for this start, 5 the transition of a start that was over meanwhile finished (Find a Game up, no box)
+static volatile int g_seamState;
+static int g_seamAbort;                   // the start was over while the transition ran: the box goes when the transition ends
+static void *g_seamVt[2], *g_seamLv[2], *g_seamObj;
+static DWORD g_seamAt, g_seamAbortAt, g_seamDoneAt, g_seamWaitLog;
+static int g_seamSawMM;                   // Find a Game seen with the box kept (a later main menu = the walk back out)
+static int seam_code(void) {              // the code at every place the walk calls or patches is 3.19's
+    if (g_seamCode >= 0) return g_seamCode;
+    static const unsigned char tick[6] = {0x55, 0x8B, 0xEC, 0x83, 0xE4, 0xF8}, ctor[5] = {0xB8, 0x27, 0x8A, 0xEE, 0x00};
+    static const unsigned char box[3] = {0x6A, 0xFF, 0x68}, nw[2] = {0xFF, 0x25}, onl[6] = {0x55, 0x8B, 0xEC, 0x83, 0xE4, 0xF8};
+    static const unsigned char lsn[6] = {0x55, 0x8B, 0xEC, 0x83, 0xE4, 0xF8}, ldr[5] = {0xA1, 0x30, 0x50, 0x33, 0x01};
+    int ok = !IsBadReadPtr((void *)SEAM_FN_TICK, 6) && !memcmp((void *)SEAM_FN_TICK, tick, 6) && !memcmp((void *)SEAM_FN_CTOR, ctor, 5)
+          && !memcmp((void *)SEAM_FN_BOX, box, 3) && !memcmp((void *)SEAM_FN_NEW, nw, 2) && !memcmp((void *)SEAM_FN_ONLINE, onl, 6)
+          && !memcmp((void *)SEAM_FN_LISTEN, lsn, 6) && !memcmp((void *)SEAM_FN_LEADER, ldr, 5)
+          && !IsBadReadPtr((void *)SEAM_VT, 0x18) && *(DWORD *)SEAM_VT == 0x00471CE9 && *(DWORD *)(SEAM_VT + 4) == SEAM_FN_TICK
+          && *(DWORD *)(SEAM_LVT + 4) == SEAM_FN_LISTEN;
+    if (ok && connbox_ok < 0) connbox_check();
+    g_seamCode = ok && connbox_ok == 1;
+    logmsg("seamless walk: %s", !g_seamCfg ? "off ([MMFind] SeamlessWalk=0 or ConnectingBox=0)" : g_seamCode ? "on (the code is 3.19's)" : "the code is not 3.19's - the 0.51 walk");
+    return g_seamCode;
+}
+// signed in to the lobby service (RLink): the check WorldwideAutomatchService::IsPartyLeader 0x5FC270 starts with -
+// (*0x1335030)->vtbl[0x28]() -> vtbl[0x40](); both stdcall(this). Before it the party cannot be hosted (a cold start).
+static int seam_signed_in(void) {
+    void **svc = *(void ***)0x01335030; if (!svc || IsBadReadPtr(svc, 4)) return 0;
+    void **vt = *(void ***)svc; if (!vt || IsBadReadPtr(vt, 0x2C)) return 0;
+    void **ls = ((void **(__stdcall *)(void *))vt[0x28 / 4])(svc); if (!ls || IsBadReadPtr(ls, 4)) return 0;
+    void **lvt = *(void ***)ls; if (!lvt || IsBadReadPtr(lvt, 0x44)) return 0;
+    return ((char (__stdcall *)(void *))lvt[0x40 / 4])(ls) != 0;
+}
+static void seam_mouse_on(const char *why) {
+    unsigned char *m = *(unsigned char **)SEAM_MOUSE;
+    if (m && !IsBadWritePtr(m + 0x15, 1) && !m[0x15]) { m[0x15] = 1; logmsg("seam: mouse input on again (%s)", why); }
+}
+// the manager calls it as thiscall(proc, box id), ret 4 (0xAD6C66..0xAD6C72)
+static int __fastcall seam_tick(void *self, void *edx, int boxId) {
+    (void)edx;
+    if (self != g_seamObj) return 3;                                 // not the object of this walk (should not be): the box goes
+    if (g_seamState == 2) return 0;                                  // Find a Game is up: the box stays until MMFind closes it
+    if (g_seamState != 1) { connbox_id = connbox_id == boxId ? -1 : connbox_id; return 3; }
+    typedef int (__fastcall *TickFn)(void *, void *, int);
+    int r = ((TickFn)SEAM_FN_TICK)(self, NULL, boxId), st = *(int *)((char *)self + 8);
+    if (r != 3) return r;
+    g_seamObj = NULL;                                                // 3: the manager deletes the object after this return
+    if (g_seamAbort) {                                               // the start was over meanwhile: the box goes now, as the game's own
+        g_seamAbort = 0; if (connbox_id == boxId) connbox_id = -1;
+        g_seamState = st == 2 ? 5 : 3; g_seamDoneAt = GetTickCount();
+        logmsg("seam: the transition of a start that is over ended (%s) - the box closed", st == 2 ? "Find a Game up" : "failed, the game's error");
+        return 3;
+    }
+    if (st == 2) { g_seamObj = self; g_seamState = 2; g_seamDoneAt = GetTickCount(); g_seamSawMM = 0;
+        logmsg("seam: the game's transition is done - Find a Game is up under the box (%lu ms)", g_seamDoneAt - g_seamAt); return 0; }
+    g_seamState = 3; if (connbox_id == boxId) connbox_id = -1;
+    logmsg("seam: the game's transition FAILED (state %d) - its own error box", st); return 3;
+}
+// the object's RLink listener (obj+4): 0x471C29 takes ANY "hosting done" event (+0xC == 1) - only while the party is being hosted
+static void __stdcall seam_listen(void *lv, void *ev) {
+    if (g_seamState == 1 && g_seamObj && lv == (char *)g_seamObj + 4) { ((void (__stdcall *)(void *, void *))SEAM_FN_LISTEN)(lv, ev); return; }
+    logmsg("seam: an RLink event for the finished transition (type %d) - not passed on", ev && !IsBadReadPtr(ev, 0x10) ? *(int *)((char *)ev + 0xC) : -1);
+}
+// the game's thread, main menu: 1 = the transition runs under our box; 0 = not now (wait); -1 = the 0.51 walk for this start
+static int seam_enter(void) {
+    if (!seam_code()) return -1;
+    if (connbox_is_open()) { logmsg("seam: a Connecting box of ours is up already - the 0.51 walk"); return -1; }
+    if (!seam_signed_in()) {                                          // a cold start: the party cannot be hosted yet
+        DWORD now = GetTickCount(); if (!g_seamWaitLog || now - g_seamWaitLog > 5000) { g_seamWaitLog = now; logmsg("seam: not signed in to the lobby service yet - waiting"); }
+        return 0; }
+    int on = ((int (__cdecl *)(void))SEAM_FN_ONLINE)();
+    if (on) { logmsg("seam: this account would get the game's online question first (0x470FA7 = %d) - the 0.51 walk", on); return -1; }
+    HMODULE l = GetModuleHandleA("Localizer.dll"); if (!l) return -1;
+    typedef char (__stdcall *GetStrFn)(int, void *); typedef void (__fastcall *CtorFn)(void *, void *);
+    GetStrFn get = (GetStrFn)GetProcAddress(l, "?GetString@Localizer@@SG_NHAAVLocString@@@Z");
+    CtorFn lc = (CtorFn)GetProcAddress(l, "??0LocString@@QAE@XZ"), ld = (CtorFn)GetProcAddress(l, "??1LocString@@UAE@XZ");
+    if (!get || !lc || !ld) { logmsg("seam: no Localizer::GetString - the 0.51 walk"); return -1; }
+    void *mgr = connbox_mgr(); if (!mgr) { logmsg("seam: no message box manager - the 0.51 walk"); return -1; }
+    void *obj = ((void *(__cdecl *)(unsigned))SEAM_FN_NEW)(0xC); if (!obj) return -1;
+    obj = ((void *(__stdcall *)(void *))SEAM_FN_CTOR)(obj);
+    void **vt = *(void ***)obj; g_seamVt[0] = vt[0]; g_seamVt[1] = (void *)seam_tick; *(void ***)obj = g_seamVt;
+    void **lv = *(void ***)((char *)obj + 4);
+    g_seamLv[0] = lv[0]; g_seamLv[1] = (void *)seam_listen; *(void ***)((char *)obj + 4) = g_seamLv;   // lv == SEAM_LVT (checked in seam_code)
+    static __attribute__((aligned(16))) unsigned char title[64], text[64];
+    memset(title, 0, sizeof title); memset(text, 0, sizeof text); lc(title, NULL); lc(text, NULL);
+    get(CONNBOX_TITLE, title); get(CONNBOX_TEXT, text);
+    g_seamObj = obj; g_seamState = 1; g_seamAbort = 0; g_seamAt = GetTickCount();
+    connbox_own = 1;
+    int id = ((int (__stdcall *)(void *, void *, void *, int, int, void *, int, int))SEAM_FN_BOX)(mgr, title, text, 0, 0, obj, 0, 0);
+    connbox_own = 0;
+    ld(title, NULL); ld(text, NULL);
+    connbox_id = id; g_rBoxTried = 1; snprintf(connbox_why, sizeof connbox_why, "seamless walk");
+    logmsg("seam: the Connecting box %d runs the game's own Find a Game transition (its party hosted under the box)", id);
+    return 1;
+}
+// our box goes (the start is over, the match loads): while the transition still runs it goes with the transition's end (closing it
+// would delete the object in the middle of the party's hosting and leave the mouse off) - 15 s at most, then closed anyway
+static void seam_box_close(const char *why) {
+    if (g_seamState == 1 && connbox_is_open()) {
+        if (!g_seamAbort) { g_seamAbort = 1; g_seamAbortAt = GetTickCount(); logmsg("seam: %s while the transition runs - the box goes when it ends", why); }
+        return; }
+    connbox_close(why);
+}
+static void seam_frame(DWORD now) {                                   // the game's thread, every frame
+    if (g_seamAbort && g_seamState == 1 && (int)(now - g_seamAbortAt) > 15000) {   // signed: g_seamAbortAt may be later than this tick's now
+        g_seamAbort = 0; g_seamState = 3; g_seamObj = NULL;
+        connbox_close("the transition of a start that is over did not end in 15 s"); seam_mouse_on("the box closed before the transition's end");
+    }
+}
 static void rbox_open(void) {                         // the game's thread, the front end only
     if (!g_boxFrom || g_rBoxTried || connbox_is_open() || g_loading || !g_fsMovie) return;
     g_rBoxTried = 1; connbox_open(0, "a launcher room's match starts");
@@ -1348,9 +1496,10 @@ static int dj_join(unsigned long long room) {         // 1 asked, 0 no join obje
 //                     {"cmd":"cancel","room":"<id>"}
 //   game -> launcher  {"ev":"status","ver":"0.47","screen":"main|find_game|games_list|lobby|other|unknown","match":b,"state":"idle|..",
 //                       "room":"<id>","step":"none|stop|walk|army|search|done","own_lobby":b,"pid":n}   (on connect and on "status")
+//                       0.51 + "room_obs":b, 0.52 + "seamless":b (the walk to Find a Game under the Connecting box: on and the code matched)
 //                     {"ev":"accepted|walking|army|searching|matched|in_room|loading","room":id}
 //                     {"ev":"failed","room":id,"reason":"busy_match|busy_room|in_lobby|not_menu|no_ownlobby|walk_timeout|race|left_screen|
-//                       refused|server_cancelled|stopped|cancelled","text":"..."}
+//                       refused|server_cancelled|stopped|cancelled|walk_failed (0.52)","text":"..."}
 // The walk: the main menu -> Multiplayer -> Find a Game (the main menu's own button commands, as MMFind 0.12-0.44 sent them); there
 // the room's mode, race and hero (the saved-choice code of 0.5+), then Start Searching with the room's id in mm/native: the ladder
 // keeps this search in the room's own pool and makes the match from the room (its host, map, teams). A normal search that runs is
@@ -1374,7 +1523,7 @@ static void emitf(const char *fmt, ...) {                             // an even
     b[n] = 0; logmsg("room: event %s", b); strcat(b, "\n"); out_push(b);
 }
 static void room_set(int rs) { if (rs != g_rs) logmsg("room %s: step %s -> %s", g_room, RSN[g_rs], RSN[rs]); g_rs = rs; g_rStepAt = GetTickCount(); if (rs != RS_WALK && rs != RS_STOP && rs != RS_WATCH) g_rWantMenu = 0;
-    if (rs == RS_NONE || rs == RS_DONE) connbox_close(rs == RS_DONE ? "the match loads" : "the room's start is over"); }
+    if (rs == RS_NONE || rs == RS_DONE) seam_box_close(rs == RS_DONE ? "the match loads" : "the room's start is over"); }   // 0.52: seam_box_close
 static void room_fail(const char *reason, const char *text) {
     char t[160] = ""; for (int i = 0; text && text[i] && i < 150; i++) t[i] = text[i] == '"' || text[i] == '\\' || (unsigned char)text[i] < 0x20 ? ' ' : text[i];
     emitf("{\"ev\":\"failed\",\"room\":\"%s\",\"reason\":\"%s\",\"text\":\"%s\"}", g_room, reason, t);
@@ -1420,6 +1569,9 @@ static void room_start(const QCmd *c, DWORD now) {
     g_rMode = c->mode; g_rRace = c->race; g_rHero = c->hero; g_rAt = now; g_rTries = 0; g_rWalked = 0; g_rEvMatched = g_rEvRoom = 0; g_rWantMenu = 1;
     g_rMenuOk = g_fsMovie && g_menuOkMovie == (DWORD)g_fsMovie;          // 0.51: the menu's own handler known already - no wait for the engine's calls
     g_rBoxTried = 0; g_wPosted = 0; g_wState = 0; g_wGone = 0; g_wRoom = 0; g_wWhy[0] = 0;
+    if (g_seamState == 1 && connbox_is_open()) { g_seamAbort = 0; g_rBoxTried = 1; logmsg("room %s: the seamless transition of the start before still runs - it serves this one", c->room); }
+    else g_seamState = 0;                                                 // 0.52: the seamless walk again for this start
+    g_seamWaitLog = 0;
     g_rGoSet = 0; g_rGoTick = 0; g_rFast = 0; g_rBackAt = 0; g_rBacks = 0; g_rRetry = 0; g_rObs = c->obs > 0 ? c->obs : 0;
     g_rWatchN = c->watch && g_obsCfg;                                     // 0.51: an observer through the native automatch (RoomObservers=1)
     room_goat(c, now);
@@ -1446,6 +1598,8 @@ static int g_rBoxCloses;
 static void room_back_main(DWORD now) { g_rBackAt = now + 300; g_rBacks = 0; g_rBoxCloses = 0; }
 static void back_step(DWORD now) {
     if (!g_rBackAt || (int)(now - g_rBackAt) < 0) return;
+    // 0.52: a cancel while the seamless transition runs - Back once Find a Game is up (it closes our box with its end)
+    if (g_rs == RS_NONE && !g_loading && (g_seamState == 1 || (g_seamState == 5 && g_screen != SC_MM && (int)(now - g_seamDoneAt) < 4000))) { g_rBackAt = now + 300; return; }
     if (g_rs == RS_NONE && !g_loading && g_screen == SC_MAIN && g_rBoxCloses < 2 && game_boxes(0, NULL)) {   // at most twice a cancel
         g_rBoxCloses++; game_boxes(1, "a cancelled launcher room's start: the game's notice away"); g_rBackAt = now + 500; return; }
     if (g_rs != RS_NONE || g_loading || g_screen != SC_MM || g_rBacks >= 4) {
@@ -1516,9 +1670,13 @@ static void room_step(DWORD now) {
         if (now - g_rAt > 60000) { room_fail("walk_timeout", "Find a Game did not open in 60 s"); break; }
         g_rWantMenu = 1;                                                     // the menu and its own handler from the engine's calls
         if (!g_fsSelf || !g_fsMovie) break;
-        if (!g_rMenuOk && now - g_rAt < 3000) break;
+        // 0.52: the seamless walk needs no menu command (the menu's own handler is needed later, on Find a Game - its OnLoadComplete
+        // brings it), so no wait for "the menu answered"
+        int seam = g_seamCfg && !g_rWatchN && g_seamState != 4 && seam_code();
+        if (!seam && !g_rMenuOk && now - g_rAt < 3000) break;
         if (!g_scrTick || now - g_rStepAt > 2500) { static DWORD lp; if (now - lp > 500) { lp = now; probe_screen(); } }   // the screen we came in on
         if (!g_scrTick) break;                                               // the menu is not up yet (the game is still starting)
+        if (g_seamState == 2 && g_screen == SC_MM) g_seamSawMM = 1;          // 0.52: Find a Game seen under the box kept
         // 0.48: Find a Game that was open before this walk (an army committed there; its hero panel closed - a race set into it then was
         // never committed, and on the stand it crashed the game): Back to the main menu first, then in again - the hero panel comes up fresh
         if (g_screen == SC_MM && !g_rMMFresh && now - g_scrTick > 500 && now - g_rStepAt > 1500) {
@@ -1529,6 +1687,23 @@ static void room_step(DWORD now) {
             g_rWantMenu = 0;
             if (!g_rWatchN && !g_mmApplied) { room_choice(); g_applyMM = 1; g_mmApplied = 1; }
             room_set(RS_ARMY); room_ev("army"); break; }
+        if (seam) {                                                           // 0.52: the seamless walk (see "the seamless walk")
+            if (g_seamState == 2 && g_screen == SC_MAIN && (g_seamSawMM || (int)(now - g_seamDoneAt) > 5000)) {   // walked back out (another army)
+                logmsg("room %s: seam - the main menu again with the box kept - the box goes, the walk again", g_room);
+                connbox_close("the walk again"); g_seamState = 0; g_rBoxTried = 0; g_rStepAt = now; break; }
+            if (g_seamState == 1 || g_seamState == 2) {
+                if ((int)(now - (g_seamState == 1 ? g_seamAt : g_seamDoneAt)) > 30000) room_fail("walk_timeout", "Find a Game did not come up under the box in 30 s");
+                break; }
+            if (g_seamState == 3) { room_fail("walk_failed", "the game could not open Find a Game (its party) - it shows its own error"); break; }
+            if (g_seamState == 5) g_seamState = 0;
+            if (g_screen == SC_MAIN && now - g_scrTick > 300 && now - g_rStepAt > 300) {
+                if (!g_rWalked) { room_ev("walking"); g_rWalked = 1; }
+                int r = seam_enter(); g_rStepAt = now;
+                if (r > 0) g_rWalked++;
+                else if (r < 0) { g_seamState = 4; logmsg("room %s: the 0.51 walk (menu commands)", g_room); }
+                break; }
+            if (g_screen == SC_MAIN) break;
+        }
         // the game's question on the first Multiplayer of an account ("Play against CPU? ... an offline game against the CPU?"):
         // its menu ignores every command while a box is up (stand 2, 06.11) - No (OnButton2), then Multiplayer again
         if (g_screen == SC_MAIN && g_rWalked && now - g_rStepAt > 700 && msgbox_up()) { g_rStepAt = now; msgbox_scan(2); break; }
@@ -1696,9 +1871,10 @@ static void status_line(char *b, int cap) {
     char room[24]; EnterCriticalSection(&g_qlk); strcpy(room, g_room); LeaveCriticalSection(&g_qlk);
     int sc = g_screen;
     _snprintf(b, cap - 1, "{\"ev\":\"status\",\"ver\":\"" MMF_VER "\",\"screen\":\"%s\",\"match\":%s,\"state\":\"%s\",\"room\":\"%s\",\"step\":\"%s\","
-              "\"own_lobby\":%s,\"game\":\"%s\",\"room_obs\":%s,\"pid\":%lu}\n",
+              "\"own_lobby\":%s,\"game\":\"%s\",\"room_obs\":%s,\"seamless\":%s,\"pid\":%lu}\n",
               !g_scrTick ? "unknown" : sc >= 0 && sc < 5 ? SC_NM[sc] : "unknown", g_loading ? "true" : "false", SN[g_state], g_rs ? room : "",
-              RSN[g_rs], GetModuleHandleW(L"OwnLobby.dll") ? "true" : "false", g_game, g_obsCfg ? "true" : "false", GetCurrentProcessId());   // 0.51: room_obs = RoomObservers=1
+              RSN[g_rs], GetModuleHandleW(L"OwnLobby.dll") ? "true" : "false", g_game, g_obsCfg ? "true" : "false",
+              g_seamCfg && g_seamCode == 1 ? "true" : "false", GetCurrentProcessId());   // 0.52: seamless = on and the code matched   // 0.51: room_obs = RoomObservers=1
     b[cap - 1] = 0;
 }
 static void cli_line(Cli *c, char *s) {
@@ -1866,6 +2042,7 @@ static void tick(void) {
     mode_peek(now);                                                   // 0.42
     stray_stop(now);                                                  // 0.45
     room_take(now); room_step(now);                                   // 0.47: the launcher's room
+    seam_frame(now);                                                  // 0.52: a seamless transition of a start that is over
     opts_install();
     if (g_natCancelled) {                                             // 0.38: the server called our native match off
         g_natCancelled = 0;
@@ -2000,6 +2177,8 @@ static void install(void) {
     logmsg("hooked Invoke + fscommand");
     install_sfm_hook();
     if (g_obsCfg || g_obsTest > 0) obs_install();                    // 0.51: observer seats of a launcher room's AUTOMATCH room (host)
+    if (!g_boxFrom && g_seamCfg) { g_seamCfg = 0; logmsg("seamless walk: off - it needs the Connecting box (ConnectingBox=0)"); }
+    seam_code();                                                     // 0.52: logs on / off / not 3.19's; the status line says it
     CloseHandle(CreateThread(NULL, 0, installer, NULL, 0, NULL));
     CloseHandle(CreateThread(NULL, 0, net_worker, NULL, 0, NULL));
 }
@@ -2038,6 +2217,7 @@ BOOL WINAPI DllMain(HINSTANCE h, DWORD r, LPVOID _) {
     g_verbose = GetPrivateProfileIntW(L"MMFind", L"Verbose", 0, ini);
     g_pipeCfg = GetPrivateProfileIntW(L"MMFind", L"Pipe", 1, ini) != 0;
     g_boxFrom = GetPrivateProfileIntW(L"MMFind", L"ConnectingBox", 1, ini) != 0;   // 0.50
+    g_seamCfg = GetPrivateProfileIntW(L"MMFind", L"SeamlessWalk", 1, ini) != 0;   // 0.52: the walk to Find a Game under the box (0 = the 0.51 walk)
     g_obsCfg = GetPrivateProfileIntW(L"MMFind", L"RoomObservers", 0, ini) != 0;   // 0.51: launcher-room observers through the native automatch (unverified: default off)
     g_obsTest = GetPrivateProfileIntW(L"MMFind", L"ObsSlotsTest", 0, ini); if (g_obsTest < 0 || g_obsTest > 4) g_obsTest = 0;   // stands only: K observer seats in every AUTOMATCH room hosted
     g_debugPipe = GetPrivateProfileIntW(L"MMFind", L"DebugPipe", 0, ini) != 0;   // stands only: menu commands over the pipe   // 0.47: the launcher rooms' pipe (0 = none)
