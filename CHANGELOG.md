@@ -4,6 +4,28 @@ Every version gets an entry here before it reaches `main`. CI then tags `vX.Y.Z`
 version (`X.Y.0`) it also publishes a GitHub Release with the DLLs and the entries since the previous `X.Y.0`.
 The version of the set lives only in `VERSION`; each DLL still writes its own version to its log.
 
+## 0.2.101 — 2026-11-16
+MMFind 0.52 (Automatch v2.0; hand release, not in the store yet): observer seats of a launcher room's match that work (siritos
+16.11: "a reliable one, not the live-replay workaround"; reports/siritos_1116/OBSERVERS_RU.md, OBSERVERS_TECH_RU.md).
+- Why the host died on 15.11 ("GAME -- Player index <69031976> out of Range", gameinfo.cpp:75, both minidumps: 0x4491EC ->
+  SendStartMessage 0x449386 -> 0x44618C -> 0x419FCE): the game builds GameInfo from the room's slots with player index = team * 4 +
+  a per-team counter kept in a local array of two (ebp-0x3c / ebp-0x38). MMFind 0.51's observer seats had team 2: the counter of
+  "team 2" was ebp-0x34, the map name's string pointer (0x041D5C20 + 8 = 69031976). Any seat of team 2, empty or taken, did it.
+  A Custom Games room keeps observer seats on the sides (slots 0-3 team 0, 4-7 team 1, type 5) - dumped on stands 1+2.
+- 0.52: the seats keep team 2 in the room (the observer's key to his seat; the host's party service holds every member to the team
+  he came with - moving a taken seat to a side kicked the observer, stand 16.11), and
+  - every game with MMFind 0.52 puts a slot of team >= 2 on its side (index & 1) in 0x44618c's own copy (0x4464C5): GameInfo is
+    the Custom Games one (the observer at his side's next place, type 5);
+  - the host moves the EMPTY extra seats to their side before the ranked countdown (0x4491B3, the match's set-slot vtbl+0x50), holds
+    the countdown while a player's seat is empty (an observer counts as "present" for the game's own ready-up), and never sends the
+    start (0x4491E7) while a slot would still break GameInfo; a side gets at most 4 places (K <= 2 x (4 - size));
+  - [MMFind] RoomObservers is on by default (nothing changes without "obs" in the host's ticket / "watch" in an observer's and the
+    ladder's data/lroom_obs_native.on); mm/native says "obs_seats":2 (the ladder lets observers in only when every game of the match
+    says so - dow2-ladder fix/lroom-obs-host-seats); status "room_obs" true only with all four patches in;
+  - DebugPipe=1 (stands): {"cmd":"slots"} - the room's slots as the game has them; ObsTestAI=<s> (stands): an empty player seat
+    becomes an Easy computer after <s> s of the hold (two accounts: host + observer + AI).
+- Stands 1+2 (two Steam accounts, Wine, Elite 3.2.1.0.0, test ladder/lobby on rts): see OBSERVERS_TECH_RU.md "Проверка".
+
 ## 0.2.100 — 2026-11-16
 ReplayOpen 4 (store replayopen-4) and LiveReplay 5 (store livereplay-5), siritos 16.11: "a replay from the launcher hangs ~15 s in the
 menu, then Connecting and at once the loading" (research reports/siritos_1116/RESEARCH_TECH_RU.md 1.1-1.6).

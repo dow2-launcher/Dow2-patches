@@ -48,11 +48,11 @@
 //   Searching at go_at (the Connecting box with it, as 0.50); a walk not done by go_at searches as soon as it is done. A ticket
 //   again for the same room updates it (options, ttl, obs, go_at; another race / hero before the search: the army again).
 //   "cancel" at any step before the match loads: the search stopped if it runs, then Back to the main menu.
-// - Launcher-room observers through the native automatch ([MMFind] RoomObservers=1, default 0 = the 0.50 way): the observer's game
-//   searches as a player does (Find a Game with the room's mode, its army as it is) with "watch" in mm/native, the ladder puts him
-//   into the room's match as a watcher of team = number of teams; the host's MMFind ("obs": K in its ticket) builds the AUTOMATCH
-//   room with K observer seats of their own team (the slot builder call 0x5FC922, research 04.11 lm7/lm8). Not verified with
-//   2-3 accounts - see the report siritos_1114c.
+// - Launcher-room observers through the native automatch ([MMFind] RoomObservers=1, 0.52: the default; 0 = the 0.50 way): the
+//   observer's game searches as a player does (Find a Game with the room's mode, its army as it is) with "watch" in mm/native, the
+//   ladder puts him into the room's match as a watcher of team = number of teams; the host's MMFind ("obs": K in its ticket) builds
+//   the AUTOMATCH room with K observer seats of that team (the slot builder call 0x5FC922, research 04.11 lm7/lm8). 0.52: the
+//   15.11 host crash at the start found and fixed (GameInfo's two team counters, see obs_build) - reports siritos_1114c, siritos_1116.
 // Hooks: Invoke 0x45DB6C (engine -> Flash, to read lists and to show our status), fscommand handler 0x681AB0 (Flash -> engine, to
 // catch the button and to send menu commands), Shark.dll shark::update (main-thread tick).
 #ifndef _WIN32_WINNT
@@ -199,6 +199,7 @@ enum { RS_NONE, RS_STOP, RS_WALK, RS_ARMY, RS_SEARCH, RS_DONE, RS_WATCH, RS_HOLD
 static const char *RSN[] = {"none", "stop", "walk", "army", "search", "done", "watch", "hold"};
 // 0.51: go_at (the tick it means, 0 = none), the fast army, a cancel's way back to the main menu, observers through the native automatch
 static int g_rRetry; static DWORD g_rGoTick; static int g_rGoSet, g_rFast, g_rWatchN, g_rObs, g_obsCfg, g_obsTest; static DWORD g_rBackAt; static int g_rBacks;
+static int g_obsOk;      // 0.52: the seats, both gates and the GameInfo fix of obs_install in (else no observer seats at all)
 static volatile DWORD g_menuOkMovie; static int go_due(DWORD now);          // the menu movie whose own handler the engine's calls confirmed (no wait for it again)
 static volatile int g_rs; static char g_room[24]; static int g_rMode, g_rRace = -1, g_rHero = -1, g_rTries, g_rWalked;
 static DWORD g_rAt, g_rStepAt; static volatile int g_rEvMatched, g_rEvRoom;
@@ -229,8 +230,8 @@ static char g_natLobby[48], g_natWhy[96], g_natLastCancel[32];
 // what to do, "MMFind 0.45", the queue and who is online. Shown from the moment the screen opens (a peek at mm/native: the ladder
 // answers as for Start Searching and changes nothing; again every 20 s and on a match type change while the screen is open), after
 // the click by what really happened. [MMFind] ShowMode=1 (default) / 0 = off, Lang=auto (the game's own text: Cyrillic = Russian) / ru / en.
-#define MMF_VER "0.51"
-#define MMF_VER_W L"0.51"
+#define MMF_VER "0.52"
+#define MMF_VER_W L"0.52"
 static int g_showMode = 1, g_langCfg = -1, g_lang = -1, g_modeProbe;
 static double g_mx = 1065, g_my = 590, g_msz = 30;           // panel units, see mode_make
 static volatile int g_peekWant, g_peekAns; static volatile DWORD g_peekLast; static char g_peekWhy[96];
@@ -555,6 +556,7 @@ static void join_body(char *body, int cap) {
     snprintf(body, cap, "{\"steam\":\"%llu\",\"game\":\"%s\",\"mode\":\"%s\",\"name\":\"%s\",\"race\":\"%s\",\"hero\":\"%d\",\"maps\":[%s],\"bans\":[%s],\"max_diff\":%d%s%s,\"group\":\"%s\",\"mmf\":\"" MMF_VER "\"%s}",
              g_mySteam, g_game, MODE_KEY[g_mode], nm, (g_random ? "random" : g_race >= 0 && g_race < 9 ? RACES[g_race] : ""), g_hero, maps, bans, g_maxDiff,
              own ? (compat ? ",\"own_server\":true,\"relay_compat\":true" : ",\"own_server\":true") : "", rp, g_group, rm);
+    if (g_obsCfg && g_obsOk) { size_t L = strlen(body); if (L > 1 && L + 20 < (size_t)cap && body[L - 1] == '}') strcpy(body + L - 1, ",\"obs_seats\":2}"); }   // 0.52: this game builds and plays observer seats right
 }
 static DWORD WINAPI net_worker(LPVOID _) {
     static char body[8192]; char res[4096];
@@ -1356,7 +1358,8 @@ static int dj_join(unsigned long long room) {         // 1 asked, 0 no join obje
 // keeps this search in the room's own pool and makes the match from the room (its host, map, teams). A normal search that runs is
 // stopped first. Never from a Custom Games lobby (the player is in one - his call), a match, or another screen.
 // The pipe thread never touches the engine: commands go into a queue the game's thread takes in its tick (shark::update).
-enum { QC_ROOM = 1, QC_CANCEL, QC_FS };
+enum { QC_ROOM = 1, QC_CANCEL, QC_FS, QC_SLOTS };
+static void obs_dump(void);                                          // 0.52: DebugPipe "slots"
 typedef struct { int what, mode, race, hero, opt[4], ttl, hook, watch, obs, hasRace, hasHero, hasTtl; long long goAt; char room[24]; char path[160], args[400]; } QCmd;
 typedef struct { char s[600]; } QOut;
 static QCmd g_cq[8]; static int g_cqH, g_cqN; static QOut g_oq[32]; static int g_oqH, g_oqN;
@@ -1666,6 +1669,7 @@ static void room_take(DWORD now) {
             if (g_fsSelf && g_fsMovie) { logmsg("pipe: fscommand %s '%.60s' as a click", cmd, c.args); fs_hook(g_fsSelf, NULL, g_fsMovie, cmd, c.args); }
             emitf("{\"ev\":\"fs_done\",\"screen\":%d}", g_screen); }
         else if (c.what == QC_FS) { g_rWantMenu = 1; probe_screen(); fs(c.path, c.args); emitf("{\"ev\":\"fs_done\",\"screen\":%d}", g_screen); }
+        else if (c.what == QC_SLOTS) obs_dump();
     }
 }
 
@@ -1698,7 +1702,7 @@ static void status_line(char *b, int cap) {
     _snprintf(b, cap - 1, "{\"ev\":\"status\",\"ver\":\"" MMF_VER "\",\"screen\":\"%s\",\"match\":%s,\"state\":\"%s\",\"room\":\"%s\",\"step\":\"%s\","
               "\"own_lobby\":%s,\"game\":\"%s\",\"room_obs\":%s,\"pid\":%lu}\n",
               !g_scrTick ? "unknown" : sc >= 0 && sc < 5 ? SC_NM[sc] : "unknown", g_loading ? "true" : "false", SN[g_state], g_rs ? room : "",
-              RSN[g_rs], GetModuleHandleW(L"OwnLobby.dll") ? "true" : "false", g_game, g_obsCfg ? "true" : "false", GetCurrentProcessId());   // 0.51: room_obs = RoomObservers=1
+              RSN[g_rs], GetModuleHandleW(L"OwnLobby.dll") ? "true" : "false", g_game, g_obsCfg && g_obsOk ? "true" : "false", GetCurrentProcessId());   // 0.51: room_obs = RoomObservers=1 (0.52: and its code in)
     b[cap - 1] = 0;
 }
 static void cli_line(Cli *c, char *s) {
@@ -1718,13 +1722,14 @@ static void cli_line(Cli *c, char *s) {
         q.ttl = jint(s, "ttl", 0); if (q.ttl < 0 || q.ttl > 600) q.ttl = 0;          // 0.48: seconds the room's start lasts (0 = no limit)
         q.watch = jtrue(s, "watch");                                         // 0.50: an observer's ticket (no army, no host)
         q.goAt = jint64(s, "go_at", 0); if (q.goAt < 0) q.goAt = 0;           // 0.51: Start Searching at this unix ms (the launcher's countdown end)
-        q.obs = jint(s, "obs", -1); if (q.obs > 4) q.obs = 4;                // 0.51: the host's observer seats (RoomObservers=1)
+        q.obs = jint(s, "obs", -1); if (q.obs > 6) q.obs = 6;                // 0.51: the host's observer seats (0.52: <= 4 places a side, obs_build)
         q.what = QC_ROOM; strcpy(q.room, room);
     } else if (!strcmp(cmd, "cancel")) { q.what = QC_CANCEL; strcpy(q.room, room); }
     else if (!strcmp(cmd, "fs") && g_debugPipe) {           // [MMFind] DebugPipe=1 (stands only): a menu command as its button sends it
         jstr(s, "path", q.path, sizeof q.path); jstr(s, "args", q.args, sizeof q.args); if (!q.path[0]) { cli_write(c, "{\"ev\":\"error\"}\n"); return; }
         q.hook = jint(s, "hook", 0) == 1;                   // 0.49: "hook":1 = as the player's own click (through MMFind's handler)
         q.what = QC_FS; }
+    else if (!strcmp(cmd, "slots") && g_debugPipe) q.what = QC_SLOTS;     // 0.52 (stands): the room's slots as the game has them
     else { cli_write(c, "{\"ev\":\"error\",\"reason\":\"bad_command\"}\n"); return; }
     logmsg("pipe: client %lu: %s %s (queued for the game's thread)", c->id, cmd, room);
     EnterCriticalSection(&g_qlk);
@@ -1957,31 +1962,205 @@ static DWORD WINAPI installer(LPVOID _) {
 // count, cap}): teams x size slots of 200 bytes, slot i -> team i % teams, +0 type 0 = open). The call site 0x5FC922 `mov edx,
 // [esi+0x188]` becomes `mov edx, obs_build`: with observers wanted the original with size + ceil(K / teams), then the extra slots get
 // type 5 (an open observer seat) - K of them, the rest type 1 (closed) - and their own team = teams (+0x68): a guest's RequestCorrectSlot
-// takes the first free slot of its team and never looks at the type, so players never land there and an observer of team "teams"
-// (the ladder says so) does. Without observers wanted: the original as it was, unchanged. Patched only with RoomObservers=1 (or the
-// stand's ObsSlotsTest).
+// (0x517E80, once, on joining) takes the first free slot of its team and never looks at the type, so players never land there and an
+// observer of team "teams" (the ladder says so) does. Without observers wanted: the original as it was, unchanged.
+//
+// 0.52 (siritos 16.11.2026: "a reliable one"): why the host died on 15.11 with "GAME -- Player index <69031976> out of Range"
+// (gameinfo.cpp:75) and the fix. Every game turns the room's slots into GameInfo players in 0x44618c (the host checks it in
+// SendStartMessage 0x449386, every game builds it again from its copy of the room at the start 0x44742a): player index = team * 4 +
+// (how many slots of that team came before) - a counter per team in a local array of TWO (ebp-0x3c, ebp-0x38). A slot of team 2 reads
+// ebp-0x34 instead - the map name's string pointer (heap, 0x041D5C20 on 15.11: 8 + that = 69031976) - and the index check fails (it
+// also adds 1 to that pointer). Every observer seat of team 2, taken or empty, did it. A Custom Games room never has it: its 8 slots
+// are 0-3 team 0 and 4-7 team 1, an observer seat is a slot of a side with type 5 ("Open All Observer" 0x492B52 changes only the type),
+// so a side never has more than 4 places (stand 16.11: [sid,type,team] 0,0,0 1,5,0 2,5,0 3,5,0 4,0,1 5,5,1 6,5,1 7,5,1).
+// The seats keep team 2 in the room itself: it is the observer's key to his seat (RequestCorrectSlot), and the host's party service
+// holds every member to the team he came with (WorldwidePartyService::UpdateSlotInfo 0x5825D0 -> 0x610FE0): moving a TAKEN seat to
+// a side kicked its observer at once ("Kicking player - no available slots", stand 16.11). So:
+// - GameInfo (every game with this MMFind - the ladder lets observers in only when every game of the match says "obs_seats":2):
+//   in 0x44618c, on its own local copy of the room, a slot of team >= 2 gets the team of its side, index & 1 (0x4464C5, the two-team
+//   path only) - the match then has the observer exactly where a Custom Games room has him (type 5 on a side, the side's next place);
+// - the host, before the ranked countdown (0x4491B3), moves the EMPTY extra seats to their side (slot i -> i % 2, as the native
+//   builder would; the match's own set-slot entry vtbl+0x50, as Open All Observer and Add Computer call it) and waits for the room's
+//   state to show it: with no observer in, the room is a Custom Games layout for any game; the start waits by itself for every
+//   game's ACK of that state (AreAllPlayersMatchInfoACKed 0x448855);
+// - the host holds the countdown while a player's seat is empty: the game counts an observer as "present" (WorldwideAutomatchService::
+//   Process readies up at open seats <= people in the room), so a room with an observer and without a player would start;
+// - the host's start gate (the call of 0x449386 at 0x4491E7): no start message while a slot would still break GameInfo here.
+// A side gets at most 4 places (GameInfo's team * 4): K <= 2 * (4 - size) (1v1 6, 2v2 4, 3v3 2; the ladder's cap 8 - 2 x size).
+#define OBS_CALL     0x005FC922
+#define FN_SLOTS_DEF 0x005F94B0
+#define CDG_AT       0x004491B3   // push "GameMode is ranked, starting countdown" (SetupArbitrator 0x44917a)
+#define CDG_STR      0x0108F67C
+#define CDG_LOG      0x004491B8   // the log call after it
+#define CDG_SKIP     0x004491D5   // no countdown now
+#define SSG_AT       0x004491E7   // call SendStartMessage 0x449386 (stdcall, 1 argument)
+#define FN_SENDSTART 0x00449386
+#define FN_MI_CTOR   0x0040172D   // MatchInfo ctor (stdcall buf)
+#define FN_MI_DTOR   0x00401794   // MatchInfo dtor (stdcall buf)
+#define MI_SLOTS     0x70         // MatchInfo: the slot vector {data, ?, count, cap} of 200-byte slots
+#define MI_NSLOTS    0x78
+#define GIT_AT       0x004464C5   // 0x44618c's two-team path: mov eax, [0x0133567C] (the Last Stand check), ebx = slot (copy), edi = index
+#define GIT_BACK     0x004464CA
+typedef struct { int sid, type, team, occ, race, faction, level, ready; unsigned id_lo, id_hi; } ObsSlot;
+static int g_obsTeams, g_obsN, g_obsK, g_obsCnt;           // the AUTOMATCH room this host built with observer seats (g_obsK 0 = none)
+static DWORD g_obsFixAt, g_obsHoldLog, g_obsHoldSince; static int g_obsFixes, g_obsAiDone, g_obsTestAI, g_obsSaidOk;
 typedef void (__stdcall *ObsBuildFn)(int teams, int size, int a3, int *vec);
+typedef void *(__fastcall *ObsGetFn)(void *self, void *edx);
+typedef void (__stdcall *MiFn)(void *buf);
+typedef char (__stdcall *MiGetFn)(void *match, void *buf);
+typedef int (__stdcall *SetSlotFn)(void *match, int sid, int type, int team, int race, int faction, int level, void *meta);
 static void __stdcall obs_build(int teams, int size, int a3, int *vec) {
     int k = g_obsTest > 0 ? g_obsTest : (g_obsCfg && g_rObs > 0 && g_rs == RS_SEARCH && !g_rWatchN) ? g_rObs : 0;
-    if (k <= 0 || teams <= 0 || teams > 8 || size <= 0 || size > 4 || !vec || IsBadReadPtr(vec, 16)) { ((ObsBuildFn)0x005F94B0)(teams, size, a3, vec); return; }
+    if (k > 0 && teams > 0 && size > 0 && size < 4 && k > teams * (4 - size)) { logmsg("observer seats: %d wanted, a side has 4 places - %d", k, teams * (4 - size)); k = teams * (4 - size); }
+    if (k <= 0 || teams != 2 || size <= 0 || size >= 4 || !vec || IsBadReadPtr(vec, 16)) { g_obsK = 0; ((ObsBuildFn)FN_SLOTS_DEF)(teams, size, a3, vec); return; }   // launcher rooms: two teams
     int n = teams * size, extra = (k + teams - 1) / teams;
-    ((ObsBuildFn)0x005F94B0)(teams, size + extra, a3, vec);
+    ((ObsBuildFn)FN_SLOTS_DEF)(teams, size + extra, a3, vec);
     unsigned cnt = (unsigned)vec[2]; char *base = (char *)vec[0];
-    if (!base || cnt > 32 || IsBadWritePtr(base, cnt * 200)) { logmsg("observer seats: the slot vector is not as expected (%u) - left as built", cnt); return; }
+    if (!base || cnt > 32 || IsBadWritePtr(base, cnt * 200)) { g_obsK = 0; logmsg("observer seats: the slot vector is not as expected (%u) - left as built", cnt); return; }
     for (unsigned i = (unsigned)n; i < cnt; i++) { *(int *)(base + i * 200) = i < (unsigned)(n + k) ? 5 : 1; *(int *)(base + i * 200 + 0x68) = teams; }
+    g_obsTeams = teams; g_obsN = n; g_obsK = k; g_obsCnt = (int)cnt; g_obsFixAt = g_obsHoldLog = g_obsHoldSince = 0; g_obsFixes = g_obsAiDone = g_obsSaidOk = 0;
     char b[300]; int o = 0;
     for (unsigned i = 0; i < cnt && o < 260; i++) o += _snprintf(b + o, sizeof b - o, " [%u t%d team%d]", i, *(int *)(base + i * 200), *(int *)(base + i * 200 + 0x68));
-    logmsg("observer seats: the AUTOMATCH room of teams %d x %d gets %d observer seat(s) - %u slots:%s", teams, size, k, cnt, b);
+    logmsg("observer seats: the AUTOMATCH room of teams %d x %d gets %d observer seat(s) - %u slots:%s (team %d = the observers' key until the countdown)", teams, size, k, cnt, b, teams);
+}
+static void *obs_match(void) {
+    void **m = *(void ***)0x01335014; if (!m || IsBadReadPtr(m, 4) || IsBadReadPtr(*m, 0x28)) return NULL;
+    void *match = ((ObsGetFn)((*(void ***)m)[0x24 / 4]))(m, 0);
+    if (!match || IsBadReadPtr(match, 4) || IsBadReadPtr(*(void **)match, 0x54)) return NULL;
+    return match;
+}
+// the room's slots as the game sees them: its own MatchInfo copy (match vtbl+4), built and freed with the game's own ctor / dtor
+static int obs_slots(void *match, ObsSlot *out, int cap) {
+    static unsigned char buf[0x400];
+    memset(buf, 0, sizeof buf);
+    ((MiFn)FN_MI_CTOR)(buf);
+    char ok = ((MiGetFn)(*(void ***)match)[1])(match, buf);
+    int n = -1;
+    if (ok) {
+        unsigned char *d = *(unsigned char **)(buf + MI_SLOTS); unsigned cnt = *(unsigned *)(buf + MI_NSLOTS);
+        if (cnt == 0) n = 0;
+        else if (d && cnt <= 32 && !IsBadReadPtr(d, cnt * 200)) {
+            for (n = 0; n < (int)cnt && n < cap; n++) {
+                unsigned char *s = d + n * 200; ObsSlot *o = &out[n];
+                o->type = *(int *)s; o->id_lo = *(unsigned *)(s + 8); o->id_hi = *(unsigned *)(s + 0xC); o->occ = (o->id_lo & o->id_hi) != 0xFFFFFFFFu;
+                o->team = *(int *)(s + 0x68); o->race = *(int *)(s + 0x6C); o->faction = *(int *)(s + 0x70); o->level = *(unsigned char *)(s + 0x74);
+                o->ready = *(unsigned char *)(s + 0x94); o->sid = *(int *)(s + 0x98);
+            }
+        }
+    }
+    ((MiFn)FN_MI_DTOR)(buf);
+    return n;
+}
+static int obs_fmt(const ObsSlot *s, int n, char *b, int cap) {   // [sid,type,team,taken,race,faction,level,ready,id]
+    int o = 0; b[0] = 0;
+    for (int i = 0; i < n && o < cap - 90; i++)
+        o += _snprintf(b + o, cap - o, "%s[%d,%d,%d,%d,%d,%d,%d,%d,%u]", i ? "," : "", s[i].sid, s[i].type, s[i].team, s[i].occ, s[i].race, s[i].faction, s[i].level, s[i].ready, s[i].occ ? s[i].id_lo : 0);
+    return o;
+}
+// GameInfo places, as 0x44618c counts them with our fix (a team >= 2 -> index & 1): slot after slot, a team's place = team * 4 + its
+// counter; a closed slot (type 1) only while its team has < 4.
+static int obs_side(const ObsSlot *s, int i) { return s[i].team >= 0 && s[i].team < 2 ? s[i].team : (i & 1); }
+static int obs_layout_ok(const ObsSlot *s, int n, int *why) {
+    int c[2] = {0, 0};
+    for (int i = 0; i < n; i++) { int t = obs_side(s, i); if (s[i].type != 1 || c[t] < 4) { if (++c[t] > 4) { *why = i; return 0; } } }
+    return 1;
+}
+static void obs_dump(void) {                                      // DebugPipe "slots" (stands): the room's slots as they are now
+    void *match = obs_match(); ObsSlot s[32]; int n = match ? obs_slots(match, s, 32) : -2; char b[2000];
+    obs_fmt(s, n > 0 ? n : 0, b, sizeof b);
+    logmsg("slots: %d [sid,type,team,taken,race,faction,level,ready,id]: %s", n, b);
+    emitf("{\"ev\":\"slots\",\"n\":%d,\"teams_built\":%d,\"obs\":%d,\"slots\":[%s]}", n, g_obsTeams, g_obsK, b);
+}
+static int __cdecl obs_gate_cd(void) {                            // the host's ranked countdown is about to start (game thread)
+    if (!g_obsK) return 1;
+    DWORD now = GetTickCount(); void *match = obs_match(); ObsSlot s[32]; int n = match ? obs_slots(match, s, 32) : -1, T = g_obsTeams;
+    char b[1200];
+    if (n <= 0) { if (now - g_obsHoldLog > 2000) { g_obsHoldLog = now; logmsg("observer seats: countdown held - the room's slots could not be read (%d)", n); } return 0; }
+    int empty = -1; for (int i = 0; i < n; i++) if (s[i].type == 0 && !s[i].occ) { empty = i; break; }
+    if (empty >= 0) {                                             // an observer is no player: wait for him (the automatch's own time limits apply)
+        if (!g_obsHoldSince) g_obsHoldSince = now;
+        if (g_obsTestAI > 0 && !g_obsAiDone && now - g_obsHoldSince > (DWORD)g_obsTestAI * 1000) {   // STANDS ONLY: two accounts, a third player
+            int src = -1; for (int i = 0; i < n; i++) if (s[i].type == 0 && s[i].occ) { src = i; break; }
+            if (src >= 0) {
+                int r = ((SetSlotFn)(*(void ***)match)[0x50 / 4])(match, s[empty].sid, 2, s[empty].team, s[src].race, s[src].faction, 0, NULL);
+                g_obsAiDone = 1; logmsg("observer seats: STAND TEST (ObsTestAI=%d) - empty player seat %d (team %d) -> Easy computer with seat %d's race %d/%d -> %d",
+                                        g_obsTestAI, empty, s[empty].team, src, s[src].race, s[src].faction, r);
+            }
+        }
+        if (now - g_obsHoldLog > 3000) { g_obsHoldLog = now; obs_fmt(s, n, b, sizeof b);
+            logmsg("observer seats: countdown held - player seat %d (team %d) is empty; an observer does not stand in for a player (%lu ms): %s", empty, s[empty].team, now - g_obsHoldSince, b); }
+        return 0;
+    }
+    g_obsHoldSince = 0;
+    int bad = 0, taken = 0; for (int i = 0; i < n; i++) if (s[i].team < 0 || s[i].team >= T) { if (s[i].occ) taken++; else bad++; }
+    if (bad) {                                                    // the empty extra seats -> their side, as the native builder would
+        if (!g_obsFixAt || now - g_obsFixAt > 1500) {
+            g_obsFixAt = now; g_obsFixes++; obs_fmt(s, n, b, sizeof b);
+            logmsg("observer seats: everyone is in and ready - %d empty seat(s) to their side before the countdown, %d taken stay (try %d): %s", bad, taken, g_obsFixes, b);
+            for (int i = 0; i < n; i++) if ((s[i].team < 0 || s[i].team >= T) && !s[i].occ) {
+                int r = ((SetSlotFn)(*(void ***)match)[0x50 / 4])(match, s[i].sid, s[i].type, i % T, s[i].race, s[i].faction, s[i].level, NULL);
+                logmsg("observer seats: slot %d (sid %d, type %d, empty) team %d -> %d: %d", i, s[i].sid, s[i].type, s[i].team, i % T, r);
+            }
+        }
+        return 0;                                                 // the countdown once the room's own state shows it
+    }
+    int why = -1;
+    if (!obs_layout_ok(s, n, &why)) { if (now - g_obsHoldLog > 3000) { g_obsHoldLog = now; obs_fmt(s, n, b, sizeof b); logmsg("observer seats: countdown held - slot %d does not fit GameInfo's 4 places a side: %s", why, b); } return 0; }
+    if (!g_obsSaidOk) { g_obsSaidOk = 1; obs_fmt(s, n, b, sizeof b);
+        logmsg("observer seats: the room is ready - empty seats on their sides, %d observer(s) in team-%d seats (GameInfo puts them on their side) - the countdown: %s", taken, T, b); }
+    return 1;
+}
+static int __cdecl obs_gate_start(void) {                         // the start message is about to go out (game thread)
+    if (!g_obsK) return 1;
+    void *match = obs_match(); ObsSlot s[32]; int n = match ? obs_slots(match, s, 32) : -1, why = -1; char b[1200];
+    if (n > 0 && obs_layout_ok(s, n, &why)) { obs_fmt(s, n, b, sizeof b); logmsg("observer seats: the start with the room: %s", b); g_obsK = 0; return 1; }
+    if (n > 0) obs_fmt(s, n, b, sizeof b); else b[0] = 0;
+    logmsg("observer seats: START HELD - the room's slots %s (%d, slot %d): %s - the countdown again", n > 0 ? "would kill every game of the room" : "could not be read", n, why, b);
+    g_obsFixAt = 0; g_obsSaidOk = 0; return 0;
 }
 static void obs_install(void) {
-    unsigned char *a = (unsigned char *)0x005FC922; DWORD old; SIZE_T w = 0;
+    unsigned char *a = (unsigned char *)OBS_CALL, *cg = (unsigned char *)CDG_AT, *sg = (unsigned char *)SSG_AT, *gi = (unsigned char *)GIT_AT;
     static const unsigned char want[6] = {0x8B, 0x96, 0x88, 0x01, 0x00, 0x00};
-    if (IsBadReadPtr(a, 6) || memcmp(a, want, 6)) { logmsg("observer seats: 0x5FC922 is not 3.19's (or another add-on has it) - no observer seats"); return; }
+    static const unsigned char cgw[5] = {0x68, 0x7C, 0xF6, 0x08, 0x01}, sgw[5] = {0xE8, 0x9A, 0x01, 0x00, 0x00}, giw[5] = {0xA1, 0x7C, 0x56, 0x33, 0x01};
+    if (IsBadReadPtr(a, 6) || memcmp(a, want, 6) || IsBadReadPtr(cg, 5) || memcmp(cg, cgw, 5) || IsBadReadPtr(sg, 5) || memcmp(sg, sgw, 5) || IsBadReadPtr(gi, 5) || memcmp(gi, giw, 5)) {
+        logmsg("observer seats: DOW2.exe is not 3.19's at 0x5FC922 / 0x4491B3 / 0x4491E7 / 0x4464C5 (or another add-on has them) - no observer seats"); return; }
+    unsigned char *c = VirtualAlloc(NULL, 128, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE); int k = 0;
+    if (!c) { logmsg("observer seats: no memory for the gates - no observer seats"); return; }
+#define OB(x) c[k++] = (unsigned char)(x)
+#define OD(v) do { DWORD v_ = (DWORD)(v); memcpy(c + k, &v_, 4); k += 4; } while (0)
+#define OREL(dest) OD((DWORD)(dest) - (DWORD)(c + k + 4))
+    unsigned char *t1 = c + k;                                   // the countdown gate
+    OB(0x60); OB(0xE8); OREL(obs_gate_cd); OB(0x85); OB(0xC0); OB(0x61);
+    OB(0x0F); OB(0x84); int j1 = k; OD(0);                        // jz skip
+    OB(0x68); OD(CDG_STR); OB(0xE9); OREL(CDG_LOG);
+    *(DWORD *)(c + j1) = (DWORD)(k - (j1 + 4)); OB(0xE9); OREL(CDG_SKIP);
+    unsigned char *t2 = c + k;                                   // the start gate
+    OB(0x60); OB(0xE8); OREL(obs_gate_start); OB(0x85); OB(0xC0); OB(0x61);
+    OB(0x0F); OB(0x84); int j2 = k; OD(0);
+    OB(0xE9); OREL(FN_SENDSTART);
+    *(DWORD *)(c + j2) = (DWORD)(k - (j2 + 4)); OB(0xC2); OB(0x04); OB(0x00);   // ret 4 (SendStartMessage's argument)
+    unsigned char *t3 = c + k;                                   // GameInfo: a slot of team >= 2 -> its side (on 0x44618c's own copy)
+    OB(0x83); OB(0x7B); OB(0x68); OB(0x02);                       // cmp dword [ebx+0x68], 2
+    OB(0x72); OB(0x08);                                           // jb +8 (a side already)
+    OB(0x89); OB(0xF8); OB(0x83); OB(0xE0); OB(0x01);             // mov eax, edi ; and eax, 1
+    OB(0x89); OB(0x43); OB(0x68);                                 // mov [ebx+0x68], eax
+    OB(0xA1); OD(0x0133567C); OB(0xE9); OREL(GIT_BACK);           // the moved instruction, back
+#undef OB
+#undef OD
+#undef OREL
+    FlushInstructionCache(GetCurrentProcess(), c, 128);
     unsigned char b[6]; b[0] = 0xBA; *(DWORD *)(b + 1) = (DWORD)obs_build; b[5] = 0x90;
-    HANDLE mx = patch_lock(); int ok = 0;
-    if (!memcmp(a, want, 6) && VirtualProtect(a, 6, PAGE_EXECUTE_READWRITE, &old)) { ok = WriteProcessMemory(GetCurrentProcess(), a, b, 6, &w) && w == 6; VirtualProtect(a, 6, old, &old); }
-    FlushInstructionCache(GetCurrentProcess(), a, 6); patch_unlock(mx);
-    logmsg(ok ? "observer seats: the AUTOMATCH slot builder call 0x5FC922 -> ours (RoomObservers %d, ObsSlotsTest %d)" : "observer seats: 0x5FC922 could not be patched (RoomObservers %d, ObsSlotsTest %d)", g_obsCfg, g_obsTest);
+    unsigned char sb[5]; sb[0] = 0xE8; *(DWORD *)(sb + 1) = (DWORD)t2 - (DWORD)(sg + 5);
+    int ok = code_jmp(gi, t3, 5) && code_jmp(cg, t1, 5) && code_bytes(sg, sb, 5) && code_bytes(a, b, 6);
+    g_obsOk = ok;
+    logmsg(ok ? "observer seats: the AUTOMATCH slot builder call 0x5FC922 -> ours, the countdown / start gates 0x4491B3 / 0x4491E7, GameInfo's sides 0x4464C5 in (RoomObservers %d, ObsSlotsTest %d, ObsTestAI %d)"
+              : "observer seats: the code could not be patched (RoomObservers %d, ObsSlotsTest %d, ObsTestAI %d) - no observer seats", g_obsCfg, g_obsTest, g_obsTestAI);
+    if (!ok) {                                                    // never seats without both gates: put back what went in
+        if (memcmp(gi, giw, 5)) code_bytes(gi, giw, 5);
+        if (memcmp(cg, cgw, 5)) code_bytes(cg, cgw, 5);
+        if (memcmp(sg, sgw, 5)) code_bytes(sg, sgw, 5);
+        if (memcmp(a, want, 6)) code_bytes(a, want, 6);
+    }
 }
 static void install(void) {
     unsigned char *t = (unsigned char *)HOOK_ADDR;
@@ -2038,7 +2217,9 @@ BOOL WINAPI DllMain(HINSTANCE h, DWORD r, LPVOID _) {
     g_verbose = GetPrivateProfileIntW(L"MMFind", L"Verbose", 0, ini);
     g_pipeCfg = GetPrivateProfileIntW(L"MMFind", L"Pipe", 1, ini) != 0;
     g_boxFrom = GetPrivateProfileIntW(L"MMFind", L"ConnectingBox", 1, ini) != 0;   // 0.50
-    g_obsCfg = GetPrivateProfileIntW(L"MMFind", L"RoomObservers", 0, ini) != 0;   // 0.51: launcher-room observers through the native automatch (unverified: default off)
+    g_obsCfg = GetPrivateProfileIntW(L"MMFind", L"RoomObservers", 1, ini) != 0;   // 0.51: launcher-room observers through the native automatch (0.52: default on - nothing happens
+                                                                                  // without "obs" in the host's ticket / "watch" in an observer's, and the ladder's flag)
+    g_obsTestAI = GetPrivateProfileIntW(L"MMFind", L"ObsTestAI", 0, ini); if (g_obsTestAI < 0 || g_obsTestAI > 120) g_obsTestAI = 0;   // stands only: see obs_gate_cd
     g_obsTest = GetPrivateProfileIntW(L"MMFind", L"ObsSlotsTest", 0, ini); if (g_obsTest < 0 || g_obsTest > 4) g_obsTest = 0;   // stands only: K observer seats in every AUTOMATCH room hosted
     g_debugPipe = GetPrivateProfileIntW(L"MMFind", L"DebugPipe", 0, ini) != 0;   // stands only: menu commands over the pipe   // 0.47: the launcher rooms' pipe (0 = none)
     g_logInvoke = GetPrivateProfileIntW(L"MMFind", L"LogInvoke", 0, ini);   // debug: every engine -> Flash call

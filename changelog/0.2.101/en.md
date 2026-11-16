@@ -1,0 +1,1 @@
+- Automatch (MMFind 0.52): observers of a launcher room can now sit in the match itself (the host no longer crashes at the start when the room has observer seats); waits for the launcher and the server to switch it on.
