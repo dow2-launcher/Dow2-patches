@@ -531,6 +531,9 @@ frameprobe/ - FrameProbe.dll (off), eliteai/ - EliteAI.dll (store id newai since
       races - points from the first minute, generators on every power point, the army past the clock, the push earlier, the orks'
       choice after tier 2 with the price saved (M1), stikkbommas before tankbustas, stormboyz, gretchin only to repair, field repair,
       hero wargear by the enemy, calmer set-up teams and vehicles. EliteAI.dll 0.18 unchanged. Victory point games only.
+    newai-36 (0.2.107): brain 0.15 (eliteai branch newai-36 = brain-s15 + the verifier's M1, DocTrukkFirst off): tankbustas only for
+      a real enemy vehicle, marines' squads and upgrades by the enemy, devastator posts in front of the point, no orders under base
+      turrets without a tank, trukk through turret range, one defender per capper, low-ticket alarm. EliteAI.dll 0.18 unchanged.
 
 ## Building
 
