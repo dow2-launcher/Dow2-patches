@@ -4,6 +4,39 @@ Every version gets an entry here before it reaches `main`. CI then tags `vX.Y.Z`
 version (`X.Y.0`) it also publishes a GitHub Release with the DLLs and the entries since the previous `X.Y.0`.
 The version of the set lives only in `VERSION`; each DLL still writes its own version to its log.
 
+## 0.2.106 — 2026-11-16
+Match marks 3 (store marks-3) and Match speed 4 (store matchspeed-4) - both experiment, off by default, games elite + vanilla +
+igrework: the top-left row (MatchSpeed's pause / speed, Marks' mark button; common/topbar.h) is placed where the game really draws
+its movies, just under the observer's camera panel. AI tester Malum, fb 1489 / 1490 / 1493 / 1500 (New AI 35, an AI-vs-AI match
+watched from an observer slot, 2560 x 1440, UI Scale on): the row was drawn under the observer panel (the ^ - v < person buttons and
+the fog-of-war list), only the buttons' tops showing, so he could not place marks.
+- Cause: topbar 1 took the host movie (resource_notifications, 1600 x 1200) as fitted into the window (showAll: x = px * 1.5 - 160 at
+  1280 x 800). The game lays out its HUD movies itself, slot 6 (+0x18) of each form: size = the movie's stage times
+  0x00B7C130(screen h, k) = clamp(h / 1200 * uiscale * k, 0.5, 1.0) (UIScale.dll: S * k, 0.25 - 4.0); resource_notifications
+  (0x00B46BE0) is then CENTRED in the window, playback_panel_v2 (0x00B4D950, the replay panel and the observer's camera panel,
+  600 x 320) sits at (0, 0). The two agree only while the movie fits the window (up to 1200 lines without UI Scale). At 1440p with
+  UI Scale auto (133 %) the host is 2133 x 1600 at (213, -80): the row (stage 4, 58 after a clamp) came out at the window's
+  (218, -3), under the observer panel. Same overlap at 1280 x 800 with UI Scale auto (0.74: host at 47, -44).
+- Now: both layouts are hooked (vtables 0x01116478 / 0x011119F4 slot +0x18, chained with gfx_hook_slot; the game's result is only
+  copied) and the row goes where the replay panel has its pause button - panel (211, 58), right under the observer's row - in
+  pixels of the panel's own scale, turned into the host's units; the buttons get the panel's on-screen size. Placed again whenever a
+  layout changes (resolution, UI scale). Not laid out yet: the game's formula with k = 1, the panel at (0, 0). The host draws only
+  inside its stage, so where it does not reach the window's corner (1440p and up without UI Scale, ultra-wide) the row moves right /
+  down to the stage's corner - never up. Logs: "... host laid out 213,-80 x1.333 (stage 1600), panel laid out 0,0 x1.333 (stage 600)".
+- Replays: unchanged (Marks' button is inside the replay panel, MatchSpeed is live only).
+- Stand 1 (Elite 3.2.1 / vanilla, Marks 3 + MatchSpeed 4 built from this tree; before = main's Marks 2 + MatchSpeed 3; shots in
+  /var/www/media/dow2_shots/marks_1116 on prod_gpu). 2560 x 1440 + UIScale auto (Malum's setup: his log bundle has
+  screenwidth 2560, screenheight 1440, uiscale ON): before - the row at the window's very top (stage 4, 58); after - player view
+  and observer custom game (host in an observer slot, computers 2v2) the row right under the observer panel ("host laid out
+  213,-80 x1.333, panel laid out 0,0 x1.333"), pause / mark clicks work in the player view; replay - Marks' button in the replay
+  panel as before. 1280 x 800 + UIScale auto, observer custom game: before - the row under the observer panel (only the pause
+  button out), after - right under it. 1280 x 800 without UI Scale: the row where it was (stage 50.5, 58 vs 51, 58), speed / mark
+  clicks work. Vanilla 2560 x 1440 without UI Scale: host 1600 x 1200 at (480, 120), the row at its corner (window 484, 124),
+  clear of the observer panel.
+- Not checked: clicks in an observer match - the stand's observer custom games freeze right after the start today (grey, static
+  frame, the main thread waiting) with main's DLLs and with neither DLL loaded alike, so not this change; the placement there was
+  read from the shot. Not checked at 1080p / ultra-wide / 4K on the stand (the same two layouts in the log decide it).
+
 ## 0.2.105 — 2026-11-16
 New AI 35 (store newai-35, experiment, off by default, Elite only): step 14 of the brain (0.14) for both races + the verifier's
 must-fix M1; EliteAI.dll 0.18 unchanged. Made and checked in victory point games only. Every other race still newai-23.1.
