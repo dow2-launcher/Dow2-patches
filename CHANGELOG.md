@@ -4,6 +4,40 @@ Every version gets an entry here before it reaches `main`. CI then tags `vX.Y.Z`
 version (`X.Y.0`) it also publishes a GitHub Release with the DLLs and the entries since the previous `X.Y.0`.
 The version of the set lives only in `VERSION`; each DLL still writes its own version to its log.
 
+## 0.2.101 — 2026-11-16
+New AI 33 (store newai-33, experiment, off by default, Elite only): step 13 of the brain (0.13) - both races (the race for points,
+own generators, tier 3 when it pays, jumps), the space marines (recovery, reinforcement cap, scouts' wargear, kiting, seen turrets),
+the orks (painboy, trukk, reviving an ally's hero, the nest of setup teams) and Malum's match of 16.11 (D1-D5). EliteAI.dll 0.17
+unchanged. Every other race still newai-23.1.
+eliteai branch newai-33 c70089a = brain-s13 0f64054 (brain-32 cb98c4e = newai-32's brain + step 13 6a75714, brain 0.13 + the verifier's
+must-fix M1 0f64054: SM.see_built skips buildings within [Lua] Brain_TechSeeHomeR = 45 m of home, so the HQ's three base heavy bolter
+turrets no longer fill the techmarine's turret limit) with main.ai, mechanics.ai and the vanilla-base sources of
+strategy_tech_purchase.ai / strategy_unit_purchase.ai of newai-31 bee001c, as newai-24 .. 32; dispatchers rebuilt by
+tools/vanilla_dispatch.py, [Lua] Brain_Races default "orks,space_marines" kept. cb98c4e..0f64054 did not touch main.ai, mechanics.ai,
+vanilla/, mod_elite/ or the dispatcher tool. Served files differing from newai-32: default.ai (the brain; netorder.ai modes 19 "into the
+transport" 0x38, 20 "all out" 0x3A, 21 "revive a hero" 0x35/01, ability 79) and append/scar/elite/elite.scar (+1 line: ability 79, the
+painboy's ork_git_sauce).
+- Both races (every rule behind a [Lua] Brain_ key, 0 = newai-32): RaceLow / RaceFight / FarmFirst (points when behind, also with equal
+  points and few tickets left; the fist fights only at a needed VP or home; a lost farm before a side fight), RazeOwn (own former
+  generators not razed), EconTierPays / EconTierUnit (T3 when a T2 squad, room and money for the tier + half its squad exist; a squad of
+  the new tier over the clocks), JumpJudge / JumpLine / JumpBasePad (jumps and teleports only into our fight, not into a trap, not
+  within 70 m of the enemy HQ), HeroHot / HeroNoSetupClose (a hero under focus fire gets the retreat order), ReviveAlly (only a hero
+  revives an ally's hero).
+- Space marines: EconRecTier, EconReinfCap, EconUpgEach / EconUpgAlt (scouts: shotguns, the second squad sniper rifles), Kite, TechSee
+  (+ M1), SetupOwn (a set-up team has one owner of its marching orders; marching orders per minute 10.4 -> 4.4), EconGearFirst,
+  TechFirstFree (an amount: 0 = new, newai-32's behaviour = 150).
+- Orks: DocPain (painboy, heal = ability 79), DocTrukk / DocTrukkRide / DocTrukkPark (trukk taxi for up to three slugga mobs, parked
+  40 m behind the fist), DocNest / DocNestDread, DocStormSetup; step 12 verifier's four notes.
+- Check (independent verifier, newai_1110/VERIFY_13_RU.md: READY WITH NOTES, with must-fix M1 - applied here): 0 Lua errors in all its
+  runs; CRC 7 of 7 of its own recordings equal over the whole game (with the author's nine: 16 of 16); brain-vs-brain BR ORD byte-equal
+  to the author's in 14 of 14; with M1 the techmarine built 6 turrets in 4 of 4 games (0 without it). Stub 319 PASS, 0 FAIL on the
+  release tree. Release tree on the fastbench (bb_kom_tm_paletoothgor, bb_mek_tm_leviathanhiv): 0 Lua errors, the techmarine built 2 + 1
+  turrets, brain orders byte-equal to the verifier's v13fix runs.
+- Notes (not blocking): A1 (race for points), B5 (the recovery exit) and D5 (stormboyz vs setup teams: 1 in 14 games) not shown on the
+  bench; the marines reach T3 in 3 of 14 games (was 10); 10 of 21 trukks die and the orks lose more squads vs the old layer (14 of 36
+  ahead vs 18, squads lost 58 vs 37; Brain_DocTrukk=0 turns the trukk off); SetupOwn also holds "back to the fist / step back / fight
+  lost" walks, a set-up team leaves only by retreat - step 14; HeroHot fires at health >= 0.8 in 12 of 41 - step 14.
+
 ## 0.2.100 — 2026-11-16
 ReplayOpen 4 (store replayopen-4) and LiveReplay 5 (store livereplay-5), siritos 16.11: "a replay from the launcher hangs ~15 s in the
 menu, then Connecting and at once the loading" (research reports/siritos_1116/RESEARCH_TECH_RU.md 1.1-1.6).
