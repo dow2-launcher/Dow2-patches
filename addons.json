@@ -1552,7 +1552,7 @@
     }
   },
   "paralleldraw": {
-    "version": "3",
+    "version": "4",
     "dll": "ParallelDraw.dll",
     "default": false,
     "games": [

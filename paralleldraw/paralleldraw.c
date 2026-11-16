@@ -1,6 +1,7 @@
 // ParallelDraw.dll - DoW2 Retribution 3.19 (DOW2.exe 3.19.10320): the draw packets of the animated models in a render list are
 // built on several CPU cores; the packets are still handed to the renderer (Spooge) by the main thread, in the original order.
-// Add-on paralleldraw-3 (experiment, off by default, Elite and vanilla); stand prototype latelag_1114 stage 2 (v7).
+// Add-on paralleldraw-4 (experiment, off by default, Elite and vanilla; store id paralleldraw_r2); stand prototype latelag_1114
+// stage 2 (v7).
 //
 // How the game draws a scene: the render-list walk 0x0078B730 (stack args: lists, pass, deferred list; eax = view buffer) calls
 // vtable slot 7 (+0x1C) of every render object of the list, in list order: list 0 (with the deferred list), then the deferred
@@ -26,7 +27,7 @@
 //     - shaders: sp::Device::GetShader and 0x006C5E20 (shader-variable layout) look up their sorted (key, value) vectors
 //       ourselves under the reader lock; a miss runs the original under the writer lock, as does the per-model packet-buffer
 //       creation (0x006CEB94..0x006CED72);
-//     - material bindings 0x006C2880 up to its copy loop: reader lock, upgraded to the writer lock on a miss (or when dirty);
+//     - material bindings 0x006C2880 (both calls, the whole call): reader lock, upgraded to the writer lock on a miss (or when dirty);
 //     - attachments 0x00C771D0 (only when the model has any) and 0x00772FC0: exclusive.
 //     Lights (0x006B12E0 -> 0x006B13B0/0x006B1440) only read the light manager, under the game's own light-manager lock: for
 //     the parallel phase the main thread holds that lock for all building threads, whose own Enter/Leave on it are skipped.
@@ -48,6 +49,16 @@
 // copies it into dow2-patches\, the launcher's winmm.dll loads it ~0.1 s after the start; Spooge.dll and Platform.dll are
 // static imports of DOW2.exe, so they are in and bound by then). Vanilla runs the same DOW2.exe 3.19.10320, Spooge.dll and
 // Platform.dll (Elite is DOW2.exe -modname Elite) and nothing here depends on the mod: no mod name, ini/log next to the DLL.
+// Version 4 (16.11.2026, a player's crash in a 3v3: three C0000005 on the workers at DOW2.exe+275BD7 / +275BDC / +275E19 while
+// building, then WER): 0x675BD0 is the 3x4 matrix product in the copy loop of the material binding table 0x6C2880 (ecx = the
+// binding's own matrix, eax = source, edx = destination, all three from the table's entry vector). The table (per material,
+// shared by every model with it) is a sorted vector of 0x14-byte nodes (layout pair -> vector of {src, dst, binding} 0xC): a
+// miss inserts a node at its place (0x6C31F0: the nodes after it shifted, their entry vectors copied and the old ones freed, or
+// the node vector reallocated when full); a dirty table is sorted and its duplicates erased at the next lookup. Version 2/3 released the reader lock BEFORE the copy loop, so a worker could walk a node and entry vector that
+// another thread's miss or sort had just shifted or freed: garbage ecx / eax / edx (the data addresses 0x00350035, 9504DEEE, D8626900).
+// The reader lock is now held until 0x6C2880 returns (the copy loop is pure arithmetic: no lock order change), for its second
+// call (0x6C1DE5) too. And a fatal exception inside a build no longer reaches the game's crash handler (pd_call / veh /
+// abandon_build): the model and the rest of the frame are drawn by the game's own code and the workers stay off for the session.
 #define _WIN32_WINNT 0x0601
 #include <windows.h>
 #include <stdio.h>
@@ -71,6 +82,7 @@
 #define RET_3A0      0x006CED72u
 #define SITE_6C2     0x006CEAFDu   // call 0x6c2880
 #define FN_6C2       0x006C2880u
+#define SITE_6C2B    0x006C1DE5u   // call 0x6c2880 (in 0x6C1DD0)
 #define SITE_6C2LOOP 0x006C2B10u   // mov esi,[ebx+8]; cmp esi,[ebx+0xc] (6 bytes) - before the copy loop
 #define C6C2LOOP     0x006C2B16u
 #define SITE_5E20    0x006CEDDDu   // call 0x6c5e20
@@ -94,7 +106,17 @@ typedef void (__attribute__((thiscall)) *DevFn)(void *, void *);
 static wchar_t g_dir[MAX_PATH], g_log[MAX_PATH], g_ini[MAX_PATH];
 static volatile LONG g_mode = 1;
 static int g_threads, g_stats, g_wd_ms = 100, g_off_ms = 2000, g_racetest;
-static volatile LONG g_par_off;        // a stall of g_off_ms or more: no workers for the rest of the game session
+static volatile LONG g_par_off;        // a stall of g_off_ms or more, or an exception while building: no workers for the rest of the game session
+static volatile LONG g_abort;          // an exception abandoned a build: the rest of the batch is left to the walk (main thread)
+static volatile LONG s_recovered;
+static HMODULE g_self;
+// stand only (ParallelDraw.ini): MatOld=1 = the material lock released before the copy loop of 0x6C2880 as in version 3;
+// MatSleep=N = a building worker sleeps N ms at the start of every 16th copy loop (widens the window of the version 3 race);
+// ColdPar=1 = models seen for the first time are built by the workers too (their cache misses fall into the parallel phase)
+// FaultTest=N = every N-th copy loop of a building worker in the phase walks a garbage entry vector (esi = 0x10: reads the null page, like the
+// player's crash): an access violation inside DOW2.exe, to test the abandoned-build path; FaultKeep=1 = the workers stay on after it
+static int g_matold, g_matsleep, g_coldpar, g_faulttest, g_faultkeep;
+static volatile LONG s_matmiss, s_matdirty;
 static DWORD g_main_tid, g_tls = TLS_OUT_OF_INDEXES;
 static S7Fn o_s7 = (S7Fn)FN_S7;
 static DevFn o_dev;
@@ -113,6 +135,7 @@ static void logmsg(const char *fmt, ...) {
 #define ARENA 32768
 #define MAXI 8192
 typedef struct { void *pkt, *list; } Emit;
+typedef struct Item_ Item_;
 typedef struct {
     int id, rec_on;            // rec_on: emits are recorded into arena[depth]
     int depth, n[MAXD];        // arena fill per depth
@@ -131,9 +154,18 @@ typedef struct {
     DWORD tid;
     // light-lock Enter calls of this thread: skipped (handed over to the main thread) or real; Leave pops the same decision
     void *lcs_stk[16]; char lskip[16]; int llsp;
+    // other game locks (Plat::RecursiveMutex) really entered while building: left again if the build is abandoned (version 4)
+    void *ocs[16]; int olsp;
+    // version 4: a build guarded by pd_call - jb = esp after its pushes, the thread's SEH list (fs:0), armed, x87 control word,
+    // MXCSR, recovered; exc_* = the exception the build was abandoned on (written by veh)
+    volatile DWORD jb[6];
+    Item_ *volatile cur_it;    // item being built
+    int rec_s;                 // arena fill at its start
+    DWORD exc_code, exc_off; void *exc_at, *exc_data; char exc_mod[48];
 } __attribute__((aligned(64))) Ctx;
 static Ctx g_ctx[MAXT];
-typedef struct { void *obj, *a3; int thr, start, n, d; char rebuild, done, cold; } Item;
+struct Item_ { void *obj, *a3; int thr, start, n, d; char rebuild, done, cold; };
+typedef struct Item_ Item;
 typedef struct {
     void *a2, *e; int ni; Item *it;
     int *hkey;                 // open-addressing table obj -> item index + 1
@@ -230,18 +262,28 @@ void __cdecl big_leave(void) {
 // the same time adds a duplicate entry, which the lookup tolerates)
 void __cdecl enter_mat(BYTE *p1) {
     Ctx *c = ctx_get(); if (!c || c->matmode || !g_phase) return;
-    if (p1[0x19]) { lk_x(c, LK_MAT); c->matmode = 2; return; }
+    if (p1[0x19]) { InterlockedIncrement(&s_matdirty); lk_x(c, LK_MAT); c->matmode = 2; return; }
     acq_s(c, LK_MAT);
     c->matmode = 1;
 }
 void __cdecl upgrade_mat(void) {
     Ctx *c = ctx_get(); if (!c || c->matmode != 1) return;
+    InterlockedIncrement(&s_matmiss);
     rel_s(c, LK_MAT); lk_x(c, LK_MAT); c->matmode = 2;
 }
 void __cdecl leave_mat(void) {
     Ctx *c = ctx_get(); if (!c || !c->matmode) return;
     if (c->matmode == 1) rel_s(c, LK_MAT); else lk_unx(c, LK_MAT);
     c->matmode = 0;
+}
+// stand only: MatOld = unlock here as version 3 did; MatSleep = widen the window (a worker in the phase, every 16th loop)
+int __cdecl at_copy_loop(void) {
+    if (g_matold) leave_mat();
+    Ctx *c = g_phase ? ctx_get() : NULL;
+    if (!c || !c->id || !c->rec_on) return 0;
+    if (g_matsleep) { static volatile LONG k; if (!(InterlockedIncrement(&k) & 15)) Sleep(g_matsleep); }
+    if (g_faulttest > 0) { static volatile LONG f; if (InterlockedIncrement(&f) % g_faulttest == 0) return 1; }
+    return 0;
 }
 // sp::Device::GetShader hit path without the exclusive lock: Spooge keeps (key, shader) sorted by key at [dev+8, dev+0xC), resorted
 // when [dev+0x15] is set; misses create the shader and insert -> the original under the exclusive lock
@@ -319,14 +361,68 @@ static void vec_push(void *list, void *val) {
 }
 
 // ---------------------------------------------------------------- building
+typedef void (__attribute__((thiscall)) *MxFn)(void *);
+static MxFn o_mx_enter, o_mx_leave;   // Plat::RecursiveMutex Enter / Leave (see hk_mx_enter)
+// Version 4: every build runs under pd_call. A fatal exception inside it (access violation and the like, in the game's code) does
+// not reach the game's crash handler: veh points the thread back at pd_recover with the stack, SEH list (fs:0) and FPU state of
+// pd_call's entry, pd_call returns 1, and abandon_build gives back what the abandoned build held (our locks, the game locks it
+// entered) and leaves the model to the walk (main thread, the game's own build at its own place). The rest of the batch is
+// left to the walk too, and the workers stay off for the rest of the game session.
+// int pd_call(DWORD *jb, void *obj, void *a2, void *a3, void *e): 0 = built, 1 = abandoned
+extern int __cdecl pd_call(volatile DWORD *jb, void *obj, void *a2, void *a3, void *e);
+extern char pd_recover[];
+__asm__(".text\n_pd_call:\n\t"
+        "pushl %ebp\n\t" "pushl %ebx\n\t" "pushl %esi\n\t" "pushl %edi\n\t"
+        "movl 20(%esp), %eax\n\t"                       // jb
+        "movl %esp, (%eax)\n\t"
+        "movl %fs:0, %ecx\n\t" "movl %ecx, 4(%eax)\n\t"
+        "fnstcw 12(%eax)\n\t" "stmxcsr 16(%eax)\n\t"
+        "movl $1, 8(%eax)\n\t"                          // armed
+        "pushl 36(%esp)\n\t" "pushl 36(%esp)\n\t" "pushl 36(%esp)\n\t"   // e, a3, a2
+        "movl 36(%esp), %ecx\n\t"                       // obj (thiscall, the callee pops its 3 args)
+        "movl $0x007525D0, %eax\n\t" "call *%eax\n\t"
+        "movl 20(%esp), %eax\n\t" "movl $0, 8(%eax)\n\t"
+        "xorl %eax, %eax\n\t"
+        "popl %edi\n\t" "popl %esi\n\t" "popl %ebx\n\t" "popl %ebp\n\t" "ret\n"
+        "_pd_recover:\n\t"                              // esp = jb[0] (set by veh)
+        "cld\n\t" "fninit\n\t"
+        "movl 20(%esp), %eax\n\t"
+        "movl 4(%eax), %ecx\n\t" "movl %ecx, %fs:0\n\t"   // the SEH list of pd_call's entry (the build's frames are gone)
+        "fldcw 12(%eax)\n\t" "ldmxcsr 16(%eax)\n\t"
+        "movl $0, 8(%eax)\n\t" "movl $1, 20(%eax)\n\t"
+        "movl $1, %eax\n\t"
+        "popl %edi\n\t" "popl %esi\n\t" "popl %ebx\n\t" "popl %ebp\n\t" "ret\n");
+
+static void abandon_build(Ctx *c, Item *it, int s) {
+    for (int k = 0; k < 4; k++) {                                   // our locks
+        if (c->x[k] && g_wr[k][0] == (LONG)c->id + 1) rel_x(k);
+        c->x[k] = 0;
+        if (c->rd[k]) rel_s(c, k);
+    }
+    c->matmode = 0; c->lsp = 0; c->spin_k = 0; c->mx_wait = NULL;
+    int no = c->olsp > 16 ? 16 : c->olsp, nl = c->llsp > 16 ? 16 : c->llsp;
+    while (no > 0) o_mx_leave(c->ocs[--no]);                        // game locks the build entered (not the skipped light lock)
+    while (nl > 0) { nl--; if (!c->lskip[nl]) o_mx_leave(c->lcs_stk[nl]); }
+    c->olsp = 0; c->llsp = 0;
+    c->n[it->d] = s;                                                // its records are dropped
+    it->thr = c->id; it->start = s; it->n = 0; it->rebuild = 1;     // the walk builds it (main thread, the game's own code)
+    InterlockedExchange(&g_abort, 1);
+    if (!g_faultkeep) InterlockedExchange(&g_par_off, 1);
+    LONG r = InterlockedIncrement(&s_recovered);
+    if (r <= 3) logmsg("EXCEPTION %08lX at %s+%lX (%p), data %p, on %s %d (tid %lu) building model %p: build abandoned, the model and the "
+                       "rest of this frame are drawn by the game itself; workers off for the rest of this game session",
+                       c->exc_code, c->exc_mod, c->exc_off, c->exc_at, c->exc_data, c->id ? "worker" : "main thread", c->id, c->tid, it->obj);
+}
 static void build_item(Ctx *c, Item *it, void *a2, void *e) {
     int d = it->d; c->depth = d;
     int s = c->n[d];
     LARGE_INTEGER t; QueryPerformanceCounter(&t); c->t_cur = t.QuadPart; c->cur = it->obj;
+    c->cur_it = it; c->rec_s = s; c->olsp = 0;
     c->rec_on = 1;
-    o_s7(it->obj, a2, it->a3, e);
+    int lost = c->jb[2] ? (o_s7(it->obj, a2, it->a3, e), 0) : pd_call(c->jb, it->obj, a2, it->a3, e);   // not nested
     c->rec_on = 0;
-    c->cur = NULL;
+    c->cur = NULL; c->cur_it = NULL;
+    if (lost) { c->jb[5] = 0; abandon_build(c, it, s); return; }
     it->thr = c->id; it->start = s; it->n = c->n[d] - s;
 }
 static void run_todo(Ctx *c) {
@@ -336,6 +432,10 @@ static void run_todo(Ctx *c) {
         if (g_racetest && c->id && i >= n) Sleep(g_racetest);              // stand: the window version 1 lost a race in
         if (i >= n) { if (c->id && g_batchno != b) InterlockedIncrement(&s_late); return; }   // s_late: version 1 could have raced
         // a valid number: the batch stays alive (and g_todo, g_cur_*, g_fcw unchanged) until this model is counted in g_done
+        if (g_abort) {                                                       // a build was abandoned: the walk builds the rest
+            Item *it = g_todo[i]; it->thr = c->id; it->start = c->n[it->d]; it->n = 0; it->rebuild = 1;
+            InterlockedIncrement(&g_done); continue;
+        }
         if (c->id) { unsigned short fcw = g_fcw; unsigned int mx = g_mxcsr; __asm__ volatile("fldcw %0" :: "m"(fcw)); __asm__ volatile("ldmxcsr %0" :: "m"(mx)); }
         build_item(c, g_todo[i], g_cur_a2, g_cur_e);
         if (c->id) InterlockedIncrement(&s_byworker);
@@ -357,8 +457,6 @@ static DWORD WINAPI worker(LPVOID arg) {
 // light-constant fill (0x006B13B0, 0x006B1440) - it would serialise the workers. The light manager is only read while drawing, so
 // for the parallel phase the main thread takes that lock once on behalf of all building threads (foreign threads still wait for
 // it as before) and the building threads' own Enter/Leave on it are no-ops (DOW2.exe's imports of RecursiveMutex::Enter/Leave).
-typedef void (__attribute__((thiscall)) *MxFn)(void *);
-static MxFn o_mx_enter, o_mx_leave;
 static void *volatile g_light_cs;
 static volatile LONG s_mx_skipped;
 // Plat::RecursiveMutex is a CRITICAL_SECTION (Platform.dll: Enter = EnterCriticalSection(this)). Whether a light-lock Enter was
@@ -374,10 +472,14 @@ static void __attribute__((fastcall)) hk_mx_enter(void *cs) {
         if (c->llsp < 16) { c->lcs_stk[c->llsp] = cs; c->lskip[c->llsp] = (char)skip; }
         c->llsp++;
         if (skip) { InterlockedIncrement(&s_mx_skipped); return; }
-    } else if (g_phase) {                                           // another game lock taken while building in the phase
-        InterlockedIncrement(&s_mx_other);
-        if (TryEnterCriticalSection((CRITICAL_SECTION *)cs)) return;
-        InterlockedIncrement(&s_mx_other_busy);
+    } else if (cs && c->rec_on) {                                   // another game lock taken while building: remembered
+        if (c->olsp < 16) c->ocs[c->olsp] = cs;                     // (left again if the build is abandoned)
+        c->olsp++;
+        if (g_phase) {
+            InterlockedIncrement(&s_mx_other);
+            if (TryEnterCriticalSection((CRITICAL_SECTION *)cs)) return;
+            InterlockedIncrement(&s_mx_other_busy);
+        }
     }
     c->mx_wait = cs; o_mx_enter(cs); c->mx_wait = NULL;
 }
@@ -386,7 +488,7 @@ static void __attribute__((fastcall)) hk_mx_leave(void *cs) {
     if (c && cs && c->llsp > 0 && (c->llsp > 16 || c->lcs_stk[c->llsp - 1] == cs)) {
         c->llsp--;
         if (c->llsp < 16 && c->lskip[c->llsp]) return;
-    }
+    } else if (c && cs && c->olsp > 0 && (c->olsp > 16 || c->ocs[c->olsp - 1] == cs)) c->olsp--;
     o_mx_leave(cs);
 }
 static void *light_cs(void) { void *m = *(void **)0x013351B4u; return m ? *(void **)m : NULL; }
@@ -470,7 +572,8 @@ void __cdecl pre_batch(void *e, void **lists, void *a2, void *a3) {
     g_nhused[d] = 0;
     LONG mode = g_mode;
     if (mode != 1 && mode != 2) return;
-    if (mode == 1 && g_par_off) return;                              // switched off after a stall: the game's own walk
+    if (mode == 1 && g_par_off) return;                              // switched off after a stall or an exception: the game's own walk
+    InterlockedExchange(&g_abort, 0);
     LARGE_INTEGER q0, q1; QueryPerformanceCounter(&q0);
     // the walk's lists: list 0 (deferred list a3), 5 buckets at +0x30, 2 at +0x6C (deferred list 0)
     int ni = 0;
@@ -500,9 +603,12 @@ void __cdecl pre_batch(void *e, void **lists, void *a2, void *a3) {
     int nt = 0;
     for (int i = 0; i < ni; i++) {
         Item *it = &g_items[d][i];
-        if (mode == 2 || it->cold || !g_nworkers) { if (it->cold) s_cold++; build_item(m, it, a2, e); }
+        if (it->cold) s_cold++;
+        if (g_abort) it->rebuild = 1;                                // a build was abandoned: the walk builds the rest
+        else if (mode == 2 || (it->cold && !g_coldpar) || !g_nworkers) build_item(m, it, a2, e);
         else g_todo[nt++] = it;
     }
+    if (nt && g_abort) { for (int i = 0; i < nt; i++) g_todo[i]->rebuild = 1; nt = 0; }
     if (nt) {
         unsigned short fcw; unsigned int mxc;
         __asm__ volatile("fnstcw %0" : "=m"(fcw)); __asm__ volatile("stmxcsr %0" : "=m"(mxc));
@@ -545,7 +651,9 @@ void __cdecl pre_batch(void *e, void **lists, void *a2, void *a3) {
     }
     LONG ov = 0;
     for (int t = 0; t <= g_nworkers; t++) { ov += g_ctx[t].overflow; g_ctx[t].overflow = 0; }
-    if (ov) {                                                               // an arena overflowed: rebuild everything in the walk
+    if (g_abort) {                                                          // an abandoned build: the whole frame by the game itself
+        for (int i = 0; i < ni; i++) g_items[d][i].rebuild = 1;
+    } else if (ov) {                                                               // an arena overflowed: rebuild everything in the walk
         s_overflow += ov;
         for (int i = 0; i < ni; i++) g_items[d][i].rebuild = 1;
     } else mark_dups(d, ni);
@@ -596,7 +704,7 @@ static void __attribute__((fastcall)) hk_s7(void *self, void *edx, void *a2, voi
 
 // ---------------------------------------------------------------- asm thunks
 // 0x78B730 entry: pre_batch(eax, a1, a2, a3), original walk, post_batch
-extern char th_rl[], th_rl_orig[], th_push[], th_miss[], th_3a0[], th_6c2[], th_6c2loop[], th_6c2miss[], th_gs_slow[], th_5e20_slow[], th_5e20[], th_gs[], th_c771[], th_2fc0[];
+extern char th_rl[], th_rl_orig[], th_push[], th_miss[], th_3a0[], th_6c2[], th_6c2b[], th_6c2loop[], th_6c2miss[], th_gs_slow[], th_5e20_slow[], th_5e20[], th_gs[], th_c771[], th_2fc0[];
 __asm__(
     ".text\n"
     "_th_rl:\n\t"
@@ -634,16 +742,28 @@ __asm__(
     "3:\n\t"
     "pushal\n\t" "pushfl\n\t" "call _big_leave\n\t" "popfl\n\t" "popal\n\t"
     "pushl $0x006CED72\n\t" "ret\n"
-    // material binding lookup: lock at the call, unlock before the copy loop
+    // material bindings 0x6C2880: lock at the call, unlock after it returns (version 4; version 3 unlocked before the copy loop,
+    // which reads the table's node and its entry vector - freed or moved by another thread's miss / sort: the 16.11 crash)
     "_th_6c2:\n\t"
     "pushal\n\t" "pushfl\n\t" "pushl 0x28(%esp)\n\t" "call _enter_mat\n\t" "addl $4, %esp\n\t" "popfl\n\t" "popal\n\t"
-    "pushl $0x006C2880\n\t" "ret\n"
+    "movl $8f, (%esp)\n\t" "pushl $0x006C2880\n\t" "ret\n"
+    "8:\n\t"
+    "pushal\n\t" "pushfl\n\t" "call _leave_mat\n\t" "popfl\n\t" "popal\n\t"
+    "pushl $0x006CEB02\n\t" "ret\n"
+    "_th_6c2b:\n\t"                     /* the other call of 0x6C2880 (0x6C1DE5 in 0x6C1DD0), same lock */
+    "pushal\n\t" "pushfl\n\t" "pushl 0x28(%esp)\n\t" "call _enter_mat\n\t" "addl $4, %esp\n\t" "popfl\n\t" "popal\n\t"
+    "movl $8f, (%esp)\n\t" "pushl $0x006C2880\n\t" "ret\n"
+    "8:\n\t"
+    "pushal\n\t" "pushfl\n\t" "call _leave_mat\n\t" "popfl\n\t" "popal\n\t"
+    "pushl $0x006C1DEA\n\t" "ret\n"
     "_th_6c2miss:\n\t"
     "pushal\n\t" "pushfl\n\t" "call _upgrade_mat\n\t" "popfl\n\t" "popal\n\t"
     "xorl %ebx, %ebx\n\t" "movl %ebx, 0x24(%esp)\n\t"
     "pushl $0x006C290C\n\t" "ret\n"
-    "_th_6c2loop:\n\t"
-    "pushal\n\t" "pushfl\n\t" "call _leave_mat\n\t" "popfl\n\t" "popal\n\t"
+    "_th_6c2loop:\n\t"                  /* stand only (MatOld / MatSleep / FaultTest): before the copy loop */
+    "pushal\n\t" "pushfl\n\t" "call _at_copy_loop\n\t" "testl %eax, %eax\n\t" "jz 7f\n\t"
+    "popfl\n\t" "popal\n\t" "movl $0x00000010, %esi\n\t" "pushl $0x006C2B20\n\t" "ret\n"   /* FaultTest: the loop body, esi = 0x10 (null page) */
+    "7:\n\t" "popfl\n\t" "popal\n\t"
     "movl 8(%ebx), %esi\n\t" "cmpl 0xc(%ebx), %esi\n\t"
     "pushl $0x006C2B16\n\t" "ret\n"      /* push/ret keep the flags of the cmp */
 );
@@ -676,26 +796,39 @@ __asm__(".text\n_th_gs:\n\t"
         "movl %eax, 0x20(%esp)\n\t" "popfl\n\t" "popal\n\t" "ret $8\n"
         "1:\n\t" "popfl\n\t" "popal\n\t" "jmp _th_5e20_slow\n");
 
-// ---------------------------------------------------------------- crash note
-// A crash inside the game ends in the game's BugSplat handler (TerminateProcess, nothing in the Windows log). A fatal exception on
-// one of our workers - or on the main thread while it builds in the parallel phase - writes one line first, without the C runtime.
+// ---------------------------------------------------------------- exceptions while building
+// A fatal exception on one of our workers - or on the main thread while it builds - used to end in the game's BugSplat handler
+// (TerminateProcess). Version 4: inside a build guarded by pd_call (armed) it is turned into an abandoned build (see pd_call) when
+// it is an access violation / illegal instruction / division by zero outside ntdll, kernel32/kernelbase and this DLL and the
+// thread is not waiting on a lock; anything else still writes one line (without the C runtime) and goes on to the game's handler.
 static volatile LONG s_exc;
+static int mod_is(const char *mod, const char *n) { return !lstrcmpiA(mod, n); }
 static LONG CALLBACK veh(EXCEPTION_POINTERS *ep) {
     DWORD code = ep->ExceptionRecord->ExceptionCode;
     if (code != EXCEPTION_ACCESS_VIOLATION && code != EXCEPTION_ILLEGAL_INSTRUCTION && code != EXCEPTION_PRIV_INSTRUCTION
         && code != EXCEPTION_INT_DIVIDE_BY_ZERO && code != EXCEPTION_STACK_OVERFLOW && code != 0xC0000409u) return EXCEPTION_CONTINUE_SEARCH;
     Ctx *c = ctx_get();
-    if (!c || (c->id == 0 && !g_phase)) return EXCEPTION_CONTINUE_SEARCH;
-    if (InterlockedIncrement(&s_exc) > 3) return EXCEPTION_CONTINUE_SEARCH;
+    if (!c || (c->id == 0 && !g_phase && !c->jb[2])) return EXCEPTION_CONTINUE_SEARCH;
     void *at = ep->ExceptionRecord->ExceptionAddress; HMODULE m = NULL; char mod[MAX_PATH] = "?";
     if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, (LPCSTR)at, &m) && m) {
         GetModuleFileNameA(m, mod, sizeof mod); char *q = strrchr(mod, '\\'); if (q) memmove(mod, q + 1, strlen(q));
     }
+    void *data = ep->ExceptionRecord->NumberParameters > 1 ? (void *)ep->ExceptionRecord->ExceptionInformation[1] : NULL;
+    int ok = c->jb[2] && c->rec_on && c->cur_it && code != EXCEPTION_STACK_OVERFLOW && code != 0xC0000409u
+             && m != g_self && !mod_is(mod, "ntdll.dll") && !mod_is(mod, "kernel32.dll") && !mod_is(mod, "kernelbase.dll")
+             && !c->spin_k && !c->mx_wait && (s_recovered < 64 || g_faultkeep);
+    if (ok) {
+        c->exc_code = code; c->exc_at = at; c->exc_data = data; c->exc_off = (DWORD)((char *)at - (char *)m);
+        lstrcpynA(c->exc_mod, mod, sizeof c->exc_mod);
+        CONTEXT *x = ep->ContextRecord;
+        x->Esp = c->jb[0]; x->Eip = (DWORD)pd_recover; x->EFlags &= ~0x400u;
+        return EXCEPTION_CONTINUE_EXECUTION;
+    }
+    if (InterlockedIncrement(&s_exc) > 3) return EXCEPTION_CONTINUE_SEARCH;
     void *obj = c->cur; SYSTEMTIME t; GetLocalTime(&t); char b[512];
     int n = wsprintfA(b, "%02d:%02d:%02d EXCEPTION %08lX at %s+%lX (%p), data %p, on %s %d (tid %lu) building model %p - the game's crash "
                       "handler takes over\r\n", t.wHour, t.wMinute, t.wSecond, code, mod, (DWORD)((char *)at - (char *)m), at,
-                      ep->ExceptionRecord->NumberParameters > 1 ? (void *)ep->ExceptionRecord->ExceptionInformation[1] : NULL,
-                      c->id ? "worker" : "main thread", c->id, GetCurrentThreadId(), obj);
+                      data, c->id ? "worker" : "main thread", c->id, GetCurrentThreadId(), obj);
     HANDLE f = CreateFileW(g_log, FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_ALWAYS, 0, NULL);
     if (f != INVALID_HANDLE_VALUE) { DWORD w; WriteFile(f, b, n, &w, NULL); CloseHandle(f); }
     return EXCEPTION_CONTINUE_SEARCH;
@@ -743,13 +876,15 @@ static DWORD WINAPI logger(LPVOID _) {
                "unconsumed %ld, replayed %ld, walks inside a build %ld, overflow %ld, lock waits sh/li/at/mat %ld/%ld/%ld/%ld, fast gs/5e20 %ld/%ld, "
                "built by workers %.0f %%, too deep %ld, light-lock enters skipped %ld | "
                "prebuild %.2f ms/batch (wait %.2f, longest %.2f) | main thread per 10 s: prebuild %.0f ms + slot 7 in the walk %.0f ms (%ld walks) | "
-               "stalls %ld, late claims %ld, other game locks in the phase %ld (busy %ld), light lock by other threads %ld (in the phase %ld)%s | worker CPU %%:%s",
+               "stalls %ld, late claims %ld, other game locks in the phase %ld (busy %ld), light lock by other threads %ld (in the phase %ld), "
+               "material misses / sorts in the phase %ld / %ld, abandoned builds %ld%s | worker CPU %%:%s",
                (long)g_mode, db, v[12] - p[12], v[1] - p[1], db ? (double)(v[1] - p[1]) / db : 0, v[2] - p[2], v[3] - p[3], v[4] - p[4],
                v[5] - p[5], v[6] - p[6], v[7] - p[7], v[8] - p[8], v[9] - p[9], v[10] - p[10], v[14] - p[14], v[15] - p[15], v[16] - p[16], v[17] - p[17], v[18] - p[18],
                v[1] - p[1] ? 100.0 * (v[11] - p[11]) / (v[1] - p[1]) : 0, v[13] - p[13], v[19] - p[19],
                db ? (q - pq) * 1000.0 / g_qf.QuadPart / db : 0, db ? (w - pw) * 1000.0 / g_qf.QuadPart / db : 0, wmax,
                (q - pq) * 1000.0 / g_qf.QuadPart, (wk - pwk) * 1000.0 / g_qf.QuadPart, nw - pnw,
-               x[0] - px[0], x[1] - px[1], x[2] - px[2], x[3] - px[3], x[4] - px[4], x[5] - px[5], g_par_off ? ", WORKERS OFF" : "", cpu);
+               x[0] - px[0], x[1] - px[1], x[2] - px[2], x[3] - px[3], x[4] - px[4], x[5] - px[5], (long)s_matmiss, (long)s_matdirty, (long)s_recovered,
+               g_par_off ? ", WORKERS OFF" : "", cpu);
         memcpy(px, x, sizeof px);
         memcpy(p, v, sizeof p); pq = q; pw = w; pwk = wk; pnw = nw;
     }
@@ -793,7 +928,7 @@ static void install(void) {
     static const BYTE DEVFN[] = {0x8B, 0x44, 0x24, 0x04, 0x56, 0x50, 0x8B, 0xF1, 0xE8};
     if (IsBadReadPtr(vt, 32) || vt[7] != (void *)FN_S7 || !bytes_are(FN_S7, S7, sizeof S7) || !bytes_are(FN_RL, RL, sizeof RL)
         || !bytes_are(0x0078B745, RLCALL, sizeof RLCALL) || !bytes_are(SITE_PUSH, PUSH, sizeof PUSH) || !bytes_are(0x006CEE64, DEVC, sizeof DEVC)
-        || !bytes_are(SITE_MISS, MISS, sizeof MISS) || !call_to(SITE_3A0, FN_3A0) || !call_to(SITE_6C2, FN_6C2)
+        || !bytes_are(SITE_MISS, MISS, sizeof MISS) || !call_to(SITE_3A0, FN_3A0) || !call_to(SITE_6C2, FN_6C2) || !call_to(SITE_6C2B, FN_6C2)
         || !bytes_are(SITE_6C2LOOP, LOOP, sizeof LOOP) || !bytes_are(0x006C28BB, MAT, sizeof MAT) || !bytes_are(0x006C2900, MATMISS, sizeof MATMISS) || !call_to(SITE_5E20, FN_5E20) || !bytes_are(SITE_GS, GS, sizeof GS)
         || !call_to(SITE_12E0, FN_12E0) || !call_to(SITE_C771, FN_C771) || !call_to(SITE_2FC0, FN_2FC0) || !bytes_are(FN_VGROW, GROW, sizeof GROW)
         || !sp || !bytes_are((DWORD)sp - SP_BASE + 0x10001C93u, GSFN, sizeof GSFN) || *(DWORD *)IAT_GS != (DWORD)sp - SP_BASE + 0x10001C80u
@@ -819,7 +954,8 @@ static void install(void) {
     }
     // shared-cache locks first (inactive until workers run), then recording, then the walk entry, then the slot
     int ok = call_at(SITE_5E20, th_5e20, 5) && call_at(SITE_GS, th_gs, 6) && call_at(SITE_C771, th_c771, 5)
-          && call_at(SITE_2FC0, th_2fc0, 5) && call_at(SITE_6C2, th_6c2, 5) && jmp_at(SITE_6C2LOOP, th_6c2loop, 6) && jmp_at(0x006C2906, th_6c2miss, 6)
+          && call_at(SITE_2FC0, th_2fc0, 5) && call_at(SITE_6C2, th_6c2, 5) && call_at(SITE_6C2B, th_6c2b, 5) && jmp_at(0x006C2906, th_6c2miss, 6)
+          && (!(g_matold || g_matsleep || g_faulttest) || jmp_at(SITE_6C2LOOP, th_6c2loop, 6))
           && call_at(SITE_3A0, th_3a0, 5) && jmp_at(SITE_MISS, th_miss, 7) && jmp_at(SITE_PUSH, th_push, 7);
     if (!ok) { logmsg("code patch failed (partly installed patches are inactive without the walk hook)"); return; }
     DWORD old;
@@ -840,13 +976,13 @@ static void install(void) {
     if (!VirtualProtect(&vt[7], 4, PAGE_EXECUTE_READWRITE, &old)) { logmsg("VirtualProtect AV vtable failed"); return; }
     InterlockedExchange((LONG *)&vt[7], (LONG)hk_s7); VirtualProtect(&vt[7], 4, old, &old);
     AddVectoredExceptionHandler(1, veh);
-    logmsg("ParallelDraw 3: AnimatorVisual slot 7 (0x7525D0) prebuilt at the render-list walk (0x78B730) by the main "
+    logmsg("ParallelDraw 4: AnimatorVisual slot 7 (0x7525D0) prebuilt at the render-list walk (0x78B730) by the main "
            "thread + %d workers (%d CPUs), packets replayed in order; mode %ld, watchdog %d ms", g_nworkers, ncpu, (long)g_mode, g_wd_ms);
 }
 
 BOOL WINAPI DllMain(HINSTANCE h, DWORD reason, LPVOID _) {
     (void)_; if (reason != DLL_PROCESS_ATTACH) return TRUE;
-    DisableThreadLibraryCalls(h);
+    DisableThreadLibraryCalls(h); g_self = h;
     GetModuleFileNameW(h, g_dir, MAX_PATH); wchar_t *sl = wcsrchr(g_dir, L'\\'); if (sl) sl[1] = 0; else g_dir[0] = 0;
     wcscpy(g_ini, g_dir); wcscat(g_ini, L"ParallelDraw.ini"); wcscpy(g_log, g_dir); wcscat(g_log, L"ParallelDraw.log");
     QueryPerformanceFrequency(&g_qf);
@@ -857,6 +993,13 @@ BOOL WINAPI DllMain(HINSTANCE h, DWORD reason, LPVOID _) {
     g_wd_ms = GetPrivateProfileIntW(L"ParallelDraw", L"Watchdog", 100, g_ini);
     g_off_ms = GetPrivateProfileIntW(L"ParallelDraw", L"StallOff", 2000, g_ini);
     g_racetest = GetPrivateProfileIntW(L"ParallelDraw", L"RaceTest", 0, g_ini);
+    g_matold = GetPrivateProfileIntW(L"ParallelDraw", L"MatOld", 0, g_ini);
+    g_matsleep = GetPrivateProfileIntW(L"ParallelDraw", L"MatSleep", 0, g_ini);
+    g_coldpar = GetPrivateProfileIntW(L"ParallelDraw", L"ColdPar", 0, g_ini);
+    g_faulttest = GetPrivateProfileIntW(L"ParallelDraw", L"FaultTest", 0, g_ini);
+    g_faultkeep = GetPrivateProfileIntW(L"ParallelDraw", L"FaultKeep", 0, g_ini);
+    if (g_matold || g_matsleep || g_coldpar || g_faulttest)
+        logmsg("stand test: MatOld %d, MatSleep %d, ColdPar %d, FaultTest %d, FaultKeep %d", g_matold, g_matsleep, g_coldpar, g_faulttest, g_faultkeep);
     install();
     TlsSetValue(g_tls, NULL);
     CloseHandle(CreateThread(NULL, 0, logger, NULL, 0, NULL));
