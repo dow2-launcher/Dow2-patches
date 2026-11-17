@@ -58,6 +58,39 @@ jobs:
           path: build/*
           retention-days: 7
 
+  # The Mac add-ons (mac/): x86_64 dylibs for the native Mac game (Feral 1.0.3), one per add-on, each with its ini - for the
+  # launcher's components_macos (mac_addons/<id>/). clang 19 as the Mac crossplay build (dow2-launcher/Dow2-mac-crossplay).
+  # Kept as a workflow artifact only: the store entries are put up by hand (mac/README.txt).
+  mac:
+    needs: version
+    runs-on: macos-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: clang 19
+        run: brew install llvm@19
+      - name: Build
+        env:
+          CC: /opt/homebrew/opt/llvm@19/bin/clang
+        run: mac/build.sh
+      - name: Check
+        run: |
+          cd mac/out
+          for d in *.dylib; do
+            file "$d"; lipo -archs "$d" | grep -qx x86_64 || { echo "$d: not x86_64 only"; exit 1; }
+            # only libSystem: no network, no Steam, no other library
+            if otool -L "$d" | tail -n +2 | grep -v -e "@rpath/$d" -e /usr/lib/libSystem.B.dylib; then echo "$d: unexpected library"; exit 1; fi
+            nm -u "$d" | tr '\n' ' '; echo
+          done
+          { echo "### Mac add-ons (dow2-patches ${{ needs.version.outputs.number }})"; echo '```'; cat SHA256SUMS.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: dow2-mac-addons
+          path: mac/out/*
+          retention-days: 30
+
   # Everything a real upload of the add-ons to the launcher mirrors does, against a temporary store and a one-off key.
   # The upload itself is skipped until the mirrors and the real signing key are available to CI.
   publish:
