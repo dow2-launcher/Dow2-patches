@@ -50,7 +50,8 @@ static int g_verbose;
 //   * lua_cfg hands the scripts strings of the local EliteAI.ini. In a network match (0.16) only the station that computes
 //     a computer runs its scripts, so the keys need not be equal across stations - but the keys of the SCAR path are not read;
 //   * the marks' file (0.17, EliteAI_Mark): the world's tick is read to choose which lines go into EliteAI.marks.log - ints
-//     and byte counts, nothing goes back to a script or an order;
+//     and byte counts, nothing goes back to a script or an order (0.19: how the file is shared among the marks - byte counts
+//     and an integer bisection, still logging only);
 //   * the move loop guard (moveloop_guard.h) changes the simulation only where the engine would hang; it counts passes
 //     whose 'time left' is BIT-equal to the pass before (an integer compare of the four bytes) - the float is read as a
 //     number only for the log line.
@@ -99,13 +100,17 @@ static void log_write(const wchar_t *name, const char *stamp, const char *line) 
 //   * a mark at tick T: its header, the ring's lines of the same world from T - 200 on (those not in the file yet: a mark
 //     inside the window of the one before goes on from where that one is), then every new line up to tick T + 200;
 //   * EliteAI.marks.log stays under MK_FILE_MAX (240 KB, the launcher takes 256 KB). One mark takes at most MK_SIDE_MAX
-//     (60 KB) of lines before it (the nearest ones) and as much after it. When the next lines do not fit, room is made from
-//     the OLDEST marks first, in two steps: (1) an older mark is squeezed to the MK_SQUEEZE (10 KB) of lines nearest to it on
-//     each side (a note says how much went), one mark at a time from the oldest; (2) only when every older mark is squeezed,
-//     the oldest is dropped whole. The first line of the file counts both. Sizes (bench and the tester's bundle): one brain
-//     ~0.5 KB a second of game, so a 1v1 mark is ~20 KB and a match keeps ~11 marks whole; a 3v3 of six brains ~2.5 KB a
-//     second, a mark ~100 KB: the last mark whole, the 7 before it squeezed to about +-4 s each, older ones dropped
-//     (test/marks_test.c with the 14 marks of that bundle: marks 7-14 kept, 1-6 dropped, 245 327 bytes);
+//     (60 KB) of lines before it (the nearest ones) and as much after it - and a side at most half its equal share of the
+//     file (the share = (MK_FILE_MAX - 2 KB) / the marks in the file, the new one counted) or half the room still free;
+//   * 0.19 (a tester's 18-min 3v3 with 15 marks: 0.17 squeezed each older mark once to 10 KB a side, then dropped the oldest
+//     whole - marks 1-6 had no AI line): when the next lines do not fit, EVERY older mark is squeezed to the same level, its
+//     equal share (lower when that is not enough), again and again as marks come: it keeps its header, its trailer and the
+//     lines nearest to the mark, half the room on each side; the note of each side says how many KB went in all. A mark is
+//     dropped whole (the oldest, a note line in its place says which and how much) only when the level would fall under
+//     MK_FLOOR (2 KB) - with 128 marks at most in the file that does not happen. The first line of the file counts both.
+//     Sizes: one brain ~0.5 KB a second of game, so a 1v1 mark is ~20 KB and ~11 marks stay whole; a 3v3 of six brains
+//     ~2.5 KB a second, a mark ~100 KB: with the 14 marks of the bundle 20261115-082422-09df0f every mark keeps ~16 KB
+//     (about +-3 s of game around it) - test/marks_test.c;
 //   * one file per match: the first mark of another match (another world object, or the tick went back) moves the file of
 //     the match before to EliteAI.marks.prev.log - also when that match had no new AI (Elite's AI, a network match);
 //   * every line of the file starts with its game time ("g 15:26.3") and then the real time of EliteAI.log.
@@ -113,7 +118,8 @@ static void log_write(const wchar_t *name, const char *stamp, const char *line) 
 // and no order ever sees it. The world's tick is read, never written.)
 #define MK_FILE_MAX   (240 * 1024)
 #define MK_SIDE_MAX   (60 * 1024)
-#define MK_SQUEEZE    (10 * 1024)
+#define MK_FLOOR      (2 * 1024)                // under this a mark is dropped whole rather than squeezed
+#define MK_SLACK      (4 * 1024)                // room made beyond the line that needs it (the file is rewritten at each squeeze)
 #define MK_WIN_TICKS  200
 #define MK_RING_N     8192
 #define MK_RING_BYTES (1024 * 1024)
@@ -123,11 +129,14 @@ typedef struct { char *s; int len; void *world; int tick; unsigned seq; } MkLine
 static MkLine g_mkRing[MK_RING_N];
 static int g_mkHead, g_mkCount; static long g_mkRingBytes; static unsigned g_mkSeq;
 static char g_mkFile[MK_FILE_MAX + 2048];       // = EliteAI.marks.log (the file is only ever written from here)
-typedef struct { int start, body, mid, squeezed; } MkSec;  // a mark's section: its header line, its first line, its first line after the mark
+// a mark's section: [start, body) its header lines (+ the note of lines cut before it, bnote bytes at the end), [body, mid) the
+// lines before the mark, [mid, tail) the lines after it, [tail, end) its trailer: the note of lines cut after it (anote bytes),
+// the "stop here" note, the "---- end of MARK" line (tail 0 = the mark is still open and has no trailer yet)
+typedef struct { int start, body, mid, tail, bnote, anote, squeezed, n, tick, cutB, cutA; } MkSec;
 static MkSec g_mkSec[MK_SEC_MAX];
 static int g_mkLen, g_mkNSec, g_mkDropped, g_mkSqueezed;     // the file's length, its marks, marks dropped / squeezed in this match
 static void *g_mkWorld; static int g_mkLastTick = -1;            // the match the file holds
-static int g_mkOpen, g_mkN, g_mkT, g_mkUntil, g_mkAfter, g_mkCut; static unsigned g_mkDone;   // the window of the last mark
+static int g_mkOpen, g_mkN, g_mkT, g_mkUntil, g_mkAfter, g_mkCut, g_mkSide; static unsigned g_mkDone;   // the window of the last mark
 static volatile int g_active;                   // this copy is the one that works (DllMain: the other copy stays idle)
 static void mk_world(void **w, int *tick) {
     void **g = (void **)MK_G_WORLD; *w = NULL; *tick = -1;
@@ -135,14 +144,30 @@ static void mk_world(void **w, int *tick) {
     *w = *g; *tick = *(int *)((char *)*g + 0x178);
 }
 static void mk_path(wchar_t *p, int prev) { _snwprintf(p, MAX_PATH, L"%lsEliteAI.marks%ls.log", g_dir, prev ? L".prev" : L""); }
-static void mk_rewrite(void) {
+// 0.19: THE FIRST 32 BYTES OF THE FILE CHANGE AT EVERY REWRITE. The launcher sends a .log in increments (logs.rs: it keeps
+// [size, the first 32 bytes]; the same 32 bytes and a size not smaller -> only the bytes past the old size go). The file
+// always began with the same header, so after a squeeze / a drop / a new match only the tail went (Orca's bundle of 17.11:
+// 25 marks in Marks.log, "244518 bytes, +17373 new" = MARK 25 alone). Now the first line starts with "=EAI mk <match>.<n> ":
+// <match> = the Unix time of the match's first mark in hex, <n> = the rewrites of this process (every mk_rewrite counts) -
+// both integers, plain ASCII. A plain append (mk_put without making room) keeps the line as it is: those still go as increments.
+static unsigned g_mkMatchId, g_mkRew;           // the match of the file (Unix time of its first mark), the rewrites so far
+static int mk_head(char *o, int cap);
+static void mk_newhead(void);
+static void mk_rewrite(void) {                  // the whole file again: a new first line (prefix), then every byte of it
+    g_mkRew++; mk_newhead();
     wchar_t p[MAX_PATH]; mk_path(p, 0); FILE *f = _wfopen(p, L"wb");
     if (f) { fwrite(g_mkFile, 1, g_mkLen, f); fclose(f); }
 }
+static unsigned mk_unix(void) {                 // the Unix time in seconds (integers; it only names the file's version)
+    FILETIME ft; GetSystemTimeAsFileTime(&ft);
+    unsigned long long t = ((unsigned long long)ft.dwHighDateTime << 32) | ft.dwLowDateTime;
+    return (unsigned)(t / 10000000ULL - 11644473600ULL);
+}
 static int mk_head(char *o, int cap) {          // the first line of the file
-    return snprintf(o, cap, "=== EliteAI 0.17: the AI's lines %d s of game before and after each mark of Marks.dll (Marks.log has the players); "
-                    "at most %d KB: older marks are squeezed to the lines nearest to them, then dropped - in this match %d squeezed, %d dropped ===\n",
-                    MK_WIN_TICKS / 10, MK_FILE_MAX / 1024, g_mkSqueezed, g_mkDropped);
+    return snprintf(o, cap, "=EAI mk %08x.%u === EliteAI 0.19: the AI's lines %d s of game before and after each mark of Marks.dll (Marks.log has the players); "
+                    "at most %d KB: older marks are squeezed toward an equal share each (the lines nearest to them kept), a mark is dropped "
+                    "only below %d KB - in this match %d squeezed, %d dropped ===\n",
+                    g_mkMatchId, g_mkRew, MK_WIN_TICKS / 10, MK_FILE_MAX / 1024, MK_FLOOR / 1024, g_mkSqueezed, g_mkDropped);
 }
 static char g_mkTmp[MK_FILE_MAX + 2048];
 // the file = A + B + C -> A + B' + C, every section offset after the change moved by the difference
@@ -150,45 +175,87 @@ static void mk_splice(int at, int len, const char *by, int n) {
     int tail = g_mkLen - at - len, d = n - len;
     memcpy(g_mkTmp, g_mkFile + at + len, tail); memcpy(g_mkFile + at, by, n); memcpy(g_mkFile + at + n, g_mkTmp, tail); g_mkLen += d;
     for (int i = 0; i < g_mkNSec; i++) {
-        if (g_mkSec[i].start >= at + len) g_mkSec[i].start += d;
-        if (g_mkSec[i].body >= at + len) g_mkSec[i].body += d;
-        if (g_mkSec[i].mid >= at + len) g_mkSec[i].mid += d;
+        MkSec *m = &g_mkSec[i];
+        if (m->start >= at + len) m->start += d;
+        if (m->body >= at + len) m->body += d;
+        if (m->mid >= at + len) m->mid += d;
+        if (m->tail && m->tail >= at + len) m->tail += d;
     }
 }
-static void mk_newhead(void) {                  // the first line again (the counts changed)
-    char h[400]; int hl = mk_head(h, sizeof h), old = g_mkNSec ? g_mkSec[0].start : g_mkLen;
-    mk_splice(0, old, h, hl);
+static int mk_end(int i) { return i + 1 < g_mkNSec ? g_mkSec[i + 1].start : g_mkLen; }
+static int mk_size(int i) { return mk_end(i) - g_mkSec[i].start; }
+static int mk_share(void) { return (MK_FILE_MAX - 2048) / (g_mkNSec > 0 ? g_mkNSec : 1); }   // one mark's equal share of the file
+static void mk_newhead(void) {                  // the first line again (the counts changed); notes of dropped marks under it stay
+    char h[512]; int hl = mk_head(h, sizeof h), old = 0;
+    while (old < g_mkLen && g_mkFile[old] != '\n') old++;
+    mk_splice(0, old < g_mkLen ? old + 1 : g_mkLen, h, hl);
 }
-static void mk_drop(int d) {                    // the d oldest marks of the file go (whole)
-    g_mkDropped += d;
-    int a = g_mkSec[0].start, e = g_mkSec[d].start;
-    mk_splice(a, e - a, "", 0);
-    memmove(g_mkSec, g_mkSec + d, sizeof g_mkSec[0] * (g_mkNSec - d)); g_mkNSec -= d;
+static void mk_drop(void) {                     // the oldest mark of the file goes (whole); a note line says which
+    MkSec *m = &g_mkSec[0]; int a = m->start, e = mk_end(0);
+    char note[200];
+    int k = snprintf(note, sizeof note, "(MARK %d (game %d:%02d, tick %d) dropped whole for later marks: its %d KB did not fit, every mark kept at least %d KB)\n",
+                     m->n, m->tick / 600, (m->tick / 10) % 60, m->tick, (e - a + 1023) / 1024, MK_FLOOR / 1024);
+    g_mkDropped++;
+    mk_splice(a, e - a, note, k);
+    memmove(g_mkSec, g_mkSec + 1, sizeof g_mkSec[0] * (g_mkNSec - 1)); g_mkNSec--;
     mk_newhead();
 }
-static void mk_squeeze(int i) {                 // an older mark keeps the MK_SQUEEZE of lines nearest to it on each side
-    MkSec *m = &g_mkSec[i]; int end = i + 1 < g_mkNSec ? g_mkSec[i + 1].start : g_mkLen;
+// an older (closed) mark is squeezed to `to` bytes at most: its header and trailer stay, of its lines the ones nearest to the
+// mark stay, half the room on each side (a side that has less gives the rest to the other). Again and again as the file fills:
+// the note of each side says how much went in all. -> bytes freed (0 = nothing to cut)
+#define MK_NOTE_ROOM 100
+static int mk_squeeze(int i, int to) {
+    MkSec *m = &g_mkSec[i]; int end = mk_end(i), tail = m->tail ? m->tail : end, size = end - m->start;
+    if (size <= to) return 0;
+    int fixed = (m->body - m->bnote - m->start) + (end - tail - m->anote);
+    int room = to - fixed - 2 * MK_NOTE_ROOM; if (room < 0) room = 0;
+    int before = m->mid - m->body, after = tail - m->mid;
+    if (before + after <= room) return 0;
+    int kb = room / 2, ka = room - kb;
+    if (before < kb) { ka += kb - before; kb = before; }
+    if (after < ka) { kb += ka - after; ka = after; if (kb > before) kb = before; }
+    int q = m->mid + ka;                            // after it: the lines that end by mid + ka
+    while (q > m->mid && g_mkFile[q - 1] != '\n') q--;
+    int p = m->mid - kb;                            // before it: the lines that start from mid - kb on
+    while (p < m->mid && p > m->body && g_mkFile[p - 1] != '\n') p++;
     char note[200]; int k;
-    m->squeezed = 1; g_mkSqueezed++;
-    int q = m->mid + MK_SQUEEZE;                    // after it: up to the line end past MK_SQUEEZE
-    if (q < end) {
-        while (q < end && g_mkFile[q - 1] != '\n') q++;
-        k = snprintf(note, sizeof note, "(squeezed for later marks: %d KB of lines farther after this mark dropped)\n", (end - q + 1023) / 1024);
-        mk_splice(q, end - q, note, k);
+    if (!m->squeezed) { m->squeezed = 1; g_mkSqueezed++; }
+    if (q < tail) {
+        m->cutA += tail - q;
+        k = snprintf(note, sizeof note, "(squeezed for later marks: %d KB of lines farther after this mark dropped)\n", (m->cutA + 1023) / 1024);
+        mk_splice(q, tail + m->anote - q, note, k);
+        m->tail = q; m->anote = k;
     }
-    int p = m->mid - MK_SQUEEZE;                    // before it: from the line start past mid - MK_SQUEEZE
     if (p > m->body) {
-        while (p < m->mid && g_mkFile[p - 1] != '\n') p++;
-        k = snprintf(note, sizeof note, "(squeezed for later marks: %d KB of lines farther before this mark dropped)\n", (p - m->body + 1023) / 1024);
-        mk_splice(m->body, p - m->body, note, k);
+        int a = m->body - m->bnote;
+        m->cutB += p - m->body;
+        k = snprintf(note, sizeof note, "(squeezed for later marks: %d KB of lines farther before this mark dropped)\n", (m->cutB + 1023) / 1024);
+        mk_splice(a, p - a, note, k);
+        m->body = a + k; m->bnote = k;
     }
+    return size - mk_size(i);
 }
-static int mk_put(const char *s, int n) {       // append to the file; room is made from the oldest marks -> 0 = not written
+static long mk_over(int level) {                // bytes the older marks hold above `level`
+    long o = 0;
+    for (int i = 0; i < g_mkNSec - 1; i++) { int s = mk_size(i); if (s > level) o += s - level; }
+    return o;
+}
+static int mk_put(const char *s, int n) {       // append to the file; room is made from the older marks -> 0 = not written
     while (g_mkLen + n > MK_FILE_MAX && g_mkNSec > 1) {
-        // never the last mark (the one being written); squeeze the oldest not squeezed yet, else drop the oldest
-        int i = 0; while (i < g_mkNSec - 1 && g_mkSec[i].squeezed) i++;
-        if (i < g_mkNSec - 1) mk_squeeze(i); else mk_drop(1);
-        mk_newhead(); mk_rewrite();
+        // never the last mark (the one being written). Every older mark is squeezed to the same level: its equal share of the
+        // file, or lower when that does not free enough (+ MK_SLACK, so that the file is not rewritten at every line); a level
+        // under MK_FLOOR drops the oldest mark whole instead
+        long need = g_mkLen + n - MK_FILE_MAX + MK_SLACK;
+        int lv = mk_share(), freed = 0;
+        if (mk_over(lv) < need) {                   // the highest level that frees enough (integers: bisection)
+            int lo = 0, hi = lv;
+            if (mk_over(0) < need) hi = lo = -1;
+            while (lo < hi) { int md = (lo + hi + 1) / 2; if (mk_over(md) >= need) lo = md; else hi = md - 1; }
+            lv = lo;
+        }
+        if (lv >= MK_FLOOR) for (int i = 0; i < g_mkNSec - 1; i++) freed += mk_squeeze(i, lv);
+        if (freed <= 0) mk_drop();
+        mk_rewrite();                               // (a new first line: the launcher sends the whole file again)
     }
     if (g_mkLen + n > MK_FILE_MAX) return 0;
     memcpy(g_mkFile + g_mkLen, s, n); g_mkLen += n;
@@ -203,6 +270,7 @@ static int mk_fmt(char *o, int cap, const MkLine *l) {      // "g 15:26.3 12:03:
 }
 static void mk_close(const char *why) {
     if (!g_mkOpen) return;
+    MkSec *m = &g_mkSec[g_mkNSec - 1]; if (!m->tail) m->tail = g_mkLen;      // (the open mark is the last section)
     char b[200]; int n = snprintf(b, sizeof b, "---- end of MARK %d (game %d:%02d): %s ----\n", g_mkN, g_mkT / 600, (g_mkT / 10) % 60, why);
     mk_put(b, n); g_mkOpen = 0;
 }
@@ -221,8 +289,11 @@ static void mk_line(const char *stamp, const char *line) {  // every line of log
     if (!w || w != g_mkWorld || t < g_mkT) { mk_close(!w ? "the match is over" : "another match"); return; }
     if (t > g_mkUntil) { mk_close("20 s of game after it"); return; }
     char b[1600]; int n = mk_fmt(b, sizeof b, l);
-    if (g_mkAfter + n > MK_SIDE_MAX) {
-        if (!g_mkCut) { g_mkCut = 1; char c[160]; int k = snprintf(c, sizeof c, "(the lines after MARK %d stop here: %d KB after one mark at most)\n", g_mkN, MK_SIDE_MAX / 1024); mk_put(c, k); }
+    if (g_mkAfter + n > g_mkSide) {
+        if (!g_mkCut) {
+            g_mkCut = 1; g_mkSec[g_mkNSec - 1].tail = g_mkLen;           // (the note is the trailer's: a squeeze keeps it)
+            char c[160]; int k = snprintf(c, sizeof c, "(the lines after MARK %d stop here: %d KB after one mark at most)\n", g_mkN, (g_mkSide + 1023) / 1024); mk_put(c, k);
+        }
         return;
     }
     if (mk_put(b, n)) { g_mkAfter += n; g_mkDone = l->seq; }
@@ -243,11 +314,18 @@ __declspec(dllexport) int __cdecl EliteAI_Mark(int n, int tick, const char *line
             if (GetFileAttributesW(a) != INVALID_FILE_ATTRIBUTES) MoveFileExW(a, b, MOVEFILE_REPLACE_EXISTING);
             g_mkDropped = g_mkSqueezed = 0;
         }
-        g_mkWorld = w; g_mkNSec = 0; g_mkLen = mk_head(g_mkFile, 400); mk_rewrite();
+        g_mkMatchId = mk_unix();
+        g_mkWorld = w; g_mkNSec = 0; g_mkLen = mk_head(g_mkFile, 512); mk_rewrite();
     }
     g_mkLastTick = tick;
-    if (g_mkNSec == MK_SEC_MAX) { mk_drop(1); mk_rewrite(); }   // (128 marks in the file: the oldest goes)
-    // the lines before it: those of this world from T - 20 s on that are not in the file yet, the nearest MK_SIDE_MAX of them
+    if (g_mkNSec == MK_SEC_MAX) { mk_drop(); mk_rewrite(); }    // (128 marks in the file: the oldest goes)
+    // a side of this mark: MK_SIDE_MAX at most, and not more than half its equal share of the file (this mark counted) - or
+    // half the room still free in the file, when that is more (a quiet match: no mark needs the room)
+    g_mkNSec++; g_mkSide = mk_share() / 2 - 512; g_mkNSec--;
+    if (g_mkSide < (MK_FILE_MAX - g_mkLen - 2048) / 2) g_mkSide = (MK_FILE_MAX - g_mkLen - 2048) / 2;
+    if (g_mkSide > MK_SIDE_MAX) g_mkSide = MK_SIDE_MAX;
+    if (g_mkSide < MK_FLOOR / 2) g_mkSide = MK_FLOOR / 2;             // (not under the floor: older marks are dropped instead)
+    // the lines before it: those of this world from T - 20 s on that are not in the file yet, the nearest g_mkSide of them
     int from = tick - MK_WIN_TICKS, first = g_mkCount, bytes = 0, older = 0, above = 0;
     char b[1600];
     for (int i = g_mkCount - 1, next = tick; i >= 0; i--) {          // (back in time: a tick that goes UP = the match before)
@@ -256,7 +334,7 @@ __declspec(dllexport) int __cdecl EliteAI_Mark(int n, int tick, const char *line
         next = l->tick;
         if (l->seq <= g_mkDone) { above = 1; break; }
         int k = mk_fmt(b, sizeof b, l);
-        if (bytes + k > MK_SIDE_MAX) { older = 1; break; }
+        if (bytes + k > g_mkSide) { older = 1; break; }
         bytes += k; first = i;
     }
     char h[700]; SYSTEMTIME st; GetLocalTime(&st);
@@ -266,9 +344,9 @@ __declspec(dllexport) int __cdecl EliteAI_Mark(int n, int tick, const char *line
                       above ? "(the lines before these, from the same 20 s, are under the mark above)\n" : "");
     if (hl >= (int)sizeof h) hl = sizeof h - 1;
     MkSec *sec = &g_mkSec[g_mkNSec++];              // this mark's section (the last one: mk_put never squeezes or drops it)
-    memset(sec, 0, sizeof *sec); sec->start = sec->body = sec->mid = g_mkLen;
+    memset(sec, 0, sizeof *sec); sec->start = sec->body = sec->mid = g_mkLen; sec->n = n; sec->tick = tick;
     if (mk_put(h, hl)) {
-        if (older) { char c[160]; int k = snprintf(c, sizeof c, "(earlier lines of the 20 s before it left out: %d KB before one mark at most)\n", MK_SIDE_MAX / 1024); mk_put(c, k); }
+        if (older) { char c[160]; int k = snprintf(c, sizeof c, "(earlier lines of the 20 s before it left out: %d KB before one mark at most)\n", (g_mkSide + 1023) / 1024); mk_put(c, k); }
         sec = &g_mkSec[g_mkNSec - 1]; sec->body = g_mkLen;                       // (mk_put may have moved the file)
         for (int i = first; i < g_mkCount; i++) { MkLine *l = &g_mkRing[(g_mkHead + i) % MK_RING_N]; int k = mk_fmt(b, sizeof b, l); if (mk_put(b, k)) g_mkDone = l->seq; }
         g_mkSec[g_mkNSec - 1].mid = g_mkLen;
@@ -1089,7 +1167,7 @@ typedef struct { wchar_t host[64]; volatile LONG refs; volatile int ok; volatile
 static void rp_unref(RpProbe *p) { if (!InterlockedDecrement(&p->refs)) free(p); }
 static DWORD WINAPI rp_probe(LPVOID a) {                    // GET /replay/api/by_lobby/<x>: the site answers "{}" (404) at once
     RpProbe *p = a; DWORD t0 = GetTickCount(), code = 0, sz = sizeof code, m; char out[64]; int n = 0;
-    HINTERNET s = WinHttpOpen(L"EliteAI/0.18", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, NULL, NULL, 0);
+    HINTERNET s = WinHttpOpen(L"EliteAI/0.19", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, NULL, NULL, 0);
     if (s) {
         WinHttpSetTimeouts(s, RP_CHECK_MS, RP_CHECK_MS, RP_CHECK_MS, RP_CHECK_MS);
         HINTERNET c = WinHttpConnect(s, p->host, INTERNET_DEFAULT_HTTPS_PORT, 0);
@@ -1107,7 +1185,7 @@ static DWORD WINAPI rp_probe(LPVOID a) {                    // GET /replay/api/b
 static DWORD rp_post(const wchar_t *host, const char *buf, DWORD size, const char *fname, char *out, int cap, DWORD tmoRecv) {
     wchar_t hdr[400]; _snwprintf(hdr, 400, L"Content-Type: application/octet-stream\r\nX-Filename: %hs\r\nX-Lobby: newai\r\n", fname);
     DWORD code = 0, sz = sizeof code, m; int n = 0; out[0] = 0;
-    HINTERNET s = WinHttpOpen(L"EliteAI/0.18", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, NULL, NULL, 0); if (!s) return 0;
+    HINTERNET s = WinHttpOpen(L"EliteAI/0.19", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, NULL, NULL, 0); if (!s) return 0;
     WinHttpSetTimeouts(s, 4000, 4000, 30000, (int)tmoRecv);       // the site parses the replay before it answers
     HINTERNET c = WinHttpConnect(s, host, INTERNET_DEFAULT_HTTPS_PORT, 0);
     HINTERNET r = c ? WinHttpOpenRequest(c, L"POST", L"/replay/api/upload", NULL, NULL, NULL, WINHTTP_FLAG_SECURE) : NULL;
@@ -1261,7 +1339,7 @@ BOOL WINAPI DllMain(HINSTANCE h, DWORD reason, LPVOID _) {
     GetModuleFileNameW(NULL, g_dir, MAX_PATH); wchar_t *s = wcsrchr(g_dir, L'\\'); if (s) wcscpy(s + 1, L"Elite_DLLs\\");
     _snwprintf(g_ini, MAX_PATH, L"%lsEliteAI.ini", g_dir);
     g_verbose = GetPrivateProfileIntW(L"EliteAI", L"Verbose", 0, g_ini);
-    logmsg("EliteAI 0.18 start (single player, and network matches for the computers this station computes - the lobby labels too; a log per match of the new AI: EliteAI.log, the match before in EliteAI.prev.log; the AI's lines around each mark of Marks.dll: EliteAI.marks.log), hook %s", install() ? "installed" : "NOT installed");
+    logmsg("EliteAI 0.19 start (single player, and network matches for the computers this station computes - the lobby labels too; a log per match of the new AI: EliteAI.log, the match before in EliteAI.prev.log; the AI's lines around each mark of Marks.dll: EliteAI.marks.log), hook %s", install() ? "installed" : "NOT installed");
     install_labels();
     int mg = mlg_install();
     logmsg("move loop guard (DOW2.exe 009141A0 / 009144F3): %s", mg == 1 ? "installed" : mg == 0 ? "MoveLoopFix.dll is active, not needed"
