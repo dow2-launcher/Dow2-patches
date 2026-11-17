@@ -534,6 +534,10 @@ frameprobe/ - FrameProbe.dll (off), eliteai/ - EliteAI.dll (store id newai since
     newai-36 (0.2.107): brain 0.15 (eliteai branch newai-36 = brain-s15 + the verifier's M1, DocTrukkFirst off): tankbustas only for
       a real enemy vehicle, marines' squads and upgrades by the enemy, devastator posts in front of the point, no orders under base
       turrets without a tank, trukk through turret range, one defender per capper, low-ticket alarm. EliteAI.dll 0.18 unchanged.
+    newai-37 (0.2.108): brain 0.16 (eliteai branch newai-37 = brain-s16 + the verifier's W1/W2 + marks-fit): the orks' refills
+      through the saving account, no generator on idle power, the answer to a machine before the tier, a guard of our own victory
+      point, the chase stops at the enemy base's turrets, marines' T3 on idle power, squads refilled to half. EliteAI.dll 0.19: every
+      tester mark keeps its AI lines in EliteAI.marks.log, a new first line per rewrite so the launcher sends the whole file.
 
 ## Building
 

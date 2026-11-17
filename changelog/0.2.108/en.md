@@ -1,0 +1,5 @@
+- New AI 37 (made and checked in victory point games only). Orks: squad reinforcements now come out of the shared budget (half of them used to bypass it, so the army stopped growing after minute 10); no generators while power sits unused; the answer to enemy vehicles comes before the next tier. After minute 10 the orks buy more (21 squads instead of 9 in bench games) and reach tier 3 and looted tanks more often.
+- A guard stays on our own victory point against a lone capturer; allied computers do not guard the same point. A squad with fewer than half its men is reinforced to at least half.
+- Squads no longer chase a target under the enemy base's turrets (2 cases instead of 19 for the orks): at the edge they switch to ranged combat and pull back. Space marines go to tier 3 when power sits unused.
+- Tester marks: the AI's lines are kept for every mark of a match, not only the latest ones, and are sent in full.
+- Not fixed yet: the orks' late fights after tier 2, and holding victory points (about 1 of 3).
