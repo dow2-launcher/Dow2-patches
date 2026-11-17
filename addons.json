@@ -7,7 +7,7 @@
     "games (launcher 1.4.11: [\"elite\", \"vanilla\"] or [\"elite\"]), requires and excludes (launcher 1.5.2: lists of store ids - this add-on works only together with / never together with those) go to the store with a deploy when the add-on here has them (since 09.11.2026: dxvk, fpsunlock); without them here games lives in the store only and deploys keep it. The top-level vanilla.loader (vloader-<n> = make build/launcher/winmm.dll) lives in the store only; see docs/ADDON_RULES.md."
   ],
   "lobbystats": {
-    "version": "0.11.0",
+    "version": "0.12.0",
     "dll": "LobbyStats.dll",
     "default": false,
     "name": {

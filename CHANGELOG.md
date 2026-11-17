@@ -4,6 +4,39 @@ Every version gets an entry here before it reaches `main`. CI then tags `vX.Y.Z`
 version (`X.Y.0`) it also publishes a GitHub Release with the DLLs and the entries since the previous `X.Y.0`.
 The version of the set lives only in `VERSION`; each DLL still writes its own version to its log.
 
+## 0.2.111 — 2026-11-17
+LobbyStats 0.12.0 (store lobbystats_r3 -> lobbystats-0.12.0): the Elite rating in the lobby (SirItos 17.11: "show our rating, the
+one of the lobby's mode 1v1/2v2/3v3, and on hover the general info as launcher PR #70 does"). Off by default: LobbyStats.ini
+`[LobbyStats] Rating=own` (default `relic` = 0.11.0's behaviour); the launcher's setting will write it later (the store entry has no
+options, none added).
+- Mode of the lobby: Receive_SetMaxPlayers (2/4/6/8), which the game sends right before every Receive_PopulatePlayerList (invoke logs
+  14.11.2026: 2 in 1v1 lobbies, 6 in a 3v3 one); the list's first argument (players per team: 1 / 3 there) when SetMaxPlayers was not
+  seen. 4v4 and FFA (Receive_SetFFASolo / SetFFATeam true - only false seen so far) have no Elite mode: a dash.
+- The name: "Name  [1584]" (the conservative number `c` of /ladder/api/own/all, as the launcher and the site), "Name  [cal 2/5]" while
+  calibrating (games played / the season's cal_games, as rating.js's "calibration: 2/5"), "Name  [—]" without one. Nothing before the
+  table and the player's lookup have come (as Relic numbers: the next lobby update shows them). An old "  [...]" of ours in front of
+  the name (two LobbyStats in the Invoke chain, 0.10.1) is taken off for the new tags too.
+- The slot's own tooltip (m_tooltip, the game's box): the name; "Elite rating - preseason" (or "season <label>"); the lobby's mode
+  first, then the others: "<mode>: <c>, place <rank> - W / L", "calibration k/5 - W / L", "no games yet"; Relic's rating with W/L and
+  win rate; Steam hours. No D3D.
+- The table: GET /ladder/api/own/all (dow2-ladder PR #31) by the existing worker thread, never on the game's thread: at the start
+  (Rating=own) and then at most every 2 min while lobby lists come (a minute when there is none yet); parsed into a sorted array
+  (lobbystats/own_rating.h, a small JSON reader for this answer, integers only, a cut or broken answer refused and the old table kept),
+  swapped in under the lock. Up to 16 MB, grown as it comes.
+- Players are found by SteamID64: the slot's ID when it is one, else the stats service's lobby line, which gets a 7th field with the
+  SteamID (dow2-ladder PR #33; LobbyStats <= 0.11 and the ladder / replay readers take fields 0..5 only). The disk cache keeps it
+  (`name\trating\tW\tL\thours\t-\tsteam`, old DLLs read the first five). Until #33 is deployed most players show a dash.
+- Mirrors: `Server=` may be a list (`host;host`); the one that answered is kept, the next tried on no answer or 5xx (as MMFind). The
+  LobbyStats build's default rts.fintebtc.de becomes rts;dow2;dow2ru. LoadingRatings / JoinSound keep the single baked host. Lookups
+  now take only an HTTP 200 answer.
+- Tests: `make test` (new, in CI after the DLLs): lobbystats/test/test_own.c against lobbystats/test/own_all.json - 26 checks (rated,
+  calibrating, "c": null, fractions, unknown keys and modes, 4v4, an empty player, cut answers at every 7th byte refused, 404 HTML,
+  20000 players). lobbystats/test/test_dll.c under Wine 11.20 wow64 (`make build/test_lobbystats.exe`, new export
+  LobbyStats_TestOwn): the PopulatePlayerList substitution - 22 checks (relic unchanged, own 1v1/2v2/3v3, calibration, no table yet,
+  no SteamID, old server line, not looked up yet, no SetMaxPlayers, FFA, 4v4, chained tags, a broken later answer keeps the table,
+  back to relic). Live under Wine: the mirror switch (a dead first host -> dow2 answered, kept) and own/all's 404 before #31 is
+  deployed ("not available right now" in the tooltip, dashes). Not run in the game.
+
 ## 0.2.110 — 2026-11-17
 Mac add-ons, step 1 (owner 17.11: "migrate the main add-ons that port to the Mac most easily"): mac/ - x86_64 dylibs for the native
 Mac game (Feral 1.0.3) for the launcher's components_macos (store ids nohints_mac, reinforcefix_mac, herolabelfix_mac; off by

@@ -21,7 +21,10 @@ Install
 Options (LobbyStats.ini, see comments inside)
   [LobbyStats] Stats=0            - no numbers at all
   [LobbyStats] ShowRatingInName=0 - keep names untouched, show the rating only in the tooltips
-  [LobbyStats] Server=host        - another stats service
+  [LobbyStats] Rating=own         - (0.12.0) our Elite rating of the lobby's mode (1v1/2v2/3v3) instead of Relic's:
+                                    "Name  [1584]", "Name  [cal 2/5]" while calibrating, "Name  [—]" without one;
+                                    the slot tooltip lists every mode (number, place, W/L) and Relic's rating. Default relic
+  [LobbyStats] Server=host;host   - another stats service (several = mirrors, the next tried when one can't be reached)
   [MenuTooltip] DX, DY, MinWidth  - where the main menu tooltip sits, so it covers the game's own one
   [Debug] LogInvoke=1             - LobbyStats_invoke.log: every Flash call of the UI (for finding UI functions)
 
