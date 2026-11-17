@@ -44,16 +44,17 @@ $(OUT):
 	mkdir -p $(OUT)
 $(OUT)/ObsFix.dll: obsfix/obsfix.c | $(OUT)
 	$(CC) $(CFLAGS) -shared -o $@ $< -static-libgcc
-# LobbyStats 0.11.0: only the lobby ratings (the clock, cooldowns, loading ratings and join sound are add-ons of their own)
-$(OUT)/LobbyStats.dll: lobbystats/lobbystats.c lobbystats/join_sound.h | $(OUT)
+# LobbyStats 0.12.0: only the lobby ratings - Relic's or (Rating=own) the Elite rating of the lobby's mode (the clock, cooldowns, loading ratings and join sound are add-ons of their own)
+$(OUT)/LobbyStats.dll: lobbystats/lobbystats.c lobbystats/join_sound.h lobbystats/own_rating.h | $(OUT)
 	$(CC) $(CFLAGS) $(STATS) -shared -o $@ lobbystats/lobbystats.c -lwinhttp -lpsapi -lgdi32 -lwinmm -static-libgcc -Wl,--kill-at
 
 # 30.10.2026: every feature its own add-on - the loading screen ratings, the cooldown numbers, the match clock (MatchTimer.dll)
-$(OUT)/LoadingRatings.dll: lobbystats/lobbystats.c matchtimer/matchtimer.c | $(OUT)
+# LoadingRatings 5 (17.11.2026): Relic's or (LobbyStats.ini [LobbyStats] Rating=own, the one key both read) the Elite rating of the match's mode
+$(OUT)/LoadingRatings.dll: lobbystats/lobbystats.c lobbystats/own_rating.h matchtimer/matchtimer.c | $(OUT)
 	$(CC) $(CFLAGS) $(STATS) -DLS_LOADING -DMT_EMBED -shared -o $@ lobbystats/lobbystats.c matchtimer/matchtimer.c -lwinhttp -lpsapi -lgdi32 -lwinmm -static-libgcc -Wl,--kill-at
 
 # 02.11.2026: the lobby join sound its own add-on (soft / sharp), from the same source
-$(OUT)/JoinSound.dll: lobbystats/lobbystats.c lobbystats/join_sound.h | $(OUT)
+$(OUT)/JoinSound.dll: lobbystats/lobbystats.c lobbystats/join_sound.h lobbystats/own_rating.h | $(OUT)
 	$(CC) $(CFLAGS) $(STATS) -DLS_JOINSOUND -shared -o $@ lobbystats/lobbystats.c -lwinhttp -lpsapi -lgdi32 -lwinmm -static-libgcc -Wl,--kill-at
 
 $(OUT)/MatchTimer.dll: matchtimer/matchtimer.c | $(OUT)
@@ -85,7 +86,21 @@ $(OUT)/UIScale.dll: uiscale/uiscale.c | $(OUT)
 
 clean:
 	rm -rf $(OUT)
-.PHONY: all clean
+# host tests (no game, no Windows): the Elite table reader of LobbyStats 0.12.0 against its fixture; CI runs it after the DLLs
+HOSTCC ?= gcc
+TESTOUT = build-test
+test:
+	mkdir -p $(TESTOUT)
+	$(HOSTCC) -Wall -Wextra -O2 -o $(TESTOUT)/test_own lobbystats/test/test_own.c
+	$(TESTOUT)/test_own lobbystats/test/own_all.json
+
+# the LobbyStats.dll lobby text / LoadingRatings.dll loading screen under Wine (wow64 / 32-bit prefix): make build/test_lobbystats.exe, then
+# wine build/test_lobbystats.exe build/LobbyStats.dll lobbystats/test/own_all.json   (not in CI: no Wine there)
+# wine build/test_lobbystats.exe build/LoadingRatings.dll lobbystats/test/own_all.json
+$(OUT)/test_lobbystats.exe: lobbystats/test/test_dll.c | $(OUT)
+	$(CC) -O2 -Wall -o $@ $< -static-libgcc
+
+.PHONY: all clean test
 
 
 # EliteAI 0.11 (11.11.2026): the replay of a match with the new AI to the replay site (WinHTTP, SHGetFolderPathW)
