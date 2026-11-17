@@ -1,0 +1,1 @@
+- First add-ons for the native Mac game (Feral, through the Elite launcher for macOS): NoHints, Reinforce fix and Hero bar fix work there as on Windows. Off by default; they need the Mac crossplay patch, which the launcher always puts in.

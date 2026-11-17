@@ -4,6 +4,24 @@ Every version gets an entry here before it reaches `main`. CI then tags `vX.Y.Z`
 version (`X.Y.0`) it also publishes a GitHub Release with the DLLs and the entries since the previous `X.Y.0`.
 The version of the set lives only in `VERSION`; each DLL still writes its own version to its log.
 
+## 0.2.110 — 2026-11-17
+Mac add-ons, step 1 (owner 17.11: "migrate the main add-ons that port to the Mac most easily"): mac/ - x86_64 dylibs for the native
+Mac game (Feral 1.0.3) for the launcher's components_macos (store ids nohints_mac, reinforcefix_mac, herolabelfix_mac; off by
+default, macOS only). Windows DLLs unchanged.
+- mac/common/machook.h: log / ini next to the dylib (mac_addons/<id>/<Name>.log, .ini, [<Name>] Enabled as on Windows), the game
+  checked by LC_UUID (1.0.3) and the bytes of every site, nothing changed unless crossplay_fix's protfix jump is over
+  CFeralGame::DoAMTask (else Feral's integrity check ends the patched game 15-18 min later), vm_protect writes.
+- NoHints.dylib 1: Misc_QuickTipsEnabled (0x101ff6400, found by its registration 0x101fedd58) -> xor eax,eax; ret.
+- ReinforceFix.dylib 1: OverwatchManager::UpdateReinforceOverwatch, the inlined ObservableContainer<Entity>::empty drop
+  (je at 0x101fcdfbc) goes to the loop step 0x101fce340 - 1 byte.
+- HeroLabelFix.dylib 1: SquadLeaderDecorator::OnSimUpdate (vtable slot 0x102dfee58) -> after it, a valid (+0x140) but hidden
+  (+0x38) decorator taken in by the manager (+0x44/+0x48) gets OnUpdate (0x1021040a0) under SFMovieManager's mutex (+0x69, TryEnter).
+- CI: job "mac" (macos-latest, clang 19 as the Mac crossplay build) -> artifact dow2-mac-addons; mac/build.sh.
+- Check (no game start - the Mac binary mapped, only the dylibs' constructors run; macrun's Steam emulator is gone since 13.11):
+  image after crossplay v25 + the 3 add-ons vs crossplay alone: 10 bytes in 3 places (the sites above); without crossplay and with
+  Enabled=0: 0 bytes; the shipped code called: Misc_QuickTipsEnabled() = 0, the je target, the HeroLabelFix hook in 5 cases against
+  stubbed game functions. Not run on a Mac.
+
 ## 0.2.109 — 2026-11-17
 MMFind 0.54 (Automatch v2.0; hand release: store automatch mmfind-0.54 = the live package mmfind-0.53 with this MMFind.dll): a
 launcher room's start on a cold game no longer stands a minute in an untouched main menu (SirItos 17.11, room 2ctk27: MMFind came in

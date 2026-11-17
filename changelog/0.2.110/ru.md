@@ -1,0 +1,1 @@
+- Первые дополнения для родной Mac-версии игры (Feral, через лаунчер Elite для macOS): NoHints, Reinforce fix и Hero bar fix работают там так же, как на Windows. По умолчанию выключены; нужен патч Mac crossplay, лаунчер ставит его всегда.
