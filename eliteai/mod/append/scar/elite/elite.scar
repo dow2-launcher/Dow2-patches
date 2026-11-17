@@ -153,6 +153,12 @@ EliteAI_MECH_ABILITIES = {
 	[78] = "ability/pvp/race_ork/kommandos/ork_debuff_aoe_smokebomb",
 	[79] = "ability/pvp/race_ork/painboy/ork_git_sauce",   -- (brain step 13: the painboy's heal)
 	-- (step SM-1, space marines: numbered from 99 down - the next ork ability takes 74; k stays below 100)
+	-- 88-91 (brain step 17): the sternguard veterans' ammunition - a toggle on the squad itself (300 + k); the brain names the
+	-- one for the target it shoots at (65_race_sm.ai SM.ammo), the engine's own tactic for them is refused (90_boot.ai)
+	[88] = "ability/pvp/race_marine/sternguard/sm_toggle_ammo_hellfire",
+	[89] = "ability/pvp/race_marine/sternguard/sm_toggle_ammo_dragonfire",
+	[90] = "ability/pvp/race_marine/sternguard/sm_toggle_ammo_vengeance",
+	[91] = "ability/pvp/race_marine/sternguard/sm_toggle_ammo_kraken",
 	[92] = "ability/pvp/race_marine/dreadnought/sm_damage_aoe_charge",
 	[93] = "ability/pvp/race_marine/terminator/sm_teleport_target_terminators",
 	[95] = "ability/pvp/race_marine/techmarine/sm_damage_aoe_knockback",
