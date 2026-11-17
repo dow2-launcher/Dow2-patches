@@ -25,6 +25,10 @@ int main(int argc, char **argv) {
     OK("fraction -> whole part, unknown keys skipped", b && b->m[OWN_3V3].rated && b->m[OWN_3V3].c == 1712 && b->m[OWN_3V3].rank == 3);
     OK("4v4 ignored", b && !b->m[OWN_1V1].has && !b->m[OWN_2V2].has);
     OK("\"c\": null = not rated", c && !c->m[OWN_2V2].rated && c->m[OWN_2V2].cal == 5);
+    OK("hours_played: a number", b && b->hours == 2400);
+    OK("hours_played: null = not known", a && a->hours == -1);
+    OK("\"h\" with a fraction -> whole hours, a list after it skipped", c && c->hours == 7);
+    OK("no hours = not known", own_find(&t, 76561198000000001ULL) && own_find(&t, 76561198000000001ULL)->hours == -1);
     OK("empty player kept, unknown steam not found", own_find(&t, 76561198000000001ULL) && !own_find(&t, 76561198099999999ULL));
     tag(s, &t, 76561198005350431ULL, OWN_1V1); OK("tag 1v1 = 1584", !strcmp(s, "1584"));
     tag(s, &t, 76561198005350431ULL, OWN_2V2); OK("tag 2v2 = cal 2/5", !strcmp(s, "cal 2/5"));

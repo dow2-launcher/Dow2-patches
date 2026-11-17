@@ -22,6 +22,12 @@
 // thread at most every 2 min while lobbies come; players are found in it by SteamID64 (the slot's ID when it is one, else the
 // 7th field of the stats service's lobby line). The stats host may be a list of mirrors (Server=host;host): the one that
 // answered is kept, the next tried when it doesn't (default rts, dow2, dow2ru - as MMFind).
+// LoadingRatings 5 (same 17.11.2026 release, SirItos: "with our mode on, our rating next to the nick; none on the main menu; the
+// full info with the hours on hover"): one switch for both add-ons - LobbyStats.ini [LobbyStats] Rating in the DLL's own folder
+// (Elite_DLLs, or dow2-patches for the vanilla copies); LoadingRatings reads it from there too, not from LoadingRatings.ini. With
+// Rating=own the loading screen shows the Elite number of the lobby's mode ("1584", "cal 2/5", "—"), and neither add-on puts a
+// rating on the main menu's name or into its tooltip. The Steam hours of a tooltip come from own/all's "hours_played" when the
+// ladder sends it, else from the stats service's lobby line as before.
 //
 // Works only with DOW2.exe 3.19 (Steam): the prologue bytes are checked before installing.
 // One source, three add-ons (owner 30.10.2026: every feature its own DLL and its own launcher tick):
@@ -34,10 +40,12 @@
 // The match clock (MatchTimer.dll) and the cooldown numbers (Cooldowns.dll) are add-ons of their own again.
 #ifdef LS_LOADING
 #define LS_NAME "LoadingRatings"
+#define LS_VER  "5 (LobbyStats 0.12.0's source)"
 #elif defined(LS_JOINSOUND)
 #define LS_NAME "JoinSound"
 #else
 #define LS_NAME "LobbyStats"
+#define LS_VER  "v0.12.0"
 #endif
 #define LS_W_(x) L##x
 #define LS_W(x) LS_W_(x)
@@ -88,6 +96,7 @@ static int g_rating = RATING_RELIC;                        // [LobbyStats] Ratin
 // the Elite table (under g_lock): state 0 = not asked/answered yet, 1 = have it, -1 = no mirror gave it and there is none
 static OwnTable g_own; static int g_ownState;
 static volatile LONG g_ownWant; static volatile DWORD g_ownTry;   // a lobby wants a fresh table; the last attempt (worker)
+static volatile int g_lobbyMode = -1;                     // the last lobby's Elite mode (OWN_1V1..), for the loading screen
 #define OWN_EVERY_MS 120000                                // a table is refreshed at most every 2 min (the launcher's pace)
 #define OWN_RETRY_MS 60000                                 // no table: tried again at most every minute
 
@@ -387,6 +396,8 @@ static void strip_tag(wchar_t *s) {
 }
 
 // ---------- Rating=own: the Elite rating of the lobby's mode (0.12.0) ----------
+// the player's SteamID64: the slot's ID when it is one, else the stats service's lobby line (its 7th field); 0 = not known
+static unsigned long long own_steam(unsigned long long id, const Entry *e) { return (id >> 32) == 0x01100001 ? id : e ? e->steam : 0; }
 // The slot's text and tooltip; under g_lock. mode: OWN_1V1..OWN_3V3, -1 = none for this lobby (FFA, 4v4, not known).
 // Returns 0 when there is nothing to show yet (no table yet, or the player's lookup still on its way): the next lobby update shows it.
 static void own_line(wchar_t *o, int cap, const OwnMode *m, const char *mname, int here) {
@@ -402,7 +413,7 @@ static void own_line(wchar_t *o, int cap, const OwnMode *m, const char *mname, i
     o[cap - 1] = 0;
 }
 static int own_slot(GFxValue *a, int i, const wchar_t *name, unsigned long long id, const Entry *e, int mode) {
-    unsigned long long steam = (id >> 32) == 0x01100001 ? id : e ? e->steam : 0;
+    unsigned long long steam = own_steam(id, e);
     if (!g_ownState) return 0;                                   // the table is on its way
     if (!steam && !(e && e->fetched)) return 0;                  // his SteamID is on its way (the lobby line)
     const OwnRow *r = steam && g_ownState == 1 ? own_find(&g_own, steam) : NULL;
@@ -433,8 +444,11 @@ static int own_slot(GFxValue *a, int i, const wchar_t *name, unsigned long long 
     if (e && e->known) {
         int games = e->wins + e->losses, wr = games ? (e->wins * 100 + games / 2) / games : 0;
         TIP_ADD(L"\nRelic rating: %d  (%d W / %d L, %d%%)", e->rating, e->wins, e->losses, wr);
-        if (e->hours >= 0) TIP_ADD(L"\nSteam hours: %d", e->hours);
     } else if (e && e->absent) TIP_ADD(L"\nRelic rating: none");
+    // the hours: own/all's hours_played when the ladder sends it (LoadingRatings 5 / LobbyStats 0.12.0), else the lobby line's
+    { const OwnRow *hr = steam && g_ownState == 1 ? own_find(&g_own, steam) : NULL;
+      int hours = hr && hr->hours >= 0 ? hr->hours : e && e->known ? e->hours : -1;
+      if (hours >= 0) TIP_ADD(L"\nSteam hours: %d", hours); }
     #undef TIP_ADD
     t[cap - 1] = 0;
     a[A_TOOLTIP].type = GFX_WSTRING; a[A_TOOLTIP].v.ws = t;
@@ -463,6 +477,7 @@ static void decorate(GFxValue *args, unsigned count) {
     // (1 / 3 there) - the fallback when SetMaxPlayers was not seen (loaded late)
     int teamArg = args[0].type == GFX_NUMBER ? (int)args[0].v.num : 0;
     int mode = own_mode_of(g_maxPlayers, teamArg, g_ffa);
+    g_lobbyMode = mode;                                 // LoadingRatings: these players load in this mode
     if (g_rating == RATING_OWN && g_stats) {
         DWORD now = GetTickCount(), last = g_ownTry;
         if (!last || now - last >= (g_ownState == 1 ? OWN_EVERY_MS : OWN_RETRY_MS)) { InterlockedExchange(&g_ownWant, 1); want = 1; }
@@ -681,7 +696,8 @@ static void decorate_gamertag(GFxValue *args) {
     }
     wcscpy(g_menuName, key);
     if (!g_nscreen) g_front = 1;                     // back from a match: the menu may come without ActivateFirstScreen
-    if (e->known && g_stats && g_showInName) {
+    // Rating=own (SirItos 17.11.2026: "on the main menu there will be none"): the name stays as the game sent it
+    if (e->known && g_stats && g_showInName && g_rating != RATING_OWN) {
         _snwprintf(g_tagBuf, 127, L"%ls  [%d]", name, e->rating); g_tagBuf[127] = 0;
         args[0].v.ws = g_tagBuf;
     }
@@ -697,22 +713,34 @@ static void decorate_gamertag(GFxValue *args) {
 static const unsigned char WSET_PRO[5] = {0x53, 0x8B, 0x5C, 0x24, 0x08};   // push ebx; mov ebx,[esp+8]
 void *g_wsetTramp __asm__("ls_wset_tramp");
 static wchar_t g_loadBuf[16][128]; static int g_nloadBuf;
+static int g_testLoad;                 // LobbyStats_TestLoad (outside the game): an online match is loading
 const wchar_t *wset_filter(void *w, const wchar_t *t) __asm__("ls_wset_filter");
 const wchar_t *wset_filter(void *w, const wchar_t *t) {
     (void)w;
     if (!t || !t[0] || !g_loadOn || !g_stats || !g_lobbyAt || !g_nseen) return t;
-    if (mt_ticking()) { g_lobbyAt = 0; return t; }                    // the match runs: the loading screen is gone
-    if (!mt_online() || IsBadReadPtr(t, 2)) return t;
+    if (!g_testLoad && mt_ticking()) { g_lobbyAt = 0; return t; }      // the match runs: the loading screen is gone
+    if ((!g_testLoad && !mt_online()) || IsBadReadPtr(t, 2)) return t;
     const wchar_t *out = t;
     EnterCriticalSection(&g_lock);
     for (int k = 0; k < g_nseen; k++) {
         if (g_seen[k].obs || wcscmp(t, g_seen[k].name)) continue;
         Entry *e = find(g_seen[k].key);
-        if (e && e->known) {
+        wchar_t tag[32] = L"";
+        if (g_rating == RATING_OWN) {
+            // LoadingRatings 5, Rating=own: the Elite number of the lobby's mode, as LobbyStats shows it in the lobby. Nothing while
+            // there is no table (not come yet / no mirror answered) or his lobby line is still on its way
+            unsigned long long steam = own_steam(g_seen[k].id, e);
+            if (g_ownState == 1 && (steam || (e && e->fetched))) {
+                char tag8[32]; own_tag_utf8(tag8, sizeof tag8, &g_own, steam ? own_find(&g_own, steam) : NULL, g_lobbyMode);
+                if (!MultiByteToWideChar(CP_UTF8, 0, tag8, -1, tag, 32)) wcscpy(tag, L"-");
+            }
+        } else if (e && e->known) _snwprintf(tag, 31, L"%d", e->rating);
+        tag[31] = 0;
+        if (tag[0]) {
             wchar_t *o = g_loadBuf[g_nloadBuf++ & 15];
-            _snwprintf(o, 127, L"%ls  [%d]", t, e->rating); o[127] = 0; out = o;
-            char n8[160]; WideCharToMultiByte(CP_UTF8, 0, t, -1, n8, sizeof n8, NULL, NULL);
-            logmsg("loading screen: %s [%d]", n8, e->rating);
+            _snwprintf(o, 127, L"%ls  [%ls]", t, tag); o[127] = 0; out = o;
+            char n8[160], t8[64]; WideCharToMultiByte(CP_UTF8, 0, t, -1, n8, sizeof n8, NULL, NULL); WideCharToMultiByte(CP_UTF8, 0, tag, -1, t8, sizeof t8, NULL, NULL);
+            logmsg("loading screen: %s [%s]", n8, t8);
         }
         break;
     }
@@ -768,7 +796,7 @@ static int tip_is_namebar(const char *inst, const wchar_t *t[4]) {
 static int __fastcall hk_tipget(void *movie, void *edx, char *info) {
     int r = g_tipGet(movie, edx, info);
     // not gated on g_front: loaded late by the Elite injector we may have missed the main menu's ActivateFirstScreen
-    if (!r || !g_gameTip || !info || IsBadReadPtr(info, 0x22C)) return r;
+    if (!r || !g_gameTip || g_rating == RATING_OWN || !info || IsBadReadPtr(info, 0x22C)) return r;   // own: no rating on the menu
     const char *inst = info + 4; const wchar_t *t[4];
     for (int i = 0; i < 4; i++) { t[i] = p_locStr(info + 0x20C + 8 * i); if (t[i] && IsBadReadPtr(t[i], 2)) t[i] = NULL; }
     int seen = !strstr(inst, "main_menu") && !strstr(inst, "gamertag");   // only the menu's ones, once each, in the log
@@ -887,7 +915,7 @@ static void own_name_from_steam(void) {
 static void __stdcall tag_frame(float dt) {
     o_upd(dt);
     static int tried; if (!g_menuName[0] && !tried) { tried = 1; own_name_from_steam(); }
-    if (g_tagDone || !g_menuMovie || !g_front || !g_hooked || !g_showInName) return;
+    if (g_tagDone || !g_menuMovie || !g_front || !g_hooked || !g_showInName || g_rating == RATING_OWN) return;
     static GFxValue a[2]; int ok = 0;
     EnterCriticalSection(&g_lock);
     Entry *e = g_menuName[0] ? find(g_menuName) : NULL;
@@ -960,9 +988,12 @@ BOOL WINAPI DllMain(HINSTANCE h, DWORD reason, LPVOID _) {
     g_showInName = GetPrivateProfileIntW(L"LobbyStats", L"ShowRatingInName", 1, ini);
     g_stats       = GetPrivateProfileIntW(L"LobbyStats", L"Stats", 1, ini);
     GetPrivateProfileStringW(L"LobbyStats", L"Server", STATS_HOST, g_server, 192, ini);
-#if !defined(LS_LOADING) && !defined(LS_JOINSOUND)
-    if (!_wcsicmp(g_server, L"rts.fintebtc.de")) wcscpy(g_server, LS_MIRRORS);   // 0.12.0: the default host -> its mirrors too
-    { wchar_t r[16]; GetPrivateProfileStringW(L"LobbyStats", L"Rating", L"relic", r, 16, ini);
+#if !defined(LS_JOINSOUND)
+    if (!_wcsicmp(g_server, L"rts.fintebtc.de")) wcscpy(g_server, LS_MIRRORS);   // 0.12.0 / LoadingRatings 5: the default host -> its mirrors too
+    // the rating system: ONE switch for LobbyStats and LoadingRatings (the launcher writes one place) - LobbyStats.ini
+    // [LobbyStats] Rating=relic (default) | own (or elite, the launcher's own word) in the DLL's folder, whichever add-on reads it
+    { wchar_t shared[MAX_PATH], r[16]; _snwprintf(shared, MAX_PATH, L"%lsLobbyStats.ini", g_dir); shared[MAX_PATH - 1] = 0;
+      GetPrivateProfileStringW(L"LobbyStats", L"Rating", L"relic", r, 16, shared);
       g_rating = !_wcsicmp(r, L"own") || !_wcsicmp(r, L"elite") ? RATING_OWN : RATING_RELIC; }
 #endif
     parse_hosts();
@@ -991,8 +1022,8 @@ BOOL WINAPI DllMain(HINSTANCE h, DWORD reason, LPVOID _) {
     logmsg(LS_NAME " 1 (from LobbyStats 0.11.0's source): %s sound, %s", g_soft ? "soft" : "sharp", g_joinSound == 2 ? "always" : "when the game is in the background");
 #else
     g_joinSound = 0;                                       // 0.11.0: the join sound is JoinSound.dll's (its own tick)
-    logmsg(LS_NAME " v0.12.0%s, rating: %s, server %ls", g_probe ? ", UI probe on (LobbyStats_invoke.log)" : "",
-           g_rating == RATING_OWN ? "own (Elite, the lobby's mode)" : "relic", g_server);
+    logmsg(LS_NAME " " LS_VER "%s, rating: %s (LobbyStats.ini [LobbyStats] Rating), server %ls", g_probe ? ", UI probe on (LobbyStats_invoke.log)" : "",
+           g_rating == RATING_OWN ? "own (Elite, the lobby's mode; none on the main menu)" : "relic", g_server);
 #endif
     if (already_loaded(LS_NAME)) { logmsg("another " LS_NAME " copy is already active in this game, this one stays idle"); return TRUE; }
     g_gameTip = GetPrivateProfileIntW(L"MenuTooltip", L"Game", 1, ini);
@@ -1003,9 +1034,10 @@ BOOL WINAPI DllMain(HINSTANCE h, DWORD reason, LPVOID _) {
     { void mt_start_nodevice(const wchar_t *dir, const wchar_t *ini);
       load_cache(); install(); install_wset();
       CloseHandle(CreateThread(NULL, 0, worker, NULL, 0, NULL));
+      if (g_stats && g_rating == RATING_OWN) { InterlockedExchange(&g_ownWant, 1); SetEvent(g_wake); }   // the table before the first match
       mt_start_nodevice(g_dir, ini); }               // match state only (loading screen -> first sim tick), no clock, no Direct3D
 #else
-    load_cache(); install(); if (g_stats && g_gameTip) install_tipget();
+    load_cache(); install(); if (g_stats && g_gameTip && g_rating != RATING_OWN) install_tipget();   // own: no rating on the menu
     CloseHandle(CreateThread(NULL, 0, worker, NULL, 0, NULL));
     if (g_stats && g_rating == RATING_OWN) { InterlockedExchange(&g_ownWant, 1); SetEvent(g_wake); }   // the table before the first lobby
     if (g_stats) CloseHandle(CreateThread(NULL, 0, tip_worker, NULL, 0, NULL));
@@ -1034,4 +1066,19 @@ __declspec(dllexport) int LobbyStats_TestOwn(const char *lines, const char *json
     g_rating = rating ? RATING_OWN : RATING_RELIC; g_maxPlayers = maxPlayers; g_ffa = ffa;
     LeaveCriticalSection(&g_lock);
     return n;
+}
+// for testing outside the game (LoadingRatings 5): which add-on this is (0 LobbyStats, 1 LoadingRatings, 2 JoinSound); the
+// loading screen's text widget as an online match loads (the last lobby given to LobbyStats_Test); the main menu's own name
+__declspec(dllexport) int LobbyStats_Build(void) {
+#if defined(LS_LOADING)
+    return 1;
+#elif defined(LS_JOINSOUND)
+    return 2;
+#else
+    return 0;
+#endif
+}
+__declspec(dllexport) const wchar_t *LobbyStats_TestLoad(const wchar_t *text) { g_testLoad = 1; return wset_filter(NULL, text); }
+__declspec(dllexport) const wchar_t *LobbyStats_TestMenuName(const wchar_t *name) {
+    GFxValue a; memset(&a, 0, sizeof a); a.type = GFX_WSTRING; a.v.ws = name; decorate_gamertag(&a); return a.v.ws;
 }

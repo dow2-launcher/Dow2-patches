@@ -6,6 +6,8 @@
 //                            "2v2": {"g": 2, "w": 1, "l": 1, "lv": 0, "cal": 3}}}}
 //   c = the conservative number (rating - 2*RD, the site's table), rank = the place in that mode's table; both absent while
 //   calibrating (cal = calibration games left). l is without the leaves (lv).
+//   Per player, optional: "hours_played" (or "h"): Retribution's Steam hours, a number or null (the ladder's /c/me name for it,
+//   17.11.2026: not in own/all yet - when it comes, the tooltip takes it before the stats service's lobby line).
 // Plain C without Windows, integers only (a number with a fraction keeps its whole part): tested natively by
 // lobbystats/test_own.c (make test). A small JSON reader just for this answer - unknown keys and values are skipped, a broken
 // or cut answer is refused as a whole (the old table stays).
@@ -18,7 +20,7 @@
 enum { OWN_1V1, OWN_2V2, OWN_3V3, OWN_NMODES };
 static const char *const OWN_MODE_NAME[OWN_NMODES] = {"1v1", "2v2", "3v3"};
 typedef struct { int has, rated, c, rank, g, w, l, lv, cal; } OwnMode;     // has: the mode is in his entry; rated: c is there
-typedef struct { unsigned long long steam; OwnMode m[OWN_NMODES]; } OwnRow;
+typedef struct { unsigned long long steam; OwnMode m[OWN_NMODES]; int hours; } OwnRow;   // hours: -1 = not in the answer
 typedef struct { OwnRow *rows; int n, cap; char season[16]; int preseason, cal_games; } OwnTable;
 
 typedef struct { const char *p, *e; } OwnJ;
@@ -139,7 +141,7 @@ static int own_parse(const char *buf, size_t len, OwnTable *t) {
             if (!oj_ch(&j, '{')) goto bad;
             players = 1;
             if (!oj_ch(&j, '}')) { do {
-                char sk[32]; OwnRow r; memset(&r, 0, sizeof r);
+                char sk[32]; OwnRow r; memset(&r, 0, sizeof r); r.hours = -1;
                 if (!oj_str(&j, sk, sizeof sk) || !oj_ch(&j, ':') || !oj_ch(&j, '{')) goto bad;
                 char *end; r.steam = strtoull(sk, &end, 10); if (*end) r.steam = 0;
                 if (!oj_ch(&j, '}')) {
@@ -148,7 +150,10 @@ static int own_parse(const char *buf, size_t len, OwnTable *t) {
                         if (!oj_str(&j, mk, sizeof mk) || !oj_ch(&j, ':')) goto bad;
                         int mi = own_mode_index(mk); oj_ws(&j);
                         if (mi >= 0 && j.p < j.e && *j.p == '{') { if (!oj_mode(&j, &m)) goto bad; r.m[mi] = m; }
-                        else if (!oj_skip(&j, 2)) goto bad;
+                        else if ((!strcmp(mk, "hours_played") || !strcmp(mk, "h")) && j.p < j.e && (*j.p == '-' || (*j.p >= '0' && *j.p <= '9'))) {
+                            long long v; if (!oj_int(&j, &v)) goto bad;
+                            r.hours = v < 0 ? -1 : v > 1000000 ? 1000000 : (int)v;   // a fraction keeps its whole part
+                        } else if (!oj_skip(&j, 2)) goto bad;
                     } while (oj_ch(&j, ','));
                     if (!oj_ch(&j, '}')) goto bad;
                 }

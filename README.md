@@ -23,8 +23,8 @@ are client-side, and the other players in the match don't need them.
 |---|---|---|---|---|
 | **Automatch v2.0** (on by default) | Multiplayer → Find a Game → Start Searching finds a 1v1 / 2v2 / 3v3 match by rating on our servers and starts it within seconds; the game itself runs through our game server over our UDP tunnel (since 05.11.2026 - the separate tick "Games through our servers" is gone). If it can't run, Find a Game says why. | `automatch` → `mmfind-0.46` | `mmfind/` + `ownlobby/` + `relay/` (Relay.dll) + `vanilla-loader/` | no |
 | **Forwarding servers (if Relic lags)** | Every other online game (ordinary lobbies) goes through our nearest server on its way to Relic - for players whose connection to Relic gets cut or lags. | `relay_fwd` → `relayfwd-23` | `relay/` | no |
-| **Lobby rating** | Relic rating next to each player in the lobby; on hover - win rate, games, Steam hours. With `Rating=own` in LobbyStats.ini (0.12.0, off by default) - our Elite rating of the lobby's mode (1v1/2v2/3v3), "cal k/5" while calibrating, "—" without one; on hover - every mode's number and place, W/L, Relic's number. Only shows, kicks nobody. | `lobbystats_r3` → `lobbystats-0.12.0` | `lobbystats/` | no |
-| **Ratings on the loading screen** | The Relic rating after each player's name on the loading screen of an online match. | `loadingratings_r3` → `loadingratings-4` | `lobbystats/` (built with `-DLS_LOADING`) | no |
+| **Lobby rating** | Relic rating next to each player in the lobby; on hover - win rate, games, Steam hours. With `Rating=own` in LobbyStats.ini (0.12.0, off by default) - our Elite rating of the lobby's mode (1v1/2v2/3v3), "cal k/5" while calibrating, "—" without one; on hover - every mode's number and place, W/L, Relic's number, Steam hours; no rating on the main menu. Only shows, kicks nobody. | `lobbystats_r3` → `lobbystats-0.12.0` | `lobbystats/` | no |
+| **Ratings on the loading screen** | The Relic rating after each player's name on the loading screen of an online match. With `Rating=own` in LobbyStats.ini (the same key as Lobby rating, read from the LobbyStats.ini next to it; 5, off by default) - our Elite rating of the match's mode. | `loadingratings_r3` → `loadingratings-5` | `lobbystats/` (built with `-DLS_LOADING`) | no |
 | **Sound when someone joins the lobby** | A soft or sharp sound and a flashing taskbar button when a player comes into your lobby while the game is minimised. | `joinsound` → `joinsound-1` | `lobbystats/` (built with `-DLS_JOINSOUND`) | no |
 | **Match timer** | Match time in the game's own interface: under the score, under the Menu button, or in it. | `matchtimer_r2` → `matchtimer-8` | `matchtimer/` | no |
 | **Cooldown seconds on ability buttons** | Seconds left on recharging abilities and global abilities, in the middle of the button. | `cooldowns_r2` → `cooldowns-9` | `cooldowns/` | no |
@@ -107,14 +107,17 @@ relay/ - **Relay.dll** (inside `automatch` since 05.11.2026, loaded by MMFind.dl
 
 lobbystats/ - **LobbyStats.dll**, **LoadingRatings.dll**, **JoinSound.dll**
     One source, three add-ons. LobbyStats 0.12.0: the Relic rating next to player names in the lobby and a tooltip with win rate,
-    games and Steam hours, your own rating in the main menu. It only reads the lobby list. Data from a small web service that
+    games and Steam hours, your own rating in the main menu (not with Rating=own). It only reads the lobby list. Data from a small web service that
     reads the public Relic API (rts.fintebtc.de with its mirrors dow2 / dow2ru, or STATS_HOST at build time, or
     Server=host;host in LobbyStats.ini), in its own thread. [LobbyStats] Rating=own (default relic): our Elite rating instead -
     the lobby's mode from Receive_SetMaxPlayers, the season table from /ladder/api/own/all (lobbystats/own_rating.h), players by
     SteamID64 (the stats service's lobby line, 7th field). Tests: `make test` (the table reader, also in CI) and
     lobbystats/test/test_dll.c under Wine (the lobby names and tooltips).
     LoadingRatings (-DLS_LOADING): ratings on the loading screen; the store's loadingratings-4 was built on 02.11 from 0f725df
-    ("LoadingRatings v0.10.1"), the tree builds it from the later lobbystats.c. JoinSound 1 (-DLS_JOINSOUND): the join sound.
+    ("LoadingRatings v0.10.1"), the tree builds it from the later lobbystats.c. LoadingRatings 5 (17.11.2026): the same
+    Rating switch, read from LobbyStats.ini in its folder (one key for both add-ons, the launcher writes only that file) -
+    with own the Elite number of the last lobby's mode after each name; with own neither add-on puts a rating on the main
+    menu. JoinSound 1 (-DLS_JOINSOUND): the join sound.
 
 matchtimer/ - **MatchTimer.dll** (MatchTimer v5, matchtimer-8)
     MM:SS of game time since the match started (pauses not counted) in the game's own HUD movies (common/gfxui.h); off as soon as

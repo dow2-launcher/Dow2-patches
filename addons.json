@@ -18,11 +18,11 @@
       "de": "Lobby ratings"
     },
     "description": {
-      "en": "Each player's rating next to their name in the lobby. Hover over it for win rate, games played and Steam hours.",
-      "ru": "Рейтинг каждого игрока рядом с его именем в лобби. Наведите мышку — увидите процент побед, число игр и часы в Steam.",
-      "es": "El rating de cada jugador junto a su nombre en la sala. Pasa el ratón para ver victorias, partidas y horas en Steam.",
-      "fr": "Le classement de chaque joueur à côté de son nom dans le salon. Survolez-le pour voir victoires, parties et heures Steam.",
-      "de": "Das Rating jedes Spielers neben seinem Namen in der Lobby. Mit der Maus darüber: Siegquote, Spiele und Steam-Stunden."
+      "en": "Each player's rating next to their name in the lobby: Relic's, or our Elite rating of the lobby's mode if you picked it in the launcher. Hover for every rating and Steam hours.",
+      "ru": "Рейтинг каждого игрока рядом с его именем в лобби: рейтинг Relic или, если выбран в лаунчере, наш рейтинг Elite в режиме лобби. Наведите мышку — все рейтинги и часы в Steam.",
+      "es": "El rating de cada jugador junto a su nombre en la sala: el de Relic o, si lo eliges en el launcher, nuestro rating Elite del modo de la sala. Pasa el ratón: todos los ratings y horas en Steam.",
+      "fr": "Le classement de chaque joueur à côté de son nom dans le salon : celui de Relic ou, si vous l'avez choisi dans le launcher, notre classement Elite du mode du salon. Survolez : tous les classements et heures Steam.",
+      "de": "Das Rating jedes Spielers neben seinem Namen in der Lobby: Relics oder, wenn im Launcher gewählt, unsere Elite-Wertung im Modus der Lobby. Mit der Maus darüber: alle Wertungen und Steam-Stunden."
     },
     "conflicts": [
       "dow2-patches/LobbyStats.dll",
@@ -130,7 +130,7 @@
     "order": 10
   },
   "loadingratings": {
-    "version": "4",
+    "version": "5",
     "dll": "LoadingRatings.dll",
     "default": false,
     "name": {
@@ -141,11 +141,11 @@
       "de": "Loading screen ratings"
     },
     "description": {
-      "en": "Each player's rating next to their name while an online match is loading.",
-      "ru": "Рейтинг каждого игрока рядом с его именем, пока грузится онлайн-матч.",
-      "es": "El rating de cada jugador junto a su nombre mientras carga una partida en línea.",
-      "fr": "Le classement de chaque joueur à côté de son nom pendant le chargement d'une partie en ligne.",
-      "de": "Das Rating jedes Spielers neben seinem Namen, während ein Online-Spiel lädt."
+      "en": "Each player's rating next to their name while an online match is loading: Relic's, or our Elite rating of the match's mode if you picked it in the launcher.",
+      "ru": "Рейтинг каждого игрока рядом с его именем, пока грузится онлайн-матч: рейтинг Relic или, если выбран в лаунчере, наш рейтинг Elite в режиме матча.",
+      "es": "El rating de cada jugador junto a su nombre mientras carga una partida en línea: el de Relic o, si lo eliges en el launcher, nuestro rating Elite del modo de la partida.",
+      "fr": "Le classement de chaque joueur à côté de son nom pendant le chargement d'une partie en ligne : celui de Relic ou, si vous l'avez choisi dans le launcher, notre classement Elite du mode de la partie.",
+      "de": "Das Rating jedes Spielers neben seinem Namen, während ein Online-Spiel lädt: Relics oder, wenn im Launcher gewählt, unsere Elite-Wertung im Modus des Spiels."
     },
     "category": "interface",
     "order": 50

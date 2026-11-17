@@ -49,6 +49,7 @@ $(OUT)/LobbyStats.dll: lobbystats/lobbystats.c lobbystats/join_sound.h lobbystat
 	$(CC) $(CFLAGS) $(STATS) -shared -o $@ lobbystats/lobbystats.c -lwinhttp -lpsapi -lgdi32 -lwinmm -static-libgcc -Wl,--kill-at
 
 # 30.10.2026: every feature its own add-on - the loading screen ratings, the cooldown numbers, the match clock (MatchTimer.dll)
+# LoadingRatings 5 (17.11.2026): Relic's or (LobbyStats.ini [LobbyStats] Rating=own, the one key both read) the Elite rating of the match's mode
 $(OUT)/LoadingRatings.dll: lobbystats/lobbystats.c lobbystats/own_rating.h matchtimer/matchtimer.c | $(OUT)
 	$(CC) $(CFLAGS) $(STATS) -DLS_LOADING -DMT_EMBED -shared -o $@ lobbystats/lobbystats.c matchtimer/matchtimer.c -lwinhttp -lpsapi -lgdi32 -lwinmm -static-libgcc -Wl,--kill-at
 
@@ -93,8 +94,9 @@ test:
 	$(HOSTCC) -Wall -Wextra -O2 -o $(TESTOUT)/test_own lobbystats/test/test_own.c
 	$(TESTOUT)/test_own lobbystats/test/own_all.json
 
-# the LobbyStats.dll lobby text under Wine (wow64 / 32-bit prefix): make build/test_lobbystats.exe, then
+# the LobbyStats.dll lobby text / LoadingRatings.dll loading screen under Wine (wow64 / 32-bit prefix): make build/test_lobbystats.exe, then
 # wine build/test_lobbystats.exe build/LobbyStats.dll lobbystats/test/own_all.json   (not in CI: no Wine there)
+# wine build/test_lobbystats.exe build/LoadingRatings.dll lobbystats/test/own_all.json
 $(OUT)/test_lobbystats.exe: lobbystats/test/test_dll.c | $(OUT)
 	$(CC) -O2 -Wall -o $@ $< -static-libgcc
 
