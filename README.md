@@ -538,6 +538,11 @@ frameprobe/ - FrameProbe.dll (off), eliteai/ - EliteAI.dll (store id newai since
       through the saving account, no generator on idle power, the answer to a machine before the tier, a guard of our own victory
       point, the chase stops at the enemy base's turrets, marines' T3 on idle power, squads refilled to half. EliteAI.dll 0.19: every
       tester mark keeps its AI lines in EliteAI.marks.log, a new first line per rewrite so the launcher sends the whole file.
+    newai-38 (0.2.112): brain 0.17 (eliteai branch newai-38 = brain-s17 + the verifier's VERIFY_17_keys_off: Brain_VpCurve=0,
+      Brain_TmRepair=0): the orks' siege task against a turret or a nest of set-up teams (answer, rally outside the arc, the turret as
+      the target), shooters out of a set-up team's arc; marines' tier 1 ceiling, librarian, sternguard ammunition by the target
+      (ability rows 88-91 in elite.scar + netorder.ai), assault jump with a lead, devastators' facing, buildings, set-up limit, focused
+      fire only at a suppressed target. EliteAI.dll 0.19 unchanged.
 
 ## Building
 
