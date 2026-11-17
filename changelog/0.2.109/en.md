@@ -1,0 +1,1 @@
+- Automatch (MMFind 0.54): a match from a launcher room no longer gets stuck for a minute in the main menu when the game has just started and nobody touched it - the game goes to Find a Game at once.

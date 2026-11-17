@@ -71,6 +71,15 @@
 // - an observer the host dropped while the match loaded no longer waits on "Waiting for players" until he closes the game: his game
 //   leaves the match by itself (the main menu with the game's notice "Host Disconnected"), the launcher gets failed
 //   "dropped_loading" (after "loading"; see odrop_step).
+//
+// 0.54 (17.11.2026, siritos): a launcher room's start on a cold game no longer stands a minute in an untouched main menu. MMFind
+// came in after the menu's last command (Elite's loader brings the add-ons in after the menu is up), so the walk waited for the
+// menu until the player moved the mouse, and the 60 s walk timer (counted from the launcher's ticket, kept as it is) cancelled the
+// start 0.2 s after the walk began. Now, while a launcher room's walk waits for the menu, mouse moves are posted over the menu's
+// buttons (common/menu.h's menu_nudge, as RoomJoin / ReplayOpen 4 / LiveReplay 5: only with the game in front; nothing hidden, no
+// click), the menu answers with its hover commands and the walk goes on (seamless: the Connecting box at once, as in 0.53). Only the
+// launcher room's walk nudges: the player's own Find a Game / Start Searching does not need the menu learnt - his clicks are the
+// menu's commands.
 // Hooks: Invoke 0x45DB6C (engine -> Flash, to read lists and to show our status), fscommand handler 0x681AB0 (Flash -> engine, to
 // catch the button and to send menu commands), Shark.dll shark::update (main-thread tick).
 #ifndef _WIN32_WINNT
@@ -248,8 +257,8 @@ static char g_natLobby[48], g_natWhy[96], g_natLastCancel[32];
 // what to do, "MMFind 0.45", the queue and who is online. Shown from the moment the screen opens (a peek at mm/native: the ladder
 // answers as for Start Searching and changes nothing; again every 20 s and on a match type change while the screen is open), after
 // the click by what really happened. [MMFind] ShowMode=1 (default) / 0 = off, Lang=auto (the game's own text: Cyrillic = Russian) / ru / en.
-#define MMF_VER "0.53"
-#define MMF_VER_W L"0.53"
+#define MMF_VER "0.54"
+#define MMF_VER_W L"0.54"
 static int g_showMode = 1, g_langCfg = -1, g_lang = -1, g_modeProbe;
 static double g_mx = 1065, g_my = 590, g_msz = 30;           // panel units, see mode_make
 static volatile int g_peekWant, g_peekAns; static volatile DWORD g_peekLast; static char g_peekWhy[96];
@@ -1046,6 +1055,34 @@ static int probe_screen(void) {
     strcpy(g_panel, pth); g_screen = found; g_scrTick = GetTickCount() - 2000;
     return found;
 }
+// 0.54 (17.11.2026, siritos's cold start through a launcher room): a main menu nobody touches sends no command and the engine calls
+// nothing in it, so a walk that came in after the menu's last command waited for the menu (g_fsMovie) until the player moved the
+// mouse - a minute, then walk_timeout. Now the walk posts mouse moves over the menu's buttons (common/menu.h's menu_nudge, as
+// RoomJoin / ReplayOpen 4 / LiveReplay 5: only with the game's window in front, the real cursor does not move); the menu answers with
+// its hover commands (_level0.display_item...), fs_hook takes the movie from them as before. Only the nudge is taken from the header:
+// MMFind keeps its own menu movie and screen, so the header's screen names are renamed here (MMFind's SC_* are other values).
+static int is_code(DWORD a) {                                         // (menu.h's destructor wrap needs it; MMFind never calls that)
+    MEMORY_BASIC_INFORMATION mi;
+    return a && VirtualQuery((void *)a, &mi, sizeof mi) && mi.State == MEM_COMMIT
+        && (mi.Protect & (PAGE_EXECUTE | PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY));
+}
+#define MENU_LOG logmsg
+#define SC_UNKNOWN MENU_SC_UNKNOWN
+#define SC_OTHER MENU_SC_OTHER
+#define SC_MAIN MENU_SC_MAIN
+#define SC_MM MENU_SC_MM
+#define SC_LIST MENU_SC_LIST
+#define SC_SETUP MENU_SC_SETUP
+#define SC_NAME MENU_SC_NAME
+#include "../common/menu.h"
+#undef SC_UNKNOWN
+#undef SC_OTHER
+#undef SC_MAIN
+#undef SC_MM
+#undef SC_LIST
+#undef SC_SETUP
+#undef SC_NAME
+static int g_rNudged;                                                 // this walk nudged the menu (the game's cursor back once it is known)
 static char __fastcall inv_hook(void *self, void *edx, const char *method, int flags, GFxValue *args, unsigned count) {
     if (g_rWantMenu && !g_loading) menu_from_call(self);
     if (g_logInvoke && method && args && count < 64 && !IsBadReadPtr(args, count * sizeof(GFxValue))     // debug: engine -> Flash calls
@@ -1577,7 +1614,7 @@ static void room_start(const QCmd *c, DWORD now) {
     g_rMMFresh = 0; g_rAcceptAt = 0; g_rWalks = 0; g_rDeadline = c->ttl > 0 ? now + (DWORD)c->ttl * 1000 : 0;
     g_rMode = c->mode; g_rRace = c->race; g_rHero = c->hero; g_rAt = now; g_rTries = 0; g_rWalked = 0; g_rEvMatched = g_rEvRoom = 0; g_rWantMenu = 1;
     g_rMenuOk = g_fsMovie && g_menuOkMovie == (DWORD)g_fsMovie;          // 0.51: the menu's own handler known already - no wait for the engine's calls
-    g_rBoxTried = 0; g_wPosted = 0; g_wState = 0; g_wGone = 0; g_wRoom = 0; g_wWhy[0] = 0;
+    g_rBoxTried = 0; g_wPosted = 0; g_wState = 0; g_wGone = 0; g_wRoom = 0; g_wWhy[0] = 0; g_rNudged = 0;
     if (g_seamState == 1 && connbox_is_open()) { g_seamAbort = 0; g_rBoxTried = 1; logmsg("room %s: the seamless transition of the start before still runs - it serves this one", c->room); }
     else g_seamState = 0;                                                 // 0.52: the seamless walk again for this start
     g_seamWaitLog = 0;
@@ -1679,7 +1716,10 @@ static void room_step(DWORD now) {
         if (g_loading) { room_fail("busy_match", "the game is in a match"); break; }
         if (now - g_rAt > 60000) { room_fail("walk_timeout", "Find a Game did not open in 60 s"); break; }
         g_rWantMenu = 1;                                                     // the menu and its own handler from the engine's calls
-        if (!g_fsSelf || !g_fsMovie) break;
+        if (!g_fsSelf || !g_fsMovie) {                                       // 0.54: an untouched menu - mouse moves over its buttons
+            if (!g_rNudged) logmsg("room %s: the menu not known yet - mouse moves over it (common/menu.h) while the game is in front", g_room);
+            g_rNudged = 1; menu_nudge(now); break; }
+        if (g_rNudged) { g_rNudged = 0; menu_cursor_back(); logmsg("room %s: the menu known after %lu ms", g_room, now - g_rAt); }
         // 0.52: the seamless walk needs no menu command (the menu's own handler is needed later, on Find a Game - its OnLoadComplete
         // brings it), so no wait for "the menu answered"
         int seam = g_seamCfg && !g_rWatchN && g_seamState != 4 && seam_code();

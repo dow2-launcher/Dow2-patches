@@ -4,6 +4,23 @@ Every version gets an entry here before it reaches `main`. CI then tags `vX.Y.Z`
 version (`X.Y.0`) it also publishes a GitHub Release with the DLLs and the entries since the previous `X.Y.0`.
 The version of the set lives only in `VERSION`; each DLL still writes its own version to its log.
 
+## 0.2.109 — 2026-11-17
+MMFind 0.54 (Automatch v2.0; hand release: store automatch mmfind-0.54 = the live package mmfind-0.53 with this MMFind.dll): a
+launcher room's start on a cold game no longer stands a minute in an untouched main menu (SirItos 17.11, room 2ctk27: MMFind came in
+0.46 s after the main menu's last command, so the walk waited for the menu - no Connecting box, a minute of plain main menu - until
+the mouse moved; the 60 s walk timer then cancelled the start for both 0.2 s after the walk began, "Find a Game did not open in 60 s").
+- While a launcher room's walk (RS_WALK) waits for the menu movie, mouse moves are posted over the menu's buttons - common/menu.h's
+  menu_nudge, as RoomJoin / ReplayOpen 4 / LiveReplay 5: only with the game's window in front, the real cursor does not move, no
+  click, nothing hidden; the menu answers with its hover commands (_level0.display_item...), from which MMFind takes the movie as
+  before; the game's cursor is put back once the menu is known. Then the walk as 0.53 (seamless: the Connecting box at once).
+- The 60 s walk timer is kept as it is (counted from the launcher's ticket): a start that goes wrong still gives up within a minute.
+- Only the launcher room's walk nudges (players and observers through the native automatch). The player's own Find a Game / Start
+  Searching is untouched: his own clicks are the menu's commands, nothing waits for the menu there.
+- Only menu_nudge / menu_cursor_back of common/menu.h are used (its screen names renamed at the include: MMFind keeps its own menu
+  movie and screen); common/menu.h itself is unchanged.
+- Not tested live (no fake harness for MMFind in this repo; built clean with -Wall). Not tested: the game behind the launcher window
+  (no nudge then - as RoomJoin; the walk waits for the menu as 0.53 did).
+
 ## 0.2.108 — 2026-11-17
 New AI 37 (store newai-37, experiment, off by default, Elite only): step 16 of the brain (0.16) + the verifier's two patches W1/W2
 + EliteAI.dll 0.19 (tester marks). Victory point games only. Every other race still newai-23.1.
