@@ -6,7 +6,7 @@ The version of the set lives only in `VERSION`; each DLL still writes its own ve
 
 ## 0.2.112 — 2026-11-17
 New AI 38 (store newai-38, experiment, off by default, Elite only): step 17 of the brain (0.17) + the verifier's VERIFY_17_keys_off;
-EliteAI.dll 0.19 unchanged (eliteai.c as newai-37). Victory point games only. Every other race still newai-23.1. (0.2.111 is open PR #139.)
+EliteAI.dll 0.19 unchanged (eliteai.c as newai-37). Victory point games only. Every other race still newai-23.1. (0.2.111 = LobbyStats / LoadingRatings, #139.)
 eliteai branch newai-38 338915e = brain-s17 9cd674b (step 17, code d265944, HANDOFF 9cd674b, on newai-37 a466843) + the verifier's
 two key defaults: Brain_VpCurve=0 (the victory point's worth no longer follows our tickets - new orks against the marines of newai-37
 445:4902 on the bench) and Brain_TmRepair=0 (the techmarine's turret repair: 39 begun, 0 mended). Served files differing from
@@ -26,6 +26,63 @@ data as newai-37.
 - Check: stub 374 PASS, 0 FAIL; default.ai unchanged by vanilla_dispatch.py, 05_data.ai unchanged by brain_data.py. Bench (snapshot
   s17v/snap/n38 = 338915e, DLL of newai-37): 4 new recordings (3 brain-vs-brain, one 3v3), 0 Lua errors, CRC 4 of 4 equal over the
   full length, 0 turret repair lines. Verifier (step 17): release with VERIFY_17_keys_off only. Not stand-tested.
+
+## 0.2.111 — 2026-11-17
+LobbyStats 0.12.0 (store lobbystats_r3 -> lobbystats-0.12.0): the Elite rating in the lobby (SirItos 17.11: "show our rating, the
+one of the lobby's mode 1v1/2v2/3v3, and on hover the general info as launcher PR #70 does"). Off by default: LobbyStats.ini
+`[LobbyStats] Rating=own` (default `relic` = 0.11.0's behaviour); the launcher's setting will write it later (the store entry has no
+options, none added).
+- Mode of the lobby: Receive_SetMaxPlayers (2/4/6/8), which the game sends right before every Receive_PopulatePlayerList (invoke logs
+  14.11.2026: 2 in 1v1 lobbies, 6 in a 3v3 one); the list's first argument (players per team: 1 / 3 there) when SetMaxPlayers was not
+  seen. 4v4 and FFA (Receive_SetFFASolo / SetFFATeam true - only false seen so far) have no Elite mode: a dash.
+- The name: "Name  [1584]" (the conservative number `c` of /ladder/api/own/all, as the launcher and the site), "Name  [cal 2/5]" while
+  calibrating (games played / the season's cal_games, as rating.js's "calibration: 2/5"), "Name  [—]" without one. Nothing before the
+  table and the player's lookup have come (as Relic numbers: the next lobby update shows them). An old "  [...]" of ours in front of
+  the name (two LobbyStats in the Invoke chain, 0.10.1) is taken off for the new tags too.
+- The slot's own tooltip (m_tooltip, the game's box): the name; "Elite rating - preseason" (or "season <label>"); the lobby's mode
+  first, then the others: "<mode>: <c>, place <rank> - W / L", "calibration k/5 - W / L", "no games yet"; Relic's rating with W/L and
+  win rate; Steam hours. No D3D.
+- The table: GET /ladder/api/own/all (dow2-ladder PR #31) by the existing worker thread, never on the game's thread: at the start
+  (Rating=own) and then at most every 2 min while lobby lists come (a minute when there is none yet); parsed into a sorted array
+  (lobbystats/own_rating.h, a small JSON reader for this answer, integers only, a cut or broken answer refused and the old table kept),
+  swapped in under the lock. Up to 16 MB, grown as it comes.
+- Players are found by SteamID64: the slot's ID when it is one, else the stats service's lobby line, which gets a 7th field with the
+  SteamID (dow2-ladder PR #33; LobbyStats <= 0.11 and the ladder / replay readers take fields 0..5 only). The disk cache keeps it
+  (`name\trating\tW\tL\thours\t-\tsteam`, old DLLs read the first five). Until #33 is deployed most players show a dash.
+- Mirrors: `Server=` may be a list (`host;host`); the one that answered is kept, the next tried on no answer or 5xx (as MMFind). The
+  default rts.fintebtc.de of LobbyStats and LoadingRatings becomes rts;dow2;dow2ru (JoinSound asks no server). Lookups now take only
+  an HTTP 200 answer.
+- Tests: `make test` (new, in CI after the DLLs): lobbystats/test/test_own.c against lobbystats/test/own_all.json - 26 checks (rated,
+  calibrating, "c": null, fractions, unknown keys and modes, 4v4, an empty player, cut answers at every 7th byte refused, 404 HTML,
+  20000 players). lobbystats/test/test_dll.c under Wine 11.20 wow64 (`make build/test_lobbystats.exe`, new export
+  LobbyStats_TestOwn): the PopulatePlayerList substitution - 22 checks (relic unchanged, own 1v1/2v2/3v3, calibration, no table yet,
+  no SteamID, old server line, not looked up yet, no SetMaxPlayers, FFA, 4v4, chained tags, a broken later answer keeps the table,
+  back to relic). Live under Wine: the mirror switch (a dead first host -> dow2 answered, kept) and own/all's 404 before #31 is
+  deployed ("not available right now" in the tooltip, dashes). Not run in the game.
+
+LoadingRatings 5 (store loadingratings_r3 -> loadingratings-5) and the rest of the in-game side for the preseason (SirItos 17.11:
+"with our mode on, our rating next to the nick; except on the main menu - there will be none; on hover the full info, the hours
+too"). One feature per DLL as before; the two share the switch and the data format only.
+- One switch: LobbyStats.ini `[LobbyStats] Rating=relic|own` (`elite` = own, the launcher's own word) in the DLL's folder -
+  Elite_DLLs\LobbyStats.ini, dow2-patches\LobbyStats.ini for the vanilla copies. LoadingRatings reads the key from that file too
+  (not from LoadingRatings.ini), so the launcher writes one place and the file may exist without LobbyStats installed.
+- The loading screen (Rating=own): the Elite number of the last lobby's mode after each player's name - "1584", "cal 2/5", "—" -
+  the same tag as the lobby (own_rating.h own_tag_utf8), players by SteamID64 (the slot's ID or the lobby line's 7th field, live
+  since dow2-ladder #33). Nothing before the table came or while his lobby line is on its way; observers untouched as before. Its
+  own worker fetches /ladder/api/own/all at the start and at most every 2 min while lobbies come.
+- The main menu (Rating=own): no rating at all - neither add-on puts "  [rating]" after the own name (Receive_SetGamerTag, the
+  frame hook's late set) and LobbyStats does not hook the name bar's tooltip. Rating=relic unchanged (LoadingRatings 4 put the
+  Relic number after the menu name too - kept as it was).
+- The hours: the tooltip's "Steam hours" from own/all's per-player `hours_played` (or `h`; a number or null) when the ladder adds
+  it (today only /ladder/api/c/me has it), else the stats service's lobby line as before; now also for a player without a Relic
+  profile when own/all has his hours.
+- Tests: test_own.c 30 checks (+ hours_played number / null / "h" with a fraction / absent); test_dll.c runs on either DLL
+  (export LobbyStats_Build): LobbyStats 29 checks (+ the main menu name relic / own, LobbyStats leaves the loading screen alone,
+  hours from own/all and from the line), LoadingRatings 16 checks (lobby untouched, relic / own 1v1 / cal / 3v3 / no Steam ID /
+  not looked up / FFA / back to relic, menu name without rating in own; new exports LobbyStats_TestLoad, LobbyStats_TestMenuName).
+  The fake lobby's slots now sit at the game's positions (team 2 from 4). Live under Wine against rts (both DLLs, Rating=elite in
+  LobbyStats.ini): own/all 17 players, lobby names "[1377]"/"[1372]" with the tooltip, loading screen the same, menu name bare.
+  Not run in the game.
 
 ## 0.2.110 — 2026-11-17
 Mac add-ons, step 1 (owner 17.11: "migrate the main add-ons that port to the Mac most easily"): mac/ - x86_64 dylibs for the native

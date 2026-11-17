@@ -51,6 +51,8 @@ jobs:
           sudo chown -R "$USER" ~/apt-archives
           i686-w64-mingw32-gcc --version | head -1
       - run: make
+      - name: Host tests (LobbyStats Elite table)
+        run: make test
       - run: cd build && sha256sum ./*.dll | tee SHA256SUMS.txt
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:

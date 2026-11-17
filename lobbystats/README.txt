@@ -21,7 +21,13 @@ Install
 Options (LobbyStats.ini, see comments inside)
   [LobbyStats] Stats=0            - no numbers at all
   [LobbyStats] ShowRatingInName=0 - keep names untouched, show the rating only in the tooltips
-  [LobbyStats] Server=host        - another stats service
+  [LobbyStats] Rating=own         - (0.12.0) our Elite rating of the lobby's mode (1v1/2v2/3v3) instead of Relic's:
+                                    "Name  [1584]", "Name  [cal 2/5]" while calibrating, "Name  [—]" without one;
+                                    the slot tooltip lists every mode (number, place, W/L), Relic's rating and the Steam
+                                    hours; nothing on the main menu. Default relic. LoadingRatings.dll (5) reads this same
+                                    key from LobbyStats.ini next to it: the loading screen then shows the Elite number of
+                                    the match's mode too
+  [LobbyStats] Server=host;host   - another stats service (several = mirrors, the next tried when one can't be reached)
   [MenuTooltip] DX, DY, MinWidth  - where the main menu tooltip sits, so it covers the game's own one
   [Debug] LogInvoke=1             - LobbyStats_invoke.log: every Flash call of the UI (for finding UI functions)
 

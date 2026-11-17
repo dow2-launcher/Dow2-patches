@@ -1,0 +1,3 @@
+- Lobby ratings: can show our Elite rating instead of Relic's - the number of the lobby's mode (1v1, 2v2 or 3v3), "cal 2/5" while a player is calibrating, a dash without one; hover a player for every mode with his place and wins / losses, Relic's rating and Steam hours. With the Elite rating the main menu shows no rating by your name. Off by default (Relic's rating as before); the switch comes with a launcher update.
+- Loading screen ratings: with the Elite rating picked, shows it for the match's mode (1v1, 2v2 or 3v3) instead of Relic's.
+- Lobby ratings, Loading screen ratings: when our main server can't be reached, the ratings come through our other servers.

@@ -1,4 +1,5 @@
 build/
+build-test/
 *.dll
 *.log
 mac/out/
