@@ -100,7 +100,7 @@ $(OUT)/EliteAI.dll: eliteai/eliteai.c eliteai/moveloop_guard.h eliteai/retlock.h
 $(OUT)/Reverse.dll: reverse/reverse.c | $(OUT)
 	$(CC) $(CFLAGS) -shared -o $@ $< -static-libgcc
 
-$(OUT)/MMFind.dll: mmfind/mmfind.c common/connbox.h | $(OUT)
+$(OUT)/MMFind.dll: mmfind/mmfind.c common/connbox.h common/menu.h | $(OUT)
 	$(CC) $(CFLAGS) -shared -o $@ $< -lwinhttp -lpsapi -lshell32 -lole32 -static-libgcc
 
 # Relay 17: two DLLs from one source: Relay.dll (since 05.11.2026 part of the automatch package, loaded by MMFind.dll - the
