@@ -10,6 +10,9 @@ protfix) lives in dow2-launcher/Dow2-mac-crossplay; without it in the game an ad
   nohints/             NoHints.dylib       store id nohints_mac       (Windows: nohints/)
   reinforcefix/        ReinforceFix.dylib  store id reinforcefix_mac  (Windows: reinforcefix/)
   herolabelfix/        HeroLabelFix.dylib  store id herolabelfix_mac  (Windows: herolabelfix/)
+  overwatchonce/       OverwatchOnce.dylib store id overwatchonce_mac (Windows: overwatchonce/)
+  ctrlattack/          CtrlAttack.dylib    store id ctrlattack_mac    (Windows: ctrlattack/; key Option, not Ctrl - Feral makes
+                                           Control + click a right click)
   build.sh             builds them all into mac/out/ (CI: the "mac" job of .github/workflows/build.yml, artifact dow2-mac-addons)
 
 Each writes <Name>.log next to itself and reads <Name>.ini there ([<Name>] Enabled=1, as on Windows). Addresses are the 1.0.3
