@@ -743,8 +743,8 @@
     }
   },
   "uiscale": {
-    "category": "interface",
-    "order": 120,
+    "category": "experiment",
+    "order": 1080,
     "name": {
       "en": "UI Scale",
       "ru": "UI Scale",

@@ -8,8 +8,8 @@ The version of the set lives only in `VERSION`; each DLL still writes its own ve
 Store groups only (owner 18.11: these work stable; out of "Experiment" into their own sections, still off by default): category and
 order in addons.json and docs/store-texts.json - replaytakeover gameplay 40, unitstats interface 80, replayspeed interface 90,
 cursorscale interface 100, herolabelfix fixes 40, soundfix fixes 50, overwatchonce gameplay 50, ctrlattack gameplay 60, langswitch
-interface 110, uiscale interface 120 (Mac herolabelfix_mac fixes 40 in the store's components_macos). ChatHide, EliteMaps,
-SpeechStreakFix, NoHints, DocsFix stay in "Experiment". No DLL, version, default or text changed; the live store's groups are set by hand (deploy changes
+interface 110 (Mac herolabelfix_mac fixes 40 in the store's components_macos). ChatHide, EliteMaps, SpeechStreakFix, NoHints,
+DocsFix, UIScale, MoveLoopFix, ArmyBadgeFix, ParallelPose, ParallelDraw stay in "Experiment". No DLL, version, default or text changed; the live store's groups are set by hand (deploy changes
 category / order only for a new add-on).
 
 ## 0.2.113 — 2026-11-17
