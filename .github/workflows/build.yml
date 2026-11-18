@@ -82,11 +82,19 @@ jobs:
           cd mac/out
           for d in *.dylib; do
             file "$d"; lipo -archs "$d" | grep -qx x86_64 || { echo "$d: not x86_64 only"; exit 1; }
-            # only libSystem: no network, no Steam, no other library
-            if otool -L "$d" | tail -n +2 | grep -v -e "@rpath/$d" -e /usr/lib/libSystem.B.dylib; then echo "$d: unexpected library"; exit 1; fi
+            # only libSystem: no Steam, no other library; LobbyStats also the system's CoreFoundation + CFNetwork (its HTTPS)
+            allow="-e @rpath/$d -e /usr/lib/libSystem.B.dylib"
+            [ "$d" = LobbyStats.dylib ] && allow="$allow -e /System/Library/Frameworks/CoreFoundation.framework/ -e /System/Library/Frameworks/CFNetwork.framework/"
+            if otool -L "$d" | tail -n +2 | grep -v $allow; then echo "$d: unexpected library"; exit 1; fi
             nm -u "$d" | tr '\n' ' '; echo
           done
           { echo "### Mac add-ons (dow2-patches ${{ needs.version.outputs.number }})"; echo '```'; cat SHA256SUMS.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+      - name: LobbyStats network check (informational - its HTTPS code against our stats hosts from the runner)
+        continue-on-error: true
+        run: |
+          /opt/homebrew/opt/llvm@19/bin/clang -isysroot "$(xcrun --show-sdk-path)" -O2 -Wall -o "$RUNNER_TEMP/test_net" mac/lobbystats/test_net.c \
+            -framework CoreFoundation -framework CFNetwork
+          "$RUNNER_TEMP/test_net" | tee -a "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: dow2-mac-addons

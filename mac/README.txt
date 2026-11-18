@@ -13,6 +13,8 @@ protfix) lives in dow2-launcher/Dow2-mac-crossplay; without it in the game an ad
   overwatchonce/       OverwatchOnce.dylib store id overwatchonce_mac (Windows: overwatchonce/)
   ctrlattack/          CtrlAttack.dylib    store id ctrlattack_mac    (Windows: ctrlattack/; key Option, not Ctrl - Feral makes
                                            Control + click a right click)
+  lobbystats/          LobbyStats.dylib    store id lobbystats_mac    (Windows: lobbystats/, the lobby part; own_rating.h shared;
+                                           HTTPS with the system's CFNetwork, http_mac.h; test_net.c = CI's network check)
   build.sh             builds them all into mac/out/ (CI: the "mac" job of .github/workflows/build.yml, artifact dow2-mac-addons)
 
 Each writes <Name>.log next to itself and reads <Name>.ini there ([<Name>] Enabled=1, as on Windows). Addresses are the 1.0.3
