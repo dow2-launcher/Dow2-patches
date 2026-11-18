@@ -1,0 +1,1 @@
+- New section "Testing & debug" (launcher 1.6.24): speed measurements, test runs and extra logging moved there (still off by default).

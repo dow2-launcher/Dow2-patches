@@ -319,8 +319,8 @@
       "fr": "Si votre jeu se ferme parfois tout seul : activez, attendez le plantage puis cliquez sur « Envoyer les journaux » dans les réglages du lanceur. Nous saurons pourquoi. Rien ne change en jeu.",
       "de": "Schließt sich dein Spiel manchmal von selbst: einschalten, auf den Absturz warten und in den Launcher-Einstellungen „Logs senden“ drücken. So finden wir die Ursache. Im Spiel ändert sich nichts."
     },
-    "category": "fixes",
-    "order": 30
+    "category": "debug",
+    "order": 50
   },
   "apm": {
     "version": "3",
@@ -836,7 +836,9 @@
     "conflicts": [
       "dow2-patches/SoundBugTest.dll",
       "Elite_DLLs/SoundFix.dll"
-    ]
+    ],
+    "category": "debug",
+    "order": 40
   },
   "replayspeed": {
     "version": "1",
@@ -909,8 +911,8 @@
       "elite",
       "vanilla"
     ],
-    "category": "performance",
-    "order": 50,
+    "category": "debug",
+    "order": 30,
     "name": {
       "en": "PerfLog",
       "ru": "PerfLog",
@@ -1432,8 +1434,8 @@
       "vanilla",
       "igrework"
     ],
-    "category": "experiment",
-    "order": 1090,
+    "category": "debug",
+    "order": 10,
     "name": {
       "en": "Match speed",
       "ru": "Match speed",
@@ -1458,8 +1460,8 @@
       "vanilla",
       "igrework"
     ],
-    "category": "experiment",
-    "order": 1100,
+    "category": "debug",
+    "order": 20,
     "name": {
       "en": "Match marks",
       "ru": "Match marks",

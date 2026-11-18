@@ -4,6 +4,13 @@ Every version gets an entry here before it reaches `main`. CI then tags `vX.Y.Z`
 version (`X.Y.0`) it also publishes a GitHub Release with the DLLs and the entries since the previous `X.Y.0`.
 The version of the set lives only in `VERSION`; each DLL still writes its own version to its log.
 
+## 0.2.115 — 2026-11-18
+Store groups only (owner 18.11: speed measurements, test runs, extra logging -> the testing & debug section): new category `debug`
+(launcher 1.6.24 shows it last as «Тестирование и отладка»; older launchers fall back to Experiment) in store_texts.py and
+docs/ADDON_TEXTS.md; category debug and order in addons.json and docs/store-texts.json - matchspeed 10, marks 20, perflog(_r2) 30,
+soundbugtest 40 (addons.json had no group for it: added), crashlog 50. No DLL, version, default or text changed; the live store's
+groups are set by hand (deploy changes category / order only for a new add-on).
+
 ## 0.2.114 — 2026-11-18
 Store groups only (owner 18.11: these work stable; out of "Experiment" into their own sections, still off by default): category and
 order in addons.json and docs/store-texts.json - replaytakeover gameplay 40, unitstats interface 80, replayspeed interface 90,

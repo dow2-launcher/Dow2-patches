@@ -29,6 +29,7 @@ README and the commits.
 | `fixes` | fixes of the game or Elite, crash records |
 | `performance` | performance (experiment): frame rate, renderer; new group 09.11.2026 - older launchers show it under Experiments |
 | `experiment` | being tested, may change or go away; anything that fits no other group |
+| `debug` | testing and debugging (shown last): speed measurements, test runs, extra logging; new group 18.11.2026 (launcher 1.6.24) - older launchers show it under Experiments |
 
 `order` is the place inside the group: a whole number, smaller = higher (10, 20, 30 ... leaves room for a new one between).
 Both live in the add-on's own entry (addons.json, docs/store-texts.json, a catalog-entry.json) and go to the store with
