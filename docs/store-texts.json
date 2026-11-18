@@ -635,8 +635,8 @@
     }
   },
   "overwatchonce": {
-    "category": "experiment",
-    "order": 1020,
+    "category": "gameplay",
+    "order": 50,
     "name": {
       "en": "Overwatch once",
       "ru": "Overwatch once",
@@ -653,8 +653,8 @@
     }
   },
   "ctrlattack": {
-    "category": "experiment",
-    "order": 1030,
+    "category": "gameplay",
+    "order": 60,
     "name": {
       "en": "Ctrl attack ground",
       "ru": "Ctrl attack ground",
@@ -689,8 +689,8 @@
     }
   },
   "langswitch": {
-    "category": "experiment",
-    "order": 1050,
+    "category": "interface",
+    "order": 110,
     "name": {
       "en": "LangSwitch",
       "ru": "LangSwitch",
@@ -743,8 +743,8 @@
     }
   },
   "uiscale": {
-    "category": "experiment",
-    "order": 1080,
+    "category": "interface",
+    "order": 120,
     "name": {
       "en": "UI Scale",
       "ru": "UI Scale",
