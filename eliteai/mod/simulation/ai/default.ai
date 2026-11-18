@@ -8531,7 +8531,7 @@ do
 --  * every decision writes one reason line: Brain.say / Brain.order. A scene's timeline must explain itself.
 
 Brain = {}
-Brain.VERSION = "0.18"
+Brain.VERSION = "0.19"
 Brain.RACES = { orks = true, space_marines = true }              -- the races that have a profile (60_roles.ai). Which of them PLAY with the brain is the dispatcher's: [Lua] Brain_Races (default orks)
 Brain.on = (type(EliteAI_MODE) == "table" and EliteAI_MODE.brain == true)
 
@@ -8567,9 +8567,13 @@ Brain.S17 = { DevFocusSup = 0, StepOutGun = 0, SetupWait = 0, VpCurve = 0, CapFi
 	JumpLead = 0, TacJump = 0 }
 -- (step 18) [Lua] Brain_Step17Race = <a race's name>: that race plays every rule of step 18 with the value that returns step 17
 -- (newai-38); a key set in the ini still wins. Not set: nothing changes.
+-- (step 19) [Lua] Brain_Step18Race = <a race's name>: that race plays every rule of step 19 with the value that returns step 18
+-- (newai-39); a key set in the ini still wins. Not set: nothing changes.
+Brain.S19 = { CapHere = 0, HomeGroup = 0, SiegeQuick = 0, CapRunField = 0 }
 Brain.S18 = { Rush = 0, WalkerBold = 0, VehAvBack = 0, DocTrukkVp = 0, DocWeirdAfter = 0, SmScoutFirst = 0, SmScoutSneak = 0, HiddenFire = 0, RepairPrio = 0, JumpSave = 0, GenRaid = 0, DocBoT1 = 0, JumpNoWalk = 0, DocVehReact = 0, DocSluggaMax = 0 }
 function Brain.num(key, default)
 	local v = tonumber(Brain.cfg("Brain_" .. key, nil))
+	if v == nil and Brain.S19[key] ~= nil and s_current_race ~= nil and Brain.cfg("Brain_Step18Race", nil) == s_current_race then return Brain.S19[key] end
 	if v == nil and Brain.S18[key] ~= nil and s_current_race ~= nil and Brain.cfg("Brain_Step17Race", nil) == s_current_race then return Brain.S18[key] end
 	if v == nil and Brain.S17[key] ~= nil and s_current_race ~= nil and Brain.cfg("Brain_Step16Race", nil) == s_current_race then return Brain.S17[key] end
 	if v == nil and Brain.S16[key] ~= nil and s_current_race ~= nil and Brain.cfg("Brain_Step15Race", nil) == s_current_race then return Brain.S16[key] end
@@ -13946,6 +13950,25 @@ local function survive(u, W, taken)
 			end
 			local healed = (u.hp >= Brain.num("HealHP", 0.8) and missing <= 0)
 			local waited = (now - st.t >= Brain.num("HealMaxSecs", 45) and u.hp >= Brain.num("HealMinHP", 0.6))
+			-- Step 19 (Orca fb 1704 'it runs about by one squad again'; the line WHO on the bench, 28 games: an ork squad is on
+			-- its way home or healing there 20 % of its seconds, 24 visits a game, each ends by itself - the squads leave home
+			-- ONE BY ONE and meet the enemy one by one). THEY LEAVE HOME TOGETHER (HomeGroup): a squad that is ready waits at
+			-- home for the others of the army that are on their way home or still healing - HomeGroupSecs (15 s) at most,
+			-- and not while it is shot at there. Machines and the rear wait for nobody and nobody waits for them.
+			-- OFF BY DEFAULT (Brain_HomeGroup=1 turns it on): bench s19_xo_b1 against s19_xo_b2hf, two seeds - with it 0.3 squads more sat at home, the group by the map was no bigger (2.82 against 2.86), the victory points held 1.16 against 1.24.
+			if (healed or waited) and Brain.num("HomeGroup", 0) >= 1 and not u.veh and not u.hit and not Brain.roles.is_rear(Brain.roles.of(u)) then
+				st.ready = st.ready or now
+				local mate
+				for _, w in ipairs(W.army) do
+					local ws = A.st[w.id]
+					if w.id ~= u.id and not w.veh and ws ~= nil and (ws.mode == "retreat" or ws.mode == "heal") and ws.ready == nil and not Brain.roles.is_rear(Brain.roles.of(w))
+						and (w.home or (w.dhome or 999) <= Brain.num("HomeGroupD", 120)) then mate = w; break end
+				end
+				if mate ~= nil and now - st.ready < Brain.num("HomeGroupSecs", 15) then
+					Brain.say("ARMY", "homegroup|" .. u.id, 30, { "squad", u.id, Brain.short(u.key), "HOME_WAIT", "why", "ready, but " .. mate.id .. " " .. Brain.short(mate.key) .. " is on its way home or healing: they leave together", "at most", f0(Brain.num("HomeGroupSecs", 15)), "s" }, "w")
+					return
+				end
+			end
 			if healed or waited then
 				A.st[u.id] = nil; taken[u.id] = nil
 				Brain.log("ARMY", "squad", u.id, Brain.short(u.key), "BACK", "why", healed and "healed and refilled" or "waited long enough",
@@ -15899,6 +15922,7 @@ end
 local function fist(W, taken)
 	local now = W.now
 	local list = {}
+	A.fist_in = {}                                                      -- (step 19, the line WHO: the fist's squads - true: within FistR of its centre)
 	-- (a squad that captures - a job of 55_capture.ai, or one found capturing with no enemy in sight - is taken there, R12 / R55)
 	-- Step 5 (tester Malum, fb 860: "the lootas need not walk with everybody - it is enough to cover some direction of the
 	-- map and fall back when needed"): a set-up team that is free holds a POST - our victory point nearest to the enemy
@@ -16253,6 +16277,7 @@ local function fist(W, taken)
 	for _, u in ipairs(list) do
 		local d = d2(u.x, u.z, cx, cz)
 		if d <= fist_r then table.insert(inside, u); n_in = n_in + 1 else table.insert(outside, u) end
+		A.fist_in[u.id] = (d <= fist_r)
 	end
 	-- (step 7: the squads away from the fist are ordered below, when it is known whether the fist stages - then they go
 	-- to the edge with the others, not to the fist's centre)
@@ -16871,8 +16896,24 @@ function A.siege(W, taken)
 		local need = math.min(n_force, Brain.num("SiegeGoArmy", 3))
 		local ready = (c_at >= 1 and (n_at >= need or waited >= Brain.num("SiegeEscortWaitSecs", 15)) and (c_at >= cn or waited >= Brain.num("SiegeCounterWaitSecs", 25)))
 		local verdict = "WAIT"
+		local off_why
 		if ready and ratio >= Brain.num("SiegeGoRatio", 1.0) then verdict = "GO"
 		elseif waited >= Brain.num("SiegeGatherSecs", 75) then verdict = "OFF" end
+		-- Step 19 (Malum's log of fb 1687: 'SIEGE ASSESS nest ... 1 of 2 there ... ratio 0.16 -> WAIT waited 10', the warboss and
+		-- the shootas called out of a fight at a free victory point to gather for it, tickets 141:421; later 'tickets 29:99 ...
+		-- ratio 0.50 -> WAIT waited 49'; on his logs the siege task is 9-20 % of the orks' squad-seconds, on the bench 4 %).
+		-- A GATHERING THAT CANNOT WIN IS NOT WAITED OUT (SiegeQuick): everybody of the force is at the place (or
+		-- SiegeQuickSecs 25 s have passed) and the force is below SiegeQuickRatio (0.6) of the target - the task ends at
+		-- once; and while the race alarms (20_plan.ai L.race_alarm: the tickets run out) nobody gathers at all - a force
+		-- that is not ready to go in this second gives the task up, the squads go for the victory points.
+		-- Brain_SiegeQuick=0: the gathering waits its SiegeGatherSecs, as step 17.
+		if verdict == "WAIT" and Brain.num("SiegeQuick", 1) >= 1 then
+			if ((n_at >= n_force and c_at >= cn) or waited >= Brain.num("SiegeQuickSecs", 25)) and ratio < Brain.num("SiegeQuickRatio", 0.6) then
+				verdict, off_why = "OFF", "the force at the place (" .. n_at .. " of " .. n_force .. ") is " .. f2(ratio) .. " of the target: a gathering that cannot win is not waited out"
+			elseif Brain.plan.race_alarm ~= nil and Brain.plan.race_alarm(W) then
+				verdict, off_why = "OFF", "the race alarms (the tickets run out) and the force is not ready (" .. n_at .. " of " .. n_force .. ", ratio " .. f2(ratio) .. "): no gathering now, the squads go for the victory points"
+			end
+		end
 		Brain.say("ARMY", "siege_assess", 10, { "SIEGE", "ASSESS", sg.kind, sg.key, "at the place:", n_at, "of", n_force, "there (counters " .. c_at .. " of " .. cn .. ")", "ours", f0(s_at), "against", f0(s_en),
 			(sg.kind == "turret") and ("(the turret " .. f0(Brain.num("SiegeTurretStr", 250)) .. " + " .. table.getn(guard) .. " squads)") or ("(" .. table.getn(guard) .. " squads)"), "ratio", f2(ratio), "->", verdict, "waited", f0(waited) }, verdict .. "|" .. n_at)
 		if verdict == "GO" then
@@ -16880,6 +16921,8 @@ function A.siege(W, taken)
 			A.stats.sg_go = (A.stats.sg_go or 0) + 1
 			Brain.log("ARMY", "SIEGE", "GO", sg.kind, sg.key, "why", "at the place " .. n_at .. " squads with " .. c_at .. " counters are " .. f2(ratio) .. " of what stands there: " ..
 				((sg.kind == "turret") and "the counters take the turret and nothing else, the others cover them" or "everybody goes in together from outside the arc"), "n", A.stats.sg_go)
+		elseif verdict == "OFF" and off_why ~= nil then
+			siege_end(sg, W, off_why, false)
 		elseif verdict == "OFF" then
 			siege_end(sg, W, "after " .. f0(waited) .. " s of gathering the force at the place is " .. f2(ratio) .. " of the target (" .. n_at .. " of " .. n_force .. " there): the fist takes another point", false)
 		end
@@ -16979,6 +17022,18 @@ function A.update(W)
 		end
 	end
 	local taken = {}
+	-- Step 19 (Orca fb 1704 / 1709 'the fist is one squad'; the verifier of step 18: 'first write down what every squad
+	-- outside the fist is busy with'). THE LINE 'WHO': which rule of this second took each squad of the army - the first
+	-- stage of A.update that marked it 'taken' (and the capture job's reason, the squad's state) - or 'fist' (in / away).
+	-- 'BR ARMY <t> WHO army N fist a/b | <id>:<unit>:<stage>:<state> ...' once in Brain_WhoSecs (5 s; the bench: 1).
+	-- Only a line of the log: no order depends on it. Brain_WhoLog=0: no line.
+	local who = {}
+	A.who = who
+	local who_on = (Brain.num("WhoLog", 1) >= 1)
+	local function tag(label)
+		if not who_on then return end
+		for _, u in ipairs(W.army) do if taken[u.id] and who[u.id] == nil then who[u.id] = label end end
+	end
 	-- Step 6 (Orca's match 1: 'melee squads sit in a building'). Who sends them in: Relic's squad tactic 'Hold'
 	-- (tactics.ai TacticDemand_Hold - the demand grows the nearer a building that can be held is; the brain left the
 	-- squads' own tactics to the engine). For a mob the demand is refused (90_boot.ai), and a mob found inside a building
@@ -17042,21 +17097,36 @@ function A.update(W)
 	-- common rules look at the squads. 65_race_sm.ai. No other profile has the field.)
 	do
 		local prof = Brain.roles.profile()
+		tag("evict")
 		if prof ~= nil and prof.tick ~= nil then prof.tick(W, taken) end
+		tag("race")
 	end
 	for _, u in ipairs(W.own) do survive(u, W, taken) end
+	tag("survive")
 	if A.veh_guard ~= nil then A.veh_guard(W, taken) end               -- (step 18: a machine leaves anti-tank fire - 53_machines.ai)
+	tag("vehback")
 	if Brain.tactics ~= nil and Brain.tactics.nest ~= nil then Brain.tactics.nest(W) end   -- (step 13: many set-up teams and our army weaker or far - the place is burnt ground)
 	if Brain.team ~= nil and Brain.team.revive ~= nil then Brain.team.revive(W, taken) end   -- (step 13: an ally's fallen hero is stood up - 80_team.ai)
 	if Brain.tactics ~= nil and Brain.tactics.trukk ~= nil then Brain.tactics.trukk(W, taken) end   -- (step 13: the trukk and its riders - 75_tactics.ai)
+	tag("trukk")
 	if Brain.tactics ~= nil and Brain.tactics.painboy ~= nil then Brain.tactics.painboy(W, taken) end   -- (step 13: the painboy mends out of a fight)
+	tag("painboy")
 	if Brain.capture.stick ~= nil then Brain.capture.stick(W, taken) end   -- (step 10: a capturer about to have its point stays on it)
+	tag("capstick")
+	if Brain.capture.here ~= nil then Brain.capture.here(W, taken) end   -- (step 19: a squad that stands at a victory point takes it - 55_capture.ai)
+	tag("caphere")
 	A.assault(W, taken)
+	tag("assault")
 	if A.raid ~= nil then A.raid(W, taken, true) end                   -- (step 18: the raid that is on keeps its squad - 52_rush.ai)
+	tag("raid")
 	if A.rush ~= nil then A.rush(W, taken) end                         -- (step 18: a set-up team is taken by everybody at once - 52_rush.ai)
+	tag("rush")
 	A.siege(W, taken)                                                   -- (step 17: the task 'a point covered by a turret / by set-up teams')
+	tag("siege")
 	A.base_out(W, taken)                                                -- (step 15: the hard rule of the base's turrets)
+	tag("baseout")
 	for _, F in ipairs(W.fights) do fight(F, W, taken) end
+	tag("fight")
 	-- a squad that stepped back out of contact finishes its step and stands there for the rest of StepHoldSecs
 	for _, u in ipairs(W.army) do
 		local st = A.st[u.id]
@@ -17070,7 +17140,9 @@ function A.update(W)
 			end
 		end
 	end
+	tag("stepwalk")
 	A.join(W, taken)                                                    -- (step SM-3: a free squad goes to our fight - a profile with 'join_fight' only)
+	tag("join")
 	-- Step 10 (the coordinator, 15.11 - ECONOMY_BY_FACTION_RU.md / ORK_COMBAT_HUMANS_VS_BOT_RU.md: people's ork squads are
 	-- on the retreat 10-13 % of the time and 21-27 % of what they spend goes into reinforcements; the brain: 1-4 % and
 	-- 4-6 % - more squads, 33-37 % less damage a squad, a third and more of the money in upgrades. 'Fewer squads, but
@@ -17108,11 +17180,53 @@ function A.update(W)
 			retreat(worst, { "to refill:", worst.n, "of", worst.full, "models, out of every fight - a full squad before a new one" })
 		end
 	end
+	tag("refill")
 	A.vp_guard(W, taken)                                               -- (step 16: one squad stays on a victory point of ours)
+	tag("vpguard")
 	if A.raid ~= nil then A.raid(W, taken) end                         -- (step 18: one squad goes for the enemy's generators - 52_rush.ai)
+	tag("raid")
 	if Brain.tactics ~= nil and Brain.tactics.split ~= nil then Brain.tactics.split(W, taken) end   -- (step 14: the orks' second group - 75_tactics.ai)
+	tag("split")
 	Brain.capture.update(W, taken)                                     -- R12: who captures (55_capture.ai); they are not the fist's
+	tag("cap")
 	fist(W, taken)
+	tag("fistpre")
+	if who_on then
+		Brain.every("army_who", Brain.num("WhoSecs", 5), function()
+			local parts, n_f, n_in = {}, 0, 0
+			for _, u in ipairs(W.army) do
+				local st = A.st[u.id]
+				local lab = who[u.id]
+				if A.fist_in ~= nil and A.fist_in[u.id] ~= nil then
+					lab = "fist"; n_f = n_f + 1
+					if A.fist_in[u.id] then n_in = n_in + 1 end
+				elseif lab == nil then lab = "free"
+				end
+				local sub = (st ~= nil and st.mode) or "-"
+				if lab == "cap" then
+					local j = Brain.capture.jobs[u.id]
+					sub = (j ~= nil and j.why ~= nil) and string.gsub(j.why, " ", "_") or ("nojob_" .. sub)
+					if j ~= nil and u.capturing then sub = sub .. "+capturing" end
+				elseif lab == "fist" then
+					sub = ((A.fist_in ~= nil and A.fist_in[u.id]) and "in_" or "away_") .. sub
+				elseif lab == "survive" and u.home then sub = sub .. "+home"
+				end
+				if u.fight ~= nil and lab ~= "fight" then sub = sub .. "+F" end
+				table.insert(parts, u.id .. ":" .. Brain.short(u.key) .. ":" .. lab .. ":" .. sub .. ":" .. f0(u.x) .. ":" .. f0(u.z) .. ":" .. (u.hit and "h" or "-") .. (u.capturing and "c" or "-") .. (u.retreating and "r" or "-"))
+			end
+			Brain.log("ARMY", "WHO", "army", table.getn(W.army), "fist", n_in .. "/" .. n_f, "|", table.concat(parts, " "))
+			-- (Brain_WhoGeo=1, the bench: the points, the enemy seen and its buildings - the counters of step 19 are made of these)
+			if Brain.num("WhoGeo", 0) >= 1 then
+				local ps, es, bs = {}, {}, {}
+				for _, p in ipairs(W.pts) do
+					table.insert(ps, p.key .. ":" .. (p.vp and "vp" or (p.pow and "pow" or "req")) .. ":" .. (p.ours and "o" or (p.enemy and "e" or "n")) .. (p.us_cap and "c" or "-") .. (p.enemy_cap and "x" or "-"))
+				end
+				for _, e in ipairs(W.en or {}) do table.insert(es, e.id .. ":" .. Brain.short(e.key) .. ":" .. f0(e.x) .. ":" .. f0(e.z) .. ":" .. (e.retreating and "r" or "-")) end
+				for _, b in ipairs(W.blds or {}) do table.insert(bs, b.key .. ":" .. (b.post and "post" or "gen") .. ":" .. f2(b.hp or 0)) end
+				Brain.log("ARMY", "GEO", "pts", table.concat(ps, " "), "| en", table.concat(es, " "), "| blds", table.concat(bs, " "))
+			end
+		end)
+	end
 	Brain.every("army_stats", Brain.num("StatsSecs", 30), function()
 		Brain.log("ARMY", "stats", "retreat", A.stats.retreat, "home", A.stats.home, "step", A.stats.step, "leave_walk", A.stats.leave,
 			"charge", A.stats.charge, "orders", Brain.st.orders, "skipped", Brain.st.skipped,
@@ -17937,6 +18051,7 @@ end
 function C.on_point(key)
 	local n = 0
 	for _, j in pairs(C.jobs) do if j.key == key then n = n + 1 end end        -- (a count: the order of pairs() does not matter)
+	if C.here_j ~= nil then for _, h in pairs(C.here_j) do if h.key == key then n = n + 1 end end end   -- (step 19, a count: a squad that stands at the point and takes it)
 	return n
 end
 -- for the plan: a point one of ours is already at and capturing, or a side point with its squad on the way - the fist
@@ -18264,6 +18379,85 @@ function C.raze_gen(u, p, j, W, taken)
 	end
 	Brain.order(u, O.ATTACK_BLD, gb.x, gb.y, gb.z, { "capture job: the enemy's generator instead of the point", j.key, "enemy at", f0(u.ed or 0) })
 	return true
+end
+-- Step 19 (Malum fb 1687 'it stands next to a victory point and does not capture it - awful'; his log, 16:44-17:24: the orks
+-- fight 20-40 m from the free victory point 65/-72, two squads walk off to gather for a siege, the tickets 141:421 - and
+-- nobody has a job on the point: every squad is 'taken' by a fight, a siege, a wait, and the capture jobs are given to
+-- FREE squads only). A SQUAD THAT STANDS AT A VICTORY POINT TAKES IT (C.here, called before the fights and the tasks):
+-- a victory point that is not ours, that nobody of ours captures or has a job on, with no squad of the enemy seen within
+-- CapHereEnR (30 m) of it (one that runs home does not count) and no turret over it - the squad of ours nearest to it
+-- within CapHereR (22 m; CapHereBehindR 40 m while we are behind on tickets or hold fewer victory points) that
+-- captures at all (whatever its health), is not on its way home, is not shot at and has no enemy within CapHereEnD
+-- (25 m) of itself, takes it: the order CAPTURE, and it is kept on the point - out of the fight's, the siege's, the
+-- fist's orders - until the point is ours, it is shot at, or the enemy comes to the point. A squad with a capture job
+-- on another point is left to it. Log: 'BR CAP <t> point K HERE squad ... why ...', 'HERE_END'. Brain_CapHere=0: off.
+C.here_j = {}                                                           -- squad id -> { key, t }
+function C.here(W, taken)
+	if Brain.num("CapHere", 1) < 1 or W.vp == nil or (Brain.plan ~= nil and Brain.plan.novp(W)) then C.here_j = {}; return end
+	local now = W.now
+	local A = Brain.army
+	local en_r, en_d = Brain.num("CapHereEnR", 30), Brain.num("CapHereEnD", 25)
+	local function clear(p)
+		for _, tu in ipairs(W.turrets or {}) do if d2(tu.x, tu.z, p.x, p.z) <= Brain.num("TurretR", 42) then return false end end
+		for _, e in ipairs(W.en) do if not e.retreating and d2(e.x, e.z, p.x, p.z) <= en_r then return false end end
+		return true
+	end
+	local function fit(u)
+		local st = A.st[u.id]
+		return not u.retreating and not (st ~= nil and (st.mode == "retreat" or st.mode == "heal")) and not u.hit and (u.ed or 999) > en_d and not u.inside and can_capture(u, true)
+	end
+	-- the jobs that are on
+	local busy = {}
+	for _, id in ipairs(Brain.keys(C.here_j)) do
+		local h, u = C.here_j[id], W.by_id[id]
+		local p = point_by_key(W, h.key)
+		local why
+		if u == nil then why = "the squad is gone"
+		elseif p == nil or p.ours then why = "the point is ours"
+		elseif taken[id] then why = "the squad is taken by a rule before this one"
+		elseif not fit(u) then why = (u.hit and "the squad is shot at") or "the enemy is at the squad, or it goes home"
+		elseif not clear(p) then why = "the enemy came to the point"
+		elseif now - h.t > Brain.num("CapHereSecs", 60) then why = "it took too long"
+		elseif d2(u.x, u.z, p.x, p.z) > Brain.num("CapHereBehindR", 40) + 10 then why = "the squad is away from the point" end
+		if why ~= nil then
+			C.here_j[id] = nil
+			Brain.log("CAP", "point", h.key, "HERE_END", "squad", id, "why", why, "secs", f0(now - h.t))
+			if u ~= nil and A.st[id] ~= nil and A.st[id].mode == "cap" then A.st[id] = nil end
+		else
+			taken[id] = true
+			busy[h.key] = true
+			A.st[id] = { mode = "cap", t = now }
+			if not u.capturing and now - (h.ord or -100) >= Brain.num("CapHereOrdSecs", 4) then
+				h.ord = now
+				Brain.order(u, O.CAPTURE, p.x, p.y, p.z, { "capture", kind_of(p), "it stands at the point", "dist", f0(d2(u.x, u.z, p.x, p.z)) })
+			end
+		end
+	end
+	local behind = (W.vp.behind == true or W.vp.losing == true)
+	local r = behind and Brain.num("CapHereBehindR", 40) or Brain.num("CapHereR", 22)
+	-- (the fist's own objective is left to the fist's rules - its capturer, the screen beyond the point, 'FIST ALONE')
+	local obj = Brain.plan ~= nil and Brain.plan.objective or nil
+	for _, p in ipairs(W.pts) do
+		if p.vp and not p.ours and not p.us_cap and not busy[p.key] and C.on_point(p.key) == 0 and clear(p) and not (obj ~= nil and obj.kind == "take" and obj.key == p.key)
+			and not (Brain.team ~= nil and Brain.team.claim ~= nil and Brain.team.claim(p.key) ~= nil and Brain.team.claim(p.key).cap) then   -- (an ally is taking it)
+			local bu, bd
+			for _, u in ipairs(W.army) do
+				if not taken[u.id] and C.jobs[u.id] == nil and C.here_j[u.id] == nil and fit(u) then
+					local d = d2(u.x, u.z, p.x, p.z)
+					if d <= r and (bd == nil or d < bd or (d == bd and u.id < bu.id)) then bu, bd = u, d end
+				end
+			end
+			if bu ~= nil then
+				C.here_j[bu.id] = { key = p.key, t = now, ord = now }
+				C.stats.here = (C.stats.here or 0) + 1
+				taken[bu.id] = true
+				A.st[bu.id] = { mode = "cap", t = now }
+				Brain.log("CAP", "point", p.key, "HERE", "squad", bu.id, Brain.short(bu.key), "why", "it stands " .. f0(bd) .. " m from a victory point that is not ours, nobody of ours takes it and nobody of the enemy is at it: it takes it" ..
+					(behind and " (we are behind: from " .. f0(r) .. " m)" or ""), "fight", (bu.fight and bu.fight.key) or "-", "n", C.stats.here)
+				Brain.order(bu, O.CAPTURE, p.x, p.y, p.z, { "capture", kind_of(p), "it stands at the point", "dist", f0(bd) })
+			end
+		end
+	end
 end
 function C.update(W, taken)
 	local now = W.now
@@ -18802,6 +18996,30 @@ local want = 1
 			local capj = 0
 			for _, j in pairs(C.jobs) do if j.why == "capturer" then capj = capj + 1 end end   -- (a count)
 			want = math.min(want, capj + Brain.num("CapOpenFightJobs", 1))
+		end
+		-- Step 19 (Orca fb 1704 / 1709 'it runs about by one squad ... why are there more capturers? there was always ONE runner';
+		-- his log: an army of 4-5, one or two of them at home, 'runners want 3 now 3 army 4'. The verifier of step 18 cut
+		-- 'want' by the size of the army and lost victory points: on the bench the army is 6-7 squads and the cut took
+		-- the runner that holds the points. The count that matters is the squads IN THE FIELD: 'army' counts the ones that
+		-- heal at home and the machines too). THE SECOND AND THIRD RUNNER ARE SENT ONLY WHILE A FIST OF CapRunFistKeep (2)
+		-- FIGHTING SQUADS STAYS IN THE FIELD: want <= fighting squads in the field (not on their way home or healing, no
+		-- machine, no squad of the rear, no set-up team) - CapRunFistKeep, but never below ONE runner (the points are held),
+		-- and not while NONE of the points is ours. Not a profile with 'keep_fist' (the marines: their capturers are a
+		-- role of their own). Brain_CapRunField=0: as newai-39.
+		do
+			local kp = Brain.roles.profile()
+			if Brain.num("CapRunField", 1) >= 1 and not opening and not (kp ~= nil and kp.keep_fist) and not (n_all > 0 and n_ours == 0) then
+				local field = 0
+				for _, u in ipairs(W.army) do
+					local st, role = A.st[u.id], Brain.roles.of(u)
+					if not u.retreating and not (st ~= nil and (st.mode == "retreat" or st.mode == "heal")) and not u.veh and not Brain.roles.is_rear(role) and not Brain.roles.is_machine(role) and role ~= "setup" then field = field + 1 end
+				end
+				local cap = math.max(field - Brain.num("CapRunFistKeep", 2), 1)
+				if want > cap then
+					Brain.say("CAP", "runfield", 60, { "runners", "FIELD", "want", want, "->", cap, "why", "fighting squads in the field " .. field .. ": a fist of " .. f0(Brain.num("CapRunFistKeep", 2)) .. " stays together, one runner at least" }, want .. "|" .. cap)
+					want = cap
+				end
+			end
 		end
 		want = math.max(math.min(want, table.getn(open), n_army - 1), 0)
 		local run_n = 0
