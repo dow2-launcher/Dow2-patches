@@ -1,0 +1,1 @@
+- Mac (native Feral game, Elite launcher for macOS): Overwatch once and Ctrl attack ground now work there too. Off by default. On the Mac the attack-ground key is Option (⌥) + left click, because the Mac game turns Control + click into a right click.

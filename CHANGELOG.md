@@ -4,6 +4,30 @@ Every version gets an entry here before it reaches `main`. CI then tags `vX.Y.Z`
 version (`X.Y.0`) it also publishes a GitHub Release with the DLLs and the entries since the previous `X.Y.0`.
 The version of the set lives only in `VERSION`; each DLL still writes its own version to its log.
 
+## 0.2.116 — 2026-11-18
+Mac add-ons, step 2 (owner 18.11: "make these two ticks available for the Mac"): Overwatch once and Ctrl attack ground as x86_64
+dylibs for the native Mac game (Feral 1.0.3), store ids overwatchonce_mac, ctrlattack_mac (components_macos, off by default). Both
+only hook vtable slots (no game code changed) and only ever send the game's own player orders - crossplay with Windows unaffected.
+Windows DLLs unchanged.
+- OverwatchOnce.dylib 1 (as OverwatchOnce.dll 1): ModUI::OnSyncPoint (slot 0x102df60a0, runs OverwatchManager::Update) wrapped;
+  CommandProxy::DoBuildSquad (slots 0x102df57e8 / 0x102df5b48) looked at only for the overwatch tick's call (return address
+  0x101fce614); once the squad is in the building's real production queue (ProductionUtil::FindProductionQueue,
+  ProductionQueue::GetQueuedItemCount) the entry is erased with the game's own OverwatchManager::ToggleSquadProductionOverwatch
+  (only while IsSquadProductionOverwatched) and the tech tree redrawn (BindingBuildTech::OnUpdate slot 0x102df99b8, +0x36d).
+- CtrlAttack.dylib 2 (as CtrlAttack.dll 2, but the key is Option/Alt: Feral's input layer turns Control + left click into a
+  right click - CHWindowEventHandler::PostMouseModifierMessage, "momr" = 0x9000 - so the game never sees it): BindingAttackGround::
+  OnValidate (slot 0x102df9550) remembered; SimVisPanel::OnInputEvent (slot 0x102dfd480 -> WorldViewSM::HandleEvent) wrapped: a
+  left button down with the key, Attack ground valid, no modal binding, world view idle, the cursor in the world and not over an
+  entity -> the binding's own OnExecute (= G, BindingManager::SetModalBinding) before the click goes on, so the click is Attack
+  ground's; no order 0.4 s after the button is up -> BindingManager::ModalCBAbort. Key=Alt|Ctrl|<Plat key> in CtrlAttack.ini.
+- Check (no game start, macrun_ma MR_ADDONTEST, the shipped dylibs): every checked site equal to the 1.0.3 binary; crossplay v25 +
+  the two vs crossplay alone: 36 bytes in 6 places (the 6 vtable slots); without crossplay and with Enabled=0: 0 bytes; all five
+  Mac add-ons together: 46 bytes in 9 places. The hooks called with the game functions stubbed: OverwatchOnce 8 cases (the tick's
+  order really sent from the tick's own call site 0x101fce612; erase once when the squad is queued, redraw; switched off by the
+  player / building gone / not queued / no queue / a player's own order / no UI update), CtrlAttack 11 cases (Option + click on the
+  ground -> G once and the click passed on; no key, Ctrl, on a unit, nothing can, another modal, band box, outside the world, other
+  events -> untouched; no order -> left after 0.4 s) - all PASS. Not run on a Mac.
+
 ## 0.2.115 — 2026-11-18
 Store groups only (owner 18.11: speed measurements, test runs, extra logging -> the testing & debug section): new category `debug`
 (launcher 1.6.24 shows it last as «Тестирование и отладка»; older launchers fall back to Experiment) in store_texts.py and
