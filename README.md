@@ -554,6 +554,9 @@ frameprobe/ - FrameProbe.dll (off), eliteai/ - EliteAI.dll (store id newai since
       Brain_DocSluggaMax=0, Brain_HiddenFire=0, Brain_RepairPrio=0, Brain_SmScoutSneak=0): the orks' rush at a set-up team (gather at
       the edge of the gun's range, jump and bombs, mobs onto the team, shooters at it), the jump kept for set-up teams, the walker bold,
       a machine leaves anti-tank fire, enemy machines answered first; marines' scouts first. EliteAI.dll 0.19 unchanged.
+    newai-40 (0.2.118): brain 0.19 (eliteai branch newai-40 = brain-s19 c7415ec, no key change): a squad at a free victory point
+      takes it (CapHere, both races), a siege gathering that cannot win is not waited out (SiegeQuick), the orks' second and third
+      runner only while a fist of two stays in the field (CapRunField), the log line WHO every 5 s. EliteAI.dll 0.19 unchanged.
 
 ## Building
 
