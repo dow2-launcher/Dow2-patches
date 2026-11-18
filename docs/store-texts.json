@@ -222,7 +222,7 @@
   },
   "herolabelfix": {
     "category": "fixes",
-    "order": 15,
+    "order": 40,
     "name": {
       "en": "Hero bar fix",
       "ru": "Hero bar fix",
@@ -365,8 +365,8 @@
     }
   },
   "unitstats": {
-    "category": "experiment",
-    "order": 30,
+    "category": "interface",
+    "order": 80,
     "name": {
       "en": "Unit stats",
       "ru": "Unit stats",
@@ -383,7 +383,7 @@
     }
   },
   "replaytakeover": {
-    "category": "experiment",
+    "category": "gameplay",
     "name": {
       "en": "Replay takeover",
       "ru": "Replay takeover",
@@ -398,11 +398,11 @@
       "fr": "Dans un replay, cliquez sur une unité d'un joueur, ouvrez le Menu et appuyez sur « Continue as ... » : la partie est à vous, l'ordinateur joue les autres.",
       "de": "Im Replay eine Einheit eines Spielers anklicken, Menü öffnen, \"Continue as ...\" drücken: ab da ist es dein Spiel, die anderen spielt der Computer."
     },
-    "order": 20
+    "order": 40
   },
   "soundfix": {
     "category": "fixes",
-    "order": 40,
+    "order": 50,
     "name": {
       "en": "Sound bug fix",
       "ru": "Sound bug fix",
@@ -437,8 +437,8 @@
     }
   },
   "replayspeed": {
-    "category": "fixes",
-    "order": 50,
+    "category": "interface",
+    "order": 90,
     "name": {
       "en": "Replay speed 8x/Max",
       "ru": "Replay speed 8x/Max",
@@ -545,8 +545,8 @@
     }
   },
   "cursorscale": {
-    "category": "experiment",
-    "order": 990,
+    "category": "interface",
+    "order": 100,
     "name": {
       "en": "Cursor Scale",
       "ru": "Cursor Scale",

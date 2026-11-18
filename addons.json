@@ -432,7 +432,7 @@
       "de": "Manchmal kam die Leiste über einem Helden (Symbol, Leben, Energie) nach dem Niederschlagen und Aufstehen bis zum Spielende nicht zurück, vor allem in Wiederholungen. Jetzt kommt sie immer zurück. Ändert nur die Anzeige."
     },
     "category": "fixes",
-    "order": 15
+    "order": 40
   },
   "steamkeep": {
     "version": "2",
@@ -569,8 +569,8 @@
     "conflicts": [
       "dow2-patches/UnitStats.dll"
     ],
-    "category": "experiment",
-    "order": 30
+    "category": "interface",
+    "order": 80
   },
   "replaytakeover": {
     "version": "4",
@@ -719,8 +719,8 @@
         "default_value": "expert"
       }
     ],
-    "category": "experiment",
-    "order": 20
+    "category": "gameplay",
+    "order": 40
   },
   "soundfix": {
     "version": "2",
@@ -813,7 +813,7 @@
       }
     ],
     "category": "fixes",
-    "order": 40
+    "order": 50
   },
   "soundbugtest": {
     "version": "off",
@@ -842,8 +842,8 @@
     "version": "1",
     "dll": "ReplaySpeed.dll",
     "default": false,
-    "category": "fixes",
-    "order": 50,
+    "category": "interface",
+    "order": 90,
     "name": {
       "en": "Replay speed 8x/Max",
       "ru": "Replay speed 8x/Max",
@@ -977,8 +977,8 @@
     "version": "1",
     "dll": "CursorScale.dll",
     "default": false,
-    "category": "experiment",
-    "order": 990,
+    "category": "interface",
+    "order": 100,
     "name": {
       "en": "Cursor Scale",
       "ru": "Cursor Scale",

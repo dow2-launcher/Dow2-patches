@@ -1,0 +1,1 @@
+- Stable add-ons moved from "Experiment" to their own sections (still off by default).

@@ -4,6 +4,13 @@ Every version gets an entry here before it reaches `main`. CI then tags `vX.Y.Z`
 version (`X.Y.0`) it also publishes a GitHub Release with the DLLs and the entries since the previous `X.Y.0`.
 The version of the set lives only in `VERSION`; each DLL still writes its own version to its log.
 
+## 0.2.114 — 2026-11-18
+Store groups only (owner 18.11: these work stable; out of "Experiment" into their own sections, still off by default): category and
+order in addons.json and docs/store-texts.json - replaytakeover gameplay 40, unitstats interface 80, replayspeed interface 90,
+cursorscale interface 100, herolabelfix fixes 40, soundfix fixes 50 (Mac herolabelfix_mac fixes 40 in the store's components_macos).
+ChatHide stays in "Experiment". No DLL, version, default or text changed; the live store's groups are set by hand (deploy changes
+category / order only for a new add-on).
+
 ## 0.2.113 — 2026-11-17
 New AI 39 (store newai-39, experiment, off by default, Elite only): step 18 of the brain (0.18) + the verifier's VERIFY_18_keys_off;
 EliteAI.dll 0.19 unchanged (eliteai.c as newai-38). Victory point games only. Every other race still newai-23.1.
