@@ -275,8 +275,8 @@
     }
   },
   "crashlog": {
-    "category": "fixes",
-    "order": 30,
+    "category": "debug",
+    "order": 50,
     "name": {
       "en": "Crash log",
       "ru": "Crash log",
@@ -419,7 +419,7 @@
     }
   },
   "soundbugtest": {
-    "category": "experiment",
+    "category": "debug",
     "order": 40,
     "name": {
       "en": "Sound bug test",
@@ -491,8 +491,8 @@
     }
   },
   "perflog_r2": {
-    "category": "performance",
-    "order": 50,
+    "category": "debug",
+    "order": 30,
     "name": {
       "en": "PerfLog",
       "ru": "PerfLog",
@@ -761,8 +761,8 @@
     }
   },
   "matchspeed": {
-    "category": "experiment",
-    "order": 1090,
+    "category": "debug",
+    "order": 10,
     "name": {
       "en": "Match speed",
       "ru": "Match speed",
@@ -779,8 +779,8 @@
     }
   },
   "marks": {
-    "category": "experiment",
-    "order": 1100,
+    "category": "debug",
+    "order": 20,
     "name": {
       "en": "Match marks",
       "ru": "Match marks",
