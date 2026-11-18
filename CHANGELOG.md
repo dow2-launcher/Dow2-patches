@@ -4,6 +4,29 @@ Every version gets an entry here before it reaches `main`. CI then tags `vX.Y.Z`
 version (`X.Y.0`) it also publishes a GitHub Release with the DLLs and the entries since the previous `X.Y.0`.
 The version of the set lives only in `VERSION`; each DLL still writes its own version to its log.
 
+## 0.2.117 — 2026-11-18
+Mac add-ons, step 3 (owner 18.11): Lobby ratings for the native Mac game (Feral 1.0.3), LobbyStats.dylib 0.12.0-mac1, store id
+lobbystats_mac (components_macos, off by default). The lobby part of LobbyStats.dll 0.12.0: the rating after each name in the lobby
+(Relic's, or with [LobbyStats] Rating=own our Elite rating of the lobby's mode), the slot tooltip with every rating, W/L and the
+Steam hours, Relic's rating after your name on the main menu (not with Rating=own). Only reads the lobby - crossplay unaffected.
+Windows DLLs unchanged.
+- One vtable slot: GFxMovieRoot::Invoke (0x102db3c38; BaseForm::Invoke builds "<movie>.<method>" and calls it). PlayerListPanel's
+  Receive_PopulatePlayerList has the Windows layout (5 + 20 per slot, name [5], tooltip [19]); the arguments are copied and the
+  copy decorated (the game's own vector untouched); Receive_SetMaxPlayers / SetFFASolo / SetFFATeam give the lobby's mode.
+  Wide strings are 16-bit (Feral's 2-byte wchar_t).
+- Players by name (the Mac list gives no Steam ID): the stats service's lobby line (with its SteamID) and the own/all table
+  (lobbystats/own_rating.h, shared with Windows). Network only on a worker thread, with the system's CFNetwork
+  (mac/lobbystats/http_mac.h: CFHTTPMessage + CFReadStream, 15 s per request, redirects, system proxy and TLS); hosts Server=
+  host;host (default rts, dow2, dow2ru, the one that answered kept); LobbyStats.cache next to the dylib.
+- mac/build.sh: <addon>/link.txt for system frameworks (LobbyStats: CoreFoundation, CFNetwork); CI's library check allows exactly
+  those two for LobbyStats.dylib; CI runs mac/lobbystats/test_net.c (the same request code against our hosts, informational).
+- Check (no game start, macrun_ma MR_ADDONTEST): crossplay v25 + LobbyStats vs crossplay alone: the one vtable slot; without crossplay
+  and with Enabled=0: 0 bytes; all six Mac add-ons together: 10 places. The hook called with the game's Invoke stubbed and the data fed
+  (no network): the Windows add-on's 31 lobby checks ported (relic / own 1v1 2v2 3v3 4v4 FFA, calibration, hours, chained tags, a
+  Cyrillic name, a broken table refused, other methods and unknown layouts passed on untouched) - all PASS. Not run on a Mac.
+- Mac launcher: it writes [LobbyStats] Rating / Server only into Elite_DLLs and dow2-patches (addons.rs write_rating_ini,
+  server_inis), not into mac_addons/lobbystats_mac/ - until it does, the Mac add-on uses its ini (Rating=relic, the 3 mirrors).
+
 ## 0.2.116 — 2026-11-18
 Mac add-ons, step 2 (owner 18.11: "make these two ticks available for the Mac"): Overwatch once and Ctrl attack ground as x86_64
 dylibs for the native Mac game (Feral 1.0.3), store ids overwatchonce_mac, ctrlattack_mac (components_macos, off by default). Both

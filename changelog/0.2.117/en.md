@@ -1,0 +1,1 @@
+- Mac (native Feral game): Lobby ratings now works there too - each player's rating after his name in the lobby and the full stats on hover. Off by default.
