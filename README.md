@@ -550,6 +550,10 @@ frameprobe/ - FrameProbe.dll (off), eliteai/ - EliteAI.dll (store id newai since
       the target), shooters out of a set-up team's arc; marines' tier 1 ceiling, librarian, sternguard ammunition by the target
       (ability rows 88-91 in elite.scar + netorder.ai), assault jump with a lead, devastators' facing, buildings, set-up limit, focused
       fire only at a suppressed target. EliteAI.dll 0.19 unchanged.
+    newai-39 (0.2.113): brain 0.18 (eliteai branch newai-39 = brain-s18 + the verifier's VERIFY_18_keys_off: Brain_DocTrukkVp=0,
+      Brain_DocSluggaMax=0, Brain_HiddenFire=0, Brain_RepairPrio=0, Brain_SmScoutSneak=0): the orks' rush at a set-up team (gather at
+      the edge of the gun's range, jump and bombs, mobs onto the team, shooters at it), the jump kept for set-up teams, the walker bold,
+      a machine leaves anti-tank fire, enemy machines answered first; marines' scouts first. EliteAI.dll 0.19 unchanged.
 
 ## Building
 

@@ -8531,7 +8531,7 @@ do
 --  * every decision writes one reason line: Brain.say / Brain.order. A scene's timeline must explain itself.
 
 Brain = {}
-Brain.VERSION = "0.17"
+Brain.VERSION = "0.18"
 Brain.RACES = { orks = true, space_marines = true }              -- the races that have a profile (60_roles.ai). Which of them PLAY with the brain is the dispatcher's: [Lua] Brain_Races (default orks)
 Brain.on = (type(EliteAI_MODE) == "table" and EliteAI_MODE.brain == true)
 
@@ -8565,8 +8565,12 @@ Brain.S16 = { BaseStopStance = 0, VpGuardAhead = 0, EconAnswerFirst = 0, BaseSto
 Brain.S17 = { DevFocusSup = 0, StepOutGun = 0, SetupWait = 0, VpCurve = 0, CapFistAlone = 0, Siege = 0, TurretFocus = 0, DocSiegeAnswer = 0, SetupArc = 0, SiegeCast = 0,
 	SetupFace = 0, SetupPack = 0, SetupHouse = 0, NoBlastRetreat = 0, SmT1Cap = 0, TmRepair = 0, TmTurretEarly = 0, SmLibPop = 0, SmLas2 = 0, VetAmmo = 0,
 	JumpLead = 0, TacJump = 0 }
+-- (step 18) [Lua] Brain_Step17Race = <a race's name>: that race plays every rule of step 18 with the value that returns step 17
+-- (newai-38); a key set in the ini still wins. Not set: nothing changes.
+Brain.S18 = { Rush = 0, WalkerBold = 0, VehAvBack = 0, DocTrukkVp = 0, DocWeirdAfter = 0, SmScoutFirst = 0, SmScoutSneak = 0, HiddenFire = 0, RepairPrio = 0, JumpSave = 0, GenRaid = 0, DocBoT1 = 0, JumpNoWalk = 0, DocVehReact = 0, DocSluggaMax = 0 }
 function Brain.num(key, default)
 	local v = tonumber(Brain.cfg("Brain_" .. key, nil))
+	if v == nil and Brain.S18[key] ~= nil and s_current_race ~= nil and Brain.cfg("Brain_Step17Race", nil) == s_current_race then return Brain.S18[key] end
 	if v == nil and Brain.S17[key] ~= nil and s_current_race ~= nil and Brain.cfg("Brain_Step16Race", nil) == s_current_race then return Brain.S17[key] end
 	if v == nil and Brain.S16[key] ~= nil and s_current_race ~= nil and Brain.cfg("Brain_Step15Race", nil) == s_current_race then return Brain.S16[key] end
 	if v == nil and Brain.S15[key] ~= nil and s_current_race ~= nil and Brain.cfg("Brain_Step14Race", nil) == s_current_race then return Brain.S15[key] end
@@ -8897,6 +8901,20 @@ function Brain.order(u, mode, x, y, z, why)
 		if tx ~= nil and (deep or Brain.base_guard(u, tx, tz)) then
 			Brain.st.base_refused = (Brain.st.base_refused or 0) + 1
 			Brain.say("ORD", "base|" .. u.id, 10, { u.id, Brain.short(u.key), "REFUSED", verb(mode), Brain.f0(tx), Brain.f0(tz), "why", "the place is under the turrets of the enemy's base", "-", table.concat(why or { "-" }, " ") }, "base")
+			return false
+		end
+	end
+	-- (step 18, 53_machines.ai: a machine is not ordered into the range of an anti-tank gun that hurt a machine of ours before)
+	if machine and Brain.veh_av ~= nil and u.x ~= nil and (mode == 1 or mode == 2 or mode == 4 or mode == 7 or mode == 8) and not Brain.setup_leaving(why) then
+		local tx, tz = x, z
+		if mode == 4 or mode == 8 then
+			local e = Brain.en_by_id and Brain.en_by_id[x] or nil
+			if e ~= nil then tx, tz = e.x, e.z else tx = nil end
+		end
+		local gun = (tx ~= nil) and Brain.veh_av(u, tx, tz, mode) or nil
+		if gun ~= nil then
+			Brain.st.av_refused = (Brain.st.av_refused or 0) + 1
+			Brain.say("ORD", "av|" .. u.id, 10, { u.id, Brain.short(u.key), "REFUSED", verb(mode), Brain.f0(tx), Brain.f0(tz), "why", "the place is in the range of the anti-tank gun", gun.id, Brain.short(gun.key), "-", table.concat(why or { "-" }, " "), "n", Brain.st.av_refused }, "av")
 			return false
 		end
 	end
@@ -10080,9 +10098,15 @@ end
 -- objective (point_score, L.defend_score), the capturers and the runners (55_capture.ai: a victory point counts
 -- VpCurveCapM (80 m) x (1 - the factor) farther while the factor is below 1). Brain_VpCurve=0: step 16.
 function L.vp_curve(W)
-	if Brain.num("VpCurve", 0) < 1 then return 1 end   -- (verifier 17: off by default - new orks against the marines of newai-37 445:4902; Brain_VpCurve=1 or VERIFY_17_vpcurve_bleed.diff)
+	-- (step 18: the curve for the ORKS ONLY, with the verifier's two corrections below (VpCurveBleed, VpCurveDefend) - [Lua]
+	-- Brain_VpCurveOrks=1; the default is what the bench of step 18 said (STEP18_RU.md). Brain_VpCurve=1: every race, as step 17)
+	if Brain.num("VpCurve", 0) < 1 and not (s_current_race == "orks" and Brain.num("VpCurveOrks", 0) >= 1) then return 1 end   -- (verifier 17: off by default - new orks against the marines of newai-37 445:4902)
 	local vp = W.vp
 	if vp == nil or vp.t_ours == nil or L.novp(W) then return 1 end
+	-- (verifier 17: the enemy holds more victory points than we do - our tickets run NOW, every second the point is left to
+	-- him costs; the cheap start is for free points, not for points the enemy already bleeds us with: the old worth at once.
+	-- bench s17v: new orks against the marines of newai-37 445:4902 with the curve alone. Brain_VpCurveBleed=0: step 17 as it was)
+	if Brain.num("VpCurveBleed", 1) >= 1 and (vp.enemy or 0) > (vp.ours or 0) then return 1 end
 	L.t_full = math.max(L.t_full or 0, vp.t_ours, vp.t_enemy or 0)
 	local lost = math.max(0, L.t_full - vp.t_ours)
 	local full, lo = math.max(Brain.num("VpCurveFullLost", 50), 1), Brain.num("VpCurveMin", 0.3)
@@ -10243,7 +10267,10 @@ function L.defend_score(p, cx, cz, W)
 	local r, en = Brain.num("ObjDefendR", 35), 0
 	for _, e in ipairs(W.en) do if not e.retreating and d2(e.x, e.z, p.x, p.z) <= r then en = en + 1 end end
 	if not p.enemy_cap and en == 0 then return nil end
-	local worth = (p.vp and Brain.num("ObjVP", 3) * L.race_k(W) * L.vp_curve(W)) or (p.pow and Brain.num("ObjPow", 2)) or Brain.num("ObjReq", 1)   -- (step 17: L.vp_curve)
+	-- (verifier 17: a victory point of ours that the enemy comes for is defended at its full worth - losing it starts the
+	-- bleeding; the curve is for taking. Brain_VpCurveDefend=1: the curve here too, as step 17 had it)
+	local vdk = (Brain.num("VpCurveDefend", 0) >= 1) and L.vp_curve(W) or 1
+	local worth = (p.vp and Brain.num("ObjVP", 3) * L.race_k(W) * vdk) or (p.pow and Brain.num("ObjPow", 2)) or Brain.num("ObjReq", 1)   -- (step 17: L.vp_curve)
 	local f = L.farms[p.key]
 	if p.pow and f ~= nil and (f.held or 0) >= Brain.num("FarmMinSecs", 45) then worth = worth * Brain.num("ObjFarmK", 3) end
 	worth = worth * Brain.num("ObjDefendK", 1.5) * L.guard_k(p, W)
@@ -11589,6 +11616,14 @@ function E.update(W)
 	local have = S.squads + S.pending
 	if upk_hi then want = math.min(want, have + (upk_tier and 1 or 0)) end      -- (step SM-3: the upkeep - no squad more, or one of the new tier)
 	local opening = (now < Brain.num("EconOpeningSecs", 90) and have < P.army0)         -- (a takeover in mid-game has no opening)
+	-- (step 18, Malum fb 1672: the tester's build order of tier 1 - the profile's 'opening_bo'; the opening then lasts until its
+	-- squads were ordered, tier 1 only, DocBoSecs (420 s) at most. Brain_DocBoT1=0 (default): the people's opening)
+	if P.opening_bo ~= nil then
+		if Brain.num("DocBoT1", 0) >= 1 then
+			P.opening = P.opening_bo
+			opening = (now < Brain.num("DocBoSecs", 420) and S.tier <= 1 and E.n.unit < table.getn(P.opening_bo))
+		else P.opening = P.opening_std end
+	end
 	S.opening = opening
 	local function buy_unit(why, wait)
 		local pick, cands = Brain.composition.pick(W, S, E)
@@ -12843,6 +12878,7 @@ function C.pick(W, S, E, again)
 	end
 	local av_real = (Brain.num("CompAvRealVeh", 1) >= 1)
 	if n_tur > 0 and Brain.num("CompTurretAv", 1) >= 1 and not av_real then en_veh = (en_veh or 0) + n_tur end
+	if P.opening_alt ~= nil then P.opening = (Brain.num("SmScoutFirst", 1) >= 1) and P.opening_alt or P.opening_std end   -- (step 18: the scouts before the tactical squad - 65_race_sm.ai)
 	local opening_i = E.n.unit + 1
 	local open_key = (S.opening and P.opening) and P.opening[opening_i] or nil
 	-- (step SM-1, P.opening_by_kind - the marines' plan only: the opening is a list of KINDS that must stand, not of orders
@@ -13051,6 +13087,16 @@ function C.pick(W, S, E, again)
 				local stand = (S.kinds[key] or 0)
 				for _, q in ipairs(E.pending) do if q.key == key then stand = stand + 1 end end
 				if stand >= P.max_kind[key] then v = 0 end
+			end
+			-- (step 18, Malum fb 1687 item 4 'no more than two slugga squads': the profile's 'max_kind_key' - a cap of a kind behind a key
+			-- of its own, [Lua] Brain_<name> = the number, 0 = no cap)
+			if P.max_kind_key ~= nil and P.max_kind_key[key] ~= nil then
+				local cap = Brain.num(P.max_kind_key[key][1], P.max_kind_key[key][2])
+				if cap > 0 then
+					local stand = (S.kinds[key] or 0)
+					for _, q in ipairs(E.pending) do if q.key == key then stand = stand + 1 end end
+					if stand >= cap then v = 0 end
+				end
 			end
 			-- (step 17, the profile's 't1_cap' - 65_race_sm.ai: the ceiling of tier 1 and of a kind)
 			if P.t1_cap ~= nil and Brain.num("SmT1Cap", 1) >= 1 and (d.t or 1) <= 1 and d.arm ~= "cmd" and not open_key then
@@ -13418,6 +13464,18 @@ function D.t2_want(W, S, E)
 		and count(S, E, K.trukk) == 0 and not D.is_lost(K.trukk))
 	-- (verifier of step 15, M1: the owner's order at tier 2 - machines -> tankbustas, MANY set-up teams (DocSetupMany, 2) -> stikkbommas,
 	-- then the trukk (ORKS_OWNER_1115_RU.md) - so the trukk-first rule is off by default. Brain_DocTrukkFirst=1: 17b5775.)
+	-- Step 18 (Malum fb 1675: 'when the enemy's machines roam - build tankbustas and a weirdboy! React!'). A MACHINE OF THE ENEMY
+	-- IS ANSWERED BEFORE ANY OTHER QUESTION OF THE TIER: with one seen and no squad of ours that hurts armour - tankbustas, even
+	-- when the set-up teams outnumber the machines (the stikkbommas came first then); with the tankbustas standing - the
+	-- weirdboy, once. Brain_DocVehReact=0: the order of step 17.
+	if Brain.num("DocVehReact", 1) >= 1 and veh >= 1 then
+		if own_av == 0 and not D.is_lost(K.busta) then
+			return K.busta, "the doctrine, tier 2: machines of the enemy seen (" .. veh .. ") and nothing of ours hurts armour - tankbustas before anything else"
+		end
+		if own_av >= 1 and D.allows(K.weird) and count(S, E, K.weird) == 0 and not D.is_lost(K.weird) then
+			return K.weird, "the doctrine, tier 2: machines of the enemy seen (" .. veh .. "), the tankbustas stand - the weirdboy with them"
+		end
+	end
 	if trukk_ok and Brain.num("DocTrukkFirst", 0) >= 1 and veh == 0 and en.setup >= Brain.num("DocSetupMany", 2) and en.setup <= Brain.num("DocTrukkSetupMax", 2) then
 		return K.trukk, "the doctrine, tier 2: " .. (S.kinds[K.slugga] or 0) .. " slugga squads and shootas of ours, " .. en.av .. " squads of the enemy hurt a machine - the trukk first, the stikkbommas after it (" .. en.setup .. " set-up teams)"
 	end
@@ -13445,7 +13503,12 @@ function D.t2_want(W, S, E)
 	if many and count(S, E, K.dread) == 0 and en.av <= Brain.num("DocNestAvMax", 1) and not D.is_lost(K.dread) then
 		return K.dread, "the doctrine, tier 2: " .. en.setup .. " set-up teams of the enemy and the stikkbommas stand - a deff dread walks into them (it is not suppressed)"
 	end
-	if many then return nil end
+	-- Step 18 (Malum fb 1614 item 8: 'the ork ignored the weirdboy'; bench s18_bb_n38: 1 weirdboy in 14 games - against the
+	-- marines two set-up teams are seen in nearly every game and the question ended here). The owner's word stands - the
+	-- weirdboy is no answer to set-up teams - but once the answers STAND (the stikkbommas, and the dread or what forbids
+	-- it) and two mobs of ours are there to run in under its Warpath, it is the next squad of tier 2.
+	-- Brain_DocWeirdAfter=0: nothing more at tier 2 against many set-up teams, as step 17.
+	if many and not (Brain.num("DocWeirdAfter", 1) >= 1 and count(S, E, K.stikk) >= 1 and (S.kinds[K.slugga] or 0) >= Brain.num("DocWeirdMobs", 2)) then return nil end
 	if D.allows(K.weird) and count(S, E, K.weird) == 0 and not D.is_lost(K.weird) then
 		return K.weird, "the doctrine, tier 2: no machines and few set-up teams seen - the weirdboy"
 	end
@@ -14272,7 +14335,7 @@ local function judge(F, W)
 		end
 	end
 	local machine = false
-	for _, u in ipairs(F.ours) do if u.veh then machine = true end end
+	for _, u in ipairs(F.ours) do if u.veh or (A.bold ~= nil and A.bold(u, F)) then machine = true end end   -- (step 18: a walker is a machine too - 53_machines.ai A.bold)
 	F.trade = nil
 	if Brain.num("TradeFix", 1) >= 1 and F.age >= Brain.num("TradeFixSecs", 12) and lo >= tfmin then
 		local scrap = false
@@ -14289,6 +14352,7 @@ local function judge(F, W)
 	-- (a turret's circle stops a fight only when the trade is already bad: a fight that goes well next to a turret goes on)
 	if zq ~= nil and zq.turret ~= nil and F.trade == nil then zq = nil end
 	if zq ~= nil and F.trade ~= "rout" and A.siege_on ~= nil and A.siege_on(F.x, F.z) then zq = nil end   -- (step 17: the siege task is in GO here)
+	if zq ~= nil and A.rush_on ~= nil and A.rush_on(F.x, F.z) then zq = nil end   -- (step 18: the rush is in GO here)
 	if zq ~= nil and not machine and r < Brain.num("ZonePressRatio", 2) and F.trade ~= "rout" and lev <= lo then
 		F.call = nil
 		if zq.turret ~= nil then return "step", "under the enemy's turret at " .. zq.turret.key .. ": not without a machine or twice its strength" end
@@ -14598,6 +14662,19 @@ local function engage(u, F, W)
 			end
 			-- Step 6 (R37, marks 7-8 'no counter to set-up teams'): a mob in front of a set-up team's barrel does not run
 			-- down the barrel - it goes to the place beside the team (FlankD 22 m to the side it is on) and charges from there
+			-- (step 18, Malum fb 1674: a squad that jumps does not walk at a set-up team - with no jump this second and the team
+			-- farther than JumpLineD it stays with the line, as above. A profile with 'jump_save'. Brain_JumpNoWalk=0: on foot.)
+			if cast == nil and role == "jump" and t.d ~= nil and t.d.setup == 1 and dist > Brain.num("JumpLineD", 14) and Brain.num("JumpNoWalk", 1) >= 1 and roles.profile() ~= nil and roles.profile().jump_save then
+				local nb, nd
+				for _, v in ipairs(F.ours) do
+					if v.id ~= u.id and not roles.is_melee(roles.of(v)) and not roles.is_rear(roles.of(v)) then
+						local d = d2(u.x, u.z, v.x, v.z)
+						if nd == nil or d < nd then nb, nd = v, d end
+					end
+				end
+				if nb ~= nil and nd > Brain.num("JumpLineD", 14) then Brain.order(u, O.MOVE, nb.x, u.y, nb.z, { "no jump this second: not on foot at the set-up team", t.id, "- with the line at", nb.id, Brain.short(nb.key), F.key }) end
+				return
+			end
 			local fp = (cast ~= "pos" and role ~= "jump") and flank_point(u, t) or nil
 			-- (the team turns its barrel after the mob: FlankMaxSecs (8 s) of going round one team, then the charge - no
 			-- circling; again not before FlankAgainSecs 30 s)
@@ -14655,7 +14732,7 @@ local function engage(u, F, W)
 		local st = A.st[u.id]
 		-- (not once it is in the scrap: bench s5_w_b, r33_ork_deff_dread_140c4e - 'waits for the boyz its 3 theirs 22' pulled it
 		-- out of a melee for a second; within WalkerInD 15 m of the enemy it fights on)
-		if k > 0 and u.ed ~= nil and di ~= nil and u.ed < di - Brain.num("WalkerLeadD", 12) and u.ed > Brain.num("WalkerInD", 15) then
+		if k > 0 and u.ed ~= nil and di ~= nil and u.ed < di - Brain.num("WalkerLeadD", 12) and u.ed > Brain.num("WalkerInD", 15) and not (A.bold ~= nil and A.bold(u, F)) then   -- (step 18: not a walker that nothing there can hurt)
 			if st == nil or st.mode ~= "walker_wait" then
 				A.st[u.id] = { mode = "walker_wait", t = W.now }
 				Brain.order(u, O.MOVE, u.x, u.y, u.z, { "walker: waits for the boyz", "its", f0(u.ed), "theirs", f0(di), F.key })
@@ -14670,7 +14747,7 @@ local function engage(u, F, W)
 				if dist <= Brain.num("ChargeR", 45) and (bd == nil or dist < bd) then t, bd = e, dist end
 			end
 		end
-		if t ~= nil and (k > 0 or F.verdict == "press") then
+		if t ~= nil and (k > 0 or F.verdict == "press" or (A.bold ~= nil and A.bold(u, F))) then
 			-- (step 8: the walker's own rush on its charge - the profile's 'charge' list, as the mobs')
 			Brain.abilities.on_charge(u, role, t, d2(u.x, u.z, t.x, t.z), F, W)
 			A.st[u.id] = { mode = "walker_charge", t = W.now }
@@ -14737,6 +14814,19 @@ local function engage(u, F, W)
 	end
 	-- (step 17: a shooting squad on foot keeps out of the arc of a set-up team - A.arc_step above)
 	if Brain.num("SetupArc", 1) >= 1 and not roles.is_machine(role) and not u.veh and A.arc_step(u, F, W, rng) then return end
+	-- Step 18 (Malum fb 1629 item 1: 'the kommando nob stands hidden and does nothing'; bench s18_bb_n38, tools/idle16.py: 198 squad-
+	-- seconds 'hidden' with an enemy inside the squad's gun range). A hidden squad does not open fire by itself, and 'in range:
+	-- it stands and shoots' below gives no order. HIDDEN AND IN RANGE in a fight we take - the attack order on the nearest
+	-- enemy that is chased: it opens fire (and is seen). The hero's own trick (75_tactics.ai) was asked before this.
+	-- A profile with 'hidden_fire' only (the orks). Brain_HiddenFire=0: no order, as newai-38.
+	-- (verifier 18: off by default, Brain_HiddenFire=1: on - see RepairPrio below)
+	if Brain.num("HiddenFire", 0) >= 1 and cen ~= nil and ced ~= nil and ced <= rng - 2 and u.sq ~= nil and type(Squad_IsInfiltrated) == "function" and Squad_IsInfiltrated(u.sq) == true then
+		local hp = roles.profile()
+		if hp ~= nil and hp.hidden_fire then
+			if Brain.order(u, O.ATTACK, cen.id, 0, 0, { "hidden and in range: it opens fire at", cen.id, Brain.short(cen.key), "dist", f0(ced), F.key, tostring(F.verdict) }) then A.stats.hidden_fire = (A.stats.hidden_fire or 0) + 1 end
+			return
+		end
+	end
 	-- Step 6: cover (see A.find_cover above). Not for a machine.
 	local cv = A.cover.at[u.id]
 	local use_cover = not roles.is_machine(role) and Brain.num("Cover", 1) >= 1
@@ -14811,6 +14901,7 @@ local function loner(F, W, taken, v)
 	-- The marines set it to the Even line, 65_race_sm.ai: their army is few strong squads, one of them that is no weaker
 	-- than the two it met fights them - bench sm1f_m: 384 AVOID lines in 8 games, 'ratio 1.14 with_support 3.94 ... WAITS')
 	local alone = (n_ours == 1 and n_en >= Brain.num("LonerEnemy", 2) and F.ratio < Brain.num("LonerRatio", Brain.num("Win", 1.3)))
+	if alone and A.bold ~= nil and A.bold(F.ours[1], F) then alone = false; A.mstats.bold = A.mstats.bold + 1 end   -- (step 18: a walker that nothing there can hurt is not 'alone')
 	local was = (F.verdict == "avoid")
 	local vhold = Brain.num("VerdictHoldSecs", 4)                        -- every verdict stands this long, AVOID too (see fight())
 	local stood = now - (F.verdict_t or now)
@@ -15973,7 +16064,11 @@ local function fist(W, taken)
 				-- Brain_RepairField=0: at home only (the gretchin anywhere), as step 13.
 				-- (a walker is a machine by its armour - the engine's 'vehicle' is false for a dreadnought: Brain_RepairWalker=0 - as before)
 				local mach = v.veh or (Brain.num("RepairWalker", 1) >= 1 and v.d ~= nil and v.d.arm == "veh")
-				local field = (Brain.num("RepairField", 1) >= 1 and mach and v.fight == nil and v.hp < Brain.num("RepairFieldHP", 0.75))
+				-- (step 18, Malum fb 1629 item 10 'the machines must be repaired first': with Brain_RepairPrio a machine in the field is mended
+				-- from RepairPrioHP (0.85) by a squad within RepairPrioR (90 m), and one at home calls its mender from 160 m at that
+				-- health already. Brain_RepairPrio=0: 0.75 / 60 m / 0.6, as newai-38)
+				local rprio = (Brain.num("RepairPrio", 0) >= 1)   -- (verifier 18: off by default - with HiddenFire the orks lost 470 tickets of margin on 14 starts and 8 of 14 machines; Brain_RepairPrio=1)
+				local field = (Brain.num("RepairField", 1) >= 1 and mach and v.fight == nil and v.hp < (rprio and Brain.num("RepairPrioHP", 0.85) or Brain.num("RepairFieldHP", 0.75)))
 				if mach and (v.home or rp.field ~= nil or field) and not v.hit and not v.retreating and v.hp < Brain.num("RepairHP", 0.9) then
 					local best, bd
 					for _, u in ipairs(W.army) do
@@ -15981,14 +16076,14 @@ local function fist(W, taken)
 						local free = not taken[u.id] or (field and job ~= nil and not u.capturing and not job.at and A.st[u.id] ~= nil and A.st[u.id].mode == "cap")
 							or (A.st[u.id] ~= nil and A.st[u.id].mode == "repair" and A.st[u.id].key == v.id and A.st[u.id].t == now)
 						if free and rp.by[u.key] and u.fight == nil and not u.retreating and not u.hit and u.id ~= v.id
-							and (v.home or (rp.field ~= nil and rp.field[u.key]) or (field and d2(u.x, u.z, v.x, v.z) <= Brain.num("RepairFieldR", 60)))
+							and (v.home or (rp.field ~= nil and rp.field[u.key]) or (field and d2(u.x, u.z, v.x, v.z) <= (rprio and Brain.num("RepairPrioR", 90) or Brain.num("RepairFieldR", 60))))
 							and (type(rp.by[u.key]) ~= "number" or Brain.capture.krew == nil or Brain.capture.krew(u)) then
 							local d = d2(u.x, u.z, v.x, v.z)
 							-- (step 16, idle16.py cause H1: a deff dread stood at home at 0.22-0.55 of its health for 287 s - below
 							-- HealMinHP it never leaves, and no squad that repairs was within RepairR. A machine at home below
 							-- RepairHomeHP (0.6) calls a free mender from RepairHomeR (160 m). Brain_RepairHomeCall=0: 70 m.)
 							local rr = Brain.num("RepairR", 70)
-							if v.home and v.hp < Brain.num("RepairHomeHP", 0.6) and Brain.num("RepairHomeCall", 1) >= 1 then rr = math.max(rr, Brain.num("RepairHomeR", 160)) end
+							if v.home and v.hp < (rprio and Brain.num("RepairPrioHP", 0.85) or Brain.num("RepairHomeHP", 0.6)) and Brain.num("RepairHomeCall", 1) >= 1 then rr = math.max(rr, Brain.num("RepairHomeR", 160)) end
 							if d <= rr and (bd == nil or d < bd) then best, bd = u, d end
 						end
 					end
@@ -16950,12 +17045,15 @@ function A.update(W)
 		if prof ~= nil and prof.tick ~= nil then prof.tick(W, taken) end
 	end
 	for _, u in ipairs(W.own) do survive(u, W, taken) end
+	if A.veh_guard ~= nil then A.veh_guard(W, taken) end               -- (step 18: a machine leaves anti-tank fire - 53_machines.ai)
 	if Brain.tactics ~= nil and Brain.tactics.nest ~= nil then Brain.tactics.nest(W) end   -- (step 13: many set-up teams and our army weaker or far - the place is burnt ground)
 	if Brain.team ~= nil and Brain.team.revive ~= nil then Brain.team.revive(W, taken) end   -- (step 13: an ally's fallen hero is stood up - 80_team.ai)
 	if Brain.tactics ~= nil and Brain.tactics.trukk ~= nil then Brain.tactics.trukk(W, taken) end   -- (step 13: the trukk and its riders - 75_tactics.ai)
 	if Brain.tactics ~= nil and Brain.tactics.painboy ~= nil then Brain.tactics.painboy(W, taken) end   -- (step 13: the painboy mends out of a fight)
 	if Brain.capture.stick ~= nil then Brain.capture.stick(W, taken) end   -- (step 10: a capturer about to have its point stays on it)
 	A.assault(W, taken)
+	if A.raid ~= nil then A.raid(W, taken, true) end                   -- (step 18: the raid that is on keeps its squad - 52_rush.ai)
+	if A.rush ~= nil then A.rush(W, taken) end                         -- (step 18: a set-up team is taken by everybody at once - 52_rush.ai)
 	A.siege(W, taken)                                                   -- (step 17: the task 'a point covered by a turret / by set-up teams')
 	A.base_out(W, taken)                                                -- (step 15: the hard rule of the base's turrets)
 	for _, F in ipairs(W.fights) do fight(F, W, taken) end
@@ -17011,6 +17109,7 @@ function A.update(W)
 		end
 	end
 	A.vp_guard(W, taken)                                               -- (step 16: one squad stays on a victory point of ours)
+	if A.raid ~= nil then A.raid(W, taken) end                         -- (step 18: one squad goes for the enemy's generators - 52_rush.ai)
 	if Brain.tactics ~= nil and Brain.tactics.split ~= nil then Brain.tactics.split(W, taken) end   -- (step 14: the orks' second group - 75_tactics.ai)
 	Brain.capture.update(W, taken)                                     -- R12: who captures (55_capture.ai); they are not the fist's
 	fist(W, taken)
@@ -17026,6 +17125,631 @@ end
 
 	end
 	eliteai_brain_50_army()
+end
+
+-- ===== EliteAI brain/52_rush.ai =====
+do
+	local function eliteai_brain_52_rush()
+-- BRAIN 52_rush (step 18): THE RUSH - a set-up team of the enemy is taken by everybody at once.
+-- Why (step 17's bench, tools/contact17.py; step 18's tools/rush18.py on newai-38, 14 games brain against brain): the orks
+-- lose 8.6 points of health for one of the devastators'; 65 % of the ork squad-seconds within 55 m of a team are spent
+-- 40-55 m from it, 2 % within 8 m. Of 210 episodes 'a devastator squad with orks near' only 33 saw an ork squad reach the
+-- team - and 24 of those 33 teams ran or died, against 7 of the other 177. The team is broken by whoever REACHES it; the
+-- rules of the fight (the verdicts, the loner, the burnt ground, the step back, the stage, the walk round the barrel, the
+-- wait outside the arc) each move one squad for its own reason and together keep the mob in front of the gun.
+-- Orca fb 1592: 'the ork is stuck at the set-up squads - until this is passed there is no progress'; Malum fb 1666:
+-- 'a pattern of attack no worse than the marines' is needed'; the owner's doctrine (15.11): the stormboyz, the stikkbombs,
+-- the hero's trick - 'only when our army is near and can focus the team at once'.
+--
+-- ONE TASK, ONE TEAM, EVERYBODY (a profile with 'rush' only - the orks; A.rush(W, taken), called by 50_army.ai A.update
+-- before the siege task and the fights; its squads are 'taken' - no verdict, no loner, no step, no stage moves them):
+--   SEE    a set-up team of the enemy in sight - not running home, not in a building, not on the ground of its base's
+--          turrets, no turret of the enemy within RushTurretR (45 m) of it (that is the siege task's) - with RushMin (2)
+--          squads of ours that can go within RushCallR (75 m) of it, one of them a squad that closes (a mob, a jumper, a
+--          melee hero, a melee walker). Who can go: a squad of the army that is fit (RushMinEff 0.45 of its strength), not
+--          on its way home, no squad of the rear, no transport, no set-up team of ours, no rider of the trukk, without a
+--          capture job (unless the gun reaches it); a machine only when the team's gun does nothing to armour.
+--   ASSESS the squads that can go against everything of the enemy within RushEnR (35 m) of the team (10_perception's
+--          strength; what was seen there seconds ago counts at GhostK): RushRatio (0.8) at least - RushRatioInit (0.65)
+--          when an opener is ready: a jump, a bomb, the hero's trick. Below - no rush: the old rules deal with the place.
+--   FORM   (RushFormSecs 10 s at most) everybody walks to the edge of the gun's reach (its range + RushPad 5 m) on its own
+--          side - nobody waits inside the reach. All there, or one of ours is shot at inside the reach, or the time is
+--          up with two there: GO. Nobody came - OFF.
+--   GO     in the same second: the jumpers jump ONTO the team (the landing is not judged by the fight's verdict - the
+--          rush was), the bombs go (70_abilities.ai B.on_fight: stikkbombs 55 m, the mortar 60 m - from outside the
+--          gun), the heroes do their trick (75_tactics.ai: the mek's teleport, the nob's stun bomb), the mobs get the
+--          melee order on the team itself - straight, no walk round the barrel, no step back, and they stop RushHzPad
+--          outside our own bomb's circle until it went off; the shooters follow RushShootSecs (2 s) later and fire AT THE
+--          TEAM (the attack order on it) - at once when it is tied (one of ours within RushTiedR 10 m of it).
+--   END    BROKEN: the team runs home or is gone. OFF: half of the squads that went are gone and the team is not
+--          tied; nobody reached it in RushGoSecs (22 s); RushMaxSecs (50 s) are over; the numbers fell below
+--          RushAbortRatio (0.4) with the team not tied. After OFF the team is left alone for RushRestSecs (40 s).
+-- Log: 'BR ARMY <t> RUSH SEE|GO|BROKEN|OFF team <id> <unit> why ...', the orders 'rush: ...'.
+-- Keys: Brain_Rush=0 - off (newai-38). Determinism: lists by ipairs, ties by the squad's id; no clock but the game's.
+
+local A = Brain.army
+local d2, O = Brain.d2, Brain.ORD
+local function f0(v) return Brain.f0(v) end
+local function f2(v) return Brain.f2(v) end
+A.rs = nil                                                             -- the rush that is on
+A.rush_rest = {}                                                       -- [team id] = the second until which it is left alone
+A.rstats = { see = 0, go = 0, broken = 0, off = 0, jump = 0, melee = 0, shoot = 0, form = 0 }
+
+local function is_hero(u) return u.key ~= nil and string.find(u.key, "/heroes/", 1, true) ~= nil end
+local function closes(u, role)
+	return Brain.roles.is_melee(role) or (role == "walker" and u.d ~= nil and u.d.mel == 1)
+end
+-- does the team's gun hurt a machine? (the data row of the blueprint: a lascannon / plasma team is no target of a walker)
+local function gun_av(t)
+	local d = t.d
+	return d ~= nil and (d.dV or 0) >= Brain.num("RushAvDps", 20)
+end
+local function gun_rng(t) return (t.d ~= nil and (t.d.rng or 0) > 0) and t.d.rng or 45 end
+
+-- the squads of ours that can go at team t
+local function force_of(t, W, taken)
+	local roles, C, T = Brain.roles, Brain.capture, Brain.tactics
+	local list, close = {}, 0
+	local rng, av = gun_rng(t), gun_av(t)
+	for _, u in ipairs(W.army) do
+		local st = A.st[u.id]
+		local role = roles.of(u)
+		local dist = d2(u.x, u.z, t.x, t.z)
+		local ok = not taken[u.id] and not u.retreating and not u.inside and dist <= Brain.num("RushCallR", 75)
+			and not (st ~= nil and (st.mode == "retreat" or st.mode == "heal"))
+			and not roles.is_rear(role) and role ~= "transport" and role ~= "setup" and role ~= "worker"
+			and (u.eff or 0) >= Brain.num("RushMinEff", 0.45)
+		if ok and is_hero(u) and (u.hp or 1) < Brain.num("RushHeroHP", 0.5) then ok = false end
+		if ok and T ~= nil and T.riders ~= nil and T.riders[u.id] ~= nil then ok = false end
+		if ok and (roles.is_machine(role) or u.veh) and (av or (u.hp or 1) < Brain.num("RushMachineHP", 0.5)) then ok = false end
+		if ok and dist > rng + 4 and ((C ~= nil and C.jobs ~= nil and C.jobs[u.id] ~= nil) or (st ~= nil and st.mode == "post")) then ok = false end
+		if ok then
+			table.insert(list, u)
+			if closes(u, role) then close = close + 1 end
+		end
+	end
+	return list, close
+end
+local function guard_of(t, W)
+	local en = {}
+	for _, e in ipairs(W.en) do if not e.retreating and d2(e.x, e.z, t.x, t.z) <= Brain.num("RushEnR", 35) then table.insert(en, e) end end
+	local gh = {}
+	for _, g in ipairs(W.ghosts or {}) do if d2(g.x, g.z, t.x, t.z) <= Brain.num("RushEnR", 35) then table.insert(gh, g) end end
+	return en, gh
+end
+local function ratio_of(list, en, gh)
+	local P = Brain.perception
+	if table.getn(list) == 0 then return 0 end
+	local s_en = P.strength(en, P.mix_of(list))
+	if table.getn(gh) > 0 then s_en = s_en + Brain.num("GhostK", 0.5) * P.strength(gh, P.mix_of(list)) end
+	return P.strength(list, P.mix_of(en)) / math.max(s_en, 1)
+end
+-- is an opener ready among these squads? (a jump in its window or nearly, a bomb for a set-up team, a hero with a trick)
+local function opener(list, t)
+	local AB, roles = Brain.abilities, Brain.roles
+	local prof = roles.profile()
+	for _, u in ipairs(list) do
+		local role = roles.of(u)
+		local cl = roles.charge_casts(u, role)
+		for _, c0 in ipairs(cl or {}) do
+			local c = AB.spec(c0)
+			if c.kind == "pos" and AB.ready(u, c.k, c.cd) and AB.has(u, c) then return "the jump of " .. Brain.short(u.key) end
+		end
+		local cs = prof and prof.casts and prof.casts[u.key] or nil
+		for _, c0 in ipairs(cs or {}) do
+			local c = AB.spec(c0)
+			if c0.at == "setup" and c.kind == "pos" and AB.ready(u, c.k, c.cd) and AB.has(u, c) then return "the " .. tostring(c.name) .. " of " .. Brain.short(u.key) end
+		end
+		if is_hero(u) and role == "hero_ranged" and Brain.tactics ~= nil and Brain.tactics.on() then return "the trick of " .. Brain.short(u.key) end
+	end
+	return nil
+end
+local function allowed(t, W)
+	if t.d == nil or t.d.setup ~= 1 or t.retreating or t.inside then return false end
+	if (A.rush_rest[t.id] or -1) > W.now then return false end
+	if A.base_of(t.x, t.z, W, Brain.num("BaseKeepR", 55) + 10) ~= nil then return false end
+	if A.base_depth ~= nil then
+		local dep = A.base_depth(nil, t.x, t.z, W)
+		if dep ~= nil and dep > -Brain.num("BaseJumpPad", 8) then return false end
+	end
+	for _, tu in ipairs(W.turrets or {}) do if d2(tu.x, tu.z, t.x, t.z) <= Brain.num("RushTurretR", 45) then return false end end
+	return true
+end
+
+local function rush_end(rs, W, word, why, rest)
+	A.rs = nil
+	if rest ~= nil and rest > 0 then A.rush_rest[rs.tid] = W.now + rest end
+	if word == "BROKEN" then A.rstats.broken = A.rstats.broken + 1 else A.rstats.off = A.rstats.off + 1 end
+	Brain.log("ARMY", "RUSH", word, "team", rs.tid, rs.tname, "why", why, "phase", rs.phase, "for", f0(W.now - rs.t0), "s", "went", rs.n0 or 0, "reached", rs.tied_t ~= nil and 1 or 0,
+		"n", A.rstats.see .. "/" .. A.rstats.go .. "/" .. A.rstats.broken .. "/" .. A.rstats.off)
+end
+
+-- one squad's second of the attack
+local function go_squad(u, role, t, rs, Fp, W, tied)
+	local AB, roles = Brain.abilities, Brain.roles
+	local now = W.now
+	local dist = d2(u.x, u.z, t.x, t.z)
+	A.st[u.id] = { mode = "rush", t = now }
+	if AB.busy[u.id] ~= nil and now - AB.busy[u.id] < Brain.num("CastBusySecs", 2) then return end
+	-- the hero's trick (the mek's teleport behind the team, the kommando nob's stun bomb and walk-up: 75_tactics.ai)
+	if is_hero(u) and Brain.tactics ~= nil and Brain.tactics.engage(u, role, Fp, W) then return end
+	-- the bombs and what else the squad casts in a fight (a bomb never with one of ours within CastFfR of the place)
+	if AB.on_fight ~= nil and AB.on_fight(u, role, Fp, W) == "busy" then return end
+	if closes(u, role) then
+		for _, c0 in ipairs(roles.charge_casts(u, role) or {}) do
+			local c = AB.spec(c0)
+			if dist >= c.min and dist <= c.max and AB.ready(u, c.k, c.cd) and AB.has(u, c) and AB.energy_ok(u, c) then
+				if c.kind == "pos" then
+					if AB.hazard_at(t.x, t.z, 2) == nil and AB.cast(u, c.k, "pos", t.x, t.y, t.z, c.cd, { "rush:", c.name, "onto the set-up team", t.id, Brain.short(t.key), "dist", f0(dist), "- everybody goes in this second" }) then
+						A.rstats.jump = A.rstats.jump + 1
+						rs.opened = rs.opened or now
+						return
+					end
+				else
+					AB.cast(u, c.k, "self", 0, 0, 0, c.cd, { "rush:", c.name, "dist", f0(dist), "target", t.id, Brain.short(t.key) })
+				end
+			end
+		end
+		-- (Malum fb 1674: 'use and keep the jump for the suppression squads - do not walk at them head-on'. A squad that jumps and
+		-- cannot jump this second - the jump recharges, the team is too near or too far for it - does not walk down the barrel:
+		-- while the team is not tied and it stands farther than RushJumpInD (14 m) from it, it waits outside the gun
+		-- (range + RushPad) and jumps when it can. Brain_JumpNoWalk=0: it charges on foot.)
+		if role == "jump" and not tied and dist > Brain.num("RushJumpInD", 14) and Brain.num("JumpNoWalk", 1) >= 1 then
+			local keep = gun_rng(t) + Brain.num("RushPad", 5)
+			if dist < keep - 3 or dist > keep + 8 then
+				local k = keep / math.max(dist, 1)
+				Brain.order(u, O.MOVE, t.x + (u.x - t.x) * k, u.y, t.z + (u.z - t.z) * k, { "rush: no jump this second - not on foot down the barrel of", t.id, Brain.short(t.key), ": outside its gun until the jump is ready", "dist", f0(dist) })
+			end
+			A.rstats.jump_wait = (A.rstats.jump_wait or 0) + 1
+			return
+		end
+		-- (our own bomb lies on the team: the mob comes up to its circle and goes in when it went off)
+		local hz = (Brain.num("Hazard", 1) >= 1) and AB.hazard_at(t.x, t.z, 2) or nil
+		if hz ~= nil then
+			local keep = hz.r + Brain.num("RushHzPad", 3)
+			local dh = d2(u.x, u.z, hz.x, hz.z)
+			if dh > keep + 4 then
+				local k = keep / math.max(dh, 1)
+				Brain.order(u, O.MOVE, hz.x + (u.x - hz.x) * k, u.y, hz.z + (u.z - hz.z) * k, { "rush: up to our own bomb's circle,", hz.name, "for", f0(hz.t1 - now), "s more - then onto", t.id, Brain.short(t.key) })
+			elseif dh < hz.r then
+				local k = keep / math.max(dh, 1)
+				Brain.order(u, O.MOVE, hz.x + (u.x - hz.x) * k, u.y, hz.z + (u.z - hz.z) * k, { "rush: out of our own bomb's circle,", hz.name })
+			end
+			return
+		end
+		if A.stanced ~= nil and A.stanced[u.id] ~= nil and u.mstance == false and A.stance(u, true, { "melee stance again: the rush at", t.id, Brain.short(t.key) }) then A.stanced[u.id] = nil end
+		if Brain.order(u, O.MELEE, t.id, 0, 0, { "rush: onto the set-up team", t.id, Brain.short(t.key), "dist", f0(dist), "- everybody at once" }) then A.rstats.melee = A.rstats.melee + 1 end
+		return
+	end
+	-- a squad that shoots or bombs
+	local rng = (u.d ~= nil and (u.d.rng or 0) > 0) and u.d.rng or 35
+	local prof = roles.profile()
+	local cs = prof and prof.casts and prof.casts[u.key] or nil
+	for _, c0 in ipairs(cs or {}) do
+		local c = AB.spec(c0)
+		if c0.at == "setup" and c.kind == "pos" then
+			-- (a bomber's place: inside its throw, outside the gun when the throw is the longer)
+			if dist > c.max - 2 then
+				local k = (c.max - 5) / math.max(dist, 1)
+				Brain.order(u, O.MOVE, t.x + (u.x - t.x) * k, u.y, t.z + (u.z - t.z) * k, { "rush: into the throw of its", c.name, f0(c.max), "from the set-up team", t.id, Brain.short(t.key), "dist", f0(dist) })
+				return
+			end
+			break
+		end
+	end
+	if not tied and now - rs.tp < Brain.num("RushShootSecs", 2) and dist > rng then return end
+	if Brain.order(u, O.ATTACK, t.id, 0, 0, { "rush: fire at the set-up team", t.id, Brain.short(t.key), "dist", f0(dist), tied and "- it is tied" or "- with the mobs" }) then A.rstats.shoot = A.rstats.shoot + 1 end
+end
+
+function A.rush(W, taken)
+	local prof = Brain.roles.profile()
+	if prof == nil or not prof.rush or Brain.num("Rush", 1) < 1 then A.rs = nil; return end
+	if Brain.plan ~= nil and Brain.plan.assault ~= nil and Brain.plan.assault.phase == "go" then A.rs = nil; return end
+	local now, roles = W.now, Brain.roles
+	local rs = A.rs
+	local t
+	if rs ~= nil then
+		t = Brain.en_by_id and Brain.en_by_id[rs.tid] or nil
+		if t == nil then
+			-- not in sight any more: dead, or it left our sight
+			local near = false
+			for _, u in ipairs(W.army) do if rs.ids[u.id] and d2(u.x, u.z, rs.x, rs.z) <= 30 then near = true end end
+			if rs.phase == "go" and near then rush_end(rs, W, "BROKEN", "the team is gone from where it stood", 0)
+			elseif now - rs.seen > Brain.num("RushLostSecs", 4) then rush_end(rs, W, "OFF", "the team is not in sight any more", 0) end
+			if A.rs == nil then rs = nil else
+				-- (a few seconds of memory: the squads go on to where it stood)
+				for _, u in ipairs(W.army) do
+					if rs.ids[u.id] and not taken[u.id] and not u.retreating then
+						taken[u.id] = true
+						if rs.phase == "go" then Brain.order(u, O.AMOVE, rs.x, u.y, rs.z, { "rush: to where the set-up team", rs.tid, "stood" }) end
+					end
+				end
+				return
+			end
+		elseif t.retreating then rush_end(rs, W, "BROKEN", "the team runs home", 0); rs = nil
+		elseif t.inside then rush_end(rs, W, "OFF", "the team went into a building: the burnas' work", 0); rs = nil
+		elseif not allowed(t, W) and rs.phase ~= "go" then rush_end(rs, W, "OFF", "the team stands where a rush does not go (its base, a turret)", 0); rs = nil
+		else rs.x, rs.z, rs.seen = t.x, t.z, now end
+	end
+	if rs == nil then
+		-- SEE: the team with the most squads of ours that can go (ties: the lower id)
+		local best, bl, bc
+		for _, e in ipairs(W.en) do
+			if e.d ~= nil and e.d.setup == 1 and allowed(e, W) then
+				local list, close = force_of(e, W, taken)
+				local n = table.getn(list)
+				if n >= Brain.num("RushMin", 2) and close >= 1 and (best == nil or n > table.getn(bl) or (n == table.getn(bl) and e.id < best.id)) then best, bl, bc = e, list, close end
+			end
+		end
+		if best == nil then return end
+		local en, gh = guard_of(best, W)
+		local r = ratio_of(bl, en, gh)
+		local op = opener(bl, best)
+		local need = (op ~= nil) and Brain.num("RushRatioInit", 0.65) or Brain.num("RushRatio", 0.8)
+		-- (the siege task has gathered for this nest and judged it: its word stands)
+		if A.siege_on ~= nil and A.siege_on(best.x, best.z) then need = math.min(need, Brain.num("RushRatioSiege", 0.7)) end
+		if r < need then
+			Brain.say("ARMY", "rush_no|" .. best.id, 20, { "RUSH", "NOT", "team", best.id, Brain.short(best.key), "why", table.getn(bl) .. " squads of ours can go against " .. table.getn(en) .. " of the enemy there (+" .. table.getn(gh) ..
+				" remembered): ratio " .. f2(r) .. ", needed " .. f2(need) .. (op and (" (an opener is ready: " .. op .. ")") or " (no opener ready)") }, "no")
+			return
+		end
+		rs = { tid = best.id, tname = Brain.short(best.key), t0 = now, tp = now, phase = "form", ids = {}, x = best.x, z = best.z, seen = now, n0 = table.getn(bl) }
+		for _, u in ipairs(bl) do rs.ids[u.id] = true end
+		A.rs = rs
+		t = best
+		A.rstats.see = A.rstats.see + 1
+		local names = {}
+		for _, u in ipairs(bl) do table.insert(names, u.id .. " " .. Brain.short(u.key)) end
+		Brain.log("ARMY", "RUSH", "SEE", "team", t.id, rs.tname, "at", f0(t.x), f0(t.z), "why", "a set-up team of the enemy and " .. table.getn(bl) .. " squads of ours within " .. f0(Brain.num("RushCallR", 75)) ..
+			" m that can go (" .. bc .. " that close): ratio " .. f2(r) .. " of " .. table.getn(en) .. " squads there, needed " .. f2(need) .. (op and (", the opener: " .. op) or ", no opener") ..
+			" - everybody to the edge of its gun, then in together", "squads", table.concat(names, ", "), "n", A.rstats.see)
+	end
+	-- the force as it stands now: the squads that were named, and whoever of ours can go and came near meanwhile
+	local list = force_of(t, W, taken)
+	local force, close_n = {}, 0
+	for _, u in ipairs(list) do
+		if rs.ids[u.id] or rs.phase == "form" or d2(u.x, u.z, t.x, t.z) <= gun_rng(t) + 10 then
+			rs.ids[u.id] = true
+			table.insert(force, u)
+			if closes(u, roles.of(u)) then close_n = close_n + 1 end
+		end
+	end
+	local n = table.getn(force)
+	local rng = gun_rng(t)
+	local tied = false
+	for _, u in ipairs(force) do if d2(u.x, u.z, t.x, t.z) <= Brain.num("RushTiedR", 10) then tied = true end end
+	if tied and rs.tied_t == nil then rs.tied_t = now end
+	local en, gh = guard_of(t, W)
+	local r = ratio_of(force, en, gh)
+	if rs.phase == "form" then
+		if n < Brain.num("RushMin", 2) or close_n < 1 then rush_end(rs, W, "OFF", "the squads that could go are not there any more (" .. n .. ")", 10); return end
+		local keep = rng + Brain.num("RushPad", 5)
+		local band = Brain.num("RushBand", 8)
+		local ready, hit = 0, false
+		for _, u in ipairs(force) do
+			local dist = d2(u.x, u.z, t.x, t.z)
+			if dist <= keep + band then ready = ready + 1 end
+			if dist <= rng + 2 and u.hit then hit = true end
+		end
+		local waited = now - rs.tp
+		local why
+		if ready >= n then why = "all " .. n .. " stand at the edge of its gun"
+		elseif hit then why = "one of ours is shot at inside its reach: no waiting in front of the gun"
+		elseif tied then why = "one of ours is on the team already"
+		elseif waited >= Brain.num("RushFormSecs", 10) and ready >= 2 then why = ready .. " of " .. n .. " at the edge after " .. f0(waited) .. " s"
+		elseif waited >= 2 * Brain.num("RushFormSecs", 10) then rush_end(rs, W, "OFF", "after " .. f0(waited) .. " s only " .. ready .. " of " .. n .. " stand at the edge", 15); return end
+		if why == nil then
+			A.rstats.form = A.rstats.form + 1
+			for _, u in ipairs(force) do
+				taken[u.id] = true
+				local dist = d2(u.x, u.z, t.x, t.z)
+				local st = A.st[u.id]
+				if dist > keep + band - 4 or (dist < keep - 4 and dist > rng - 12 and not u.hit) then
+					local k = keep / math.max(dist, 1)
+					A.st[u.id] = { mode = "rush_form", t = now }
+					Brain.order(u, O.MOVE, t.x + (u.x - t.x) * k, u.y, t.z + (u.z - t.z) * k, { "rush: to the edge of the gun of", t.id, Brain.short(t.key), f0(keep), "m - then in together", "there", ready .. "/" .. n, "dist", f0(dist) })
+				elseif st == nil or st.mode ~= "rush_form" or st.held == nil then
+					A.st[u.id] = { mode = "rush_form", t = now, held = true }
+					Brain.order(u, O.MOVE, u.x, u.y, u.z, { "rush: at the edge of the gun of", t.id, Brain.short(t.key), "- waits for the others", ready .. "/" .. n })
+				end
+			end
+			return
+		end
+		-- the look at the place before the order
+		local op = opener(force, t)
+		local need = ((op ~= nil) and Brain.num("RushRatioInit", 0.65) or Brain.num("RushRatio", 0.8)) * Brain.num("RushGoBand", 0.85)
+		if r < need and not tied then rush_end(rs, W, "OFF", "at the edge the numbers are " .. f2(r) .. " (needed " .. f2(need) .. "): not this time", Brain.num("RushRestSecs", 40) / 2); return end
+		rs.phase, rs.tp, rs.n0 = "go", now, n
+		A.rstats.go = A.rstats.go + 1
+		Brain.log("ARMY", "RUSH", "GO", "team", t.id, rs.tname, "at", f0(t.x), f0(t.z), "why", why .. ": ratio " .. f2(r) .. " of " .. table.getn(en) .. " squads there" .. (op and (", the opener: " .. op) or ", no opener") ..
+			" - the jump and the bombs first, the mobs straight onto the team, the shooters fire at it", "squads", n, "closers", close_n, "formed in", f0(waited), "s", "n", A.rstats.go)
+	end
+	-- GO
+	local went = now - rs.tp
+	if n == 0 then rush_end(rs, W, "OFF", "nobody of the squads that went is left", Brain.num("RushRestSecs", 40)); return end
+	if not tied and n < math.max(1, math.ceil((rs.n0 or n) / 2)) and went >= 4 then rush_end(rs, W, "OFF", "the force is spent: " .. n .. " of " .. (rs.n0 or n) .. " squads left and the team is not tied", Brain.num("RushRestSecs", 40)); return end
+	if rs.tied_t == nil and went >= Brain.num("RushGoSecs", 22) then rush_end(rs, W, "OFF", "nobody reached the team in " .. f0(went) .. " s", Brain.num("RushRestSecs", 40)); return end
+	if went >= Brain.num("RushMaxSecs", 50) then rush_end(rs, W, "OFF", "the team still stands after " .. f0(went) .. " s", Brain.num("RushRestSecs", 40)); return end
+	if not tied and went >= 6 and r < Brain.num("RushAbortRatio", 0.4) then rush_end(rs, W, "OFF", "the numbers fell to " .. f2(r) .. " and the team is not tied", Brain.num("RushRestSecs", 40)); return end
+	local Fp = { key = "R" .. t.id, verdict = "press", en = en, ours = force, support = {}, x = t.x, z = t.z, ratio = r, ratio_all = r, age = went, keep = {}, loss_ours = 0, loss_en = 0, rush = true }
+	if table.getn(en) == 0 then table.insert(Fp.en, t) end
+	for _, u in ipairs(force) do
+		taken[u.id] = true
+		go_squad(u, roles.of(u), t, rs, Fp, W, tied)
+	end
+	Brain.say("ARMY", "rush_on", 10, { "RUSH", "ON", "team", t.id, rs.tname, "hp", f2(t.hp or 1), "ours", n, "of", rs.n0 or n, "tied", tied and 1 or 0, "ratio", f2(r), "for", f0(went), "s" }, tostring(n) .. (tied and "t" or "-"))
+end
+-- is the rush in GO at this place? (the burnt ground and the nest's mark do not stop what happens there)
+function A.rush_on(x, z)
+	local rs = A.rs
+	return rs ~= nil and rs.phase == "go" and d2(x, z, rs.x, rs.z) <= Brain.num("RushEnR", 35) + 15
+end
+
+-- ---- step 18: THE GENERATOR RAID (Malum fb 1666 item 2 'it does not break the enemy's generators', fb 1672 'the ork must hit the
+-- enemy's generators'; bench s18_bb_n38, tools/map18.py: the orks shot or burnt at generators at 21 places in 14 games, the
+-- marines at 45 - the raze rule (50_army.ai) works for a squad that happens to stand within 30 m of one, and nobody was SENT).
+-- A.raid(W, taken, first): called twice a second - before the fights (the raid that is on keeps its squad: no fight 80 m away
+-- calls it as its support; bench s18_xo_c1: 123 of 152 raids ended within seconds 'another rule has the squad') and after them
+-- (the choice). From GenRaidFrom (240 s) on, while GenRaidArmy (5) fit fighting squads of ours stand, ONE of them - free, in no fight, fit (GenRaidEff
+-- 0.7), no hero, no machine, no squad of the rear, no set-up team, without a capture job, not the dedicated capturer; a mob
+-- with burnas first, then a squad that jumps, then any other - walks to a power point of the enemy with nobody of the enemy
+-- seen or remembered within GenRaidGuardR (45 m), no turret there, not under its base, not a farm that was ours (that one is
+-- taken back), within GenRaidMaxD (260 m). There the raze rule burns what stands and the capture rule takes the point. An
+-- enemy at the point, the squad shot at or in a fight, GenRaidSecs (120 s) on one target - the raid is over, the next not
+-- before GenRaidGapSecs (30 s). Log: 'BR ARMY <t> RAID GO|END ...', the orders 'raid: ...'. A profile with 'gen_raid'.
+-- OFF BY DEFAULT ([Lua] Brain_GenRaid=1: on) - see STEP18_RU.md.
+A.rd = nil
+A.rd_t = -1000
+local function raid_guarded(p, W)
+	local r = Brain.num("GenRaidGuardR", 45)
+	for _, e in ipairs(W.en) do if not e.retreating and d2(e.x, e.z, p.x, p.z) <= r then return true end end
+	for _, g in ipairs(W.ghosts or {}) do if (g.age or 0) <= Brain.num("GenRaidGhostSecs", 30) and d2(g.x, g.z, p.x, p.z) <= r then return true end end
+	for _, tu in ipairs(W.turrets or {}) do if d2(tu.x, tu.z, p.x, p.z) <= r then return true end end
+	return false
+end
+local function raid_end(W, why)
+	local rd = A.rd
+	A.rd, A.rd_t = nil, W.now
+	A.rstats.raid_end = (A.rstats.raid_end or 0) + 1
+	Brain.log("ARMY", "RAID", "END", "squad", rd.id, "point", rd.key, "why", why, "for", f0(W.now - rd.t0), "s", "n", (A.rstats.raid or 0) .. "/" .. A.rstats.raid_end)
+end
+function A.raid(W, taken, first)
+	local prof = Brain.roles.profile()
+	if prof == nil or not prof.gen_raid or Brain.num("GenRaid", 0) < 1 then A.rd = nil; return end   -- (off by default: bench s18_xo_c3 against s18_xonr_c3 - with the raid the orks held 0.97 victory points after the 3rd minute, without it 1.12)
+	if Brain.plan == nil or Brain.plan.novp(W) then return end
+	local now, roles, C = W.now, Brain.roles, Brain.capture
+	local rd = A.rd
+	if rd ~= nil and rd.tick == now then return end                    -- (the second call of this second: the choice only)
+	if rd ~= nil then
+		rd.tick = now
+		local u = W.by_id[rd.id]
+		local p
+		for _, q in ipairs(W.pts) do if q.key == rd.key then p = q end end
+		if u == nil or u.retreating then raid_end(W, "the squad is gone or on its way home"); return end
+		if p == nil or not p.enemy then raid_end(W, "the point is not the enemy's any more"); return end
+		if taken[u.id] then raid_end(W, "another rule has the squad (" .. tostring(A.st[u.id] and A.st[u.id].mode or "-") .. ")"); return end
+		if u.fight ~= nil or u.hit then raid_end(W, "the squad is in a fight or shot at"); return end
+		if raid_guarded(p, W) then raid_end(W, "the enemy stands at the point"); return end
+		if now - rd.t0 >= Brain.num("GenRaidSecs", 120) then raid_end(W, "long enough at one point"); return end
+		local d = d2(u.x, u.z, p.x, p.z)
+		if d > Brain.num("GenRaidAtD", 24) then
+			taken[u.id] = true
+			A.st[u.id] = { mode = "raid", t = now }
+			Brain.order(u, O.MOVE, p.x, u.y, p.z, { "raid: to the enemy's power point", p.key, "- nobody of the enemy there: its generators", "dist", f0(d) })
+		end
+		return
+	end
+	if first or now - A.rd_t < Brain.num("GenRaidGapSecs", 30) or now < Brain.num("GenRaidFrom", 240) then return end
+	local fit = 0
+	for _, u in ipairs(W.army) do
+		local role = roles.of(u)
+		if not u.retreating and (u.eff or 0) >= 0.5 and not roles.is_rear(role) and role ~= "transport" and role ~= "worker" then fit = fit + 1 end
+	end
+	if fit < Brain.num("GenRaidArmy", 5) then return end
+	local best, bp, bk
+	for _, u in ipairs(W.army) do
+		local role = roles.of(u)
+		local st = A.st[u.id]
+		if not taken[u.id] and not u.retreating and u.fight == nil and not u.hit and not u.home and (u.eff or 0) >= Brain.num("GenRaidEff", 0.7) and not is_hero(u)
+			and not roles.is_machine(role) and not u.veh and not roles.is_rear(role) and role ~= "setup" and role ~= "worker"
+			and not (C ~= nil and C.jobs ~= nil and C.jobs[u.id] ~= nil) and not (C ~= nil and C.ded == u.id) and not (st ~= nil and (st.mode == "post" or st.mode == "retreat" or st.mode == "heal"))
+			and not (Brain.tactics ~= nil and Brain.tactics.riders ~= nil and Brain.tactics.riders[u.id] ~= nil) then
+			local rank = (A.has_flame ~= nil and A.has_flame(u)) and 0 or ((role == "jump") and 1 or 2)
+			for _, p in ipairs(W.pts) do
+				if p.pow and p.enemy then
+					local d = d2(u.x, u.z, p.x, p.z)
+					local own = (Brain.plan.farms ~= nil and Brain.plan.farms[p.key] ~= nil and Brain.plan.farms[p.key].lost ~= nil)
+					if d <= Brain.num("GenRaidMaxD", 260) and not own and A.base_of(p.x, p.z, W, Brain.num("ObjHqR", 55) + 10) == nil and not raid_guarded(p, W) then
+						local k = { rank, d, u.id }
+						local better = (bk == nil)
+						if not better then for i = 1, 3 do if k[i] ~= bk[i] then better = (k[i] < bk[i]); break end end end
+						if better then best, bp, bk = u, p, k end
+					end
+				end
+			end
+		end
+	end
+	if best == nil then return end
+	A.rd = { id = best.id, key = bp.key, t0 = now, tick = now }
+	A.rstats.raid = (A.rstats.raid or 0) + 1
+	taken[best.id] = true
+	A.st[best.id] = { mode = "raid", t = now }
+	Brain.log("ARMY", "RAID", "GO", "squad", best.id, Brain.short(best.key), "point", bp.key, "dist", f0(bk[2]), "why", "the enemy's power point with nobody of the enemy seen within " .. f0(Brain.num("GenRaidGuardR", 45)) ..
+		" m and " .. fit .. " fit squads of ours standing: one squad goes and breaks its generators" .. ((bk[1] == 0) and " (its burnas)" or ((bk[1] == 1) and " (it jumps)" or "")), "n", A.rstats.raid)
+	Brain.order(best, O.MOVE, bp.x, best.y, bp.z, { "raid: to the enemy's power point", bp.key, "- nobody of the enemy there: its generators", "dist", f0(bk[2]) })
+end
+
+	end
+	eliteai_brain_52_rush()
+end
+
+-- ===== EliteAI brain/53_machines.ai =====
+do
+	local function eliteai_brain_53_machines()
+-- BRAIN 53_machines (step 18): the orks' machines - the walker fights, a machine leaves the fire that hurts armour and
+-- does not drive back into it.
+-- Malum fb 1666 item 3: 'the kan spins on the spot and does not fight until anti-tank fire hits it'. His log of newai-38
+-- (malum_1117d, 712-820 s, the deff dread 50017): 'WAITS why alone against 2 enemy squads ratio 0.55 ... it holds out of
+-- range', 'MOVE step back 25 towards home ... burnt ground (routed here 17 s ago, 20 x): not again without a machine or
+-- twice its strength' - the dread IS the machine: the fight's judge asked the engine's 'vehicle' flag, which is false
+-- for a walker; 'alone against 4 ... ratio 1.09' - one squad against N is 'alone' whatever it is. Twelve marching orders
+-- in 100 s, four charges that were each taken back within 5-7 s.
+-- Malum fb 1614 items 6, 9, fb 1629 item 6: 'the tank was wasted on the devastators - pull it back after the first shot',
+-- 'the marines pull their machines back, the ork does not', 'the trukk drove under a lascannon'.
+--
+-- 1. THE WALKER IS BOLD (A.bold(u, F) -> true). A melee walker of ours (armour 'veh', a melee unit) at WalkerBoldHP (0.5)
+--    of its health and more, in a fight where nothing of the enemy hurts armour - no machine, no squad whose data row
+--    does VehAvDps (15) a second to armour, no gun of the enemy that hurt a machine of ours before (A.av_ids), and the
+--    walker itself did not lose VehAvDrop of its health in the last VehAvSecs - is not 'one squad against N' (the
+--    loner's rule passes it), does not wait for the boyz, and is a machine for the burnt ground. Brain_WalkerBold=0: off.
+-- 2. A MACHINE LEAVES ANTI-TANK FIRE (A.veh_guard(W, taken), every second, before the trukk's rule and the fights). A
+--    machine of ours (a trukk with riders too) that is shot at and lost VehAvDrop (0.10) of its health within VehAvSecs
+--    (4 s): the enemy that did it - the nearest squad that hurts armour by its data, else the nearest set-up team in whose
+--    range it stands, else the nearest machine - is remembered (A.av_ids, for the whole game: a lascannon is an upgrade,
+--    the data row does not show it) and the machine drives VehBackPad (8 m) out of that gun's range, towards home, and
+--    stays out for VehBackSecs (12 s). Below MachineHomeHP the survive rule sends it home as before.
+-- 3. NOT BACK INTO IT (Brain.veh_av: asked by 00_core.ai Brain.order for every marching and attack order of a machine):
+--    an order whose place or target lies in the range of a remembered anti-tank gun that is in sight and does not run
+--    home is refused - unless the machine stands in that range itself (the way out, the fight it is in) or the rush
+--    (52_rush.ai) has TIED that gun. Log: 'BR ORD ... REFUSED ... the place is in the range of the anti-tank gun'.
+-- Brain_VehAvBack=0: 2 and 3 off. Lists by ipairs, ties by the id.
+
+local A = Brain.army
+local d2, O = Brain.d2, Brain.ORD
+local function f0(v) return Brain.f0(v) end
+local function f2(v) return Brain.f2(v) end
+A.av_ids = {}                                                          -- [enemy squad id] = the second it was caught hurting a machine of ours
+A.vback = {}                                                           -- [machine id] = { till, x, z, gun }
+A.mstats = { bold = 0, back = 0, refused = 0, learnt = 0 }
+
+local function is_machine(u) return (u.veh or (u.d ~= nil and u.d.arm == "veh")) and true or false end
+A.is_machine = is_machine
+-- does this enemy squad hurt armour (by what is known)?
+local function hurts_armour(e)
+	if e == nil or e.retreating then return false end
+	if A.av_ids[e.id] ~= nil then return true end
+	if e.veh or (e.d ~= nil and e.d.arm == "veh") then return true end
+	return e.d ~= nil and (e.d.dV or 0) >= Brain.num("VehAvDps", 15)
+end
+A.hurts_armour = hurts_armour
+local function drop_of(u, secs, now)
+	local h = A.nhist ~= nil and A.nhist[u.id] or nil
+	if h == nil then return 0 end
+	local top = u.hp or 0
+	for _, q in ipairs(h) do if now - q.t <= secs and (q.hp or 0) > top then top = q.hp end end
+	return top - (u.hp or 0)
+end
+
+function A.bold(u, F)
+	if Brain.num("WalkerBold", 1) < 1 or u == nil or F == nil then return false end
+	local prof = Brain.roles.profile()
+	if prof == nil or not prof.walker_bold then return false end
+	if not (u.d ~= nil and u.d.arm == "veh" and u.d.mel == 1) then return false end
+	if (u.hp or 0) < Brain.num("WalkerBoldHP", 0.5) then return false end
+	local now = Brain.now or 0
+	if drop_of(u, Brain.num("VehAvSecs", 4), now) >= Brain.num("VehAvDropWalker", 0.2) then return false end
+	local vb = A.vback[u.id]
+	if vb ~= nil and now < vb.till then return false end
+	for _, e in ipairs(F.en or {}) do if hurts_armour(e) then return false end end
+	return true
+end
+
+function A.veh_guard(W, taken)
+	if Brain.num("VehAvBack", 1) < 1 then return end
+	local prof = Brain.roles.profile()
+	if prof == nil or not prof.veh_av_back then return end
+	local now = W.now
+	for _, u in ipairs(W.own) do
+		if is_machine(u) and not taken[u.id] and not u.retreating then
+			local vb = A.vback[u.id]
+			local st = A.st[u.id]
+			if st ~= nil and (st.mode == "retreat" or st.mode == "heal") then vb = nil; A.vback[u.id] = nil end
+			local drop = drop_of(u, Brain.num("VehAvSecs", 4), now)
+			-- (bench s18_xo_b3: a deff dread in a melee with assault marines lost 0.11 in 4 s, was pulled out of it, and the heavy bolter
+			-- team 21 m away was 'remembered as an anti-tank gun'. A melee walker leaves only at VehAvDropWalker (0.2); a set-up
+			-- team is LEARNT as an anti-tank gun only when nobody of the enemy stands within VehAvMeleeR (12 m) of the machine.)
+			local need_drop = (u.d ~= nil and u.d.mel == 1) and Brain.num("VehAvDropWalker", 0.2) or Brain.num("VehAvDrop", 0.10)
+			local melee_on = false
+			for _, e in ipairs(W.en) do if not e.retreating and d2(u.x, u.z, e.x, e.z) <= Brain.num("VehAvMeleeR", 12) then melee_on = true; break end end
+			if u.hit and drop >= need_drop and (vb == nil or now >= vb.till - Brain.num("VehBackSecs", 12) + 3) and not (st ~= nil and (st.mode == "retreat" or st.mode == "heal")) then
+				-- who did it
+				local gun, gd, how
+				for _, e in ipairs(W.en) do
+					if not e.retreating then
+						local d = d2(u.x, u.z, e.x, e.z)
+						local rng = (e.d ~= nil and (e.d.rng or 0) > 0) and e.d.rng or 40
+						local rank
+						if e.d ~= nil and (e.d.dV or 0) >= Brain.num("VehAvDps", 15) and d <= rng + 6 then rank = 1
+						elseif A.av_ids[e.id] ~= nil and d <= rng + 6 then rank = 1
+						elseif e.d ~= nil and e.d.setup == 1 and d <= rng + 4 and not melee_on then rank = 2
+						elseif (e.veh or (e.d ~= nil and e.d.arm == "veh")) and d <= rng + 6 then rank = 3 end
+						if rank ~= nil and (gun == nil or rank < how or (rank == how and (d < gd or (d == gd and e.id < gun.id)))) then gun, gd, how = e, d, rank end
+					end
+				end
+				local hx, hz = (W.home and W.home.x) or u.x, (W.home and W.home.z) or u.z
+				local gx, gz, grng = u.x, u.z, 40
+				if gun ~= nil then
+					gx, gz, grng = gun.x, gun.z, (gun.d ~= nil and (gun.d.rng or 0) > 0) and gun.d.rng or 40
+					if A.av_ids[gun.id] == nil and how == 2 then A.mstats.learnt = A.mstats.learnt + 1 end
+					if how <= 2 then A.av_ids[gun.id] = A.av_ids[gun.id] or now end
+				else
+					-- (a gun we do not see: away from the nearest enemy, else towards home)
+					local ne, nd
+					for _, e in ipairs(W.en) do local d = d2(u.x, u.z, e.x, e.z); if nd == nil or d < nd then ne, nd = e, d end end
+					if ne ~= nil then gx, gz, grng = ne.x, ne.z, math.max(nd, 30) end
+				end
+				-- the place: out of the gun's range by the pad, on the line from the gun through the machine bent towards home
+				local keep = grng + Brain.num("VehBackPad", 8)
+				local dx, dz = u.x - gx, u.z - gz
+				local dl = math.max(math.sqrt(dx * dx + dz * dz), 1)
+				local hxd, hzd = hx - u.x, hz - u.z
+				local hl = math.max(math.sqrt(hxd * hxd + hzd * hzd), 1)
+				local vx, vz = dx / dl + 0.6 * hxd / hl, dz / dl + 0.6 * hzd / hl
+				local vl = math.max(math.sqrt(vx * vx + vz * vz), 0.1)
+				local step = math.max(keep - dl + 6, 18)
+				local px, pz = u.x + vx / vl * step, u.z + vz / vl * step
+				A.vback[u.id] = { till = now + Brain.num("VehBackSecs", 12), x = px, z = pz, gun = gun and gun.id or nil }
+				A.mstats.back = A.mstats.back + 1
+				Brain.log("ARMY", "squad", u.id, Brain.short(u.key), "VEH_BACK", "why", "the machine lost " .. f2(drop) .. " of its health in " .. f0(Brain.num("VehAvSecs", 4)) .. " s: anti-tank fire -",
+					gun and (gun.id .. " " .. Brain.short(gun.key) .. " at " .. f0(gd) .. " m" .. ((how == 2) and " (a set-up team: remembered as an anti-tank gun)" or "")) or "a gun we do not see",
+					"- out of its range", f0(keep), "hp", f2(u.hp), "n", A.mstats.back)
+				vb = A.vback[u.id]
+			end
+			if vb ~= nil and now < vb.till then
+				taken[u.id] = true
+				A.st[u.id] = { mode = "veh_back", t = now }
+				if d2(u.x, u.z, vb.x, vb.z) > 6 then
+					Brain.order(u, O.MOVE, vb.x, u.y, vb.z, { "machine hurt: out of the fire of the anti-tank gun", vb.gun or "-", "hp", f2(u.hp), "for", f0(vb.till - now), "s more" })
+				end
+			elseif vb ~= nil then A.vback[u.id] = nil end
+		end
+	end
+end
+
+-- 00_core.ai Brain.order: is the place (or the target) of this machine's order in the range of a known anti-tank gun?
+-- Returns the gun (the order is refused) or nil.
+Brain.veh_av = function(u, tx, tz, mode)
+	if Brain.num("VehAvBack", 1) < 1 or A.W == nil then return nil end
+	local prof = Brain.roles.profile()
+	if prof == nil or not prof.veh_av_back then return nil end
+	local W = A.W
+	for _, e in ipairs(W.en or {}) do
+		if A.av_ids[e.id] ~= nil and not e.retreating and e.d ~= nil and e.d.setup == 1 then
+			local rng = ((e.d.rng or 0) > 0) and e.d.rng or 45
+			local pad = Brain.num("VehAvPad", 3)
+			if d2(tx, tz, e.x, e.z) <= rng + pad and d2(u.x, u.z, e.x, e.z) > rng + pad then
+				-- (the gun is tied by the rush, or by a mob of ours on it: it does not shoot at machines now)
+				local tied = false
+				for _, w in ipairs(W.own or {}) do if w.id ~= u.id and not is_machine(w) and d2(w.x, w.z, e.x, e.z) <= Brain.num("RushTiedR", 10) then tied = true; break end end
+				if not tied then return e end
+			end
+		end
+	end
+	return nil
+end
+
+	end
+	eliteai_brain_53_machines()
 end
 
 -- ===== EliteAI brain/55_capture.ai =====
@@ -18248,6 +18972,8 @@ R.PROFILES = {
 		-- the ork way: cheap melee mobs close in together and shout; shootas and lootas hold the line behind them;
 		-- mobs are refilled to the last boy before the next push (strength = the number of models)
 		reinforce_to = 1.0,
+		walker_bold = true, veh_av_back = true, hidden_fire = true, jump_save = true, gen_raid = true,   -- (step 18) the walker fights what cannot hurt it; a machine leaves anti-tank fire: 53_machines.ai
+		rush = true,                          -- (step 18) a set-up team of the enemy is taken by everybody at once: 52_rush.ai ([Lua] Brain_Rush=0: off)
 		-- step 12: the owner's build order by tier and his tactics (45_doctrine.ai, 75_tactics.ai; [Lua] Brain_Doctrine=0: off)
 		doctrine = true,
 		global_fight = "ork_waaagh",          -- the player's global for a fight (70_abilities.ai B.global): 'globals/ork_waaagh', 200 requisition AND 200 of the red resource
@@ -18257,6 +18983,12 @@ R.PROFILES = {
 		econ = {
 			starters = 1, army0 = 3,                         -- squads besides the hero: the starter mob + the two opening squads
 			opening = { "race_ork/troops/ork_shoota", "race_ork/troops/ork_shoota" },   -- 86-93 % of the people's ork games
+			-- (step 18, Malum fb 1672 - a tester's build order of tier 1, behind [Lua] Brain_DocBoT1 (30_economy.ai): besides the starter
+			-- sluggas - shootas, two stormboy squads ('they force the fight on the devastators and keep the jump for them'), two
+			-- loota squads, then tier 2 by its clock. Off by default: STEP18_RU.md has the bench against the people's opening.)
+			opening_std = { "race_ork/troops/ork_shoota", "race_ork/troops/ork_shoota" },
+			max_kind_key = { ["race_ork/troops/ork_slugga"] = { "DocSluggaMax", 0 } },   -- (verifier 18: no cap by default - bench v18_rjmS: -594 tickets of margin; Brain_DocSluggaMax=2)   -- (step 18, Malum fb 1687: two slugga squads at most; Brain_DocSluggaMax=0: no cap)
+			opening_bo = { "race_ork/troops/ork_shoota", "race_ork/troops/ork_stormboy", "race_ork/troops/ork_stormboy", "race_ork/troops/ork_lootas", "race_ork/troops/ork_lootas" },
 			-- step 7: the tier 3 core (40_composition.ai C.late_core): which squads and how many at most; late_order = the
 			-- order they are asked for (rich = only while the bank holds CompCore2K x the price: the idle bank at the cap)
 			late_core = { ["race_ork/troops/ork_nob_squad"] = 2, ["race_ork/vehicles/ork_looted_tank"] = 1 },
@@ -18746,7 +19478,7 @@ function R.melee_target(u, F)
 		if not skip and Brain.army ~= nil and Brain.army.no_chase ~= nil and Brain.army.no_chase(e, F, Brain.army.W, dist) ~= nil then skip = true end
 		if not skip and dist <= cr and arm ~= "veh" and arm ~= "bld" and not e.veh then
 			local s = dist
-			if e.d ~= nil and e.d.setup == 1 then s = s - Brain.num("ChargeSetupBonus", 15)
+			if e.d ~= nil and e.d.setup == 1 then s = s - Brain.num("ChargeSetupBonus", 15) - ((R.of(u) == "jump" and Brain.num("JumpSave", 1) >= 1) and Brain.num("JumpSetupBonus", 30) or 0)   -- (step 18: a squad that jumps goes at the set-up team first)
 			elseif e.d ~= nil and e.d.mel ~= 1 then s = s - Brain.num("ChargeShooterBonus", 8) end
 			if bs == nil or s < bs then best, bs = e, s end
 		end
@@ -18862,6 +19594,10 @@ P.units["race_marine/troops/sm_terminator_assault"] = { role = "melee" }
 -- ---- the plan of the purse --------------------------------------------------------------------------------------------
 local E = P.econ
 E.opening = { TAC, SCOUT }
+-- (step 18, Orca fb 1609 item 2 'why does it build tactical marines first and not the second scouts?': the second scout squad is
+-- the first order of the opening, the tactical squad the second - two squads that take points from the first minute.
+-- 40_composition.ai picks the list by the key. Brain_SmScoutFirst=0: tactical marines first, as newai-38)
+E.opening_std, E.opening_alt = { TAC, SCOUT }, { SCOUT, TAC }
 E.opening_by_kind = true                               -- (40_composition.ai: a kind that stands or is on its way is not ordered again)
 E.starter_kinds = { [SCOUT] = 1 }
 E.max_kind = { [SCOUT] = 2 }                           -- the starters and one squad more: capturers, not an army
@@ -19082,7 +19818,11 @@ P.lead_casts = {
 	["race_marine/troops/sm_librarian"] = { { k = K.SM_LIB_SMITE, kind = "pos", name = "smite", lead = 1.2 } },
 }
 -- the scouts' infiltration (the upgrade of tier 2): a capturer walks hidden - out of a fight only, as the lootas' camo
-P.stealth = { [SCOUT] = { k = K.SM_SCOUT_CAMO, name = "infiltration", idle = true, cd = 30, tries = 3 } }
+-- (step 18, Orca fb 1609 item 4 'the scouts could use the infiltration - and throw their grenades out of it': 'sneak' = the
+-- key that lets them hide IN a fight too while a set-up team of the enemy stands in it, nobody shoots at them and the
+-- nearest enemy is StealthSneakD (18 m) away at least - they walk up hidden and the frag grenade goes at the team
+-- (70_abilities.ai B.stealth, B.on_fight). Brain_SmScoutSneak=0: out of a fight only, as newai-38)
+P.stealth = { [SCOUT] = { k = K.SM_SCOUT_CAMO, name = "infiltration", idle = true, cd = 30, tries = 3, sneak = "SmScoutSneak" } }
 
 -- ---- step 17 (Orca fb 1550 / 1592, the sparring side) -------------------------------------------------------------------
 -- TIER 1 HAS A CEILING (fb 1592 item 6 'why a second tactical squad? Again too many units of tier 1 - a limit of squads is
@@ -20054,10 +20794,24 @@ end
 function B.on_charge(u, role, target, dist, F, W)
 	local list = Brain.roles.charge_casts(u, role)
 	if list == nil then return end
+	-- Step 18 (Malum fb 1672: 'the stormboyz force the fight on the devastators and KEEP THE JUMP FOR THEM'; fb 1629 items 7-8). A
+	-- profile with 'jump_save' (the orks): while a set-up team of the enemy that stands (not running home, not in a building) is
+	-- in sight within JumpSaveR (90 m) of the squad, its jump goes at a set-up team and at nothing else - the squad walks at any
+	-- other target. Brain_JumpSave=0: the jump at whatever it charges, as newai-38.
+	local save = false
+	do
+		local prof = Brain.roles.profile()
+		if prof ~= nil and prof.jump_save and Brain.num("JumpSave", 1) >= 1 and W ~= nil and not (target.d ~= nil and target.d.setup == 1) then
+			for _, e in ipairs(W.en or {}) do
+				if e.d ~= nil and e.d.setup == 1 and not e.retreating and not e.inside and Brain.d2(u.x, u.z, e.x, e.z) <= Brain.num("JumpSaveR", 90) then save = true; break end
+			end
+			if save then B.n_jump_save = (B.n_jump_save or 0) + 1; Brain.say("ABIL", "jumpsave|" .. u.id, 20, { "JUMP_KEPT", u.id, Brain.short(u.key), "why", "a set-up team of the enemy stands within " .. Brain.f0(Brain.num("JumpSaveR", 90)) .. " m: the jump is kept for it", "target", target.id, Brain.short(target.key), "n", B.n_jump_save }, "save") end
+		end
+	end
 	for _, c0 in ipairs(list) do
 		local c = spec(c0)
 		if dist >= c.min and dist <= c.max and B.ready(u, c.k, c.cd) and B.has(u, c) and B.energy_ok(u, c)
-			and (c.kind ~= "pos" or B.jump_ok(u, target, F, W)) then
+			and (c.kind ~= "pos" or (not save and B.jump_ok(u, target, F, W))) then
 			local why = { "charge", c.name, "dist", Brain.f0(dist), "target", target.id, Brain.short(target.key) }
 			if c.kind == "pos" then
 				-- Step 17 (Orca fb 1550 item 8: 'the landing of the assault marines' jump must be matched with where the enemy squad
@@ -20558,6 +21312,15 @@ end
 -- Called by the army module once a tick. A toggle: it is sent only when the engine says the squad is NOT hidden
 -- (Squad_IsInfiltrated - without that function nothing is sent: a blind toggle would switch the camo off again).
 -- Log: 'BR ORD <t> <id> <unit> CAST_SELF70 0 0 why hide camo ...'. Brain_Stealth=0: off.
+-- (step 18: a squad whose stealth is marked 'sneak' hides in a fight as well - while a set-up team of the enemy stands in that
+-- fight, the squad is not shot at and its nearest enemy is StealthSneakD away)
+-- (verifier 18: Brain_SmScoutSneak off by default - the bench cannot see it: the brain's orks have no set-up teams, 0 orders changed in 14 games)
+function B.sneak_ok(u, c0, W)
+	if c0 == nil or c0.sneak == nil or Brain.num(c0.sneak, 0) < 1 or u.fight == nil or u.hit then return false end
+	local team = false
+	for _, e in ipairs(u.fight.en or {}) do if e.d ~= nil and e.d.setup == 1 and not e.retreating then team = true end end
+	return team and (u.ed == nil or u.ed >= Brain.num("StealthSneakD", 18))
+end
 function B.stealth(W)
 	local prof = Brain.roles.profile()
 	if prof == nil or prof.stealth == nil or Brain.num("Stealth", 1) < 1 or type(Squad_IsInfiltrated) ~= "function" then return end
@@ -20643,7 +21406,7 @@ function B.stealth(W)
 				end
 			elseif c.goal and Brain.num("StealthGoal", 1) >= 1 and not B.stealth_goal(u, W, c, hidden) then
 				-- (step 14: no goal - no camo; B.stealth_goal below switched it off or left it off)
-			elseif (not c.still or not u.moving) and (not c.idle or u.fight == nil) and B.ready(u, c.k, c.cd) and B.has(u, c) and B.energy_ok(u, c)
+			elseif (not c.still or not u.moving) and (not c.idle or u.fight == nil or B.sneak_ok(u, c0, W)) and B.ready(u, c.k, c.cd) and B.has(u, c) and B.energy_ok(u, c)
 				and (not setup_rule or (stood >= Brain.num("StealthStillSecs", 7) and (near_en == nil or near_en > Brain.num("StealthSafeR", 75))))
 				and not hidden and (c.tries == nil or ht.n < c.tries or (Brain.now or 0) - ht.t >= Brain.num("StealthRestSecs", 300)) then
 				if c.tries ~= nil and ht.n >= c.tries then ht.n = 0 end
@@ -21517,7 +22280,9 @@ function T.trukk_target(W, riders, x, z, but)
 				for _, o in ipairs(W.en) do
 					if not o.retreating and d2(o.x, o.z, cx, cz) <= Brain.num("DocTrukkEnR", 25) then
 						table.insert(en, o)
-						if o.d ~= nil and (o.d.dV or 0) >= Brain.num("CompAvDps", 30) then av = av + 1 end
+						if o.d ~= nil and (o.d.dV or 0) >= Brain.num("CompAvDps", 30) then av = av + 1
+						-- (step 18: a gun that hurt a machine of ours before - 53_machines.ai A.av_ids: a lascannon is an upgrade, the data row does not show it - forbids the ride)
+						elseif A ~= nil and A.av_ids ~= nil and A.av_ids[o.id] ~= nil and Brain.num("VehAvBack", 1) >= 1 then av = av + 2 end
 					end
 				end
 				local under_base = (A ~= nil and A.base_of ~= nil and A.base_of(cx, cz, W, Brain.num("BaseKeepR", 55)) ~= nil)
@@ -21534,8 +22299,16 @@ function T.trukk_target(W, riders, x, z, but)
 		end
 	end
 	if best ~= nil then return best end
+	-- Step 18 (Malum fb 1614 items 2, 4: 'the trukk stands at the base / at a point instead of loading the boyz and taking the
+	-- victory points'; bench s18_bb_n38: 26 orders 'the trukk waits behind the fist - no ride on' against 15 rides in 14 games).
+	-- A VICTORY POINT that is not ours with nobody of the enemy seen near is a target as the generator farm is, and comes
+	-- before it: the riders step out and take it (the same capture order). Brain_DocTrukkVp=0: generator farms only.
+	-- (verifier 18: Brain_DocTrukkVp off by default - bench v18_rjmT: -531 tickets of margin on 14 starts, the trukk drove to free victory
+	-- points and was lost 5 of 9; Brain_DocTrukkVp=1: on)
+	for pass = 1, 2 do
+	if best ~= nil then break end
 	for _, p in ipairs(W.pts) do
-		if p.pow and p.enemy and ("gens|" .. p.key) ~= but and W.now - (done["gens|" .. p.key] or -1000) >= again then
+		if ((pass == 2 and p.pow and p.enemy) or (pass == 1 and p.vp and not p.ours and Brain.num("DocTrukkVp", 0) >= 1)) and ("gens|" .. p.key) ~= but and W.now - (done["gens|" .. p.key] or -1000) >= again then
 			local guarded, base = false, false
 			for _, e in ipairs(W.en) do if not e.retreating and d2(e.x, e.z, p.x, p.z) <= Brain.num("DocTrukkGenGuardR", 45) then guarded = true end end
 			for _, g in ipairs(W.ghosts or {}) do if d2(g.x, g.z, p.x, p.z) <= Brain.num("DocTrukkGenGuardR", 45) then guarded = true end end
@@ -21544,9 +22317,10 @@ function T.trukk_target(W, riders, x, z, but)
 			local ours_once = (Brain.plan ~= nil and Brain.plan.farms ~= nil and Brain.plan.farms[p.key] ~= nil and Brain.plan.farms[p.key].lost ~= nil)   -- (our own generators stand there: taken back, not burnt)
 			local d = d2(x, z, p.x, p.z)
 			if not guarded and not base and not ours_once and (bd == nil or d < bd) then
-				best, bd = { kind = "gens", x = p.x, z = p.z, key = "gens|" .. p.key, why = "the enemy's power point " .. p.key .. " with nobody of the enemy seen within " .. Brain.f0(Brain.num("DocTrukkGenGuardR", 45)) .. " m: its generators" }, d
+				best, bd = { kind = "gens", x = p.x, z = p.z, key = "gens|" .. p.key, why = (p.vp and "the victory point " or "the enemy's power point ") .. p.key .. " with nobody of the enemy seen within " .. Brain.f0(Brain.num("DocTrukkGenGuardR", 45)) .. (p.vp and " m: the riders take it" or " m: its generators") }, d
 			end
 		end
+	end
 	end
 	return best
 end
