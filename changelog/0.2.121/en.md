@@ -1,0 +1,1 @@
+- Instant retreat: the card is marked as dangerous - turn it on only if every player of the match has it, otherwise desync and the match is not rated.

@@ -4,6 +4,9 @@ Every version gets an entry here before it reaches `main`. CI then tags `vX.Y.Z`
 version (`X.Y.0`) it also publishes a GitHub Release with the DLLs and the entries since the previous `X.Y.0`.
 The version of the set lives only in `VERSION`; each DLL still writes its own version to its log.
 
+## 0.2.121 — 2026-11-19
+Instant retreat: the store card is marked as dangerous (owner 19.11) - the name "⚠ Instant retreat (desync!)" and the description starts with the warning: turn it on only if every player of the match has it, otherwise desync and the match is not rated. Texts only, the DLL is unchanged (retreatnow-4).
+
 ## 0.2.120 — 2026-11-19
 Instant retreat 4 (store retreatnow-4, experiment, off by default, Elite and vanilla; CHANGES THE SIMULATION - every player and
 observer of a match needs the same version: 4 does not sync with 3, replays recorded with 3 play only with 3). RetreatNow.dll 4:
