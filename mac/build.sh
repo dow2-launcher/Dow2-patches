@@ -9,7 +9,7 @@ cd "$(dirname "$0")"
 CC="${CC:-clang}"
 TARGET="${TARGET:--target x86_64-apple-macos10.9}"
 SDK="${SDKROOT:-$(xcrun --show-sdk-path 2>/dev/null || true)}"
-ADDONS="${ADDONS:-nohints reinforcefix herolabelfix overwatchonce ctrlattack lobbystats}"
+ADDONS="${ADDONS:-nohints reinforcefix herolabelfix overwatchonce ctrlattack lobbystats retreatnow}"
 rm -rf out && mkdir -p out
 for a in $ADDONS; do
   ini=$(ls "$a"/*.ini); name=$(basename "$ini" .ini)
