@@ -200,7 +200,8 @@ $(OUT)/MoveLoopFix.dll: moveloopfix/moveloopfix.c | $(OUT)
 
 # 19.11.2026: Instant retreat (experiment, CHANGES THE SIMULATION - every player of a match needs it): a retreat order ends a started
 # ability (can_retreat_interrupt for all), drops the squad's start hold, melee does not finish its swing first, and (4, 19.11) every
-# model gets its own straight order to the retreat point instead of a formation slot around the leader
+# model gets its own straight order to the retreat point instead of a formation slot around the leader; (5) no decision delay
+# before that order, a model in melee leaves it while its team packs up
 $(OUT)/RetreatNow.dll: retreatnow/retreatnow.c | $(OUT)
 	$(CC) $(CFLAGS) -shared -o $@ $< -static-libgcc
 

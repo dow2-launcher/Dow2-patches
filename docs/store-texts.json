@@ -897,18 +897,18 @@
       "de": "⚠ Instant retreat (desync!)"
     },
     "description": {
-      "en": "⚠ DANGER, do not turn on just like that: it changes the game. Only if EVERY player in the match has it on, otherwise desync and the match is not rated. Retreat at once: the squad drops everything (even a grenade throw), every model runs straight home without gathering. Replays made with it play only with it.",
-      "ru": "⚠ ОПАСНО, просто так не включать: меняет игру. Только если она включена у ВСЕХ игроков матча, иначе рассинхрон и матч не засчитается. Отступление сразу: отряд бросает всё (даже бросок гранаты), каждый боец бежит прямо на базу, не собираясь в кучу. Реплеи с ней смотрятся только с ней.",
-      "es": "⚠ PELIGRO, no activar sin más: cambia el juego. Solo si TODOS los jugadores de la partida lo tienen, si no hay desincronización y la partida no cuenta. Retirada inmediata: la escuadra suelta todo (incluso una granada) y cada uno corre directo a la base. Sus replays solo se ven con él.",
-      "fr": "⚠ DANGER, ne pas activer à la légère : change le jeu. Seulement si TOUS les joueurs de la partie l'ont, sinon désynchro et partie non comptée. Retraite immédiate : l'escouade lâche tout (même une grenade), chacun court droit à la base. Ses replays ne se lisent qu'avec.",
-      "de": "⚠ GEFAHR, nicht einfach einschalten: ändert das Spiel. Nur wenn ALLE Spieler im Match es an haben, sonst Desync und das Match zählt nicht. Sofortiger Rückzug: der Trupp lässt alles fallen (auch Granaten), jeder rennt direkt zur Basis. Replays damit laufen nur mit."
+      "en": "⚠ DANGER, do not turn on just like that: it changes the game. Only if EVERY player in the match has it on, otherwise desync and the match is not rated. Retreat at once: the squad drops everything (even a grenade throw), every model runs straight home without gathering. Replays made with it play only with it. Version 5: not together with version 4.",
+      "ru": "⚠ ОПАСНО, просто так не включать: меняет игру. Только если она включена у ВСЕХ игроков матча, иначе рассинхрон и матч не засчитается. Отступление сразу: отряд бросает всё (даже бросок гранаты), каждый боец бежит прямо на базу, не собираясь в кучу. Реплеи с ней смотрятся только с ней. Версия 5: не вместе с версией 4.",
+      "es": "⚠ PELIGRO, no activar sin más: cambia el juego. Solo si TODOS los jugadores de la partida lo tienen, si no hay desincronización y la partida no cuenta. Retirada inmediata: la escuadra suelta todo (incluso una granada) y cada uno corre directo a la base. Sus replays solo se ven con él. Versión 5: no junto con la 4.",
+      "fr": "⚠ DANGER, ne pas activer à la légère : change le jeu. Seulement si TOUS les joueurs de la partie l'ont, sinon désynchro et partie non comptée. Retraite immédiate : l'escouade lâche tout (même une grenade), chacun court droit à la base. Ses replays ne se lisent qu'avec. Version 5 : pas avec la version 4.",
+      "de": "⚠ GEFAHR, nicht einfach einschalten: ändert das Spiel. Nur wenn ALLE Spieler im Match es an haben, sonst Desync und das Match zählt nicht. Sofortiger Rückzug: der Trupp lässt alles fallen (auch Granaten), jeder rennt direkt zur Basis. Replays damit laufen nur mit. Version 5: nicht zusammen mit Version 4."
     },
     "danger": {
-      "en": "Changes the game: turn on only if EVERY player of the match has it on too. Otherwise the match desyncs and does not count.",
-      "ru": "Меняет игру: включать, только если у ВСЕХ игроков матча она тоже включена. Иначе рассинхрон и матч не засчитается.",
-      "es": "Cambia el juego: actívalo solo si TODOS los jugadores de la partida también lo tienen activado. Si no, la partida se desincroniza y no cuenta.",
-      "fr": "Modifie le jeu : à activer seulement si TOUS les joueurs de la partie l'ont aussi. Sinon la partie se désynchronise et ne compte pas.",
-      "de": "Ändert das Spiel: nur aktivieren, wenn ALLE Spieler des Matches es auch aktiviert haben. Sonst gibt es einen Desync und das Match zählt nicht."
+      "en": "Changes the game: turn on only if EVERY player of the match has it on too. Otherwise the match desyncs and does not count. Version 5 does not play together with version 4: everyone needs the same version.",
+      "ru": "Меняет игру: включать, только если у ВСЕХ игроков матча она тоже включена. Иначе рассинхрон и матч не засчитается. Версия 5 не играет вместе с версией 4: у всех должна быть одна версия.",
+      "es": "Cambia el juego: actívalo solo si TODOS los jugadores de la partida también lo tienen activado. Si no, la partida se desincroniza y no cuenta. La versión 5 no juega junto con la versión 4: todos necesitan la misma versión.",
+      "fr": "Modifie le jeu : à activer seulement si TOUS les joueurs de la partie l'ont aussi. Sinon la partie se désynchronise et ne compte pas. La version 5 ne joue pas avec la version 4 : tout le monde doit avoir la même version.",
+      "de": "Ändert das Spiel: nur aktivieren, wenn ALLE Spieler des Matches es auch aktiviert haben. Sonst gibt es einen Desync und das Match zählt nicht. Version 5 läuft nicht zusammen mit Version 4: alle brauchen dieselbe Version."
     }
   }
 }

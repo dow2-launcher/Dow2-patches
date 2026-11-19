@@ -16,7 +16,7 @@ protfix) lives in dow2-launcher/Dow2-mac-crossplay; without it in the game an ad
   lobbystats/          LobbyStats.dylib    store id lobbystats_mac    (Windows: lobbystats/, the lobby part; own_rating.h shared;
                                            HTTPS with the system's CFNetwork, http_mac.h; test_net.c = CI's network check)
   retreatnow/          RetreatNow.dylib    store id retreatnow_mac    (Windows: retreatnow/; CHANGES THE SIMULATION - every player of
-                                           the match needs RetreatNow 4, Windows or Mac; experiment, off by default)
+                                           the match needs RetreatNow 5, Windows or Mac; experiment, off by default)
   build.sh             builds them all into mac/out/ (CI: the "mac" job of .github/workflows/build.yml, artifact dow2-mac-addons)
 
 Each writes <Name>.log next to itself and reads <Name>.ini there ([<Name>] Enabled=1, as on Windows). Addresses are the 1.0.3

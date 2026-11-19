@@ -41,19 +41,31 @@
 //     type, issued through the engine's own per-entity move (0x00A41130 = WorldDoCommandEntity move) only when the engine's
 //     own check (0x00A409C0) says the model is not already moving there (2) and can path there (not 0). Each model takes its
 //     own path; a model the engine keeps from new orders (CombatExt lock, knocked down...) keeps it as before.
+//  5. (version 5) Decision delay: a model that swung a melee weapon, fired, packed up a weapon, was revived... gets a "decision
+//     delay" (PostureExt, EntityController::QI(0x11) +0x50: ticks left; MeleeWeapon::BeginSwing / ShootingWeapon::UpdateState /
+//     SpecialAttack / Revive set it). The engine's per-entity move (0x00A41130) silently drops every move order while it is not 0,
+//     so a model of a retreating squad stood still until it ran out - Malum's fb 1849 (c890fc73a2e8c72e ticks 18318, 20643: the
+//     apothecary left melee on the order's tick and stood 1.5 s). Before our move order to a model of a retreating squad the
+//     delay is cleared - what the engine itself does for an evacuation (StateEvacuate: PostureExt::ClearDecisionDelay). Not for a
+//     model in sync kill / jump / knockback / unconscious (entity states 12, 14, 15, 16).
+//  6. (version 5) Melee while the Retreat state still waits (weapon transition: a set-up team packs up before it moves): the
+//     squad gives its models no orders yet, a model in melee keeps fighting, and the pack-up waits for it - 7.5 s in
+//     c890fc73 tick 9625 (devastators). The attack state's "exit requested" test (0x0097C9F1, +4) also counts as set for an
+//     entity whose squad is retreating, so it leaves melee by the engine's own exit path (part 3 then skips the swing).
 // What the engine does not let a unit drop (knockback, sync kill, jump in flight, a weapon team packing up, garrison/transport,
 // a downed hero) stays as it is. Every patched place is checked byte for byte first; any other exe leaves the game untouched.
 #include <windows.h>
 #include <stdio.h>
 #include <string.h>
 
-#define VERSION   "4"
+#define VERSION   "5"
 #define G_WORLD   0x013356A4u      // World*, +0x178 sim tick
 #define CALL_HOLD 0x00A480EEu      // call 0x00A44F30
 #define FN_HOLD   0x00A44F30u      // SquadMovement::AssignRandomStartDelays(SquadMovement*) stdcall
 #define AB_UPD    0x00970654u      // cmp byte [edi+111Ch],0 / je 0097067A
 #define AB_EXIT   0x009707F5u      // cmp byte [esi+111Ch],al / je 0097085C
 #define ML_TEST   0x0097CA06u      // cmp byte [ebx+80h],0 / je 0097CA1A
+#define ME_TEST   0x0097C9F1u      // cmp byte [ebx+4],0 / je 0097CA36 (attack state: exit requested?)
 #define ST_RETREAT 10
 #define CALL_ISSUE 0x00A4236Cu     // call 0x00A449C0 (SquadMovement::IssueOrders, stdcall 1 arg) in SquadMovement::Update
 #define FN_ISSUE   0x00A449C0u
@@ -72,11 +84,13 @@ static void logmsg(const char *fmt, ...) {
 }
 #ifdef RN_RESEARCH
 int rn_from = 0;                   // research build: changes only from this sim tick on (RetreatNow.ini FromTick)
+int rn_from5 = 0;                  // research build: version 5's parts 5 and 6 only from this sim tick on (V5From)
 #else
 int rn_from = -0x7FFFFFFF;
+int rn_from5 = -0x7FFFFFFF;
 #endif
 DWORD rn_world = G_WORLD;
-volatile LONG rn_n_hold, rn_n_melee, rn_n_imm, rn_n_direct;
+volatile LONG rn_n_hold, rn_n_melee, rn_n_imm, rn_n_direct, rn_n_delay, rn_n_mexit;
 
 static int state_id(DWORD st) {    // BaseState vtable slot 1 = the state's id (mov eax,N / ret)
     if (!st) return -1;
@@ -89,6 +103,7 @@ static int squad_retreating(DWORD sq) {
     return ctl && state_id(*(DWORD *)(ctl + 0x1E8)) == ST_RETREAT;   // SquadController::QIStateActive
 }
 static int now_on(void) { DWORD w = *(DWORD *)G_WORLD; return !w || *(int *)(w + 0x178) >= rn_from; }
+static int v5_on(void) { DWORD w = *(DWORD *)G_WORLD; return !w || *(int *)(w + 0x178) >= rn_from5; }
 
 // 0. retreat order -> leave the current squad state now. Hooked: SimEngine.dll SquadStateProcessor::Update(SquadController*)
 //    (thiscall, ret 4; first 6 bytes moved into a trampoline). Read: SquadController +4 its WorldCommandQueue (+8 list head,
@@ -168,18 +183,28 @@ void __stdcall rn_move(DWORD ent, DWORD target, DWORD movetype);
 static DWORD (__attribute__((thiscall)) *g_squad_qi)(DWORD, unsigned);       // SquadController::QI (export)
 static DWORD *(__attribute__((thiscall)) *g_grp_begin)(DWORD), *(__attribute__((thiscall)) *g_grp_end)(DWORD);
 static DWORD g_issue_next = FN_ISSUE;
+static DWORD (__attribute__((thiscall)) *g_ent_qi)(DWORD, unsigned);       // EntityController::QI (export)
+// 5. the model's decision delay goes before our move order (0x00A41130 would drop the order while it is not 0)
+static void rn_clear_delay(DWORD ent) {
+    if (!v5_on()) return;
+    DWORD ec = *(DWORD *)(ent + 0x3C); if (!ec) return;
+    int es = state_id(*(DWORD *)(ec + 0x36C));                               // EntityController's active state
+    if (es == 12 || es == 14 || es == 15 || es == 16) return;                // sync kill / jump / knockback / unconscious
+    DWORD x = g_ent_qi(ec, 0x11);
+    if (x && *(DWORD *)(x + 0x50)) { *(DWORD *)(x + 0x50) = 0; InterlockedIncrement(&rn_n_delay); }
+}
 static int rn_issue_direct(DWORD sm) {
     DWORD leader = *(DWORD *)(sm + 0x42C), target = sm + 0x404, sq = *(DWORD *)(sm + 0x424);
     DWORD ext = g_squad_qi(*(DWORD *)(sq + 0x48), 10);                        // SquadMoveTypeExt: the current move type
     int mt = (*(DWORD *)(ext + 0x1C) == *(DWORD *)(ext + 0x20)) ? *(int *)(ext + 0x18) : **(int **)(ext + 0x1C);
     int r = rn_chk(leader, target);
     if (r == 0) return 0;                                                       // as the engine's direct branch: cannot path
-    if (r == 1) rn_move(leader, target, mt);
+    if (r == 1) { rn_clear_delay(leader); rn_move(leader, target, mt); }
     DWORD grp = sm + 0x28C; DWORD *b = g_grp_begin(grp), *e = g_grp_end(grp);
     for (; b != e; b++) {
         DWORD ent = *b;
         if (*(DWORD *)(ent + 0x2C) == *(DWORD *)(leader + 0x2C)) continue;
-        if (rn_chk(ent, target) == 1) { rn_move(ent, target, mt); InterlockedIncrement(&rn_n_direct); }
+        if (rn_chk(ent, target) == 1) { rn_clear_delay(ent); rn_move(ent, target, mt); InterlockedIncrement(&rn_n_direct); }
     }
     return 1;
 }
@@ -205,6 +230,14 @@ int __stdcall rn_melee_leave(DWORD state) {
     if (!squad_retreating(*(DWORD *)(ent + 0x38))) return 0;         // Entity+0x38 = its Squad
     InterlockedIncrement(&rn_n_melee); return 1;
 }
+// 6. melee: C side of the exit-requested cave
+int __stdcall rn_melee_exit(DWORD state) {
+    if (!now_on() || !v5_on()) return 0;
+    DWORD ent = *(DWORD *)(state + 0x34); if (!ent) return 0;
+    if (!squad_retreating(*(DWORD *)(ent + 0x38))) return 0;
+    InterlockedIncrement(&rn_n_mexit); return 1;
+}
+DWORD rn_me_exit = 0x0097C9F7, rn_me_stay = 0x0097CA36;
 DWORD rn_ab1_ok = 0x0097065D, rn_ab1_no = 0x0097067A, rn_ab2_ok = 0x009707FD, rn_ab2_no = 0x0097085C;
 DWORD rn_ml_leave = 0x0097CA1A, rn_ml_stay = 0x0097CA0F;
 __asm__(".intel_syntax noprefix\n"
@@ -227,8 +260,15 @@ __asm__(".intel_syntax noprefix\n"
         "jmp dword ptr [_rn_ml_stay]\n"
         "2:\npopfd\npopad\n"
         "1:\njmp dword ptr [_rn_ml_leave]\n"
+        // 6. melee: the attack state's exit-requested test
+        ".globl _rn_cave_me\n_rn_cave_me:\n"
+        "cmp byte ptr [ebx + 4], 0\njne 1f\n"
+        "pushad\npushfd\npush ebx\ncall _rn_melee_exit@4\ntest eax, eax\njnz 2f\npopfd\npopad\n"
+        "jmp dword ptr [_rn_me_stay]\n"
+        "2:\npopfd\npopad\n"
+        "1:\njmp dword ptr [_rn_me_exit]\n"
         ".att_syntax prefix\n");
-void rn_cave_ab1(void); void rn_cave_ab2(void); void rn_cave_ml(void);
+void rn_cave_ab1(void); void rn_cave_ab2(void); void rn_cave_ml(void); void rn_cave_me(void);
 
 static int same(DWORD at, const unsigned char *want, int n, const char *what) {
     if (IsBadReadPtr((void *)at, n)) { logmsg("NOT installed: no code at %08lX (%s) - not DOW2.exe 3.19?", at, what); return 0; }
@@ -248,10 +288,11 @@ static int install(void) {
     static const unsigned char W_AB1[9] = {0x80, 0xBF, 0x1C, 0x11, 0x00, 0x00, 0x00, 0x74, 0x1D};
     static const unsigned char W_AB2[8] = {0x38, 0x86, 0x1C, 0x11, 0x00, 0x00, 0x74, 0x5F};
     static const unsigned char W_ML[9] = {0x80, 0xBB, 0x80, 0x00, 0x00, 0x00, 0x00, 0x74, 0x0B};
+    static const unsigned char W_ME[6] = {0x80, 0x7B, 0x04, 0x00, 0x74, 0x3F};
     unsigned char *c = (unsigned char *)CALL_HOLD;
     // all or nothing: every place is checked before anything is written
     if (!same(AB_UPD, W_AB1, 9, "ability update test") || !same(AB_EXIT, W_AB2, 8, "ability exit test") ||
-        !same(ML_TEST, W_ML, 9, "melee stop test")) return 0;
+        !same(ML_TEST, W_ML, 9, "melee stop test") || !same(ME_TEST, W_ME, 6, "melee exit test")) return 0;
     if (IsBadReadPtr(c, 5) || c[0] != 0xE8) { logmsg("NOT installed: no call at %08X (start hold)", CALL_HOLD); return 0; }
     DWORD tgt = CALL_HOLD + 5 + *(LONG *)(c + 1);
     if (tgt != FN_HOLD && tgt >= 0x00400000u && tgt < 0x01400000u) { logmsg("NOT installed: the start hold call goes to %08lX", tgt); return 0; }
@@ -263,7 +304,8 @@ static int install(void) {
     g_squad_qi = se0 ? (void *)GetProcAddress(se0, "?QI@SquadController@@QAEPAVSquadExtension@@I@Z") : 0;
     g_grp_begin = se0 ? (void *)GetProcAddress(se0, "?begin@EntityGroupTemp@@QAEPAPAVEntity@@XZ") : 0;
     g_grp_end = se0 ? (void *)GetProcAddress(se0, "?end@EntityGroupTemp@@QAEPAPAVEntity@@XZ") : 0;
-    if (!g_squad_qi || !g_grp_begin || !g_grp_end) { logmsg("NOT installed: SimEngine.dll exports (QI, begin, end) not found"); return 0; }
+    g_ent_qi = se0 ? (void *)GetProcAddress(se0, "?QI@EntityController@@QAEPAVEntityExtension@@I@Z") : 0;
+    if (!g_squad_qi || !g_grp_begin || !g_grp_end || !g_ent_qi) { logmsg("NOT installed: SimEngine.dll exports (QI, begin, end) not found"); return 0; }
     static const unsigned char W_CHK[6] = {0x83, 0xEC, 0x08, 0x8B, 0x48, 0x3C}, W_HW[4] = {0x8B, 0x46, 0x38, 0x83}, W_MV[6] = {0x64, 0xA1, 0x00, 0x00, 0x00, 0x00};
     if (!same(FN_CHK, W_CHK, 6, "move check") || !same(FN_HWAY, W_HW, 4, "highway size") || !same(FN_MOVE, W_MV, 6, "entity move")) return 0;
     DWORD proc = hook_processor(); if (!proc) return 0;
@@ -275,6 +317,7 @@ static int install(void) {
     put_jmp(AB_UPD, 9, (void *)rn_cave_ab1);
     put_jmp(AB_EXIT, 8, (void *)rn_cave_ab2);
     put_jmp(ML_TEST, 9, (void *)rn_cave_ml);
+    put_jmp(ME_TEST, 6, (void *)rn_cave_me);
     DWORD old; VirtualProtect(c, 5, PAGE_EXECUTE_READWRITE, &old);
     *(LONG *)(c + 1) = (LONG)((DWORD)hold_wrap - (CALL_HOLD + 5));
     VirtualProtect(c, 5, old, &old); FlushInstructionCache(GetCurrentProcess(), c, 5);
@@ -282,13 +325,13 @@ static int install(void) {
 }
 // counts go to the log from a side thread, never from the game's thread
 static DWORD WINAPI watch(LPVOID _) {
-    (void)_; LONG h = 0, m = 0, i = 0, d = 0;
+    (void)_; LONG h = 0, m = 0, i = 0, d = 0, y = 0, x = 0;
     for (;;) {
         Sleep(30000);
-        if (rn_n_hold != h || rn_n_melee != m || rn_n_imm != i || rn_n_direct != d) {
-            h = rn_n_hold; m = rn_n_melee; i = rn_n_imm; d = rn_n_direct;
+        if (rn_n_hold != h || rn_n_melee != m || rn_n_imm != i || rn_n_direct != d || rn_n_delay != y || rn_n_mexit != x) {
+            h = rn_n_hold; m = rn_n_melee; i = rn_n_imm; d = rn_n_direct; y = rn_n_delay; x = rn_n_mexit;
             logmsg("so far in this game process: squad states left at once %ld, start holds dropped %ld, melee left at once %ld, "
-                   "models sent straight home %ld", i, h, m, d);
+                   "models sent straight home %ld, decision delays cleared %ld, melee left for a waiting retreat %ld", i, h, m, d, y, x);
         }
     }
     return 0;
@@ -305,6 +348,7 @@ BOOL WINAPI DllMain(HINSTANCE h, DWORD reason, LPVOID _) {
 #ifdef RN_RESEARCH
     char ini[MAX_PATH]; strcpy(ini, g_log); strcat(ini, "RetreatNow.ini");
     rn_from = GetPrivateProfileIntA("RetreatNow", "FromTick", 0, ini);
+    rn_from5 = GetPrivateProfileIntA("RetreatNow", "V5From", 0, ini);
 #endif
     strcat(g_log, "RetreatNow.log");
     if (already_loaded("RetreatNow")) { logmsg("another RetreatNow copy is already active in this game, this one stays idle"); return TRUE; }
@@ -313,7 +357,7 @@ BOOL WINAPI DllMain(HINSTANCE h, DWORD reason, LPVOID _) {
     logmsg("RetreatNow " VERSION " RESEARCH build: installed, active from sim tick %d", rn_from);
 #else
     logmsg("RetreatNow " VERSION ": installed - a retreat order is carried out at once (the squad state is left on the order's tick, "
-           "abilities interrupted, no start hold, melee left without finishing the swing, every model straight home). Changes the simulation: every player of the match needs it, or the match desyncs");
+           "abilities interrupted, no start hold, melee left without finishing the swing, every model straight home, no decision delay). Changes the simulation: every player of the match needs it, or the match desyncs");
 #endif
     HANDLE w = CreateThread(NULL, 0, watch, NULL, 0, NULL); if (w) CloseHandle(w);
     return TRUE;

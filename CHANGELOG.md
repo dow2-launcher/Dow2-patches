@@ -4,6 +4,23 @@ Every version gets an entry here before it reaches `main`. CI then tags `vX.Y.Z`
 version (`X.Y.0`) it also publishes a GitHub Release with the DLLs and the entries since the previous `X.Y.0`.
 The version of the set lives only in `VERSION`; each DLL still writes its own version to its log.
 
+## 0.2.123 — 2026-11-19
+Instant retreat 5 (store retreatnow-5, staging; Mac retreatnow_mac-5 prepared; CHANGES THE SIMULATION - version 5 does not sync
+with version 4, every player needs the same version; replays recorded with 4 play only with 4). Malum's fb 1849 ("the retreat
+triggers, but the models stand still for a second or 2-3"), his game c890fc73a2e8c72e (recorded with retreatnow-4, the harness
+reproduces it bit for bit with v4):
+- decision delay (new part 5): a model that swung a melee weapon, fired, packed up a weapon or was revived gets a PostureExt
+  "decision delay" (EntityController::QI(0x11) +0x50, ticks left) and the per-entity move 0x00A41130 drops every move order
+  while it is set; v4's part 3 let it leave melee at once but it then stood until the delay ran out (his marks at ticks 18356 /
+  20672: the apothecary stood 1.5 s both times). Before our move order to a model of a retreating squad the delay is cleared,
+  as the engine itself does for an evacuation (PostureExt::ClearDecisionDelay); not for sync kill / jump / knockback / downed.
+  Like for like (v4 up to the order's tick, then v5): the apothecary's first step 1.6 s -> 0.1 s at both marks.
+- melee while the retreat still waits (new part 6): a set-up team packs up first and gives its models no orders, a model in
+  melee kept fighting and the pack-up waited for it (tick 9625, devastators: 7.6 s -> 1.3 s, the pack-up itself). The attack
+  state's exit-requested test 0x0097C9F1 also counts as set for an entity of a retreating squad.
+- not changed (the engine's own): knockback (models fly and get up), weapon teams packing up (~1.2 s), a squad that cannot move.
+Mac: mac/retreatnow/ RetreatNow.dylib 5, the same two parts (decision delay ctl+0x30 -> +0x110 / +0x60, exit test 0x101bc81db).
+
 ## 0.2.122 — 2026-11-19
 Instant retreat: the store entry gets the `danger` warning (launcher 1.6.29 shows a red DANGER chip and asks before turning it on); store_texts.py carries `danger`. Texts only, retreatnow-4 unchanged.
 
