@@ -1,0 +1,1 @@
+- Instant retreat: in launcher 1.6.29 the card has a red DANGER chip and asks before turning on.

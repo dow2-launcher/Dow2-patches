@@ -5,7 +5,7 @@
   store_texts.py store <launcher.json>     shows what would change in that store file
   store_texts.py store <launcher.json> -w  writes it (then sign it as usual: elite-publish sign ...)
 
-Only category, order, name, description are touched; versions, files, options stay as they are.
+Only category, order, name, description (and danger, when set) are touched; versions, files, options stay as they are.
 """
 import json
 import sys
@@ -16,7 +16,7 @@ TEXTS = ROOT / "docs" / "store-texts.json"
 ADDONS = ROOT / "addons.json"
 LANGS = ("en", "ru", "es", "fr", "de")
 CATEGORIES = ("network", "interface", "gameplay", "fixes", "performance", "experiment", "debug")
-KEYS = ("category", "order", "name", "description")
+KEYS = ("category", "order", "name", "description", "danger")   # danger: launcher 1.6.29 (optional)
 
 
 def load_texts():
