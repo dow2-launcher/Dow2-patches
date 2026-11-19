@@ -1606,7 +1606,7 @@
     "order": 1140
   },
   "retreatnow": {
-    "version": "2",
+    "version": "3",
     "dll": "RetreatNow.dll",
     "default": false,
     "games": [

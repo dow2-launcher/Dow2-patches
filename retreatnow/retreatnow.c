@@ -30,25 +30,22 @@
 //     drawn: the random stream stays the same).
 //  3. Melee: an entity in melee told to stop (StateMelee+0x80 = the stop order, type 1) finishes its swing first
 //     (StateMelee attack state 0x0097C890: PauseMeleeWeaponsAfterSwing, then "+0x80 set and not all weapons paused -> stay").
-//     For an entity whose squad is retreating that test (0x0097CA06) takes the engine's own "leave now" branch.
-//     A special melee attack (StateMelee special state 0x0097D8E0) ignores exit requests and runs until its duration is over
-//     (start tick +0x74 + the attack's duration; 0x0097D9B5 "now < end -> stay"); for an entity of a retreating squad it ends
-//     now through the same "duration over" branch (return 3 -> the no-target state -> exit, the state's own cleanup on exit).
-//     Sync kills (another StateMelee state) are not touched.
+//     For an entity whose squad is retreating that test (0x0097CA06) takes the engine's own "leave now" branch. Sync kills and
+//     special attacks are other states of StateMelee and are not touched (RetreatNow 2 also ended a special attack early: the
+//     model left melee but still stood until the attack's time was over - no gain, so version 3 is version 1's logic again).
 // What the engine does not let a unit drop (knockback, sync kill, jump in flight, a weapon team packing up, garrison/transport,
 // a downed hero) stays as it is. Every patched place is checked byte for byte first; any other exe leaves the game untouched.
 #include <windows.h>
 #include <stdio.h>
 #include <string.h>
 
-#define VERSION   "2"
+#define VERSION   "3"
 #define G_WORLD   0x013356A4u      // World*, +0x178 sim tick
 #define CALL_HOLD 0x00A480EEu      // call 0x00A44F30
 #define FN_HOLD   0x00A44F30u      // SquadMovement::AssignRandomStartDelays(SquadMovement*) stdcall
 #define AB_UPD    0x00970654u      // cmp byte [edi+111Ch],0 / je 0097067A
 #define AB_EXIT   0x009707F5u      // cmp byte [esi+111Ch],al / je 0097085C
 #define ML_TEST   0x0097CA06u      // cmp byte [ebx+80h],0 / je 0097CA1A
-#define SP_TEST   0x0097D9B5u      // cmp [edx+178h],ecx / jl 0097DA54 (special attack: time not up -> stay)
 #define ST_RETREAT 10
 // squad states that may be left at once for a retreat: 0 idle 1 move 2 stop 3 combat 4 capture 5 ability 12 attack-move 13 patrol 14 melee
 #define IMM_STATES ((1u << 0) | (1u << 1) | (1u << 2) | (1u << 3) | (1u << 4) | (1u << 5) | (1u << 12) | (1u << 13) | (1u << 14))
@@ -66,7 +63,7 @@ int rn_from = 0;                   // research build: changes only from this sim
 int rn_from = -0x7FFFFFFF;
 #endif
 DWORD rn_world = G_WORLD;
-volatile LONG rn_n_hold, rn_n_melee, rn_n_imm, rn_n_special;
+volatile LONG rn_n_hold, rn_n_melee, rn_n_imm;
 
 static int state_id(DWORD st) {    // BaseState vtable slot 1 = the state's id (mov eax,N / ret)
     if (!st) return -1;
@@ -149,13 +146,7 @@ int __stdcall rn_melee_leave(DWORD state) {
     InterlockedIncrement(&rn_n_melee); return 1;
 }
 DWORD rn_ab1_ok = 0x0097065D, rn_ab1_no = 0x0097067A, rn_ab2_ok = 0x009707FD, rn_ab2_no = 0x0097085C;
-DWORD rn_ml_leave = 0x0097CA1A, rn_ml_stay = 0x0097CA0F, rn_sp_leave = 0x0097D9C1, rn_sp_stay = 0x0097DA54;
-int __stdcall rn_special_leave(DWORD state) {
-    if (!now_on()) return 0;
-    DWORD ent = *(DWORD *)(state + 0x34); if (!ent) return 0;
-    if (!squad_retreating(*(DWORD *)(ent + 0x38))) return 0;
-    InterlockedIncrement(&rn_n_special); return 1;
-}
+DWORD rn_ml_leave = 0x0097CA1A, rn_ml_stay = 0x0097CA0F;
 __asm__(".intel_syntax noprefix\n"
         // 1. ability, event "update": can_retreat_interrupt counts as set
         ".globl _rn_cave_ab1\n_rn_cave_ab1:\n"
@@ -176,15 +167,8 @@ __asm__(".intel_syntax noprefix\n"
         "jmp dword ptr [_rn_ml_stay]\n"
         "2:\npopfd\npopad\n"
         "1:\njmp dword ptr [_rn_ml_leave]\n"
-        // 3b. special melee attack: its time is up, or the squad retreats -> the "time is up" branch
-        ".globl _rn_cave_sp\n_rn_cave_sp:\n"
-        "cmp dword ptr [edx + 0x178], ecx\njge 1f\n"
-        "pushad\npushfd\npush esi\ncall _rn_special_leave@4\ntest eax, eax\njnz 2f\npopfd\npopad\n"
-        "jmp dword ptr [_rn_sp_stay]\n"
-        "2:\npopfd\npopad\n"
-        "1:\njmp dword ptr [_rn_sp_leave]\n"
         ".att_syntax prefix\n");
-void rn_cave_ab1(void); void rn_cave_ab2(void); void rn_cave_ml(void); void rn_cave_sp(void);
+void rn_cave_ab1(void); void rn_cave_ab2(void); void rn_cave_ml(void);
 
 static int same(DWORD at, const unsigned char *want, int n, const char *what) {
     if (IsBadReadPtr((void *)at, n)) { logmsg("NOT installed: no code at %08lX (%s) - not DOW2.exe 3.19?", at, what); return 0; }
@@ -204,11 +188,10 @@ static int install(void) {
     static const unsigned char W_AB1[9] = {0x80, 0xBF, 0x1C, 0x11, 0x00, 0x00, 0x00, 0x74, 0x1D};
     static const unsigned char W_AB2[8] = {0x38, 0x86, 0x1C, 0x11, 0x00, 0x00, 0x74, 0x5F};
     static const unsigned char W_ML[9] = {0x80, 0xBB, 0x80, 0x00, 0x00, 0x00, 0x00, 0x74, 0x0B};
-    static const unsigned char W_SP[12] = {0x39, 0x8A, 0x78, 0x01, 0x00, 0x00, 0x0F, 0x8C, 0x93, 0x00, 0x00, 0x00};
     unsigned char *c = (unsigned char *)CALL_HOLD;
     // all or nothing: every place is checked before anything is written
     if (!same(AB_UPD, W_AB1, 9, "ability update test") || !same(AB_EXIT, W_AB2, 8, "ability exit test") ||
-        !same(ML_TEST, W_ML, 9, "melee stop test") || !same(SP_TEST, W_SP, 12, "special attack time test")) return 0;
+        !same(ML_TEST, W_ML, 9, "melee stop test")) return 0;
     if (IsBadReadPtr(c, 5) || c[0] != 0xE8) { logmsg("NOT installed: no call at %08X (start hold)", CALL_HOLD); return 0; }
     DWORD tgt = CALL_HOLD + 5 + *(LONG *)(c + 1);
     if (tgt != FN_HOLD && tgt >= 0x00400000u && tgt < 0x01400000u) { logmsg("NOT installed: the start hold call goes to %08lX", tgt); return 0; }
@@ -218,7 +201,6 @@ static int install(void) {
     put_jmp(AB_UPD, 9, (void *)rn_cave_ab1);
     put_jmp(AB_EXIT, 8, (void *)rn_cave_ab2);
     put_jmp(ML_TEST, 9, (void *)rn_cave_ml);
-    put_jmp(SP_TEST, 12, (void *)rn_cave_sp);
     DWORD old; VirtualProtect(c, 5, PAGE_EXECUTE_READWRITE, &old);
     *(LONG *)(c + 1) = (LONG)((DWORD)hold_wrap - (CALL_HOLD + 5));
     VirtualProtect(c, 5, old, &old); FlushInstructionCache(GetCurrentProcess(), c, 5);
@@ -226,13 +208,12 @@ static int install(void) {
 }
 // counts go to the log from a side thread, never from the game's thread
 static DWORD WINAPI watch(LPVOID _) {
-    (void)_; LONG h = 0, m = 0, i = 0, sp = 0;
+    (void)_; LONG h = 0, m = 0, i = 0;
     for (;;) {
         Sleep(30000);
-        if (rn_n_hold != h || rn_n_melee != m || rn_n_imm != i || rn_n_special != sp) {
-            h = rn_n_hold; m = rn_n_melee; i = rn_n_imm; sp = rn_n_special;
-            logmsg("so far in this game process: squad states left at once %ld, start holds dropped %ld, melee left at once %ld, "
-                   "special attacks cut %ld", i, h, m, sp);
+        if (rn_n_hold != h || rn_n_melee != m || rn_n_imm != i) {
+            h = rn_n_hold; m = rn_n_melee; i = rn_n_imm;
+            logmsg("so far in this game process: squad states left at once %ld, start holds dropped %ld, melee left at once %ld", i, h, m);
         }
     }
     return 0;
@@ -257,7 +238,7 @@ BOOL WINAPI DllMain(HINSTANCE h, DWORD reason, LPVOID _) {
     logmsg("RetreatNow " VERSION " RESEARCH build: installed, active from sim tick %d", rn_from);
 #else
     logmsg("RetreatNow " VERSION ": installed - a retreat order is carried out at once (the squad state is left on the order's tick, "
-           "abilities interrupted, no start hold, melee left without finishing the swing or a special attack). Changes the simulation: every player of the match needs it, or the match desyncs");
+           "abilities interrupted, no start hold, melee left without finishing the swing). Changes the simulation: every player of the match needs it, or the match desyncs");
 #endif
     HANDLE w = CreateThread(NULL, 0, watch, NULL, 0, NULL); if (w) CloseHandle(w);
     return TRUE;

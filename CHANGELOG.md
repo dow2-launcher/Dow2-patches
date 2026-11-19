@@ -5,8 +5,8 @@ version (`X.Y.0`) it also publishes a GitHub Release with the DLLs and the entri
 The version of the set lives only in `VERSION`; each DLL still writes its own version to its log.
 
 ## 0.2.119 — 2026-11-19
-Instant retreat (new, store retreatnow-2, experiment order 1150, off by default, Elite and vanilla; CHANGES THE SIMULATION -
-every player and observer of a match needs it, replays recorded with it play only with it). RetreatNow.dll 2, retreatnow/:
+Instant retreat (new, store retreatnow-3, experiment order 1150, off by default, Elite and vanilla; CHANGES THE SIMULATION -
+every player and observer of a match needs it, replays recorded with it play only with it). RetreatNow.dll 3, retreatnow/:
 a retreat order is carried out at once. Four of the engine's own decisions:
 - the squad state is left on the order's tick: SimEngine.dll SquadStateProcessor::Update (export) is hooked; a retreat order
   (0x3D) at the queue front that the squad's Retreat state accepts, while the squad is idle/move/stop/combat/capture/ability/
@@ -19,9 +19,9 @@ a retreat order is carried out at once. Four of the engine's own decisions:
 - start hold: the 4 per-element holds drawn by SquadMovement::AssignRandomStartDelays 0x00A44F30 (secs_to_hold_at_move_start in
   ticks, 1-4 ticks measured, 0 under threat; drawn whenever the retreat (re)starts its move) are zeroed after the draw (call
   0x00A480EE wrapped; the random numbers are still drawn);
-- melee: StateMelee's attack state 0x0097C890 no longer finishes the swing after a stop (test +0x80 at 0x0097CA06), and its
-  special-attack state 0x0097D8E0 no longer runs out its duration (test 0x0097D9B5), for an entity whose squad is retreating
-  (the engine's own leave-now / duration-over branches). Sync kills untouched.
+- melee: StateMelee's attack state 0x0097C890 no longer finishes the swing after a stop (test +0x80 at 0x0097CA06) for an entity
+  whose squad is retreating (the engine's own leave-now branch). Sync kills and special attacks untouched (version 2, staging
+  only, also cut special attacks short: the model left melee but stood until the attack's time was over anyway - dropped).
 Only simulation state is read; all places checked byte for byte first (all or nothing); one copy per process (mutex).
 Tests: see the PR (fastbench per-tick CRC, like-for-like retreats, stand 1 live games).
 
