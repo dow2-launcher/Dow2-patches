@@ -1604,5 +1604,30 @@
     },
     "category": "experiment",
     "order": 1140
+  },
+  "retreatnow": {
+    "version": "1",
+    "dll": "RetreatNow.dll",
+    "default": false,
+    "games": [
+      "elite",
+      "vanilla"
+    ],
+    "category": "experiment",
+    "order": 1150,
+    "name": {
+      "en": "Instant retreat",
+      "ru": "Instant retreat",
+      "es": "Instant retreat",
+      "fr": "Instant retreat",
+      "de": "Instant retreat"
+    },
+    "description": {
+      "en": "Retreat at once: the squad drops what it is doing (even a grenade throw) and every model runs, no gathering first. Changes the game: everyone in the match needs it on, or the match desyncs; replays made with it play only with it.",
+      "ru": "Отступление сразу: отряд бросает всё (даже бросок гранаты), и каждый боец бежит, не собираясь. Меняет игру: нужно всем в матче, иначе рассинхрон; реплеи с ним смотрятся только с ним.",
+      "es": "Retirada inmediata: la escuadra suelta lo que hace (incluso una granada) y todos corren sin agruparse. Cambia el juego: todos en la partida deben tenerlo, o se desincroniza; sus replays solo se ven con él.",
+      "fr": "Retraite immédiate : l'escouade lâche tout (même une grenade) et chacun court sans se regrouper. Change le jeu : tous les joueurs doivent l'avoir, sinon désynchro ; ses replays ne se lisent qu'avec.",
+      "de": "Sofortiger Rückzug: der Trupp lässt alles fallen (auch einen Granatwurf), jeder rennt sofort los. Ändert das Spiel: alle im Match brauchen es, sonst Desync; Replays damit laufen nur mit."
+    }
   }
 }

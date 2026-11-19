@@ -4,6 +4,26 @@ Every version gets an entry here before it reaches `main`. CI then tags `vX.Y.Z`
 version (`X.Y.0`) it also publishes a GitHub Release with the DLLs and the entries since the previous `X.Y.0`.
 The version of the set lives only in `VERSION`; each DLL still writes its own version to its log.
 
+## 0.2.119 — 2026-11-19
+Instant retreat (new, store retreatnow-1, experiment order 1150, off by default, Elite and vanilla; CHANGES THE SIMULATION -
+every player and observer of a match needs it, replays recorded with it play only with it). RetreatNow.dll 1, retreatnow/:
+a retreat order is carried out at once. Four of the engine's own decisions:
+- the squad state is left on the order's tick: SimEngine.dll SquadStateProcessor::Update (export) is hooked; a retreat order
+  (0x3D) at the queue front that the squad's Retreat state accepts, while the squad is idle/move/stop/combat/capture/ability/
+  attack-move/patrol/melee, gets the engine's RequestExit() on that state and is then marked immediate (processing type 2), so
+  the processor ForceExit()s the state and enters Retreat at once (before: until the state ended by itself - an ability's
+  action, a knocked-back model getting up). Other states unchanged. For a squad whose active state is Retreat (10):
+- abilities: SquadStateAbility::UpdateAbility 0x009705A0 - both can_retreat_interrupt tests (bag+0x111C, 0x00970654 and
+  0x009707F5) pass, so a started ability ends when a retreat is queued (Relic's own path; e.g. the Kommandos' burna bomb and the
+  Guardians' plasma grenade have can_interrupt = can_retreat_interrupt = false: the order waited until the throw ended);
+- start hold: the 4 per-element holds drawn by SquadMovement::AssignRandomStartDelays 0x00A44F30 (secs_to_hold_at_move_start in
+  ticks, 1-4 ticks measured, 0 under threat; drawn whenever the retreat (re)starts its move) are zeroed after the draw (call
+  0x00A480EE wrapped; the random numbers are still drawn);
+- melee: StateMelee's attack state 0x0097C890 no longer finishes the swing after a stop (test +0x80 at 0x0097CA06) for an entity
+  whose squad is retreating (the engine's own leave-now branch). Sync kills / special attacks untouched.
+Only simulation state is read; all places checked byte for byte first (all or nothing); one copy per process (mutex).
+Tests: see the PR (fastbench per-tick CRC, like-for-like retreats, stand 1 live games).
+
 ## 0.2.118 — 2026-11-18
 New AI 40 (store newai-40, experiment, off by default, Elite only): step 19 of the brain (0.19) as the author left it - the verifier
 (VERIFY_19_RU.md) recommends no key change. EliteAI.dll 0.19 unchanged (eliteai.c as newai-39). Victory point games only. Every other

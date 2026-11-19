@@ -39,6 +39,7 @@ all: $(OUT)/UIScale.dll
 all: $(OUT)/MatchSpeed.dll
 all: $(OUT)/Marks.dll
 all: $(OUT)/MoveLoopFix.dll
+all: $(OUT)/RetreatNow.dll
 
 $(OUT):
 	mkdir -p $(OUT)
@@ -195,6 +196,11 @@ $(OUT)/Marks.dll: marks/marks.c common/gfxui.h common/topbar.h | $(OUT)
 # 13.11.2026: the game froze for good when a melee unit's last step landed exactly on its target's centre (the movement loop
 # 0x009141A0 never spent the tick's time); cut after 256 passes with no time spent
 $(OUT)/MoveLoopFix.dll: moveloopfix/moveloopfix.c | $(OUT)
+	$(CC) $(CFLAGS) -shared -o $@ $< -static-libgcc
+
+# 19.11.2026: Instant retreat (experiment, CHANGES THE SIMULATION - every player of a match needs it): a retreat order ends a started
+# ability (can_retreat_interrupt for all), drops the squad's start hold, and melee does not finish its swing first
+$(OUT)/RetreatNow.dll: retreatnow/retreatnow.c | $(OUT)
 	$(CC) $(CFLAGS) -shared -o $@ $< -static-libgcc
 
 # 03.11.2026: the game's own Continue after a custom game (host -> everyone back in the same room)

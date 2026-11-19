@@ -57,6 +57,7 @@ are client-side, and the other players in the match don't need them.
 | **Match speed** (new, staging, experiment) | Speed x2 / x4 and a pause for a match where the player is the only person: against computers, or computers against computers watched from an observer slot of a custom game (host it, move to an observer slot, put computers in the team slots). Two buttons at the top left (the replay panel's own pause and 1x / 2x / 4x buttons, where a replay has them; v2 - before by the minimap, where a click also moved the camera) and Ctrl+= / Ctrl+- / Ctrl+P. Nothing happens in a match with another person (player or observer). Elite and vanilla. | `matchspeed` → `matchspeed-3` (staging) | `matchspeed/` | no (one machine only; same simulation, a replay of it plays as usual) |
 | **Match marks** (new, staging, experiment) | For testers: a button (top left in a match, by the replay panel's pause in a replay) and Ctrl+M write the moment - game time, live / replay file, map, players, camera - into Marks.log (and EliteAI.log when the new AI plays), for the developers to find it in the AI log and replay it. Elite and vanilla. | `marks` → `marks-2` (staging) | `marks/` | no (only reads; writes a log) |
 | **Melee freeze fix** (new, staging, experiment) | The game could freeze for good (and then run out of memory) when a melee unit's last step put it exactly on the centre of the enemy unit it was going for: the game's movement loop for that unit never ended. MoveLoopFix cuts that loop after 256 rounds that used no time, the game carries on. Players and computers alike, very rare. Elite and vanilla. | `moveloopfix` → `moveloopfix-1` (staging) | `moveloopfix/` | no (changes the simulation only where a game without it hangs for ever) |
+| **Instant retreat** (new, staging, experiment; CHANGES THE SIMULATION) | A retreat order is carried out at once: the squad leaves what it is doing on the order's tick (not when that ends, nor when a knocked-back model gets up), a started ability (a grenade throw too) is dropped, melee ends without finishing the swing, the squad does not hold at the start of the move (also when it restarts after a death), every model runs. Every player of the match (and every observer) needs it on, otherwise the match desyncs at the first retreat it changes; replays recorded with it play only with it on, older ones only with it off. Knockback, sync kills, a jump in flight, a weapon team packing up, garrison/transport, a downed hero: as before. Elite and vanilla. | `retreatnow` → `retreatnow-1` (staging) | `retreatnow/` | **yes** - everyone in the match needs the same setting |
 | **Ctrl attack ground** (new, staging, experiment) | Hold Ctrl and LEFT-click the ground: the selected squads that can attack the ground (wraithguard, D-cannon, predators, tankbustas, zoanthropes...) fire at that point - the game's own Attack ground (core action G) without pressing G; Shift queues it. Ctrl + right-click is not touched (Reverse). Ctrl + left click on a unit, or with no squad that can: the game's own click. Elite and vanilla. | `ctrlattack` → `ctrlattack-2` (staging) | `ctrlattack/` | no (the game's own SCMD_Attack order, the same as G + click) |
 | **Observer lag fix (experimental)** | Spectating a live game no longer stutters. | `obsfix_r2` → `obsfix-1` | `obsfix/` | no |
 | **Join a lobby from the launcher (test)** | Experiment by siritos: a Join button on the launcher's Lobbies tab (and elite:// links of the ladder site); the game starts and walks into the room by itself. | `roomjoin` → `roomjoin-4` (staging; live: `roomjoin-3`) | `roomjoin/` | no |
@@ -360,6 +361,36 @@ moveloopfix/ - **MoveLoopFix.dll** (MoveLoopFix 1, "Melee freeze fix")
     Both places and the code around them (24 + 56 bytes) are checked first; each patch is one 8-byte cmpxchg8b write. Identical in
     vanilla and Elite (the same DOW2.exe 3.19.10320). No calls in the game's thread: a fire notes its tick, a side thread writes
     MoveLoopFix.log ("installed" / "NOT installed: why" / "fired (N): game m:ss (tick T)"). MoveLoopFix.ini [MoveLoopFix] Enabled.
+
+retreatnow/ - **RetreatNow.dll** (RetreatNow 1, "Instant retreat") - CHANGES THE SIMULATION (deterministically)
+    Four of the engine's own decisions are changed for a retreating squad (squad state id 10 = SquadStateRetreat):
+    0. SimEngine.dll SquadStateProcessor::Update (export, hooked at entry, 6 bytes moved to a trampoline; another DLL's jmp there
+       is chained) handles a normal order by RequestExit() on the active squad state and waits until that state ends by itself
+       (an ability until its action is over, any state while one model lies knocked back...); "immediate" orders (WorldCommand
+       +4 processing type 2) ForceExit() it on the same tick. A retreat (type 0x3D, processing 0) at the front of the queue is
+       turned into an immediate one when the Retreat state accepts it (its own AcceptCommand, vtable slot 6: can retreat, has a
+       retreat point) and the active state is idle/move/stop/combat/capture/ability/attack-move/patrol/melee (ids 0-5, 12-14);
+       the state first gets the engine's RequestExit() (so the exit handlers that look at the exit-requested flag +4 clean up as
+       on a normal exit). Load/unload/hold-unload, weapon set-up, jump, construction, hunker (downed hero), worship: unchanged.
+    1. SquadStateAbility::UpdateAbility 0x009705A0 lets a squad leave an ability whose action already started (+0x962) only when
+       the ability bag says can_interrupt (+0x111B) or can_retreat_interrupt (+0x111C) and a retreat (WorldCommand 0x3D) is queued.
+       Both +0x111C tests (0x00970654 event update, 0x009707F5 event request-exit) jump to a stub that takes the "set" branch, i.e.
+       every ability acts as if can_retreat_interrupt=true (Relic's own path; 62 abilities have it in the data). Before, e.g. the
+       Kommandos' burna bomb (can_interrupt and can_retreat_interrupt false) kept the retreat order queued until the throw ended.
+    2. SquadMovement::AssignRandomStartDelays 0x00A44F30 (called once, 0x00A480EE, from SquadMovement::SetTarget) draws a start
+       hold for each of the 4 formation elements (move type bag secs_to_hold_at_move_start_min/max in ticks - 1-4 ticks in the
+       games measured - x hold_at_move_start_modifier_when_threatened, 0 under threat) into SquadMovement+0x434..+0x440;
+       CalculateOrders 0x00A43C80 gives a holding element (not the lead one) no orders. The call is wrapped: for a squad
+       (SquadMovement+0x424) whose active state is Retreat the 4 holds are zeroed after the draw (the random numbers are still
+       drawn, the sim's random stream is unchanged). Small: up to 0.4 s per (re)start of the retreat's move, only when not threatened.
+    3. StateMelee's attack state 0x0097C890: exit requested + the order was a stop (+0x80) -> PauseMeleeWeaponsAfterSwing and stay
+       until the swing ends. The test 0x0097CA06 goes through a stub: for an entity (+0x34) whose squad (+0x38) is retreating the
+       engine's own "leave now" branch (0x0097CA1A) is taken. Sync kills / special attacks are other StateMelee states, untouched.
+    Only simulation state is read (squad controller active state, the bag flags the engine reads itself); no clock, no local
+    player, no UI, no arithmetic of our own (the engine's own checks decide) -> both players compute the same game. All five places (the SimEngine entry, 9+8+9 bytes and the call) are checked first,
+    all or nothing. One copy per process (mutex dow2patch_RetreatNow_<pid>). RetreatNow.log: installed / NOT installed: why /
+    counts. Built with -DRN_RESEARCH (bench only, not shipped): RetreatNow.ini FromTick=<tick> - active only from that sim tick.
+    Tests (fastbench + stand 1): see reports/retreatnow_1119 (README_RU.md in the media vault) and the PR.
 
 langswitch/ - **LangSwitch.dll** (LangSwitch 1)
     The game's message loop, Plat::Window::ProcessMessages (Platform.dll 0x1000B7B0), takes messages with PeekMessageA(&msg,
