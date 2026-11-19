@@ -4,7 +4,7 @@ Every version gets an entry here before it reaches `main`. CI then tags `vX.Y.Z`
 version (`X.Y.0`) it also publishes a GitHub Release with the DLLs and the entries since the previous `X.Y.0`.
 The version of the set lives only in `VERSION`; each DLL still writes its own version to its log.
 
-## 0.2.123 — 2026-11-19
+## 0.2.124 — 2026-11-19
 Instant retreat 5 (store retreatnow-5, staging; Mac retreatnow_mac-5 prepared; CHANGES THE SIMULATION - version 5 does not sync
 with version 4, every player needs the same version; replays recorded with 4 play only with 4). Malum's fb 1849 ("the retreat
 triggers, but the models stand still for a second or 2-3"), his game c890fc73a2e8c72e (recorded with retreatnow-4, the harness
@@ -20,6 +20,20 @@ reproduces it bit for bit with v4):
   state's exit-requested test 0x0097C9F1 also counts as set for an entity of a retreating squad.
 - not changed (the engine's own): knockback (models fly and get up), weapon teams packing up (~1.2 s), a squad that cannot move.
 Mac: mac/retreatnow/ RetreatNow.dylib 5, the same two parts (decision delay ctl+0x30 -> +0x110 / +0x60, exit test 0x101bc81db).
+
+## 0.2.123 — 2026-11-19
+Unit stats 0.6 (store unitstats-0.6, category as in the store - experiment, off by default, Elite and vanilla): the numbers in
+replays too (SirItos 19.11). UnitStats.dll 0.6, `[UnitStats] Replay=1` (default; launcher option "Also in replays"), `[Replay]`:
+- hovering a squad icon of the players' panels: the game's own tooltip (TooltipPanel, ui\movies\message_boxes\tooltip,
+  vtable 0x0110D8AC slot 4 0xAE35F0, chained) gets the two stat rows and the effects under its name / level; the frame is grown
+  with the game's TooltipFrame (m_client_* + UpdateFrame) and the movie placed again with the new size (+0x4C/+0x50, 0x682070),
+  so it stays on screen. The squad: the hovered widget (movie manager tooltip info +0x204, type 2) is one of
+  BindingObserverPlayerList's icon widgets (vtable 0x01119224 slot 6 0xB65020 chained for its pointer; binding + 0x128 +
+  (slot * 0x36 + icon) * 4), its squad id at +0x3C4, the squad among Player::GetSquads by +0x40 (SimEngine exports).
+- the selected squad (a click on an icon or a unit, as in a game): the same numbers on a dark backdrop right above the observer
+  panel (observer_player_list form vtable 0x01115D04 slot 4, chained; our clip in player_list_mc.unit_info_mc); with three
+  players a side the panel is at the top of the movie's stage, then the box stands left of it.
+- only in a replay (game type 0x800); live matches and the selection panel unchanged; read-only (no sim writes).
 
 ## 0.2.122 — 2026-11-19
 Instant retreat: the store entry gets the `danger` warning (launcher 1.6.29 shows a red DANGER chip and asks before turning it on); store_texts.py carries `danger`. Texts only, retreatnow-4 unchanged.

@@ -549,7 +549,7 @@
     "order": 15
   },
   "unitstats": {
-    "version": "0.5",
+    "version": "0.6",
     "dll": "UnitStats.dll",
     "default": false,
     "name": {
@@ -560,14 +560,30 @@
       "de": "Unit stats"
     },
     "description": {
-      "en": "Left of the Retreat button: the selected squad's ranged and melee DPS (counted as in the attribute editor), melee skill, armour, range, speed, sight and active effects. Only you see it.",
-      "ru": "Слева от кнопки отступления: DPS выбранного отряда в дальнем и ближнем бою (считается как в редакторе атрибутов), навык ближнего боя, броня, дальность, скорость, обзор и действующие эффекты. Видите только вы.",
-      "es": "A la izquierda del botón de retirada: DPS a distancia y cuerpo a cuerpo de la escuadra seleccionada (como en el editor de atributos), habilidad cuerpo a cuerpo, blindaje, alcance, velocidad, visión y efectos activos. Solo lo ves tú.",
-      "fr": "À gauche du bouton de retraite : DPS à distance et au corps à corps de l'escouade choisie (calculés comme dans l'éditeur d'attributs), mêlée, armure, portée, vitesse, vision et effets actifs. Vous seul le voyez.",
-      "de": "Links vom Rückzugsknopf: Fern- und Nahkampf-DPS des gewählten Trupps (gerechnet wie im Attribut-Editor), Nahkampfwert, Rüstung, Reichweite, Tempo, Sicht und aktive Effekte. Nur du siehst es."
+      "en": "Left of the Retreat button: the selected squad's ranged and melee DPS (counted as in the attribute editor), melee skill, armour, range, speed, sight and active effects. Only you see it. In replays: in the tooltip of a squad icon.",
+      "ru": "Слева от кнопки отступления: DPS выбранного отряда в дальнем и ближнем бою (считается как в редакторе атрибутов), навык ближнего боя, броня, дальность, скорость, обзор и действующие эффекты. Видите только вы. В реплеях — в подсказке иконки отряда.",
+      "es": "A la izquierda del botón de retirada: DPS a distancia y cuerpo a cuerpo de la escuadra seleccionada, habilidad cuerpo a cuerpo, blindaje, alcance, velocidad, visión y efectos activos. Solo lo ves tú. También en repeticiones.",
+      "fr": "À gauche du bouton de retraite : DPS à distance et au corps à corps de l'escouade choisie (comme l'éditeur d'attributs), mêlée, armure, portée, vitesse, vision et effets actifs. Vous seul le voyez. Aussi en replay (survol d'icône).",
+      "de": "Links vom Rückzugsknopf: Fern- und Nahkampf-DPS des gewählten Trupps (gerechnet wie im Attribut-Editor), Nahkampfwert, Rüstung, Reichweite, Tempo, Sicht und aktive Effekte. Nur du siehst es. In Replays: im Tooltip des Trupp-Symbols."
     },
     "conflicts": [
       "dow2-patches/UnitStats.dll"
+    ],
+    "options": [
+      {
+        "id": "replay",
+        "ini": "Elite_DLLs/UnitStats.ini",
+        "section": "UnitStats",
+        "key": "Replay",
+        "default": true,
+        "name": {
+          "en": "Also in replays (squad icon tooltips, selected squad)",
+          "ru": "Также в реплеях (подсказки иконок отрядов, выбранный отряд)",
+          "es": "También en repeticiones (iconos de escuadras, escuadra elegida)",
+          "fr": "Aussi dans les replays (icônes d'escouades, escouade choisie)",
+          "de": "Auch in Replays (Trupp-Symbole, gewählter Trupp)"
+        }
+      }
     ],
     "category": "interface",
     "order": 80

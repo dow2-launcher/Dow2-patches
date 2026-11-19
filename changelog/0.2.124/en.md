@@ -1,0 +1,1 @@
+- Instant retreat 5 (experiment, dangerous): models that had just swung a melee weapon, fired or packed up no longer stand still for a second or more before they run, and a weapon team in melee no longer waits for the fight to end before packing up. Version 5 does not play together with version 4 - everyone in the match needs the same version.

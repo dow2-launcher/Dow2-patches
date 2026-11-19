@@ -171,6 +171,7 @@ static void ini_icon(const wchar_t *key, const wchar_t *def, Icon *ic) {
     if (ic->scale < 20 || ic->scale > 400) ic->scale = 100;
     snprintf(ic->path, sizeof ic->path, "%s", s);
 }
+static void load_ini_replay(void);
 static void load_ini(void) {
     WIN32_FILE_ATTRIBUTE_DATA a;
     if (GetFileAttributesExW(g_ini, GetFileExInfoStandard, &a)) g_iniTime = a.ftLastWriteTime;
@@ -202,6 +203,7 @@ static void load_ini(void) {
         if (g_eicon[k].scale < 20 || g_eicon[k].scale > 400) g_eicon[k].scale = 100;
         snprintf(g_eicon[k].path, sizeof g_eicon[k].path, "%s", u);
     }
+    load_ini_replay();
 }
 
 // ---------- the engine (DOW2.exe 3.19, SimEngine.dll, Platform.dll) ----------
@@ -1062,26 +1064,26 @@ static void layout(void *mv) {
     }
     g_layoutDirty = 0;
 }
-static void set_stats(void *mv, const Stats *s) {
-    char v[32], sm[48];
+// the shown text of each item: the value and the small "(3x14.6)" after it (v6: shared by the panel and the replay boxes)
+static void stat_strings(const Stats *s, char v[NITEMS][64], char sm[NITEMS][48]) {
     int pm = g_perModel && s->models > 1;
-    if (s->nRanged) fmtdps(v, sizeof v, s->rdps); else snprintf(v, sizeof v, "-");
-    sm[0] = 0;
-    if (pm && s->sameR && s->rdps > 0) { char q[16]; fmtdps(q, sizeof q, s->rdps1); snprintf(sm, sizeof sm, "(%d\xC3\x97%s)", s->models, q); }
-    set_item_text(mv, I_RANGED, v, sm);
-    if (s->nMelee) fmtdps(v, sizeof v, s->mdps); else snprintf(v, sizeof v, "-");
-    sm[0] = 0;
-    if (pm && s->sameM && s->mdps > 0) { char q[16]; fmtdps(q, sizeof q, s->mdps1); snprintf(sm, sizeof sm, "(%d\xC3\x97%s)", s->models, q); }
-    set_item_text(mv, I_MELEE, v, sm);
-    if (s->skill >= 0) snprintf(v, sizeof v, "%d", s->skill); else snprintf(v, sizeof v, "-");
-    set_item_text(mv, I_SKILL, v, NULL);
-    set_item_text(mv, I_ARMOUR, s->armourShort[0] ? s->armourShort : "-", NULL);
-    if (s->nRanged) fmtnum(v, sizeof v, s->range); else snprintf(v, sizeof v, "-");
-    set_item_text(mv, I_RANGE, v, NULL);
-    fmtnum(v, sizeof v, s->speed); set_item_text(mv, I_SPEED, v, NULL);
-    fmtnum(v, sizeof v, s->sight); set_item_text(mv, I_SIGHT, v, NULL);
-    for (int k = 0; k < NITEMS; k++)
-        set_icon(mv, k, k == I_ARMOUR ? &g_armIcon[armour_class(armour_internal(s->armour))] : &g_icon[k]);
+    for (int k = 0; k < NITEMS; k++) { v[k][0] = 0; sm[k][0] = 0; }
+    if (s->nRanged) fmtdps(v[I_RANGED], 64, s->rdps); else snprintf(v[I_RANGED], 64, "-");
+    if (pm && s->sameR && s->rdps > 0) { char q[16]; fmtdps(q, sizeof q, s->rdps1); snprintf(sm[I_RANGED], 48, "(%d\xC3\x97%s)", s->models, q); }
+    if (s->nMelee) fmtdps(v[I_MELEE], 64, s->mdps); else snprintf(v[I_MELEE], 64, "-");
+    if (pm && s->sameM && s->mdps > 0) { char q[16]; fmtdps(q, sizeof q, s->mdps1); snprintf(sm[I_MELEE], 48, "(%d\xC3\x97%s)", s->models, q); }
+    if (s->skill >= 0) snprintf(v[I_SKILL], 64, "%d", s->skill); else snprintf(v[I_SKILL], 64, "-");
+    snprintf(v[I_ARMOUR], 64, "%s", s->armourShort[0] ? s->armourShort : "-");
+    if (s->nRanged) fmtnum(v[I_RANGE], 64, s->range); else snprintf(v[I_RANGE], 64, "-");
+    fmtnum(v[I_SPEED], 64, s->speed);
+    fmtnum(v[I_SIGHT], 64, s->sight);
+}
+static const Icon *item_icon(const Stats *s, int k) { return k == I_ARMOUR ? &g_armIcon[armour_class(armour_internal(s->armour))] : &g_icon[k]; }
+static void set_stats(void *mv, const Stats *s) {
+    char v[NITEMS][64], sm[NITEMS][48];
+    stat_strings(s, v, sm);
+    for (int k = 0; k < NITEMS; k++) set_item_text(mv, k, v[k], sm[k]);
+    for (int k = 0; k < NITEMS; k++) set_icon(mv, k, item_icon(s, k));
     if (g_layoutDirty) layout(mv);
 }
 // ---------- v3: the effects block, left of the stat rows: per effect an icon clip e<k> and a text f<k> (shadow g<k>) ----------
@@ -1175,7 +1177,7 @@ static const char *tag_tr(const char *t) {
     return t;
 }
 // the cell's text: the value (coloured by what it means for the squad), the tag and the seconds left in small type
-static void cell_text(Cell *c) {
+static void cell_text_fs(Cell *c, int efs) {   // v6: the font size given (the replay boxes have their own)
     const EffDef *d = &EFFDEF[c->def]; char v[32] = ""; float delta = 0;
     float m = c->mul, a = c->add; int addOnly = (m - 1 < 0.005f && 1 - m < 0.005f);
     switch (d->mode) {
@@ -1191,10 +1193,11 @@ static void cell_text(Cell *c) {
     const char *tag = d->mode == EM_ON || d->mode == EM_OFF ? "" : d->tag;
     char sm[48]; snprintf(sm, sizeof sm, "%s", tag_tr(tag));
     if (*sm) snprintf(c->html, sizeof c->html, "<font face=\"$NormalFont\" size=\"%d\" color=\"%s\">%s<font size=\"%d\" color=\"%s\"> %s</font></font>",
-                      g_efs, col, v, g_efs * 3 / 4, C_SMALL, sm);
-    else snprintf(c->html, sizeof c->html, "<font face=\"$NormalFont\" size=\"%d\" color=\"%s\">%s</font>", g_efs, col, v);
+                      efs, col, v, efs * 3 / 4, C_SMALL, sm);
+    else snprintf(c->html, sizeof c->html, "<font face=\"$NormalFont\" size=\"%d\" color=\"%s\">%s</font>", efs, col, v);
     snprintf(c->plain, sizeof c->plain, "%s %s%s%s", mod_name(d->cls, d->type), v, *sm ? " " : "", sm);
 }
+static void cell_text(Cell *c) { cell_text_fs(c, g_efs); }
 static int cell_cmp(const void *x, const void *y) {           // the biggest change first
     const Cell *a = x, *b = y;
     return a->score < b->score ? 1 : a->score > b->score ? -1 : a->def - b->def;
@@ -1387,6 +1390,384 @@ static void __thiscall hk_sp_upd(char *form, float dt) { g_frames++; AT("the gam
 static void *sim(const char *name) { HMODULE m = GetModuleHandleA("SimEngine.dll"); return m ? (void *)GetProcAddress(m, name) : NULL; }
 static void *plat(const char *name) { HMODULE m = GetModuleHandleA("Platform.dll"); return m ? (void *)GetProcAddress(m, name) : NULL; }
 static int code_is(DWORD at, const unsigned char *pro, int n) { return rd((void *)at, n) && !memcmp((void *)at, pro, n); }
+// ---------- v6 / 0.6 (19.11.2026, SirItos: "show them in the replay, maybe when you hover a unit, if there is a tooltip") ----------
+// A replay has no selection panel (its per-frame update never runs there); the replay HUD is the observer player list
+// (ui\movies\hud\observer_player_list, form vtable 0x01115D04 made in 0xB3C780; slot 4 = 0xB3DA00 as every HUD form),
+// filled by BindingObserverPlayerList (vtable 0x01119224, slot 6 = its update 0xB65020):
+//   * a row of squad icons per player: player_list_mc.slot0<s>.multi_select.mini_portrait0<i> - the binding's widgets at
+//     binding + 0x128 + (s * 0x36 + i) * 4 (UpdatePlayerSquads 0xB66FA0); each one's squad id is at widget + 0x3C4
+//     (= squad + 0x40), its tooltip (type 2: the squad's name, "Level N") at +0x254 / +0x25C;
+//   * player_list_mc.unit_info_mc above the right team: the SELECTED squad (UpdateSelectionAndPortrait 0xB66200, from the
+//     binding's selection container +0x64) - name, "Fire Support Infantry (infantry armor)", level, health. In a replay a
+//     click on an icon or a unit selects it as in a game (the same selection object the panel version reads).
+// Hovering an icon shows the game's tooltip (TooltipPanel, ui\movies\message_boxes\tooltip, vtable 0x0110D8AC made in
+// 0xAE2030, slot 4 OnUpdate 0xAE35F0): the movie manager's tooltip info *(0x01335088) + 0x2C has +0x208 the type and
+// +0x204 the hovered widget; type 2 -> the movie's ShowUpgrade (upgrade_mc: name_txt, brief_txt) every frame, then
+// g_tooltip_frame0 (a TooltipFrame) is sized to it and the panel (+0x4C/+0x50 the size read back from _level0.g_tooltip_*)
+// places the movie by the cursor (0x682070 -> OnUpdateViewport 0xAE3D70, kept on screen with that size).
+// What 0.6 adds, only in a replay (game type settings+0x118 has 0x800) and with [UnitStats] Replay=1:
+//   * the hovered icon's squad: our clip us_tt in upgrade_mc under the game's two lines (same icons and numbers as the
+//     panel, the effects below), the frame grown to hold it (m_client_* + UpdateFrame of the game's own TooltipFrame) and
+//     the movie placed again with the new size (+0x4C/+0x50, 0x682070) - after the game's own OnUpdate, every frame;
+//   * the selected squad: our clip us_box in unit_info_mc, right above that panel, on a dark backdrop.
+// Still read-only: the squad is found by id among the players' squads (Player::GetSquads, as the binding does), nothing is
+// written into the simulation (the tooltip panel's own size fields are UI state) - a replay keeps its sync.
+#define OBS_VT_UPD    0x01115D14u      // observer player list form (vtable 0x01115D04), slot 4
+#define OBS_UPD_FN    0x00B3DA00u
+#define OBS_BIND_UPD  0x0111923Cu      // BindingObserverPlayerList (vtable 0x01119224), slot 6
+#define OBS_BIND_FN   0x00B65020u
+#define TT_VT_UPD     0x0110D8BCu      // TooltipPanel (vtable 0x0110D8AC), slot 4 OnUpdate(float)
+#define TT_UPD_FN     0x00AE35F0u
+#define FN_VIEWPORT   0x00682070u      // the form's viewport placement, ECX = form (its OnUpdate ends with it, via 0xAE40E0)
+#define G_MOVIEMGR    0x01335088u      // +0x2C the tooltip info: +0x204 widget, +0x208 type
+#define G_SETTINGS    0x01335A78u      // +0x118 game type, 0x800 = playback (also LiveReplay)
+#define T_PLAYBACK    0x800
+static int g_replay = 1, g_rPanel = 1, g_rTip = 1, g_rSize = 18, g_rTipSize = 15, g_rBack = 55, g_rOffX = 0, g_rOffY = 0, g_rWidth = 520;
+static void load_ini_replay(void) {
+    g_replay = ini_int(L"Replay", 1, 0, 1);
+    g_rPanel = GetPrivateProfileIntW(L"Replay", L"Selected", 1, g_ini) != 0;
+    g_rTip = GetPrivateProfileIntW(L"Replay", L"Tooltip", 1, g_ini) != 0;
+    g_rSize = GetPrivateProfileIntW(L"Replay", L"FontSize", 18, g_ini); if (g_rSize < 8 || g_rSize > 40) g_rSize = 18;
+    g_rTipSize = GetPrivateProfileIntW(L"Replay", L"TooltipFontSize", 15, g_ini); if (g_rTipSize < 8 || g_rTipSize > 40) g_rTipSize = 15;
+    g_rBack = GetPrivateProfileIntW(L"Replay", L"Backdrop", 55, g_ini); if (g_rBack < 0 || g_rBack > 100) g_rBack = 55;
+    g_rOffX = GetPrivateProfileIntW(L"Replay", L"OffsetX", 0, g_ini); g_rOffY = GetPrivateProfileIntW(L"Replay", L"OffsetY", 0, g_ini);
+    g_rWidth = GetPrivateProfileIntW(L"Replay", L"Width", 520, g_ini); if (g_rWidth < 150 || g_rWidth > 2000) g_rWidth = 520;
+}
+static int is_replay(void) {
+    char *st = rd((void *)G_SETTINGS, 4) ? *(char **)G_SETTINGS : NULL;
+    return st && rd(st + 0x118, 4) && (*(DWORD *)(st + 0x118) & T_PLAYBACK);
+}
+static int gfx_getnum(void *mv, const char *path, double *out) {        // movie vtable +0x30 = GetVariable(GFxValue *, path)
+    GfxVal r; memset(&r, 0, sizeof r);
+    if (!(*(char (__thiscall **)(void *, GfxVal *, const char *))(*(char **)mv + 0x30))(mv, &r, path)) return 0;
+    if (r.type == GV_NUMBER) { *out = r.v.num; return 1; }
+    if (r.type == GV_BOOL) { *out = r.v.b; return 1; }
+    return 0;
+}
+static double invoke_num(void *mv, const char *m) {
+    GfxVal r; memset(&r, 0, sizeof r);
+    return gfx_invoke(mv, m, &r, NULL, 0) && r.type == GV_NUMBER ? r.v.num : -1;
+}
+
+// a box of ours in a movie: two rows of icon + number (as the panel) and the effects under them, laid out from its top left
+typedef struct {
+    const char *parent, *name, *what; int depth, back;       // the clip <parent>.<name>; back: a dark backdrop under it
+    char box[128]; void *mv; int fs, efs; double iconS, eIconS, lineH, w, h, bw, bh;
+    char txt[NITEMS][300]; char ipath[NITEMS][200]; int idone[NITEMS], isc[NITEMS];
+    char ctxt[MAXEFF][260]; char cpath[MAXEFF][200]; int cdone[MAXEFF], cgen[MAXEFF], csc[MAXEFF], ncell;
+    int dirty, shown; char *sq; DWORD calc; double x, y;
+} RBox;
+static RBox g_rbSel = { "_root.player_list_mc.unit_info_mc", "us_box", "the observer panel (selected squad)", 16110, 1 };
+static RBox g_rbTip = { "_root.upgrade_mc", "us_tt", "the tooltip (hovered squad icon)", 16110, 0 };
+static void rb_path(const RBox *b, char *o, size_t n, const char *fmt, int k) { char t[64]; snprintf(t, sizeof t, fmt, k); snprintf(o, n, "%s.%s", b->box, t); }
+static void rb_make(RBox *b, void *mv, int fs) {
+    char p[200], nm[16];
+    b->mv = mv; b->fs = fs; b->efs = fs * 5 / 6; b->iconS = 1.2 * fs; b->eIconS = 1.3 * b->efs; b->lineH = 1.3 * fs + 4;
+    snprintf(b->box, sizeof b->box, "%s.%s", b->parent, b->name);
+    snprintf(p, sizeof p, "%s.createEmptyMovieClip", b->parent);
+    GfxVal a[2] = { gv_str(b->name), gv_num(b->depth) }; invoke_n(mv, p, a, 2);
+    if (b->back) { rb_path(b, p, sizeof p, "createEmptyMovieClip", 0); GfxVal c[2] = { gv_str("bg"), gv_num(1) }; invoke_n(mv, p, c, 2); }
+    for (int k = 0; k < NITEMS + MAXEFF; k++) {
+        int e = k >= NITEMS, q = e ? k - NITEMS : k;
+        for (int s = 0; s < 2; s++) {                     // s = 0 the black shadow, 1 the text
+            snprintf(nm, sizeof nm, e ? (s ? "f%d" : "g%d") : (s ? "t%d" : "s%d"), q);
+            GfxVal c[6] = { gv_str(nm), gv_num((e ? 200 : 10) + 2 * q + s), gv_num(0), gv_num(0), gv_num(10), gv_num(b->lineH) };
+            rb_path(b, p, sizeof p, "createTextField", 0); invoke_n(mv, p, c, 6);
+            char f[32]; snprintf(f, sizeof f, "%s.html", nm); rb_path(b, p, sizeof p, f, 0); gfx_setvar(mv, p, gv_bool(1));
+            snprintf(f, sizeof f, "%s.selectable", nm); rb_path(b, p, sizeof p, f, 0); gfx_setvar(mv, p, gv_bool(0));
+            snprintf(f, sizeof f, "%s.autoSize", nm); rb_path(b, p, sizeof p, f, 0); gfx_setvar(mv, p, gv_str("left"));
+            if (!s) { snprintf(f, sizeof f, "%s._alpha", nm); rb_path(b, p, sizeof p, f, 0); gfx_setvar(mv, p, gv_num(75)); }
+            snprintf(f, sizeof f, "%s._visible", nm); rb_path(b, p, sizeof p, f, 0); gfx_setvar(mv, p, gv_bool(0));
+        }
+        snprintf(nm, sizeof nm, e ? "e%d" : "i%d", q);
+        GfxVal c[2] = { gv_str(nm), gv_num((e ? 300 : 100) + q) }; rb_path(b, p, sizeof p, "createEmptyMovieClip", 0); invoke_n(mv, p, c, 2);
+        char f[48]; snprintf(f, sizeof f, "%s.createEmptyMovieClip", nm); rb_path(b, p, sizeof p, f, 0);
+        GfxVal d[2] = { gv_str("h"), gv_num(1) }; invoke_n(mv, p, d, 2);
+        if (!e) { snprintf(f, sizeof f, "%s.h.createEmptyMovieClip", nm); rb_path(b, p, sizeof p, f, 0); GfxVal im[2] = { gv_str("img"), gv_num(1) }; invoke_n(mv, p, im, 2); }
+        snprintf(f, sizeof f, "%s._visible", nm); rb_path(b, p, sizeof p, f, 0); gfx_setvar(mv, p, gv_bool(0));
+    }
+    memset(b->txt, 0, sizeof b->txt); memset(b->ipath, 0, sizeof b->ipath); memset(b->idone, 0, sizeof b->idone);
+    memset(b->ctxt, 0, sizeof b->ctxt); memset(b->cpath, 0, sizeof b->cpath); memset(b->cdone, 0, sizeof b->cdone);
+    for (int k = 0; k < NITEMS; k++) b->isc[k] = 100;
+    for (int k = 0; k < MAXEFF; k++) b->csc[k] = 100;
+    b->ncell = 0; b->dirty = 1; b->shown = -1; b->sq = NULL; b->calc = 0; b->w = b->h = b->bw = b->bh = 0; b->x = b->y = -1e9;
+    snprintf(p, sizeof p, "%s.%s._visible", b->parent, b->name); gfx_setvar(mv, p, gv_bool(0)); b->shown = 0;
+    rb_path(b, p, sizeof p, "t0", 0);
+    logmsg("v6: clip %s in %s (movie %p): %s (font %d)", b->box, b->what, mv, gfx_exists(mv, p) ? "ok" : "NOT THERE", fs);
+}
+static void rb_show(RBox *b, int vis) {
+    if (!b->mv || vis == b->shown) return;
+    b->shown = vis; char p[160]; snprintf(p, sizeof p, "%s._visible", b->box); gfx_setvar(b->mv, p, gv_bool(vis));
+}
+static void rb_settext(RBox *b, int sh, int k, const char *html, int eff) {     // the text, and its black copy as the shadow
+    char p[200], s[300], f[24];
+    snprintf(f, sizeof f, eff ? "f%d.htmlText" : "t%d.htmlText", k); rb_path(b, p, sizeof p, f, 0); gfx_setvar(b->mv, p, gv_str(html));
+    char *o = s; const char *q = html;
+    while (*q && o < s + sizeof s - 8) {
+        if (*q == '#' && strlen(q) >= 7 && (!strncmp(q, C_GOOD, 7) || !strncmp(q, C_BAD, 7) || !strncmp(q, C_NEUTRAL, 7) || !strncmp(q, C_SMALL, 7))) { memcpy(o, "#000000", 7); o += 7; q += 7; }
+        else *o++ = *q++;
+    }
+    *o = 0; (void)sh;
+    snprintf(f, sizeof f, eff ? "g%d.htmlText" : "s%d.htmlText", k); rb_path(b, p, sizeof p, f, 0); gfx_setvar(b->mv, p, gv_str(s));
+}
+// an icon into <box>.i<k>.h.img (items) or a fresh <box>.e<k>.h.m<gen> (effects), scaled once its size is known
+static void rb_icon(RBox *b, int eff, int k, const Icon *ic) {
+    char p[200], f[48]; char *path = eff ? b->cpath[k] : b->ipath[k]; int *done = eff ? &b->cdone[k] : &b->idone[k];
+    double size = eff ? b->eIconS : b->iconS;
+    if (strcmp(path, ic->path)) {
+        snprintf(path, 200, "%s", ic->path); *done = 0;
+        if (eff) {
+            if (b->cgen[k]) { snprintf(f, sizeof f, "e%d.h.m%d.removeMovieClip", k, b->cgen[k]); rb_path(b, p, sizeof p, f, 0); invoke_n(b->mv, p, NULL, 0); }
+            b->cgen[k]++; snprintf(f, sizeof f, "e%d.h.createEmptyMovieClip", k); rb_path(b, p, sizeof p, f, 0);
+            char nm[16]; snprintf(nm, sizeof nm, "m%d", b->cgen[k]); GfxVal a[2] = { gv_str(nm), gv_num(b->cgen[k] % 1000 + 1) }; invoke_n(b->mv, p, a, 2);
+            snprintf(f, sizeof f, "e%d.h.m%d", k, b->cgen[k]); b->csc[k] = ic->scale;
+        } else { snprintf(f, sizeof f, "i%d.h.img", k); b->isc[k] = ic->scale; }
+        rb_path(b, p, sizeof p, f, 0);
+        GfxVal a[2] = { gv_str(p), gv_str(ic->path) }; invoke_n(b->mv, "Receive_LoadMovie", a, 2);
+        snprintf(f, sizeof f, eff ? "e%d._visible" : "i%d._visible", k); rb_path(b, p, sizeof p, f, 0); gfx_setvar(b->mv, p, gv_bool(0));
+        b->dirty = 1; return;
+    }
+    if (*done > 0) return;
+    if (eff) snprintf(f, sizeof f, "e%d.h.m%d", k, b->cgen[k]); else snprintf(f, sizeof f, "i%d.h.img", k);
+    rb_path(b, p, sizeof p, f, 0);
+    double w = clip_w(b->mv, p), h = clip_h(b->mv, p);
+    if (w <= 0 || h <= 0) { if (--*done == -12 && g_verbose) logmsg("v6: icon %s not there after 12 checks", ic->path); return; }
+    double sc = ic->scale * size / (w > h ? w : h);
+    snprintf(f, sizeof f, eff ? "e%d._xscale" : "i%d._xscale", k); rb_path(b, p, sizeof p, f, 0); gfx_setvar(b->mv, p, gv_num(sc));
+    snprintf(f, sizeof f, eff ? "e%d._yscale" : "i%d._yscale", k); rb_path(b, p, sizeof p, f, 0); gfx_setvar(b->mv, p, gv_num(sc));
+    *done = 1; b->dirty = 1;
+}
+static void rb_xy(RBox *b, const char *fmt, int k, double x, double y) {
+    char p[200], f[32];
+    snprintf(f, sizeof f, fmt, k); strcat(f, "._x"); rb_path(b, p, sizeof p, f, 0); gfx_setvar(b->mv, p, gv_num(x));
+    snprintf(f, sizeof f, fmt, k); strcat(f, "._y"); rb_path(b, p, sizeof p, f, 0); gfx_setvar(b->mv, p, gv_num(y));
+}
+static void rb_vis(RBox *b, const char *fmt, int k, int on) { char p[200], f[32]; snprintf(f, sizeof f, fmt, k); strcat(f, "._visible"); rb_path(b, p, sizeof p, f, 0); gfx_setvar(b->mv, p, gv_bool(on)); }
+static void rb_layout(RBox *b, double maxW) {
+    double pad = b->back ? 0.35 * b->fs : 0, gapI = 0.2 * b->fs, gapItem = 0.7 * b->fs, w = 0, y = pad;
+    char p[200];
+    for (int row = 0; row < 2; row++) {
+        double x = pad;
+        for (int k = 0; k < NITEMS; k++) {
+            if (ITEM_ROW[k] != row) continue;
+            double ov = b->iconS * (b->isc[k] - 100) / 200.0;
+            rb_xy(b, "i%d", k, x - ov, y + (b->lineH - b->iconS) / 2 + 1 - ov); rb_vis(b, "i%d", k, b->idone[k] > 0);
+            x += b->iconS + gapI;
+            rb_path(b, p, sizeof p, "t%d", k); double tw = clip_w(b->mv, p); if (tw < 0) tw = 3 * b->fs;
+            rb_xy(b, "t%d", k, x, y); rb_xy(b, "s%d", k, x + 1.2, y + 1.5); rb_vis(b, "t%d", k, 1); rb_vis(b, "s%d", k, 1);
+            x += tw + gapItem;
+        }
+        if (x - gapItem > w) w = x - gapItem;
+        y += b->lineH;
+    }
+    double limit = maxW > w ? maxW : w, elh = 1.3 * b->efs + 4, x = pad; int any = 0;
+    for (int k = 0; k < MAXEFF; k++) {
+        if (k >= b->ncell) { rb_vis(b, "e%d", k, 0); rb_vis(b, "f%d", k, 0); rb_vis(b, "g%d", k, 0); continue; }
+        rb_path(b, p, sizeof p, "f%d", k); double tw = clip_w(b->mv, p); if (tw < 0) tw = 3 * b->efs;
+        double cw = b->eIconS + gapI + tw;
+        if (any && x + cw > limit) { x = pad; y += elh; }
+        if (!any) any = 1;
+        double ov = b->eIconS * (b->csc[k] - 100) / 200.0;
+        rb_xy(b, "e%d", k, x - ov, y + (elh - b->eIconS) / 2 + 1 - ov); rb_vis(b, "e%d", k, b->cdone[k] > 0);
+        rb_xy(b, "f%d", k, x + b->eIconS + gapI, y); rb_xy(b, "g%d", k, x + b->eIconS + gapI + 1.1, y + 1.3);
+        rb_vis(b, "f%d", k, 1); rb_vis(b, "g%d", k, 1);
+        x += cw + 0.6 * b->efs; if (x - 0.6 * b->efs > w) w = x - 0.6 * b->efs;
+    }
+    if (any) y += elh;
+    b->w = w + pad; b->h = y + pad;
+    if (b->back && (b->bw != b->w || b->bh != b->h)) {          // the backdrop: a dark rectangle drawn in bg (the AS drawing API)
+        b->bw = b->w; b->bh = b->h;
+        rb_path(b, p, sizeof p, "bg.clear", 0); invoke_n(b->mv, p, NULL, 0);
+        GfxVal f[2] = { gv_num(0), gv_num(g_rBack) }; rb_path(b, p, sizeof p, "bg.beginFill", 0); invoke_n(b->mv, p, f, 2);
+        double pts[5][2] = { { 0, 0 }, { b->w, 0 }, { b->w, b->h }, { 0, b->h }, { 0, 0 } };
+        GfxVal m[2] = { gv_num(0), gv_num(0) }; rb_path(b, p, sizeof p, "bg.moveTo", 0); invoke_n(b->mv, p, m, 2);
+        for (int i = 1; i < 5; i++) { GfxVal l[2] = { gv_num(pts[i][0]), gv_num(pts[i][1]) }; rb_path(b, p, sizeof p, "bg.lineTo", 0); invoke_n(b->mv, p, l, 2); }
+        rb_path(b, p, sizeof p, "bg.endFill", 0); invoke_n(b->mv, p, NULL, 0);
+    }
+    b->dirty = 0;
+}
+static void rb_item_html(char *h, size_t n, int fs, const char *val, const char *small) {
+    if (small && *small) snprintf(h, n, "<font face=\"$NormalFont\" size=\"%d\" color=\"#FFFFFF\">%s<font size=\"%d\" color=\"#B8AE90\"> %s</font></font>", fs, val, fs * 3 / 4, small);
+    else snprintf(h, n, "<font face=\"$NormalFont\" size=\"%d\" color=\"#FFFFFF\">%s</font>", fs, val);
+}
+static void rb_set(RBox *b, const Stats *s, Cell *cells, int n) {
+    char v[NITEMS][64], sm[NITEMS][48], h[300];
+    stat_strings(s, v, sm);
+    for (int k = 0; k < NITEMS; k++) {
+        rb_item_html(h, sizeof h, b->fs, v[k], sm[k]);
+        if (strcmp(h, b->txt[k])) { strcpy(b->txt[k], h); rb_settext(b, 1, k, h, 0); b->dirty = 1; }
+        rb_icon(b, 0, k, item_icon(s, k));
+    }
+    if (n > MAXEFF) n = MAXEFF;
+    for (int k = 0; k < n; k++) {
+        cell_text_fs(&cells[k], b->efs);
+        if (strcmp(cells[k].html, b->ctxt[k])) { snprintf(b->ctxt[k], sizeof b->ctxt[k], "%s", cells[k].html); rb_settext(b, 1, k, cells[k].html, 1); b->dirty = 1; }
+        rb_icon(b, 1, k, &g_eicon[EFFDEF[cells[k].def].icon]);
+    }
+    for (int k = n; k < MAXEFF; k++) b->ctxt[k][0] = 0;
+    if (n != b->ncell) { b->ncell = n; b->dirty = 1; }
+}
+// the numbers of a squad into a box (four times a second, or at once for a new squad); 0 = nothing to show
+static int rb_fill(RBox *b, char *sq, DWORD now) {
+    if (sq == b->sq && now - b->calc < 250) return 1;
+    b->calc = now;
+    static Stats st; Job j = { sq, &st }; memset(&st, 0, sizeof st);
+    if (!run_guarded(squad_stats, &j, "the squad's numbers (replay)") || !st.models) return 0;
+    static Effs fx; Cell cells[MAXEFF]; int n = 0;
+    if (g_effOn && g_effMax > 0) {
+        memset(&fx, 0, sizeof fx); fx.squad = sq; EJob ej = { sq, &fx }; g_detailN = 0; g_detail[0] = 0;
+        if (run_guarded(eff_values, &ej, "the squad's effects (replay)")) n = compose(&fx, cells);
+    }
+    rb_set(b, &st, cells, n);
+    if (g_verbose && sq != b->sq)
+        logmsg("v6 %s: %s - ranged %.2f, melee %.2f, skill %d, %s, range %.1f, speed %.2f, sight %.1f, %d effects", b->what,
+               p_sqName ? p_sqName(sq) : "?", st.rdps, st.mdps, st.skill, st.armourShort, st.range, st.speed, st.sight, n);
+    b->sq = sq;
+    return 1;
+}
+
+// the squad behind a squad icon of the observer panel (the binding's widget array), found among the players' squads by id
+typedef unsigned (__thiscall *Cnt_t)(void *pm);
+typedef void *(__thiscall *At_t)(void *pm, unsigned i);
+static Cnt_t p_plCount; static At_t p_plAt; static P0_t p_plSquads, p_sqBegin, p_sqEnd;
+static volatile char *g_obsBind; static volatile DWORD g_obsBindT;
+typedef void (__thiscall *BindUpd_t)(char *binding, void *ctx);
+static BindUpd_t o_bindUpd;
+static void __thiscall hk_bind_upd(char *binding, void *ctx) { o_bindUpd(binding, ctx); g_obsBind = binding; g_obsBindT = GetTickCount(); }
+typedef struct { char *widget, *squad; int slot, icon; DWORD id; } WJob;
+static void widget_squad(void *arg) {
+    WJob *j = arg; j->squad = NULL; j->slot = -1;
+    char *b = (char *)g_obsBind; if (!b || GetTickCount() - g_obsBindT > 2000 || !rd(b + 0x128, 6 * 0xD8)) return;
+    for (int s = 0; s < 6 && j->slot < 0; s++) for (int i = 0; i < 7; i++)
+        if (*(char **)(b + 0x128 + (s * 0x36 + i) * 4) == j->widget) { j->slot = s; j->icon = i; break; }
+    if (j->slot < 0 || !rd(j->widget + 0x3C4, 4)) return;
+    DWORD id = *(DWORD *)(j->widget + 0x3C4); j->id = id; if (!id) return;
+    char *w = *(char **)G_WORLD; if (!rd(w + 0x194, 4)) return;
+    void *pm = w + 0x194; unsigned n = p_plCount(pm); if (n > 16) return;
+    for (unsigned i = 0; i < n; i++) {
+        char *pl = p_plAt(pm, i); if (!rd(pl, 4)) continue;
+        char *g = p_plSquads(pl); if (!rd(g, 4) || !rd(*(char **)g, 8)) continue;
+        char *c = g + ((int *)*(char **)g)[1];                       // the container is its virtual base (as 0xB66FA0)
+        char **sb = p_sqBegin(c), **se = p_sqEnd(c);
+        if (!sb || se < sb || se - sb > 512 || !rd(sb, (se - sb) * 4)) continue;
+        for (char **q = sb; q < se; q++) if (*q && rd(*q + 0x40, 4) && *(DWORD *)(*q + 0x40) == id) { j->squad = *q; return; }
+    }
+}
+
+// the selected squad: our box right above unit_info_mc
+typedef void (__thiscall *Upd_t2)(char *form, float dt);
+static Upd_t2 o_obsUpd, o_ttUpd;
+static DWORD g_obsCheck;
+static void frame_obs(char *form) {
+    if (!g_replay || !g_rPanel || g_dead || !g_enabled) { if (g_rbSel.mv && g_rbSel.mv == gfx_movie_of_form(form)) rb_show(&g_rbSel, 0); return; }
+    if (!is_replay()) return;
+    void *mv = gfx_movie_of_form(form); if (!mv) return;
+    DWORD now = GetTickCount();
+    char p[160]; snprintf(p, sizeof p, "player_list_mc.unit_info_mc.%s.t0", g_rbSel.name);
+    if (mv != g_rbSel.mv || g_rbSel.fs != g_rSize || (now - g_obsCheck > 1000 && (g_obsCheck = now, !gfx_exists(mv, p)))) {
+        if (!gfx_exists(mv, "player_list_mc.unit_info_mc")) return;
+        g_obsCheck = now; rb_make(&g_rbSel, mv, g_rSize);
+    }
+    Sel s; memset(&s, 0, sizeof s);
+    if (!run_guarded(get_selection, &s, "the selection (replay)")) return;
+    if (s.n == -1) return;
+    if (s.n != 1) { rb_show(&g_rbSel, 0); g_rbSel.sq = NULL; return; }
+    if (!rb_fill(&g_rbSel, s.squad, now)) { rb_show(&g_rbSel, 0); return; }
+    if (g_rbSel.dirty) rb_layout(&g_rbSel, g_rWidth);
+    // unit_info_mc's own frame is 560 x 144 from 0,0. Above it when the movie has room there; with 3 players a side the panel
+    // is at the top of the movie's stage (player_list_mc frame 4, unit_info_mc at y -234 under player_list_mc at 234.65) and
+    // the movie draws nothing outside its stage - then left of it, top aligned (the stage is empty there, over the left team)
+    static DWORD posT; static double top = 1e9;
+    if (now - posT > 500) {
+        posT = now; double py = 0, uy = 0;
+        if (gfx_getnum(mv, "_root.player_list_mc._y", &py) && gfx_getnum(mv, "_root.player_list_mc.unit_info_mc._y", &uy)) top = py + uy;
+    }
+    double x = g_rOffX, y = -(g_rbSel.h + 6) + g_rOffY;
+    if (top + y < 0) { x = -(g_rbSel.w + 6) + g_rOffX; y = g_rOffY; }
+    if (x != g_rbSel.x || y != g_rbSel.y) {
+        g_rbSel.x = x; g_rbSel.y = y;
+        snprintf(p, sizeof p, "%s._x", g_rbSel.box); gfx_setvar(mv, p, gv_num(x));
+        snprintf(p, sizeof p, "%s._y", g_rbSel.box); gfx_setvar(mv, p, gv_num(y));
+    }
+    rb_show(&g_rbSel, 1);
+    static char *dbgSq;
+    if (g_verbose && dbgSq != s.squad) {                             // where the box is (the panel moves with the number of players)
+        dbgSq = s.squad; double v[8] = { 0 };
+        static const char *K[8] = { "._visible", "._x", "._y", "._width", "._height", "", "", "" };
+        for (int i = 0; i < 5; i++) { snprintf(p, sizeof p, "%s%s", g_rbSel.box, K[i]); gfx_getnum(mv, p, &v[i]); }
+        gfx_getnum(mv, "_root.player_list_mc.unit_info_mc._y", &v[5]); gfx_getnum(mv, "_root.player_list_mc.unit_info_mc._visible", &v[6]);
+        gfx_getnum(mv, "_root.player_list_mc._currentframe", &v[7]);
+        logmsg("v6 box: visible %g at %g,%g size %gx%g; unit_info_mc y %g visible %g; player_list_mc frame %g", v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7]);
+    }
+}
+static void __thiscall hk_obs_upd(char *form, float dt) { g_frames++; o_obsUpd(form, dt); AT("ours (replay panel)"); frame_obs(form); AT("idle"); }
+
+// the hovered squad icon: our box in the game's tooltip, under its two lines, the frame grown to hold it
+typedef void (__thiscall *Vp_t)(char *form);
+static void frame_tt(char *form) {
+    void *mv = gfx_movie_of_form(form); if (!mv) return;
+    if (!g_replay || !g_rTip || g_dead || !g_enabled) { if (g_rbTip.mv == mv) rb_show(&g_rbTip, 0); return; }
+    char *mm = rd((void *)G_MOVIEMGR, 4) ? *(char **)G_MOVIEMGR : NULL;
+    char *info = mm && rd(mm + 0x2C, 4) ? *(char **)(mm + 0x2C) : NULL;
+    WJob j; memset(&j, 0, sizeof j);
+    if (info && rd(info + 0x204, 8) && *(int *)(info + 0x208) == 2 && (j.widget = *(char **)(info + 0x204)) && g_obsBind && is_replay())
+        if (!run_guarded(widget_squad, &j, "the hovered squad icon")) j.squad = NULL;
+    double up = 0;
+    if (j.squad && (!gfx_getnum(mv, "_root.upgrade_mc._visible", &up) || !up)) j.squad = NULL;   // the game shows no tooltip now
+    if (!j.squad) { if (g_rbTip.mv == mv) rb_show(&g_rbTip, 0); g_rbTip.sq = NULL; return; }
+    DWORD now = GetTickCount();
+    char p[160]; snprintf(p, sizeof p, "upgrade_mc.%s.t0", g_rbTip.name);
+    if (mv != g_rbTip.mv || g_rbTip.fs != g_rTipSize || !gfx_exists(mv, p)) {
+        if (!gfx_exists(mv, "upgrade_mc.name_txt")) return;
+        rb_make(&g_rbTip, mv, g_rTipSize);
+    }
+    char *was = g_rbTip.sq;
+    if (!rb_fill(&g_rbTip, j.squad, now)) { rb_show(&g_rbTip, 0); return; }
+    if (g_verbose && was != j.squad) logmsg("v6 tooltip: icon %d of slot %d, squad id %lu", j.icon, j.slot, j.id);
+    // the game's lines as UpdateUpgrade laid them out this frame: name, brief, description one under the other
+    static const char *LINES[3] = { "_root.upgrade_mc.name_txt", "_root.upgrade_mc.brief_txt", "_root.upgrade_mc.description_txt" };
+    double y0 = 0, w0 = 0;
+    for (int i = 0; i < 3; i++) {
+        double vis = 0; snprintf(p, sizeof p, "%s._visible", LINES[i]);
+        if (!gfx_getnum(mv, p, &vis) || !vis) continue;
+        double h = clip_h(mv, LINES[i]), w = clip_w(mv, LINES[i]);
+        if (h > 0) y0 += h; if (w > w0) w0 = w;
+    }
+    if (g_rbTip.dirty) rb_layout(&g_rbTip, w0 > 200 ? w0 : 200);
+    double x = 2, y = y0 + 4;
+    if (x != g_rbTip.x || y != g_rbTip.y) {
+        g_rbTip.x = x; g_rbTip.y = y;
+        snprintf(p, sizeof p, "%s._x", g_rbTip.box); gfx_setvar(mv, p, gv_num(x));
+        snprintf(p, sizeof p, "%s._y", g_rbTip.box); gfx_setvar(mv, p, gv_num(y));
+    }
+    rb_show(&g_rbTip, 1);
+    double W = g_rbTip.w + 4 > w0 ? g_rbTip.w + 4 : w0, H = y + g_rbTip.h;
+    gfx_setvar(mv, "_root.g_tooltip_frame0.m_client_width", gv_num(floor(W)));
+    gfx_setvar(mv, "_root.g_tooltip_frame0.m_client_height", gv_num(floor(H)));
+    invoke_n(mv, "_root.g_tooltip_frame0.UpdateFrame", NULL, 0);
+    double fw = invoke_num(mv, "_root.g_tooltip_frame0.GetWidth"), fh = invoke_num(mv, "_root.g_tooltip_frame0.GetHeight");
+    if (fw <= 0 || fh <= 0) return;
+    gfx_setvar(mv, "_level0.g_tooltip_width", gv_num(fw)); gfx_setvar(mv, "_level0.g_tooltip_height", gv_num(fh));
+    if (rd(form + 0x4C, 8)) {                                  // the panel's size of the tooltip, then placed again by it
+        *(int *)(form + 0x4C) = (int)fw; *(int *)(form + 0x50) = (int)fh;
+        ((Vp_t)FN_VIEWPORT)(form);
+    }
+}
+static void __thiscall hk_tt_upd(char *form, float dt) { o_ttUpd(form, dt); AT("ours (replay tooltip)"); frame_tt(form); AT("idle"); }
+static void hook_replay(void) {
+    p_plCount  = (Cnt_t)sim("?GetPlayerCount@PlayerManager@@QBEIXZ");
+    p_plAt     = (At_t)sim("?GetPlayerAt@PlayerManager@@QAEPAVPlayer@@I@Z");
+    p_plSquads = (P0_t)sim("?GetSquads@Player@@QBEABVSquadGroupTemp@@XZ");
+    p_sqBegin  = (P0_t)sim("?begin@?$ObservableContainer@PBVSquad@@$00@ast@@QAEPAPBVSquad@@XZ");
+    p_sqEnd    = (P0_t)sim("?end@?$ObservableContainer@PBVSquad@@$00@ast@@QAEPAPBVSquad@@XZ");
+    int sq = p_plCount && p_plAt && p_plSquads && p_sqBegin && p_sqEnd;
+    int a = gfx_hook_slot(OBS_VT_UPD, OBS_UPD_FN, (void *)hk_obs_upd, (void **)&o_obsUpd);
+    int b = sq && gfx_hook_slot(OBS_BIND_UPD, OBS_BIND_FN, (void *)hk_bind_upd, (void **)&o_bindUpd);
+    int c = b && code_is(FN_VIEWPORT, (const unsigned char *)"\x6A\xFF\x68", 3) && gfx_hook_slot(TT_VT_UPD, TT_UPD_FN, (void *)hk_tt_upd, (void **)&o_ttUpd);
+    logmsg("v6 replays (Replay=%d): selected squad over the observer panel %s, squad icons %s, tooltip %s", g_replay,
+           a ? "hooked" : "NOT as in 3.19", b ? "hooked" : sq ? "NOT as in 3.19" : "(SimEngine exports missing)", c ? "hooked" : "NOT hooked");
+}
+
 static int resolve(void) {
     p_qi      = (QI_t)sim("?QI@EntityController@@QAEPAVEntityExtension@@I@Z");
     p_allEnts = (P0_t)sim("?GetAllEntities@Squad@@QAEABVEntityGroupTemp@@XZ");
@@ -1421,6 +1802,7 @@ static DWORD WINAPI worker(LPVOID _) {
     if (gfx_hook_slot(SP_VT_UPD, SP_UPD_FN, (void *)hk_sp_upd, (void **)&o_spUpd))
         logmsg("hooked the selection panel's per-frame update%s", (DWORD)o_spUpd != SP_UPD_FN ? " (after another add-on)" : "");
     else logmsg("selection panel form not as in DOW2.exe 3.19 - no numbers");
+    hook_replay();
     return 0;
 }
 BOOL WINAPI DllMain(HINSTANCE h, DWORD reason, LPVOID _) {
@@ -1436,7 +1818,7 @@ BOOL WINAPI DllMain(HINSTANCE h, DWORD reason, LPVOID _) {
         if (GetFileAttributesExW(g_log, GetFileExInfoStandard, &a) && (a.nFileSizeHigh || a.nFileSizeLow > 2u << 20)) DeleteFileW(g_log);
     }
     load_ini();
-    logmsg("UnitStats 0.5 (DPS as the attribute editor counts it%s; selected squad's DPS / melee skill / armour / range / speed / sight and its active effects with the game's icons left of Retreat, in the game's own selection panel movie)", g_showEngine ? "; ShowEngineCycle=1: the engine's real cycle shown instead" : "");
+    logmsg("UnitStats 0.6 (DPS as the attribute editor counts it%s; selected squad's DPS / melee skill / armour / range / speed / sight and its active effects with the game's icons left of Retreat, in the game's own selection panel movie; in a replay: the hovered squad icon's tooltip and the selected squad over the observer panel)", g_showEngine ? "; ShowEngineCycle=1: the engine's real cycle shown instead" : "");
     if (!g_enabled) { logmsg("disabled in UnitStats.ini"); return TRUE; }
     s2t_install();
     CloseHandle(CreateThread(NULL, 0, worker, NULL, 0, NULL));
