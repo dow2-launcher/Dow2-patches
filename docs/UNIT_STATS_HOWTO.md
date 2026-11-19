@@ -18,7 +18,11 @@ weapon's real firing cycle (the engine's weapon state machine, checked against t
 the armour type as icon + short name in the game's language, the effects in three compact rows when two do not hold
 them. Section "v4" at the end; the old formula below is now only logged as "tooltip".
 
-Status (0.5, 07.11.2026): **an add-on of the launcher store** - id `unitstats`, store version `unitstats-0.5`, category
+v6 / 0.6 (19.11.2026, SirItos: "show them in the replay, maybe as extra info when you hover a unit, if there's already
+some tooltip there"): in a replay the numbers are in the game's tooltip of a squad icon of the players' panels, and the
+selected squad's numbers stand right above the observer panel. Section "v6" at the end.
+
+Status (0.6, 19.11.2026; 0.5 since 07.11.2026): **an add-on of the launcher store** - id `unitstats`, store version `unitstats-0.6`, category
 experiment, off by default (addons.json, docs/store-texts.json). `make build/UnitStats.dll` (in `make all`). Code:
 `unitstats/unitstats.c`. The DPS shown is the attribute editor's (section v5 at the end); 0.1-0.4 were the experiment
 of the archive branch `archive/unitstats-experiment`. No ini is shipped: every setting has its default in the code;
@@ -553,3 +557,69 @@ times noted there too (the commander's bolt pistol, wind_down 0.49: 13.29, the t
 grantovich's own shotgun (Hardened Veterans, newer than the stand's Elite data) has the pathfinder carbine's shape:
 180 / (9 x 2.0 + 3) = 8.57 with 0.5 (0.4: 8.3, 0.3: 10.3).
 
+## v6 - replays (0.6, 19.11.2026)
+
+SirItos: "We have the unit stats DLL - let's try to show them in the replay, maybe as extra info when you hover a unit, if
+there's already some tooltip there." Option `[UnitStats] Replay=1` (default; the launcher's option "Also in replays"),
+settings in `[Replay]`. Only in a replay (game type settings `*(0x01335A78) + 0x118` has 0x800 - also LiveReplay's games);
+live matches and the selection panel are as in 0.5.
+
+### What a replay shows (DOW2.exe 3.19)
+
+A replay has no selection panel: its form's per-frame update (0xB3DA00 through vtable 0x01115490) never runs, so 0.5 showed
+nothing. The replay HUD at the bottom is **`ui\movies\hud\observer_player_list`** (000_data.sga, Elite does not override it;
+form made in 0xB3C780, vtable `0x01115D04`, slot 4 = the same generic per-frame update 0xB3DA00), filled every frame by
+**`BindingObserverPlayerList`** (Mac symbols; vtable `0x01119224`, slot 6 = its update `0xB65020`):
+
+* `player_list_mc.slot0<s>` - one panel per player (s = the UI slot), in it `multi_select.mini_portrait0<i>` (i = 0..6) the
+  squad icons. UpdatePlayerSquads `0xB66FA0` walks `Player::GetSquads` and, for the i-th squad, takes the widget
+  `binding + 0x128 + (s * 0x36 + i) * 4`, puts the **squad id at widget + 0x3C4** (`squad + 0x40`) and the icon's tooltip:
+  type 2, title `+0x254` = the squad's name, brief `+0x25C` = "Level N" (`+0x250` = has a tooltip; `0x687500` sends it to
+  the movie with `Receive_SetTooltipInfo`).
+* `player_list_mc.unit_info_mc` (560 x 144 in its own units, above the right team) - the **selected** squad:
+  UpdateSelectionAndPortrait `0xB66200` shows the front of the binding's selection container (+0x64): portrait, name,
+  "Light Infantry (infantry fire resist armor)", level, health, models. In a replay a click on a squad icon or on a unit
+  selects it exactly as in a game (stand: the panel shows it and stays) - the same selection object 0.5 reads.
+
+Hovering an icon shows the game's own tooltip - not part of that movie: **`TooltipPanel`** (`ui\movies\message_boxes\tooltip`,
+form made in 0xAE2030, vtable `0x0110D8AC`, slot 4 = OnUpdate `0xAE35F0`). Each frame OnUpdate reads the movie manager's
+tooltip info `*(0x01335088) + 0x2C` (what `Receive_GetTooltipInfo` of the movie under the cursor gave): `+0x208` type,
+`+0x204` the widget, `+0x20C`/`+0x214` title/description. Type 2 (the squad icons) -> the movie's `ShowUpgrade` every frame
+(`upgrade_mc`: name_txt, brief_txt, description_txt one under the other) -> `ShowTooltip` -> `g_tooltip_frame0`
+(a `TooltipFrame`) sized to it, `_level0.g_tooltip_width/height`; then `0xAE40E0` reads those two into the panel
+(`+0x4C`/`+0x50`) and `0x682070` (ECX = the form) places the movie by the cursor through OnUpdateViewport `0xAE3D70`
+(left/up of the cursor when it would leave the screen - with that size).
+
+### What 0.6 does
+
+* **Tooltip** (`[Replay] Tooltip=1`): our hook runs after the game's OnUpdate. Hovered widget (info type 2) = one of the
+  binding's icon widgets (the binding pointer is taken in its own update, slot 6, chained) -> id at +0x3C4 -> the squad
+  among `PlayerManager` (world +0x194) `GetPlayerAt` / `Player::GetSquads` (the container is its virtual base, as 0xB66FA0)
+  by `squad + 0x40` - SimEngine exports only, read-only. Our clip `us_tt` goes into `upgrade_mc` right under the game's
+  lines (their heights read back), the same two stat rows and effect icons as the panel (`TooltipFontSize=15`), then the
+  frame is grown: `g_tooltip_frame0.m_client_width/height` + its own `UpdateFrame()`, `_level0.g_tooltip_*` from its
+  `GetWidth/GetHeight`, the panel's +0x4C/+0x50 and `0x682070` again - so the bigger tooltip is kept on screen the
+  game's way. Any other tooltip: `us_tt` hidden (the game sizes its frame anew every frame).
+* **Selected squad** (`[Replay] Selected=1`): our clip `us_box` in `unit_info_mc`, its bottom 6 units above that panel,
+  on a dark backdrop (`Backdrop=55`, the AS drawing API: `beginFill/lineTo` in a child clip), `FontSize=18`, effects
+  wrap at `Width=520`. Exactly one squad selected, as 0.5. With three players a side `player_list_mc` is on its frame 4
+  and `unit_info_mc` sits at the very top of the movie's stage (y -234 under player_list_mc at 234.65; the stage is
+  1050 x 468) - the movie draws nothing outside its stage, so the box above was invisible (stand, 3v3): when
+  `player_list_mc._y + unit_info_mc._y - box height < 0` the box goes left of the panel instead, top aligned.
+* The squad's numbers are the same functions as 0.5 (squad_stats, eff_values, four times a second); the boxes are their own
+  layout (`RBox` in unitstats.c), the panel's code is unchanged except that the item texts come from one function now.
+
+### Checked on stand 1 (19.11.2026)
+
+`unitstats/stand/replay_session.sh` + `replay_drive.sh` (replay from the -init script through `SetGamePlayback`, the DLLs in
+Elite_DLLs or, for vanilla, dow2-patches with the launcher's loader; xdotool hovers and clicks the squad icons from a command
+file), `CrcTrace.dll` beside it, `fastbench_1113/bin/reccmp.py` against the replay's own per-tick sync hashes.
+Screenshots and logs: /var/www/media/dow2_shots/unitstats/replay_1119/.
+
+| Replay | data | run | CRC vs the replay's hashes |
+|---|---|---|---|
+| 67343d34 MrCrow vs Adila, 2p_calderisdunes, 1v1 | Elite 3.2.1 | 16 min, 12 min of it hovering all icons (471 hover changes, 14 selections) | 10549 ticks, equal except tick 0 |
+| 1bef8d8a FreshMangoJuice + 2 vs 3, 6p_fen_dunloch, 3v3 | Elite 3.2.1 | the whole replay (14700 ticks, partly at 4x), 10.5 min hovering all 6 panels (509 / 12) | 14699 ticks, 0 differ |
+| a53ddae9 anadi_ch vs Jötunn, 2p_calderisrefinery, 1v1 | vanilla | 7.5 min, 5.5 min hovering (233 / 11) | 4996 ticks, equal except tick 0 - the same without the DLL (CrcTrace alone: tick 0 differs too, the two traces equal on all 1082 common ticks) |
+
+No fault, no watchdog line, no crash in any run. 0.5 in the same replay: nothing at all (`00_v05_replay_nothing_shown`).
