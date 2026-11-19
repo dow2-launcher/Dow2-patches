@@ -1616,18 +1616,18 @@
     "category": "experiment",
     "order": 1150,
     "name": {
-      "en": "Instant retreat",
-      "ru": "Instant retreat",
-      "es": "Instant retreat",
-      "fr": "Instant retreat",
-      "de": "Instant retreat"
+      "en": "⚠ Instant retreat (desync!)",
+      "ru": "⚠ Instant retreat (desync!)",
+      "es": "⚠ Instant retreat (desync!)",
+      "fr": "⚠ Instant retreat (desync!)",
+      "de": "⚠ Instant retreat (desync!)"
     },
     "description": {
-      "en": "Retreat at once: the squad drops what it is doing (even a grenade throw) and every model runs straight home, no gathering first. Changes the game: everyone in the match needs it on, or the match desyncs; replays made with it play only with it.",
-      "ru": "Отступление сразу: отряд бросает всё (даже бросок гранаты), и каждый боец бежит прямо на базу, не собираясь в кучу. Меняет игру: нужно всем в матче, иначе рассинхрон; реплеи с ним смотрятся только с ним.",
-      "es": "Retirada inmediata: la escuadra suelta lo que hace (incluso una granada) y cada uno corre directo a la base, sin agruparse. Cambia el juego: todos en la partida deben tenerlo, o se desincroniza; sus replays solo se ven con él.",
-      "fr": "Retraite immédiate : l'escouade lâche tout (même une grenade) et chacun court droit à la base sans se regrouper. Change le jeu : tous les joueurs doivent l'avoir, sinon désynchro ; ses replays ne se lisent qu'avec.",
-      "de": "Sofortiger Rückzug: der Trupp lässt alles fallen (auch einen Granatwurf), jeder rennt direkt zur Basis, ohne Sammeln. Ändert das Spiel: alle im Match brauchen es, sonst Desync; Replays damit laufen nur mit."
+      "en": "⚠ DANGER, do not turn on just like that: it changes the game. Only if EVERY player in the match has it on, otherwise desync and the match is not rated. Retreat at once: the squad drops everything (even a grenade throw), every model runs straight home without gathering. Replays made with it play only with it.",
+      "ru": "⚠ ОПАСНО, просто так не включать: меняет игру. Только если она включена у ВСЕХ игроков матча, иначе рассинхрон и матч не засчитается. Отступление сразу: отряд бросает всё (даже бросок гранаты), каждый боец бежит прямо на базу, не собираясь в кучу. Реплеи с ней смотрятся только с ней.",
+      "es": "⚠ PELIGRO, no activar sin más: cambia el juego. Solo si TODOS los jugadores de la partida lo tienen, si no hay desincronización y la partida no cuenta. Retirada inmediata: la escuadra suelta todo (incluso una granada) y cada uno corre directo a la base. Sus replays solo se ven con él.",
+      "fr": "⚠ DANGER, ne pas activer à la légère : change le jeu. Seulement si TOUS les joueurs de la partie l'ont, sinon désynchro et partie non comptée. Retraite immédiate : l'escouade lâche tout (même une grenade), chacun court droit à la base. Ses replays ne se lisent qu'avec.",
+      "de": "⚠ GEFAHR, nicht einfach einschalten: ändert das Spiel. Nur wenn ALLE Spieler im Match es an haben, sonst Desync und das Match zählt nicht. Sofortiger Rückzug: der Trupp lässt alles fallen (auch Granaten), jeder rennt direkt zur Basis. Replays damit laufen nur mit."
     }
   }
 }
