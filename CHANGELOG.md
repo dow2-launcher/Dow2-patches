@@ -4,6 +4,9 @@ Every version gets an entry here before it reaches `main`. CI then tags `vX.Y.Z`
 version (`X.Y.0`) it also publishes a GitHub Release with the DLLs and the entries since the previous `X.Y.0`.
 The version of the set lives only in `VERSION`; each DLL still writes its own version to its log.
 
+## 0.2.122 — 2026-11-19
+Instant retreat: the store entry gets the `danger` warning (launcher 1.6.29 shows a red DANGER chip and asks before turning it on); store_texts.py carries `danger`. Texts only, retreatnow-4 unchanged.
+
 ## 0.2.121 — 2026-11-19
 Instant retreat: the store card is marked as dangerous (owner 19.11) - the name "⚠ Instant retreat (desync!)" and the description starts with the warning: turn it on only if every player of the match has it, otherwise desync and the match is not rated. Texts only, the DLL is unchanged (retreatnow-4).
 

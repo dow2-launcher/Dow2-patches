@@ -1628,6 +1628,13 @@
       "es": "⚠ PELIGRO, no activar sin más: cambia el juego. Solo si TODOS los jugadores de la partida lo tienen, si no hay desincronización y la partida no cuenta. Retirada inmediata: la escuadra suelta todo (incluso una granada) y cada uno corre directo a la base. Sus replays solo se ven con él.",
       "fr": "⚠ DANGER, ne pas activer à la légère : change le jeu. Seulement si TOUS les joueurs de la partie l'ont, sinon désynchro et partie non comptée. Retraite immédiate : l'escouade lâche tout (même une grenade), chacun court droit à la base. Ses replays ne se lisent qu'avec.",
       "de": "⚠ GEFAHR, nicht einfach einschalten: ändert das Spiel. Nur wenn ALLE Spieler im Match es an haben, sonst Desync und das Match zählt nicht. Sofortiger Rückzug: der Trupp lässt alles fallen (auch Granaten), jeder rennt direkt zur Basis. Replays damit laufen nur mit."
+    },
+    "danger": {
+      "en": "Changes the game: turn on only if EVERY player of the match has it on too. Otherwise the match desyncs and does not count.",
+      "ru": "Меняет игру: включать, только если у ВСЕХ игроков матча она тоже включена. Иначе рассинхрон и матч не засчитается.",
+      "es": "Cambia el juego: actívalo solo si TODOS los jugadores de la partida también lo tienen activado. Si no, la partida se desincroniza y no cuenta.",
+      "fr": "Modifie le jeu : à activer seulement si TOUS les joueurs de la partie l'ont aussi. Sinon la partie se désynchronise et ne compte pas.",
+      "de": "Ändert das Spiel: nur aktivieren, wenn ALLE Spieler des Matches es auch aktiviert haben. Sonst gibt es einen Desync und das Match zählt nicht."
     }
   }
 }
