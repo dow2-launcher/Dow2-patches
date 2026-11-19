@@ -1,0 +1,1 @@
+- Automatch (MMFind 0.55): the army for the automatch is only what you pick on Find a Game - picking a race in a Custom Games lobby no longer changes it; with Random chosen, Random is set again every time you open Find a Game and the screen says so.
