@@ -1,0 +1,1 @@
+- Unit stats: in replays too - hover a squad icon in the players' panels and its tooltip shows the numbers; the selected squad's numbers stand above the panel at the bottom.
