@@ -4,6 +4,21 @@ Every version gets an entry here before it reaches `main`. CI then tags `vX.Y.Z`
 version (`X.Y.0`) it also publishes a GitHub Release with the DLLs and the entries since the previous `X.Y.0`.
 The version of the set lives only in `VERSION`; each DLL still writes its own version to its log.
 
+## 0.2.120 — 2026-11-19
+Instant retreat 4 (store retreatnow-4, experiment, off by default, Elite and vanilla; CHANGES THE SIMULATION - every player and
+observer of a match needs the same version: 4 does not sync with 3, replays recorded with 3 play only with 3). RetreatNow.dll 4:
+- straight home: SquadMovement::IssueOrders 0x00A449C0 sends the leader straight to the squad's target but every other model to
+  its formation slot around the leader, so a squad scattered by a knockback first ran together - models far from the leader ran
+  away from home for 1.5-2.5 s. Its call 0x00A4236C is wrapped: for a retreating squad every model gets the leader's direct
+  order (the engine's per-entity move 0x00A41130 with the squad's target, tolerance 1.0, the highway size and move type the
+  engine uses), except where the engine's own check 0x00A409C0 says it already moves there or cannot path there.
+- fastbench (per-tick CRC): two runs with the DLL identical on 3 replays (1aba1106 11289 ticks, a7230a38 18221, ed875401 16641),
+  first difference to the replay at 1098 / 927 / 599; knockback-scattered squads (same tick, same world): a7230a38 tick 1488 no
+  model moves away from home (before: 32 model-ticks, one model 7.4 m back towards the leader), 1aba1106 tick 12346 every model
+  5 m closer after 1.4 s (before: one never), 1aba1106 13471 0 away ticks (before 5).
+Mac: mac/retreatnow/ RetreatNow.dylib 4 (store id retreatnow_mac, components_macos, put up by hand) - the same five decisions at
+the Mac 1.0.3 addresses; mac/build.sh builds it with the others.
+
 ## 0.2.119 — 2026-11-19
 Instant retreat (new, store retreatnow-3, experiment order 1150, off by default, Elite and vanilla; CHANGES THE SIMULATION -
 every player and observer of a match needs it, replays recorded with it play only with it). RetreatNow.dll 3, retreatnow/:
