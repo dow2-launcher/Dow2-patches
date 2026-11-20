@@ -1,0 +1,26 @@
+{
+  "_readme": "Third-party binaries the add-ons ship (addons.json \"files\"), kept out of git: `make` (scripts/fetch_blobs.py) downloads each to its path and checks its sha256, failing the build on a mismatch. A new file or version: upload it to rts /var/www/rts-site/elite/blobs/<sha256>/<name> (never change a published one), add an entry here and its path to .gitignore.",
+  "blobs": [
+    {
+      "path": "dxvk/DXVK_d3d9.bin",
+      "what": "DXVK 2.7.1 x32 d3d9.dll (official release, renamed; zlib licence, dxvk/DXVK_LICENSE.txt)",
+      "url": "https://rts.fintebtc.de/elite/blobs/00ecd422b3b12e9d3b309785f3f19431405389d80eb4a37018ebc63e2d87d900/DXVK_d3d9.bin",
+      "sha256": "00ecd422b3b12e9d3b309785f3f19431405389d80eb4a37018ebc63e2d87d900",
+      "size": 4493326
+    },
+    {
+      "path": "soundfix/SoundFix_fmodex.bin",
+      "what": "FMOD Ex 4.32.20 fmodex.dll (Firelight Technologies; the file Elite ships as Elite_bin/Elite_fmodex.bin)",
+      "url": "https://rts.fintebtc.de/elite/blobs/4cc400c7044a312c4b52e3a5f52e28214a486e6b1b3f0be6dcea339319900c10/SoundFix_fmodex.bin",
+      "sha256": "4cc400c7044a312c4b52e3a5f52e28214a486e6b1b3f0be6dcea339319900c10",
+      "size": 798720
+    },
+    {
+      "path": "soundbugtest/SoundBugTest_fmodex.bin",
+      "what": "FMOD Ex 4.32.3 fmodex.dll (Firelight Technologies; Relic's file from the game's Steam depot)",
+      "url": "https://rts.fintebtc.de/elite/blobs/7516e3d3311f712284a57a15d12d100b20f9ec256460a452cee767dee05a50e3/SoundBugTest_fmodex.bin",
+      "sha256": "7516e3d3311f712284a57a15d12d100b20f9ec256460a452cee767dee05a50e3",
+      "size": 1163264
+    }
+  ]
+}
