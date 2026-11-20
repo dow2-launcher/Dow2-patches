@@ -80,6 +80,14 @@
 // click), the menu answers with its hover commands and the walk goes on (seamless: the Connecting box at once, as in 0.53). Only the
 // launcher room's walk nudges: the player's own Find a Game / Start Searching does not need the menu learnt - his clicks are the
 // menu's commands.
+//
+// 0.55 (20.11.2026, SirItos 19.11: "after the game, back on the faction choice before Find Match, the random is reset and another
+// faction is set"): the automatch's army is only what the player picks on Find a Game - a Custom Games lobby's hero panel (the same
+// movie names) no longer changes the saved choice (player logs 19.11: Random on / off saved from a custom lobby); on Find a Game the
+// match type is set first and the army 0.3 s later (before: Random / the race, then the match type 2 ms after it); Random is pressed
+// only when my Your Party row of this visit does not already say Random (stand 20.11: the game drops Random on every entry - the
+// row shows its stored race again, the hero panel shows yet another race until the match rolls); with Random saved the info block
+// says "Army: Random (race and hero are rolled in the match)".
 // Hooks: Invoke 0x45DB6C (engine -> Flash, to read lists and to show our status), fscommand handler 0x681AB0 (Flash -> engine, to
 // catch the button and to send menu commands), Shark.dll shark::update (main-thread tick).
 #ifndef _WIN32_WINNT
@@ -257,8 +265,8 @@ static char g_natLobby[48], g_natWhy[96], g_natLastCancel[32];
 // what to do, "MMFind 0.45", the queue and who is online. Shown from the moment the screen opens (a peek at mm/native: the ladder
 // answers as for Start Searching and changes nothing; again every 20 s and on a match type change while the screen is open), after
 // the click by what really happened. [MMFind] ShowMode=1 (default) / 0 = off, Lang=auto (the game's own text: Cyrillic = Russian) / ru / en.
-#define MMF_VER "0.54"
-#define MMF_VER_W L"0.54"
+#define MMF_VER "0.55"
+#define MMF_VER_W L"0.55"
 static int g_showMode = 1, g_langCfg = -1, g_lang = -1, g_modeProbe;
 static double g_mx = 1065, g_my = 590, g_msz = 30;           // panel units, see mode_make
 static volatile int g_peekWant, g_peekAns; static volatile DWORD g_peekLast; static char g_peekWhy[96];
@@ -686,7 +694,7 @@ static void fs(const char *rel, const char *args) {          // rel: ".OnClickHo
     g_sending++; g_fsOrig(g_fsSelf, NULL, g_fsMovie, cmd, args ? args : ""); g_sending--;
 }
 // ---------------- saved choice: race / chapter / hero picked by the player ----------------
-int g_race = -1, g_chapter = -1, g_hero = -1, g_random; static volatile int g_heroCount; static volatile int g_curRace = -1, g_curChapter = -1, g_curHero = -1; static void *g_heroSelf; static int g_heroFlags; static volatile DWORD g_randomTick, g_autoSelTick, g_lastFsTick; static volatile int g_applyMM, g_mmApplied; static volatile DWORD g_heroAt;
+int g_race = -1, g_chapter = -1, g_hero = -1, g_random; static volatile int g_heroCount; static volatile int g_curRace = -1, g_curChapter = -1, g_curHero = -1; static void *g_heroSelf; static int g_heroFlags; static volatile DWORD g_randomTick, g_autoSelTick, g_lastFsTick; static volatile int g_applyMM, g_mmApplied; static volatile DWORD g_heroAt, g_armyAt;
 static wchar_t g_ini[MAX_PATH];   // g_heroCount: heroes of the race on screen (from Receive_PopulateHeroList)
 static void save_choice(void) {
     wchar_t b[16];
@@ -925,6 +933,10 @@ static void mode_html(wchar_t *h, int cap) {
         h[cap - 1] = 0; return;
     }
     const wchar_t *lab = ru ? L"Автопоиск:" : L"Automatch:";
+    // 0.55: with Random the panel shows the race / hero the game rolled for the screen - say it is Random (the match rolls again)
+    wchar_t rnd[200] = L"";
+    if (g_random && g_rs == RS_NONE) _snwprintf(rnd, 199, L"<font face='$NormalFont' size='%d' color='#E2C36B'>%ls</font><br>", s2,
+                                                ru ? L"Армия: случайная (раса и герой выпадут в матче)" : L"Army: Random (race and hero are rolled in the match)");
     const wchar_t *val = k == 1 ? (ru ? L"наши серверы" : L"our servers") : (ru ? L"проверяем..." : L"checking...");
     const wchar_t *col = k == 1 ? L"#8FE3B4" : L"#A9B4AE";
     wchar_t q[160] = L"", n[64] = L"", o[64] = L"";
@@ -937,8 +949,8 @@ static void mode_html(wchar_t *h, int cap) {
     else if (n[0] || o[0]) { _snwprintf(q, 159, L"%ls%ls%ls", n, n[0] && o[0] ? L" \x00B7 " : L"", o); if (q[0] >= L'a' && q[0] <= L'z') q[0] -= 32; else if (q[0] >= 0x430 && q[0] <= 0x44F) q[0] -= 32; }
     _snwprintf(h, cap - 1, L"<font face='$NormalFont' size='%d' color='#D8D2BC'>%ls</font><font face='$NormalFont' size='%d' color='%ls'> %ls</font><br>"
                            L"<font face='$NormalFont' size='%d' color='#8E9A94'>MMFind " MMF_VER_W L"</font><br>"
-                           L"<font face='$NormalFont' size='%d' color='#C9D6CF'>%ls</font>",
-               s1, lab, s1, col, val, s2, s2, q);
+                           L"%ls<font face='$NormalFont' size='%d' color='#C9D6CF'>%ls</font>",
+               s1, lab, s1, col, val, s2, rnd, s2, q);
     h[cap - 1] = 0;
 }
 static void field_make(void *m, const char *nm, double depth, double x, double y, double w, double hgt) {
@@ -1226,7 +1238,9 @@ static void __fastcall fs_hook(void *self, void *edx, void *movie, const char *c
             }
         }
         // the player's own pick - remember it
-        if (!g_sending && strstr(cmd, "hero_selection_mc.") && args) {
+        // 0.55 (SirItos 19.11: "after the game the random is reset, another faction is set"): only the picks on Find a Game are the
+        // automatch's army - a Custom Games lobby's hero panel (the same movie names) changed it silently before
+        if (!g_sending && g_screen == SC_MM && strstr(cmd, "hero_selection_mc.") && args) {
             int a = -1, b = -1;
             if (ends_with(cmd, ".OnClickRandom")) { g_randomTick = GetTickCount(); if (!g_random) { g_random = 1; save_choice(); logmsg("choice: random race and hero"); } }
             else if (ends_with(cmd, ".OnSelectDropDownItem") && sscanf(args, "%d;%d", &a, &b) == 2) {
@@ -1666,7 +1680,7 @@ static void room_cancel(const char *room) {
         if (g_state == S_NATIVE) { set_state(S_IDLE); g_wantLeave = 1; SetEvent(g_wake); if (g_engSearch == 1 && !g_loading) fs(".OnClickStart", ""); }   // Stop Searching
         else if (g_state == S_NASK) set_state(S_IDLE);
     }
-    g_applyMM = 0; g_heroAt = 0;                                          // 0.51: nothing of the room's army is applied after the cancel
+    g_applyMM = 0; g_heroAt = 0; g_armyAt = 0;                            // 0.51: nothing of the room's army is applied after the cancel
     if (g_rs != RS_DONE) { room_fail("cancelled", ""); if (!g_loading) room_back_main(GetTickCount()); }
 }
 // the room's army into the saved choice the Find a Game code applies (apply_race / apply_hero / Random)
@@ -1775,7 +1789,7 @@ static void room_step(DWORD now) {
         break;
     case RS_ARMY:                                                             // the choice applied (upd_hook: race, then hero 0.8 s on)
         if (g_screen != SC_MM) { room_fail("left_screen", "Find a Game was left"); break; }
-        if (g_applyMM || g_heroAt) break;
+        if (g_applyMM || g_armyAt || g_heroAt) break;
         if (g_rWatchN) {                                                      // 0.51: an observer - the hero panel's Ready only (the army he has)
             if (!g_rAcceptAt) { logmsg("room %s: observer - the hero panel's Ready (army as it is: race %d hero %d)", g_room, g_curRace, g_curHero);
                 fs(".hero_selection_mc.OnClickAccept", ""); g_heroUp = 0; g_rAcceptAt = now; g_rStepAt = now; }
@@ -2148,9 +2162,23 @@ static void tick(void) {
 static void __stdcall upd_hook(float dt) {
     g_updOrig(dt);
     DWORD now = GetTickCount(); int alive = g_fsMovie && g_state != S_DONE;            // after Start the frontend goes away - hands off
-    if (g_applyMM && alive) { static DWORD t; if (!t) t = now; if (now - t > 400) { g_applyMM = 0; t = 0;      // Find a Game: the saved army and mode
-        if (g_random) { g_autoSelTick = now; fs(".hero_selection_mc.OnClickRandom", ""); g_heroAt = 0; } else g_heroAt = now + (apply_race() ? 800 : 1);
-        char a[8]; snprintf(a, sizeof a, "0;%d", g_mode); fs(".OnSelectDropDownItem", a); } }
+    if (g_applyMM && alive) { static DWORD t; if (!t) t = now; if (now - t > 400) { g_applyMM = 0; t = 0;      // Find a Game: the saved mode and army
+        // 0.55: the match type FIRST, the army 0.3 s later (before: Random / the race, then the match type 2 ms after it - a match type
+        // change that refreshes the hero panel took the army back); g_armyAt below
+        char a[8]; snprintf(a, sizeof a, "0;%d", g_mode); fs(".OnSelectDropDownItem", a); g_armyAt = now + 300; } }
+    if (g_armyAt && now >= g_armyAt) { g_armyAt = 0;
+        if (alive && g_screen == SC_MM) {
+            if (g_random) {
+                // 0.55: Random is the game's own state, seen in my Your Party row ("Random", hero_xs_random; stand 20.11: the hero panel
+                // keeps showing a race). The game drops it on every entry to Find a Game (the row shows its stored race again) - then
+                // pressed; when the row of this visit already says Random, not pressed again
+                int rowRandom = g_partyTick && (int)(g_partyTick - g_scrTick) >= 0 && strstr(g_partyImg, "hero_xs_random") != NULL;
+                if (rowRandom) logmsg("random: Your Party already says Random - not pressed again");
+                else { g_autoSelTick = now; g_randomTick = now; fs(".hero_selection_mc.OnClickRandom", "");
+                       logmsg("random: pressed (Your Party said %s)", g_partyImg[0] ? g_partyImg : "nothing yet"); }
+                g_heroAt = 0;
+            } else g_heroAt = now + (apply_race() ? 800 : 1);
+        } }
     if (g_heroAt && now >= g_heroAt) { g_heroAt = 0; if (alive && g_screen == SC_MM) apply_hero(); }
     tick();
 }

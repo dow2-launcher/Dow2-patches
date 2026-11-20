@@ -4,6 +4,21 @@ Every version gets an entry here before it reaches `main`. CI then tags `vX.Y.Z`
 version (`X.Y.0`) it also publishes a GitHub Release with the DLLs and the entries since the previous `X.Y.0`.
 The version of the set lives only in `VERSION`; each DLL still writes its own version to its log.
 
+## 0.2.125 — 2026-11-20
+MMFind 0.55 (Automatch v2.0; hand release: store automatch mmfind-0.55 = the live package mmfind-0.54 with this MMFind.dll), the
+army on Find a Game (SirItos 19.11: "after the game, back on the faction choice, the random is reset and another faction is set"):
+- Only the picks on Find a Game are saved as the automatch's army: a Custom Games lobby's hero panel (the same movie names) changed
+  the saved race / Random before (player logs of 19.11: Random switched on and off from a custom lobby).
+- On entering Find a Game the match type is set first, the saved army 0.3 s later (before: the army, then the match type 2 ms after).
+- Random is pressed only when my Your Party row of this visit does not already say Random. Stand 20.11 (LogInvoke): the game itself
+  drops Random on every entry to Find a Game (the row shows its stored race - Space Marines there - the hero panel shows yet another,
+  orks), so MMFind presses it again ~0.6 s after the entry and the row says Random; 0.54 did the same (its order did not lose Random
+  on the stand).
+- With Random saved the info block under Your Party says "Army: Random (race and hero are rolled in the match)".
+- Stand 1 (cherpekat, Find a Game only, no search): Random restored after leaving and re-entering, a race pick saved and applied
+  after the match type, a hero panel command on another screen not saved; the info line not seen there (the stand's old package has
+  no OwnLobby, the info block is not drawn). Not tested: after a real match (needs a match), live.
+
 ## 0.2.124 — 2026-11-19
 Instant retreat 5 (store retreatnow-5, staging; Mac retreatnow_mac-5 prepared; CHANGES THE SIMULATION - version 5 does not sync
 with version 4, every player needs the same version; replays recorded with 4 play only with 4). Malum's fb 1849 ("the retreat
