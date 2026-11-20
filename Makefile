@@ -6,6 +6,12 @@ OUT = build
 STATS_HOST ?= rts.fintebtc.de
 STATS = $(if $(STATS_HOST),-DSTATS_HOST='L"$(STATS_HOST)"',)
 
+# 20.11.2026: the third-party binaries the add-ons ship (DXVK_d3d9.bin, *_fmodex.bin) are not in git: blobs.json lists them
+# (path, url, sha256); scripts/fetch_blobs.py downloads them into place and fails the build on a sha256 mismatch
+all: blobs
+blobs:
+	python3 scripts/fetch_blobs.py
+
 all: $(OUT)/ObsFix.dll $(OUT)/LobbyStats.dll $(OUT)/LoadingRatings.dll $(OUT)/Cooldowns.dll $(OUT)/MatchTimer.dll $(OUT)/winmm.dll $(OUT)/FrameProbe.dll $(OUT)/ReinforceFix.dll $(OUT)/HeroLabelFix.dll $(OUT)/JumpRetry.dll $(OUT)/JoinSound.dll $(OUT)/APM.dll $(OUT)/SteamKeep.dll
 all: $(OUT)/EliteAI.dll $(OUT)/Reverse.dll $(OUT)/MMFind.dll $(OUT)/RoomJoin.dll $(OUT)/Relay.dll $(OUT)/Continue.dll
 # released too (04.11.2026: the GitHub Release carries every released DLL; build/early/winmm.dll is built by its own name)
@@ -101,7 +107,7 @@ test:
 $(OUT)/test_lobbystats.exe: lobbystats/test/test_dll.c | $(OUT)
 	$(CC) -O2 -Wall -o $@ $< -static-libgcc
 
-.PHONY: all clean test
+.PHONY: all clean test blobs
 
 
 # EliteAI 0.11 (11.11.2026): the replay of a match with the new AI to the replay site (WinHTTP, SHGetFolderPathW)

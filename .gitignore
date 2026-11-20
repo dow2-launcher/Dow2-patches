@@ -3,3 +3,7 @@ build-test/
 *.dll
 *.log
 mac/out/
+# third-party binaries: fetched by make from blobs.json (scripts/fetch_blobs.py), not in git
+dxvk/DXVK_d3d9.bin
+soundfix/SoundFix_fmodex.bin
+soundbugtest/SoundBugTest_fmodex.bin

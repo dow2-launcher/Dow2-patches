@@ -501,7 +501,7 @@ netprobe/ - **NetProbe.dll** (NetProbe 2), experiment - removed from the store 0
     No hooks. 15 s after the game starts: TCP and UDP to our servers' probe service (dow2-ladder gameserver/probe_server.py) on
     several ports, ~5 MB, 1-2 minutes; writes NetProbe.log and sends it to us.
 
-dxvk/ - **DXVK.dll** (DXVK 1) + DXVK_d3d9.bin (DXVK 2.7.1 x32 d3d9.dll), DXVK.conf, DXVK_LICENSE.txt (zlib)
+dxvk/ - **DXVK.dll** (DXVK 1) + DXVK_d3d9.bin (DXVK 2.7.1 x32 d3d9.dll, fetched by make: blobs.json), DXVK.conf, DXVK_LICENSE.txt (zlib)
     Early add-on. Points only Spooge.dll's import of d3d9.dll!Direct3DCreate9 at DXVK_d3d9.bin (loaded in the hook, not under the
     loader lock; .bin so the loader does not load it as an add-on); DXVK_CONFIG_FILE / DXVK_LOG_PATH = the add-on folder. Does
     nothing when the game's d3d9.dll is DXVK already (Elite IsDXVK) or when it is loaded > 5 s after the start. No Vulkan check.
@@ -623,7 +623,12 @@ frameprobe/ - FrameProbe.dll (off), eliteai/ - EliteAI.dll (store id newai since
     make build/launcher/winmm.dll # the launcher's loader for vanilla (by -modname)
     make STATS_HOST=other.host    # another stats host baked into LobbyStats (default rts.fintebtc.de)
 
-Needs gcc-mingw-w64-i686. By hand: put the DLL into Elite_DLLs\ and add it to InjectedFiles= in Elite.launchconfig; without
+The third-party binaries the add-ons ship (dxvk/DXVK_d3d9.bin, soundfix/SoundFix_fmodex.bin,
+soundbugtest/SoundBugTest_fmodex.bin) are not in git: `make` first runs scripts/fetch_blobs.py, which downloads them from
+https://rts.fintebtc.de/elite/blobs/<sha256>/<name> as listed in blobs.json and fails the build on a sha256 mismatch.
+See THIRD_PARTY.md for their licences.
+
+Needs gcc-mingw-w64-i686 and python3. By hand: put the DLL into Elite_DLLs\ and add it to InjectedFiles= in Elite.launchconfig; without
 Elite: winmm.dll next to DOW2.exe, patches into dow2-patches\.
 
 ## Versions and CI
