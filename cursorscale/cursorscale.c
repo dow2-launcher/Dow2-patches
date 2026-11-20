@@ -194,7 +194,7 @@ static void dump(const Orig *o, HCURSOR c) {
         bh.bV5AlphaMask = 0xFF000000; bh.bV5CSType = 0x73524742;
         BITMAPFILEHEADER fh; memset(&fh, 0, sizeof fh); fh.bfType = 0x4D42;
         fh.bfOffBits = sizeof fh + sizeof bh; fh.bfSize = fh.bfOffBits + 4 * w * h;
-        fwrite(&fh, sizeof fh, 1, f); fwrite(&bh, sizeof bh, 1, f); fwrite(px, 4, w * h, f); fclose(f);
+        fwrite(&fh, sizeof fh, 1, f); fwrite(&bh, sizeof bh, 1, f); fwrite(px, 4, (size_t)w * (size_t)h, f); fclose(f);
     }
     free(px); (void)o;
 }
