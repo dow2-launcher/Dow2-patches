@@ -1,0 +1,127 @@
+-- ===== STAND ONLY (unitstats v7 session): effects that colour the numbers, the HP / energy bars, transports with squads inside =====
+-- We are Eldar (Farseer), the enemy IG (Lord Commissar, AI off). Real abilities (Guide, Fortune, exarch aura, Frenzy, the
+-- commissar's execution, suppression by a heavy weapon team) and SCAR modifiers (Modify_*, Modifier_Create) put effects on
+-- squads; one squad is selected at a time ("SELECT <what>" in EliteAI.log - the session takes a screenshot of each).
+local UL = eliteai_log or (string and string.eliteai_log) or print
+US = { t = -1, n = 0 }
+local function q(f, ...) if type(f) ~= "function" then return nil end local ok, r = pcall(f, ...); if ok then return r end return nil end
+local function bpid(name) local ok, id = pcall(World_GetPropertyBagGroupID, name); if ok and id then return id end; UL("NO BLUEPRINT", name) end
+local function uspawn(p, bp, pos, toward, tag, inv)
+	local id = bpid(bp); if not id then return end
+	local ok2, s = pcall(Squad_CreateAndSpawnToward, id, p, 0, pos, toward)
+	if not ok2 or not s then UL("SPAWN FAILED", bp, tostring(s)); return end
+	US.n = US.n + 1; local g = SGroup_CreateIfNotFound("us7_g" .. US.n); SGroup_Add(g, s)
+	if inv then pcall(SGroup_SetInvulnerable, g, true) end
+	UL("spawned", tag, bp); return s, g
+end
+local function off(b, x, z) return World_Pos(b.x + x, b.y, b.z + z) end
+local function cast(caster, name, target, what)
+	local id = bpid(name); if not id or not caster then UL("CAST skipped", what); return end
+	UL("CAST", what, tostring(pcall(Cmd_Ability, caster, id, target, true)))
+end
+local function sel(s, what)
+	-- only deselect a live squad (selecting right after the selected squad died froze the game in v2/v3)
+	if US.prev then if pcall(Squad_GetPosition, US.prev) then pcall(Misc_SelectSquad, US.prev, false) end end
+	local ok, p = pcall(Squad_GetPosition, s); if not ok then UL("gone", what); US.prev = nil; return end
+	pcall(Camera_FocusOnPosition, p, false, 0, false)
+	UL("SELECT", what, tostring(pcall(Misc_SelectSquad, s, true))); US.prev = s
+end
+-- a modifier of the engine on every entity / on the squad itself (as the abilities do): MAT_Entity / MAT_Squad, the type's file name
+local function mod(g, app, name, usage, v, what)
+	local ok, m = pcall(Modifier_Create, app, name, usage, false, v, "")
+	if not ok or not m then UL("MOD create failed", what, tostring(m)); return end
+	SGroup_ForEach(g, function(gg, i, s) UL("MOD", what, tostring(pcall(Modifier_ApplyToSquad, m, s))) end)
+end
+local function inhold(s) return s and (q(Squad_IsInHoldEntity, s) or q(Squad_IsInHoldSquad, s)) and true or false end
+-- load squad s (group g) into the transport t (group tg): the instant garrison first, then the load commands of DOW2.exe
+local function load(g, s, tg, t, what)
+	if inhold(s) then return end
+	local eg = EGroup_CreateIfNotFound("us7_eg_" .. what); EGroup_Clear(eg); EGroup_Add(eg, Squad_EntityAt(t, 0))
+	UL("LOAD", what, "canload", tostring(q(Entity_CanLoadSquad, Squad_EntityAt(t, 0), s)))
+	if not inhold(s) and type(Cmd_InstantGarrison) == "function" then UL("LOAD", what, "Cmd_InstantGarrison", tostring(pcall(Cmd_InstantGarrison, g, eg))) end
+	if not inhold(s) and type(Command_SquadSquadLoad) == "function" and type(SCMD_Load) == "number" then
+		UL("LOAD", what, "Command_SquadSquadLoad", tostring(pcall(Command_SquadSquadLoad, US.P, g, SCMD_Load, tg, false, false))) end
+	UL("LOAD", what, "in hold now", tostring(inhold(s)))
+end
+function US_Setup()
+	US.P = World_GetPlayerAt(1); US.E = World_GetPlayerAt(2)
+	local b = Player_GetStartingPosition(US.P); local eb = Player_GetStartingPosition(US.E); US.base = b
+	US.own = {}; SGroup_ForEach(Player_GetSquads(US.P), function(g, i, s) US.own[i] = s end)
+	US.enemy = {}; SGroup_ForEach(Player_GetSquads(US.E), function(g, i, s) US.enemy[i] = s end)
+	US.farseer = US.own[1]; US.commissar = US.enemy[1]
+	US.Fg = SGroup_CreateIfNotFound("us7_farseer"); if US.farseer then SGroup_Add(US.Fg, US.farseer) end
+	local mods = {}; for k, v in pairs(_G) do if type(k) == "string" and type(v) == "function" and (string.find(k, "^Modify_") or string.find(k, "Garrison") or string.find(k, "Load")) then mods[#mods + 1] = k end end
+	table.sort(mods); UL("SCAR functions:", table.concat(mods, " "))
+	US.A, US.Ag = uspawn(US.P, "sbps/pvp/race_eldar/troops/eld_guardian", off(b, 14, 14), b, "own A (guide, fortune)", true)
+	US.B, US.Bg = uspawn(US.P, "sbps/pvp/race_eldar/troops/eld_banshee", off(b, 24, 14), b, "own B (exarch aura)", true)
+	US.C, US.Cg = uspawn(US.P, "sbps/pvp/race_eldar/troops/eld_warp_spider", off(b, 34, 14), b, "own C (max HP / regeneration)", true)
+	US.D, US.Dg = uspawn(US.P, "sbps/pvp/race_eldar/troops/eld_guardian", off(b, 14, 44), b, "own D (suppressed)", true)
+	US.S, US.Sg = uspawn(US.P, "sbps/pvp/race_eldar/troops/eld_guardian", off(b, 44, 14), b, "own S (sight down, melee skill up)", true)
+	US.K, US.Kg = uspawn(US.P, "sbps/pvp/race_eldar/troops/eld_guardian", off(b, 44, 30), b, "own K (nothing)", true)
+	US.T, US.Tg = uspawn(US.P, "sbps/pvp/race_imperial_guard/vehicles/ig_chimera", off(b, 4, 24), b, "own T chimera (slowed, damage taken)", true)
+	US.Q, US.Qg = uspawn(US.P, "sbps/pvp/race_imperial_guard/troops/ig_guardsmen_squad", off(b, 4, 16), b, "own Q guardsmen (into the chimera)", true)
+	US.F, US.Fag = uspawn(US.P, "sbps/pvp/race_eldar/vehicles/eld_falcon", off(b, 24, 30), b, "own V falcon (several effects)", true)
+	US.R, US.Rg = uspawn(US.P, "sbps/pvp/race_eldar/troops/eld_guardian", off(b, 24, 22), b, "own R guardians (into the falcon)", true)
+	US.H, US.Hg = uspawn(US.E, "sbps/pvp/race_imperial_guard/troops/ig_heavy_weapon_squad", off(b, 14, 74), b, "enemy H (heavy weapon on D)", true)
+	US.G = uspawn(US.E, "sbps/pvp/race_imperial_guard/troops/ig_guardsmen_squad", off(eb, 8, 8), eb, "enemy G (execution)", false)
+	US.N = uspawn(US.E, "sbps/pvp/race_ork/troops/ork_nob_squad", off(eb, -12, 8), eb, "enemy N (frenzy)", true)
+	pcall(FOW_RevealAll); UL("AI_Enable off", tostring(pcall(AI_Enable, US.E, false)))
+	if US.D and US.H then UL("H attacks D", tostring(pcall(Cmd_AttackSGroup, US.Hg, US.Dg))) end
+	-- the SCAR modifiers (the engine's own modifier objects, as abilities make them)
+	if US.Tg then
+		UL("T speed", tostring(pcall(Modify_UnitSpeed, US.Tg, 0.75)))
+		UL("T received damage", tostring(pcall(Modify_ReceivedDamage, US.Tg, 0.75)))
+	end
+	if US.Fag then
+		UL("V received damage", tostring(pcall(Modify_ReceivedDamage, US.Fag, 0.6)))
+		UL("V accuracy", tostring(pcall(Modify_WeaponAccuracy, US.Fag, 1.5)))
+		UL("V damage", tostring(pcall(Modify_WeaponDamage, US.Fag, 1.2)))
+		mod(US.Fag, MAT_Entity, "modifiers\\entity_modifiers\\received_damage_melee_modifier", MUT_Multiplication, 0.8, "V melee taken")
+	end
+	if US.Cg then
+		mod(US.Cg, MAT_Entity, "modifiers\\entity_modifiers\\health_maximum_modifier", MUT_Multiplication, 1.25, "C max HP x1.25")
+		mod(US.Cg, MAT_Entity, "modifiers\\entity_modifiers\\health_regeneration_modifier", MUT_Multiplication, 2.0, "C regen x2")
+	end
+	if US.Sg then
+		UL("S sight", tostring(pcall(Modify_SightRadius, US.Sg, 0.7)))
+		mod(US.Sg, MAT_Entity, "modifiers\\entity_modifiers\\skill_melee_modifier", MUT_Addition, 20, "S skill +20")
+	end
+	mod(US.Fg, MAT_Squad, "modifiers\\squad_modifiers\\energy_maximum_squad_modifier", MUT_Multiplication, 1.5, "farseer max energy x1.5")
+	mod(US.Fg, MAT_Squad, "modifiers\\squad_modifiers\\energy_regen_rate_squad_modifier", MUT_Multiplication, 0.5, "farseer energy regen x0.5")
+	UL("US7 SETUP done")
+	Rule_AddInterval(US_Tick, 1)
+end
+Rule_AddOneShot(US_Setup, 3)
+-- one selection every 6 s at least (the session's screenshot comes 2.5 s after a SELECT line); timed buffs cast right before
+local PLAN = {
+	{ 2, function() if US.Q and US.T then load(US.Qg, US.Q, US.Tg, US.T, "guardsmen->chimera") end
+	                if US.R and US.F then load(US.Rg, US.R, US.Fag, US.F, "guardians->falcon") end end },
+	{ 6, function() sel(US.A, "A guardians, nothing on them yet") end },
+	{ 9, function() cast(US.farseer, "ability/pvp/race_eldar/farseer/eld_buff_target_fortune", US.A, "fortune -> A") end },
+	{ 11, function() cast(US.farseer, "ability/pvp/race_eldar/farseer/eld_buff_target_guide", US.A, "guide -> A") end },
+	{ 13, function() sel(US.A, "A guide and fortune") end },
+	{ 19, function() cast(US.B, "ability/pvp/race_eldar/scorpion/eld_buff_aoe_auraexarch", nil, "exarch aura B") end },
+	{ 20, function() sel(US.B, "B banshees exarch aura") end },
+	{ 26, function() sel(US.D, "D guardians suppressed") end },
+	{ 32, function() if US.Q and US.T then load(US.Qg, US.Q, US.Tg, US.T, "guardsmen->chimera (again)") end
+	                 if US.R and US.F then load(US.Rg, US.R, US.Fag, US.F, "guardians->falcon (again)") end
+	                 sel(US.T, "T chimera with guardsmen inside") end },
+	{ 38, function() sel(US.F, "V falcon with guardians inside") end },
+	{ 44, function() sel(US.C, "C warp spiders max HP and regeneration") end },
+	{ 50, function() sel(US.farseer, "hero max energy up, energy regeneration down") end },
+	{ 56, function() sel(US.S, "S guardians sight down, melee skill up") end },
+	{ 61, function() cast(US.commissar, "ability/pvp/race_imperial_guard/commissar_lord/ig_commissar_kill_target_execute", US.G, "execute -> G") end },
+	{ 63, function() sel(US.G, "G guardsmen after execution") end },
+	{ 68, function() cast(US.N, "ability/pvp/race_ork/nobs/ork_buff_self_frenzy", nil, "frenzy N") end },
+	{ 69, function() sel(US.N, "N nobz frenzy") end },
+	{ 75, function() sel(US.K, "K guardians nothing, bars back to white") end },
+	{ 81, function() sel(US.C, "C warp spiders again") end },
+	{ 87, function() sel(US.T, "T chimera again") end },
+}
+function US_Tick()
+	US.t = US.t + 1; local t = US.t
+	if t % 5 == 0 then UL("tick", t) end
+	for _, e in ipairs(PLAN) do if e[1] == t then local ok, err = pcall(e[2]); if not ok then UL("PLAN ERR", t, tostring(err)) end end end
+	if t == 93 then UL("US7 DONE") end
+end
+UL("unitstats v7 scar loaded")

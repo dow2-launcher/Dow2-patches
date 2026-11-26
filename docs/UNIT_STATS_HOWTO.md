@@ -22,7 +22,12 @@ v6 / 0.6 (19.11.2026, SirItos: "show them in the replay, maybe as extra info whe
 some tooltip there"): in a replay the numbers are in the game's tooltip of a squad icon of the players' panels, and the
 selected squad's numbers stand right above the observer panel. Section "v6" at the end.
 
-Status (0.6, 19.11.2026; 0.5 since 07.11.2026): **an add-on of the launcher store** - id `unitstats`, store version `unitstats-0.6`, category
+v7 / 0.7 (26.11.2026, grantovich: "on a transport the buffs / debuffs are drawn over the icons of the units inside"; "buffs to
+speed, range, sight, damage, melee skill - change the number itself, green when buffed, red when debuffed"; "energy and HP
+buffs into the bar under the portrait"): the effects colour the numbers, HP / energy ones go into the bars, the effect icons
+keep clear of the native widgets. Section "v7" at the end.
+
+Status (0.7, 26.11.2026; 0.6 19.11.2026; 0.5 since 07.11.2026): **an add-on of the launcher store** - id `unitstats`, store version `unitstats-0.7`, category
 experiment, off by default (addons.json, docs/store-texts.json). `make build/UnitStats.dll` (in `make all`). Code:
 `unitstats/unitstats.c`. The DPS shown is the attribute editor's (section v5 at the end); 0.1-0.4 were the experiment
 of the archive branch `archive/unitstats-experiment`. No ini is shipped: every setting has its default in the code;
@@ -623,3 +628,82 @@ Screenshots and logs: /var/www/media/dow2_shots/unitstats/replay_1119/.
 | a53ddae9 anadi_ch vs Jötunn, 2p_calderisrefinery, 1v1 | vanilla | 7.5 min, 5.5 min hovering (233 / 11) | 4996 ticks, equal except tick 0 - the same without the DLL (CrcTrace alone: tick 0 differs too, the two traces equal on all 1082 common ticks) |
 
 No fault, no watchdog line, no crash in any run. 0.5 in the same replay: nothing at all (`00_v05_replay_nothing_shown`).
+
+## v7 - effects in the numbers and the bars, clear of the native widgets (0.7, 26.11.2026)
+
+grantovich (Discord, 26.11, screenshot of a Chimera with two squads inside: our "-25%" over the first of their portraits):
+1. "the buffs / debuffs of a transport are drawn over the icons of the units inside it";
+2. "buffs and debuffs to speed, range, sight, damage and melee skill: change the number itself - 113 grows by the buff and turns
+   green, a debuff lowers it and turns it red; no separate lines";
+3. "energy and HP buffs: into the bar under the portrait".
+
+### The numbers (what they are, how the colour is decided)
+
+The numbers were already the engine's modified values; 0.7 compares each with the same number without any modifier:
+
+| Number | shown (the engine's, as before) | compared with (no modifier) | effects it takes in (no icon of their own any more) |
+|---|---|---|---|
+| ranged / melee DPS | the editor's formula with damage, cooldown, reload through the weapon modifier function `0x8A6790` (type 7 damage already multiplies in the melee / ranged / projectile damage types 0xE / 0xF / 0x10 - `0x8A65C0`), x the level multiplier | the same formula with the weapon bag's raw damage / cooldown / reload (same level multiplier) | damage_weapon, damage_melee / ranged / projectile_weapon, cooldown_weapon, reload_weapon |
+| range | the weapon's GetMaxRange - the range allowance | the weapon bag's max range - the allowance | range_maximum_weapon |
+| speed | moving_ext speed_max through the entity modifier function `0x8A6AC0` type 6 | moving_ext speed_max | speed_maximum |
+| sight | SightExt +0x28 | that value with the entity modifiers of type 0x0A taken out: `0x8A6AC0` gives (v + add) x mul, f(1) - f(0) = mul, f(0) / mul = add, base = v / mul - add | sight_radius |
+| melee skill | the game's getter `0x862CB0` (leveling skill + type 0x2F) | the same, type 0x2F taken out | skill_melee |
+
+Green when the shown number is above the base by more than half a percent, red when below (float noise of the modifier
+functions stays white). A level-up is not an effect (its multiplier is in both). Permanent modifiers from upgrades count as
+effects too (the number differs from the blueprint's) - the same as the effect icons always did.
+
+### The bars
+
+`status_bars.health` / `.energy` (vanilla and Elite movies alike): `amount_txt` "500 / 500" (DefineEditText 151 / 160, white,
+centred over the bar; the game sets it with `.text` through `Receive_SetText`). max HP (entity health_maximum) / max energy
+(squad energy_maximum) changed: the native text is coloured green / red with the movie's own `Receive_SetTextColor`, back to white
+when the effect is gone, nothing or another squad is shown. Green on the green HP bar was unreadable (stand run b), so while it is
+coloured a dark backing (our clip `us_bg` at depth 9 of the bar - over the fill, under `amount_txt` at 10 - drawn with the AS
+drawing API, sized to `amount_txt.textWidth`) stands behind the number. HP / energy regeneration (entity health_regeneration / squad
+energy_regen_rate) changed: our clip `us_n` inside the bar - the effect's icon and "+100%" - right aligned at the bar's right
+end; when the centred native number would reach it, `amount_txt._x` is moved left just enough (and put back with the note).
+`[UnitStats] BarEffects=0`: these four stay icons. In the replay boxes (no such bar there) they stay icons.
+
+### The icons left: clear of the native widgets
+
+The effect icons kept are those no number shows (damage / suppression / accuracy taken, accuracy, armour penetration, burst,
+vs-armour damage, knockback, recharge, hidden / no fire / no retreat). The squads inside a transport or a building are the
+portraits `main_panel.multi_select.mini_portrait00..07` - in the same strip as the effect rows (core_actions x -483 + 67 per
+portrait, y 146..207, stand 1). Every update their boxes are read back from the movie (`_visible` of the clip and every parent;
+its `_x/_y/_width/_height` in its parent, every parent's `_x/_y/_xscale/_yscale` up to `_root`, then into core_actions' units with
+core_actions' own `_x/_y/_xscale/_yscale`) and a row of icons starts `[Effects] Gap` right of every visible portrait it overlaps
+by more than 30 % of the height. What does not fit then is dropped as before (the log says "not all fit").
+Not taken as obstacles: `main_panel.reinforce_queue_btn` and `squad_full` / `squad_partial` - their boxes read back x -478..-299,
+y 51..230 (hidden progress dial and rollover frames) while what they draw stays above the strip; taking them pushed every icon off
+an infantry squad's panel (stand run a).
+
+`[UnitStats] BuffColors=0` is 0.6 exactly: white numbers, every effect an icon (the portraits are still avoided).
+
+### Checked on stand 1 (26.11.2026)
+
+`unitstats/stand/session_v7.sh` (Elite 3.2.1) / `vsession_v7.sh` (vanilla 3.19, the launcher's loader) + `unitstats_v7.scar`:
+Eldar (Warlock) vs IG (Lord Commissar), AI off; effects from abilities (Guide, Fortune, exarch aura, suppression by a heavy weapon
+team, the commissar's execution, Frenzy) and from SCAR modifiers (Modify_UnitSpeed / ReceivedDamage / WeaponDamage /
+WeaponAccuracy / SightRadius, Modifier_Create health_maximum / health_regeneration / skill_melee / energy_maximum /
+energy_regen_rate); a Chimera and a Falcon with a squad loaded by Cmd_InstantGarrison. Screenshots
+/var/www/media/dow2_shots/unitstats/v7/ (raw runs in raw/, replay in replay/), logs there too.
+
+| Case | shown | without effects (log) |
+|---|---|---|
+| Chimera + guardsmen inside, speed x0.75, damage taken x0.75 | speed 6.0 red; "-25%" icon right of the two portraits (core_actions x -483..-355 read back) | speed 8.0 |
+| Falcon + guardians inside, damage x1.2, accuracy x1.5, damage taken x0.6, melee taken x0.8 | ranged DPS 83.56 green; "+50%" "-40%" right of the portraits (third did not fit) | 69.63 |
+| Guardians + Guide + Fortune | ranged 56.88 / melee 43.33 / range 49.7 green; Fortune "-30%" and cover "-50%" "-50%" icons | 43.75 / 33.33 / 38 |
+| Banshees + exarch aura | speed 6.0 green | 5.5 |
+| Guardians under heavy weapon fire (cooldown x20, speed x0.35) | ranged 6.69 red, speed 1.9 red | 43.75 / 5.5 |
+| Guardians, sight x0.7, melee skill +20 | sight 28 red, skill 70 green | 40 / 50 |
+| Guardsmen after the execution (damage x2) | ranged 43.24 / melee 20 green | 21.62 / 10 |
+| Warp spiders, max HP x1.25, regeneration x2 | "950 / 950" green on its backing, regeneration icon + "+100%" | - |
+| Warlock, max energy x1.5, energy regeneration x0.5 | "57 / 150" green, energy icon + "-50%" red | - |
+| fresh guardians after all that | everything white, the bars as the game draws them | - |
+
+Vanilla (vsession_v7.sh, the Elite-only abilities left out): the same numbers and colours (Falcon 77.63 green / 64.69 - vanilla
+data), the Chimera's icon right of its portraits. Replay (Elite 1v1 67343d34, the 0.6 harness): tooltip and selected-squad box
+as in 0.6. No fault, no watchdog line in any run. The first vanilla run froze 15 s in: its SCAR asked for the exarch aura, which
+vanilla does not have under that name - in -dev that stops the simulation (no panel update at all, ours idle); the script now
+leaves those abilities out for vanilla.
