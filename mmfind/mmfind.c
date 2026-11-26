@@ -88,6 +88,14 @@
 // only when my Your Party row of this visit does not already say Random (stand 20.11: the game drops Random on every entry - the
 // row shows its stored race again, the hero panel shows yet another race until the match rolls); with Random saved the info block
 // says "Army: Random (race and hero are rolled in the match)".
+// 0.56 (26.11.2026, SirItos 24.11 in a party: "he had Random, Orks were shown"; "after the game we could not Continue together"):
+// - Find a Game reached by the post-game Continue (the party goes back together) comes without the hero panel and Random pressed
+//   then does nothing: the party showed / searched with the stored races while the info block said "Army: Random". MMFind opens
+//   the hero panel as the click on one's own portrait does (party_panel_mc.OnHeroClick), then puts the saved army as on any entry.
+// - Your Party: my row is found among all rows (a party member's is not the first) - 0.55 compared only the leader's row.
+// - A party member's Match Type is the leader's: no longer set by MMFind nor shown as the member's own saved mode.
+// - The game ending its own search by itself (a party member left) is passed to the ladder (mm/leave): before, the party's search
+//   stayed queued and the member who left stood on "Processing" until he restarted the game.
 // Hooks: Invoke 0x45DB6C (engine -> Flash, to read lists and to show our status), fscommand handler 0x681AB0 (Flash -> engine, to
 // catch the button and to send menu commands), Shark.dll shark::update (main-thread tick).
 #ifndef _WIN32_WINNT
@@ -138,6 +146,8 @@ static volatile int g_screen;
 static char g_panel[160];                 // path of the current full-screen panel, e.g. _level0.display_item.panel2_mc.panel_mc
 static void *g_fsSelf, *g_fsMovie;        // fscommand handler + frontend movie, taken from real button presses
 static volatile int g_heroShown;          // hero selection is on screen
+static volatile int g_heroVisit, g_heroOpenTried;   // 0.56: the hero panel came on this visit of Find a Game / we opened it ourselves
+static volatile int g_mtLocked;           // 0.56: the Match Type drop-down is disabled - a party member (only the leader picks it)
 static volatile DWORD g_heroTick, g_scrTick;   // the hero panel's last message / the last screen change
 static volatile int g_humans;             // people in the last Custom Games lobby (its player list): a match with people = a replay
 static wchar_t g_myName[64];              // our gamer tag
@@ -247,7 +257,7 @@ static int g_pipeCfg = 1, g_debugPipe;
 // the army the game really searches with is the one COMMITTED on Find a Game - its own "Your Party" row (Receive_PopulateList: name,
 // race, hero, the hero's xs image) changes only after the hero panel's Ready. g_partyImg = that image of my row; the room's army is
 // checked against it before Start Searching (the image names come from the game data, the same in every language).
-static char g_partyImg[200]; static volatile DWORD g_partyTick; static DWORD g_rAcceptAt, g_rDeadline; static int g_rMMFresh, g_rWalks;
+static char g_partyImg[200]; static volatile DWORD g_partyTick; static volatile int g_partyRow = -1; static DWORD g_rAcceptAt, g_rDeadline; static int g_rMMFresh, g_rWalks;
 static int g_rOpt[4] = {-1, -1, -1, -1};      // 0.47: the room's options for the host: victory condition, VPTK, SLOC, RSST (-1 = the game's)
 static void room_set(int rs); static void room_ev(const char *ev);
 // 0.38 (owner 03.11.2026: "Start Searching straight to the loading screen, fully on our servers"): with OwnLobby.dll in the game and
@@ -257,6 +267,7 @@ static void room_set(int rs); static void room_ev(const char *ev);
 static volatile int g_natAnswer;            // 0 waiting, 1 native, 2 not native (g_natWhy)
 static volatile DWORD g_natPass, g_natGood; static volatile int g_natSeen, g_natCancelled;   // pass-through time, last native answer of the ladder
 static volatile int g_engSearch = -1;       // the engine's own search state (Receive_ShowSearchingAnimation as the engine sends it), -1 unknown
+static char g_natSt[16]; static volatile DWORD g_natStTick, g_engOffAt;   // 0.56: the ladder's last word on our native search (state, when); the engine's search off since
 static DWORD g_stopGrace;                   // 0.45: no stray-search stop before this (the game is still ending a native search of ours)
 static char g_natLobby[48], g_natWhy[96], g_natLastCancel[32];
 // 0.42 (owner 03.11.2026: "when we press search, show right away which search it is"): the kind of search, text fields of ours in
@@ -265,8 +276,8 @@ static char g_natLobby[48], g_natWhy[96], g_natLastCancel[32];
 // what to do, "MMFind 0.45", the queue and who is online. Shown from the moment the screen opens (a peek at mm/native: the ladder
 // answers as for Start Searching and changes nothing; again every 20 s and on a match type change while the screen is open), after
 // the click by what really happened. [MMFind] ShowMode=1 (default) / 0 = off, Lang=auto (the game's own text: Cyrillic = Russian) / ru / en.
-#define MMF_VER "0.55"
-#define MMF_VER_W L"0.55"
+#define MMF_VER "0.56"
+#define MMF_VER_W L"0.56"
 static int g_showMode = 1, g_langCfg = -1, g_lang = -1, g_modeProbe;
 static double g_mx = 1065, g_my = 590, g_msz = 30;           // panel units, see mode_make
 static volatile int g_peekWant, g_peekAns; static volatile DWORD g_peekLast; static char g_peekWhy[96];
@@ -670,6 +681,7 @@ static DWORD WINAPI net_worker(LPVOID _) {
                     int nat = jtrue(res, "native"), good = nat && (!strcmp(state, "searching") || !strcmp(state, "matched") || !strcmp(state, "playing"));
                     static char lastSt[48]; char cur[48]; snprintf(cur, sizeof cur, "%s%s %s", nat ? "native " : "", state, mid);
                     if (strcmp(cur, lastSt)) { strcpy(lastSt, cur); logmsg("native: the ladder says %s", res); }
+                    snprintf(g_natSt, sizeof g_natSt, "%s", state); g_natStTick = GetTickCount();
                     if (g_rs == RS_SEARCH && !strcmp(state, "matched")) {          // 0.47: tell the launcher
                         if (!g_rEvMatched) g_rEvMatched = 1;
                         char rm2[24] = ""; if (!g_rEvRoom && jstr(res, "room", rm2, sizeof rm2) && rm2[0] >= '1' && rm2[0] <= '9') g_rEvRoom = 1; }
@@ -1132,13 +1144,22 @@ static char __fastcall inv_hook(void *self, void *edx, const char *method, int f
             logmsg("map preferences: %d maps for %s", g_mpN, MODE_KEY[g_mode]);
             return g_invOrig(self, edx, method, flags, g_mpArgs, n);
         }
-        if (!strcmp(method, "Receive_PopulateList") && count >= 4 && g_screen == SC_MM && args[0].type == GFX_WSTRING && args[0].v.ws
-            && (!g_myName[0] || !wcscmp(args[0].v.ws, g_myName))) {        // 0.48: my row of Your Party - the army the game searches with
-            char img[200] = "";
-            if (args[3].type == GFX_STRING && args[3].v.s && !IsBadReadPtr(args[3].v.s, 1)) snprintf(img, sizeof img, "%s", args[3].v.s);
-            else if (args[3].type == GFX_WSTRING && args[3].v.ws && !IsBadReadPtr(args[3].v.ws, 2)) WideCharToMultiByte(CP_UTF8, 0, args[3].v.ws, -1, img, sizeof img, NULL, NULL);
-            img[sizeof img - 1] = 0; _strlwr(img);
-            if (img[0]) { if (strcmp(img, g_partyImg)) { strcpy(g_partyImg, img); if (g_rs) logmsg("room: Your Party says %s", img); } g_partyTick = GetTickCount(); }
+        if (!strcmp(method, "Receive_PopulateList") && count >= 4 && g_screen == SC_MM) {
+            // 0.48: my row of Your Party - the army the game searches with. 0.56: the list is 10 fields a row (name, race, hero, the
+            // hero's xs image, ...), the party leader's row first - a party member's own row is the 2nd / 3rd one (0.48-0.55 read only
+            // the first row, so a member never saw his own army and pressed Random on every entry)
+            int k = -1;
+            for (unsigned r = 0; r * 10 + 3 < count && r < 3; r++)
+                if (args[r * 10].type == GFX_WSTRING && args[r * 10].v.ws && !IsBadReadPtr(args[r * 10].v.ws, 2)
+                    && (r == 0 ? !g_myName[0] || !wcscmp(args[0].v.ws, g_myName) : g_myName[0] && !wcscmp(args[r * 10].v.ws, g_myName))) { k = (int)r; break; }
+            if (k >= 0) {
+                GFxValue *a3 = &args[k * 10 + 3]; char img[200] = "";
+                if (a3->type == GFX_STRING && a3->v.s && !IsBadReadPtr(a3->v.s, 1)) snprintf(img, sizeof img, "%s", a3->v.s);
+                else if (a3->type == GFX_WSTRING && a3->v.ws && !IsBadReadPtr(a3->v.ws, 2)) WideCharToMultiByte(CP_UTF8, 0, a3->v.ws, -1, img, sizeof img, NULL, NULL);
+                img[sizeof img - 1] = 0; _strlwr(img);
+                if (img[0]) { if (strcmp(img, g_partyImg)) { strcpy(g_partyImg, img); if (g_rs || k) logmsg("%sYour Party says %s (my row %d)", g_rs ? "room: " : "", img, k + 1); }
+                              g_partyTick = GetTickCount(); g_partyRow = k; }
+            }
         }
         if (!strcmp(method, "Receive_SetGamerTag") && count >= 1 && args[0].type == GFX_WSTRING && args[0].v.ws) wcsncpy(g_myName, args[0].v.ws, 63);
         else if (!strcmp(method, "Receive_PopulatePlayerList")) on_player_list(args, count);
@@ -1151,13 +1172,17 @@ static char __fastcall inv_hook(void *self, void *edx, const char *method, int f
         else if (!strcmp(method, "Receive_SetDropDownSelection") && count == 2 && args[0].type == GFX_NUMBER && args[1].type == GFX_NUMBER) {
             int dd = (int)args[0].v.num, v = (int)args[1].v.num;
             if (self == g_heroSelf) { if (dd == 0) { if (v != g_curRace) g_curChapter = -1; g_curRace = v; } else if (dd == 1) g_curChapter = v; }
-            else if (g_screen == SC_MM && dd == 0 && v != g_mode && v >= 0 && v < 4) {   // Match Type: the engine keeps resetting it - show the player's choice
+            else if (g_screen == SC_MM && dd == 0 && v != g_mode && v >= 0 && v < 4 && !g_mtLocked) {   // Match Type: the engine keeps resetting it - show the player's choice
+                // 0.56: not for a party member - his Match Type is the leader's (the drop-down disabled); 0.55 showed him his own saved one
                 static int n; if (n++ < 20) logmsg("match type: engine set %d, keeping %d", v, g_mode);
                 args[1].v.num = g_mode;
             }
         }
-        else if (!strcmp(method, "Receive_ShowHeroSelect")) { g_heroShown = 1; g_heroUp = 1; g_heroTick = GetTickCount(); if (g_screen == SC_MM && g_state == S_IDLE && !g_mmApplied) { g_applyMM = 1; g_mmApplied = 1; } }
+        else if (!strcmp(method, "Receive_ShowHeroSelect")) { g_heroShown = 1; g_heroUp = 1; if (g_screen == SC_MM) g_heroVisit = 1; g_heroTick = GetTickCount(); if (g_screen == SC_MM && g_state == S_IDLE && !g_mmApplied) { g_applyMM = 1; g_mmApplied = 1; } }
         else if (!strcmp(method, "Receive_HideHeroSelect")) g_heroShown = g_heroUp = 0;
+        else if (!strcmp(method, "Receive_SetDropDownEnabled") && count == 2 && g_screen == SC_MM && self != g_heroSelf && args[0].type == GFX_NUMBER
+                 && (int)args[0].v.num == 0 && args[1].type == GFX_BOOL) {     // 0.56: Find a Game's Match Type: disabled = I am a party member
+            int lk = !args[1].v.b; if (lk != g_mtLocked) { g_mtLocked = lk; logmsg("match type: %s", lk ? "the party leader's (I am a party member) - not set by MMFind" : "mine to pick"); } }
     }
     if (method && !strcmp(method, "Receive_SetStartButtonText") && count == 1 && args && args[0].type == GFX_WSTRING && args[0].v.ws
         && !IsBadReadPtr(args[0].v.ws, 2) && g_langCfg < 0 && g_lang != 1 && has_cyr(args[0].v.ws)) { g_lang = 1; logmsg("search kind: language ru (the Start button)"); }
@@ -1189,7 +1214,7 @@ static void search_blocked(const char *why) {
 static void search_click(void) {
     if (g_curRace >= 0 && !g_random) { g_race = g_curRace; g_chapter = g_curChapter; if (g_curHero >= 0) g_hero = g_curHero; save_choice();
         logmsg("search with race %d chapter %d hero %d (as shown on Find a Game)", g_race, g_chapter, g_hero); }
-    g_searchTick = GetTickCount(); g_queue = -1; g_runWhy[0] = 0;
+    g_searchTick = GetTickCount(); g_queue = -1; g_runWhy[0] = 0; g_natSt[0] = 0; g_engOffAt = 0;
     const char *no = native_no();
     if (!no) { g_natAnswer = 0; g_natSeen = g_natCancelled = 0; g_natLobby[0] = 0; g_natWatchUntil = 0; set_state(S_NASK); SetEvent(g_wake); }   // 0.38: ask the ladder
     else search_blocked(no);
@@ -1230,7 +1255,7 @@ static void __fastcall fs_hook(void *self, void *edx, void *movie, const char *c
                 else if (strstr(url, "game_list_movie.gfx")) sc = SC_LIST; else if (strstr(url, "game_setup_movie.gfx")) sc = SC_SETUP;
                 else if (strstr(url, "mp_postgame.gfx")) sc = SC_OTHER;
                 if (sc >= 0 && !strcmp(path + strlen(path) - 9, ".panel_mc")) {
-                    strcpy(g_panel, path); g_screen = sc; g_scrTick = GetTickCount(); g_engSearch = -1; g_mapUp = 0; if (sc != SC_MM) g_heroUp = 0; else g_mmApplied = 0;
+                    strcpy(g_panel, path); g_screen = sc; g_scrTick = GetTickCount(); g_engSearch = -1; g_mapUp = 0; if (sc != SC_MM) g_heroUp = 0; else g_mmApplied = 0; g_heroVisit = g_heroOpenTried = 0;
                     g_visit++;                                       // 0.49: the Map Preferences dialog of an earlier visit is gone
                     if (sc == SC_MM && g_rs == RS_WALK) g_rMMFresh = 1;   // 0.48: Find a Game opened by this walk (its hero panel comes up fresh)
                     logmsg("screen %d panel %s", sc, g_panel);
@@ -2148,6 +2173,18 @@ static void tick(void) {
         }
         break;
     case S_NATIVE: {                                                  // 0.38: the game searches by itself; we only watch the ladder
+        // 0.56 (stand 26.11, a party): the game ends its own search without any click of ours - a party member left the party
+        // (Back on his Find a Game) - and its automatch/stoppolling carries no poll id, so neither our lobby server nor the ladder
+        // learnt it: the party's search stayed in the queue as long as the member who left kept polling it, and that member's
+        // game stood on "Processing" / Cancel Searching until it got the server's stop (never). Off for 3 s on Find a Game while
+        // the ladder still says "searching" (not matched: in a match's room the search goes off before the loading) = stopped:
+        // the ladder is told (mm/leave) and our lobby server stops the search for every member of the party.
+        if (g_engSearch == 0 && g_screen == SC_MM && !g_loading) {
+            if (!g_engOffAt) g_engOffAt = now;
+            else if (now - g_engOffAt > 3000 && !strcmp(g_natSt, "searching") && now - g_natStTick < 3000) {
+                logmsg("native: the game ended its own search by itself (a party member left?) and the ladder still has it - leaving the queue");
+                g_engOffAt = 0; g_queue = -1; set_state(S_IDLE); g_wantLeave = 1; SetEvent(g_wake); break; }
+        } else g_engOffAt = 0;
         DWORD quiet = g_natSeen && (int)(g_natGood - g_natPass) > 0 ? now - g_natGood : now - g_natPass;
         if (quiet <= 10000) break;
         const char *why = g_natSeen ? "the ladder lost the native search" : "the ladder never saw the native search";
@@ -2165,7 +2202,16 @@ static void __stdcall upd_hook(float dt) {
     if (g_applyMM && alive) { static DWORD t; if (!t) t = now; if (now - t > 400) { g_applyMM = 0; t = 0;      // Find a Game: the saved mode and army
         // 0.55: the match type FIRST, the army 0.3 s later (before: Random / the race, then the match type 2 ms after it - a match type
         // change that refreshes the hero panel took the army back); g_armyAt below
-        char a[8]; snprintf(a, sizeof a, "0;%d", g_mode); fs(".OnSelectDropDownItem", a); g_armyAt = now + 300; } }
+        char a[8]; snprintf(a, sizeof a, "0;%d", g_mode); if (!g_mtLocked) fs(".OnSelectDropDownItem", a); g_armyAt = now + 300; } }
+    // 0.56 (SirItos 24.11, party: "he had Random - Orks were shown"): Find a Game reached by the post-game Continue (the party goes back
+    // together) comes WITHOUT the hero panel (no Receive_ShowHeroSelect), and Random pressed without it does nothing (stand 26.11) -
+    // the party plays the stored race while our info block says Random. Then the hero panel is opened the way the player's click on
+    // his own portrait in Your Party does (party_panel_mc.OnHeroClick '<my row>'); its ShowHeroSelect brings the saved army as always.
+    if (alive && g_screen == SC_MM && !g_heroVisit && !g_heroOpenTried && !g_mmApplied && g_state == S_IDLE && g_rs == RS_NONE && !g_loading
+        && (g_random || g_race >= 0) && g_partyRow >= 0 && g_partyTick && (int)(g_partyTick - g_scrTick) >= 0 && now - g_scrTick > 1500) {
+        g_heroOpenTried = 1; char a[8]; snprintf(a, sizeof a, "%d", g_partyRow);
+        logmsg("army: Find a Game came without the hero panel (back from a match by Continue?) - opening it (my row %d) for the saved army", g_partyRow + 1);
+        fs(".party_panel_mc.OnHeroClick", a); }
     if (g_armyAt && now >= g_armyAt) { g_armyAt = 0;
         if (alive && g_screen == SC_MM) {
             if (g_random) {

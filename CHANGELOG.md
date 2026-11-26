@@ -4,6 +4,32 @@ Every version gets an entry here before it reaches `main`. CI then tags `vX.Y.Z`
 version (`X.Y.0`) it also publishes a GitHub Release with the DLLs and the entries since the previous `X.Y.0`.
 The version of the set lives only in `VERSION`; each DLL still writes its own version to its log.
 
+## 0.2.129 — 2026-11-26
+MMFind 0.56 (Automatch v2.0; hand release: store automatch mmfind-0.56 = the live package mmfind-0.55 with this MMFind.dll), parties
+on Find a Game (SirItos 24.11, party leader: "he had Random - Orks were shown, mine showed fine"; "at the end of the game we could
+not continue together - Continue was not active for the host"). Stands 26.11, party of two (stand 1 leader, stand 2 joined with
+`+connect_lobby <the leader's Steam lobby>`), test lobby / test ladder, a real party match (one team: the test ladder put only the
+party in the match, research MatchOpts.dll SoloStart on the stands), shots in media/dow2_shots/party_1126:
+- Find a Game reached by the post-game Continue (the party goes back together) comes WITHOUT the hero panel (no
+  Receive_ShowHeroSelect), so 0.55 never put the saved army, and Random pressed without the panel does nothing: both rows showed
+  the stored races (Orks / Mekboy, Eldar / Warlock) while the info block said "Army: Random" - the report. Now, 1.5 s after entering
+  Find a Game without the panel, MMFind opens it the way the click on one's own portrait in Your Party does
+  (party_panel_mc.OnHeroClick '<my row>') and the saved army is put as on any entry: both rows Random again (stand, 0.56).
+- Your Party rows are 10 fields each, the leader's first: my row is looked up by name among all rows (0.48-0.55 read only the
+  first, so a party member never saw his own row; the room's army check and "Random already set" are right for members now).
+- A party member's Match Type is the leader's (its drop-down disabled): MMFind no longer selects the member's saved mode on his
+  screen nor rewrites what the engine shows him (0.55 sent his own mode to his game at every entry).
+- The game ending its own search by itself while ours runs (a party member pressed Back during the search; the leader's
+  automatch/stoppolling carries no poll id, so neither the lobby server nor the ladder learnt it): 3 s off on Find a Game while the
+  ladder still says "searching" = MMFind leaves the ladder's queue (mm/leave); the lobby server then stops the party's search for
+  every member. Before: the party's search stayed queued and the member who left stood on "Processing" / Cancel Searching until he
+  restarted the game (stand, 0.55: reproduced twice; 0.56: the member is back in the main menu, the queue empty).
+- Continue itself: on our servers it is enabled for the party leader after a party match (stand: "Play again with the same team",
+  the member greyed, both back on Find a Game in the same party). The game enables it (canContinue 0x47F7EF) only while the party
+  session is connected and every party member's game has reported arriving at the post-game screen (PartyProgresser
+  PPMT_ArriveAtPostgame over the party session) - a member who is still in the match / left the post-game screen / dropped keeps it
+  grey. Not reproduced: the stand match was seconds long; a 20+ minute match on Relic's party relay is not tested.
+
 ## 0.2.128 — 2026-11-26
 Unit stats 0.8 (store unitstats-0.8, the store entry keeps its group / order, off by default, Elite and vanilla), noofancy 24.11
 ("unit stats does not show the dogs' regeneration - an integer value there, it shows only per cent"; Hormagaunts at a Brood Nest).
