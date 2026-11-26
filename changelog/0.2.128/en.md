@@ -1,0 +1,1 @@
+- Unit stats: flat health and energy regeneration bonuses are now shown (for example the Brood Nest's +1 HP/s on Hormagaunts): "+1/s" at the right end of the bar under the portrait, green for a bonus, red for a penalty.
