@@ -4,6 +4,18 @@ Every version gets an entry here before it reaches `main`. CI then tags `vX.Y.Z`
 version (`X.Y.0`) it also publishes a GitHub Release with the DLLs and the entries since the previous `X.Y.0`.
 The version of the set lives only in `VERSION`; each DLL still writes its own version to its log.
 
+## 0.2.128 — 2026-11-26
+Unit stats 0.8 (store unitstats-0.8, the store entry keeps its group / order, off by default, Elite and vanilla), noofancy 24.11
+("unit stats does not show the dogs' regeneration - an integer value there, it shows only per cent"; Hormagaunts at a Brood Nest).
+UnitStats.dll 0.8:
+- flat (additive) HP / energy regeneration effects are shown: the Brood Nest's health_regeneration addition 0.1 (the tooltip's
+  "1 HP/s") and the other regeneration additions of the data (0.05..2.4; energy 0.05..0.35) are per sim tick, and an addition
+  counted 1/100 of its size towards "is there an effect" (0.001 < 0.004) - never shown. Any real addition counts now;
+  regeneration reads per second at the bar's right end: "+1/s" (green), "-0.5/s" (red), a multiplier and an addition together
+  "+100% +1/s"; in replays the same text in the effect's icon cell;
+- the other additions of Elite's data were already shown (max HP +200, range +5, melee skill +10, knockback -100); small speed
+  additions (+0.15) colour the speed number as before. Stand scripts: unitstats/stand/session_v8.sh + unitstats_v8.scar.
+
 ## 0.2.127 — 2026-11-26
 Unit stats 0.7 (store unitstats-0.7, the store entry keeps its group / order, off by default, Elite and vanilla), grantovich 26.11
 (screenshot: a Chimera with two squads inside, our "-25%" over the first one's portrait). UnitStats.dll 0.7:

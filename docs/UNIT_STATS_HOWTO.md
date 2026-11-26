@@ -27,7 +27,10 @@ speed, range, sight, damage, melee skill - change the number itself, green when 
 buffs into the bar under the portrait"): the effects colour the numbers, HP / energy ones go into the bars, the effect icons
 keep clear of the native widgets. Section "v7" at the end.
 
-Status (0.7, 26.11.2026; 0.6 19.11.2026; 0.5 since 07.11.2026): **an add-on of the launcher store** - id `unitstats`, store version `unitstats-0.7`, category
+v8 / 0.8 (26.11.2026, noofancy 24.11: "unit stats does not show the dogs' regeneration - an integer value there, it shows only
+per cent"; Hormagaunts at a Brood Nest): flat (additive) HP / energy regeneration is shown, per second. Section "v8" at the end.
+
+Status (0.8, 26.11.2026; 0.7 26.11.2026; 0.6 19.11.2026; 0.5 since 07.11.2026): **an add-on of the launcher store** - id `unitstats`, store version `unitstats-0.8`, category
 experiment, off by default (addons.json, docs/store-texts.json). `make build/UnitStats.dll` (in `make all`). Code:
 `unitstats/unitstats.c`. The DPS shown is the attribute editor's (section v5 at the end); 0.1-0.4 were the experiment
 of the archive branch `archive/unitstats-experiment`. No ini is shipped: every setting has its default in the code;
@@ -707,3 +710,34 @@ data), the Chimera's icon right of its portraits. Replay (Elite 1v1 67343d34, th
 as in 0.6. No fault, no watchdog line in any run. The first vanilla run froze 15 s in: its SCAR asked for the exarch aura, which
 vanilla does not have under that name - in -dev that stops the simulation (no panel update at all, ours idle); the script now
 leaves those abilities out for vanilla.
+
+## v8 - flat regeneration (0.8, 26.11.2026)
+
+noofancy's screenshot (0.6): Hormagaunts beside a Brood Nest, 463 / 640, only their own "-40%" (melee damage taken) shown. The
+Brood Nest (`ebps/pvp/race_tyranid/buildings/tyr_spawning_pool`, always-on `tyr_heal_aoe_broodnest`) puts
+`health_regeneration_modifier`, usage addition, **0.1** on allied infantry in radius 30 - its tooltip says "1 HP/s". The
+regeneration the engine reads (`0x85C3C0`, `0x8A6AC0` type 1) is per sim tick, so are the additions: Elite's data has 121
+health_regeneration additions (98 of them 0.05..0.35, up to 2.4) and 80 energy_regen_rate additions (0.05..0.35). The effect
+reader got mul 1, add 0.1 right, but the "is there an effect" score counted an addition as |add| / 100 (made for +50 HP,
++10 melee skill): 0.001 against the 0.004 cut - never shown, in 0.6 (an icon) as in 0.7 (the bar).
+
+0.8: `eff_score` - any addition above 1e-4 scores at least 0.005 (no addition gives an exact 0: `(0 + 0) x mul`); the mode
+`EM_REGEN` for health_regeneration / energy_regen_rate writes an addition x 10 per second ("+1/s", "-0.5/s", "+0.25/s"), a
+multiplier as before ("+100%"), both "+100% +1/s". The other additions of the data were already above the cut (max HP 50..900,
+energy max 20..100, range 4..15, melee skill 1..50, knockback 100); speed additions 0.15..0.25 only colour the speed number
+(compared with the blueprint, no score involved).
+
+Stand 1, Elite 3.2.1 (`unitstats/stand/session_v8.sh` + `unitstats_v8.scar`: Tyranids, a real Brood Nest made by
+Entity_Create, six Hormagaunt broods at half HP, model 0 HP logged every 2 s). Screenshots /var/www/media/dow2_shots/unitstats/v8/.
+
+| Squad | shown at the HP bar | HP of model 0 |
+|---|---|---|
+| X at the Brood Nest | regeneration icon + "+1/s" green | +1.5 per s |
+| Y nothing of ours (in the nest's radius too) | "+1/s" | +1.5 per s |
+| Z SCAR addition 0.1 (+ the nest's) | "+2/s" | +2.5 per s |
+| M regeneration x2, damage taken x0.75 | "+100%"; the "-25%" icon as before | - |
+| B regeneration x2 and +0.1 | "+100% +1/s" | - |
+| N addition -0.05, out of the nest's radius | "-0.5/s" red | stays (its own 0.05 per tick minus 0.05 = 0) |
+
+Each 0.1 of addition = 1 HP/s more (Z - Y), the per-second factor 10 confirmed; the half HP/s more than the additions is the
+Hormagaunt's own regeneration (0.05 per tick, which N's -0.05 cancels). No fault, no watchdog line.

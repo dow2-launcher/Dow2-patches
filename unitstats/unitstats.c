@@ -88,6 +88,12 @@
 //     start right of every native widget visible in that strip (the loaded / garrisoned squads' portraits of
 //     main_panel.multi_select), measured every update - nothing of ours covers them.
 //   [UnitStats] BuffColors=0 = as 0.6 (white numbers, every effect an icon).
+// v8 / 0.8 (26.11.2026, noofancy 24.11: "unit stats does not show the dogs' regeneration - an integer value there, it shows only
+// per cent"; Hormagaunts at a Brood Nest, tyr_heal_aoe_broodnest = health_regeneration addition 0.1): HP / energy regeneration
+// additions are per sim tick (0.05..0.35 in Elite's data, the tooltip's "1 HP/s" = 0.1) and an addition was scored at 1/100 of
+// its size - under the 0.004 cut, never shown. Any real addition is shown now (eff_score), regeneration as "+1/s" (per second),
+// a multiplier and an addition together "+100% +1/s". Other additions (max HP +200, range +5, melee skill +10, knockback -100)
+// already scored above the cut; small speed additions (+0.15) only colour the speed number, as before.
 #include <windows.h>
 #include <stdio.h>
 #include <stdarg.h>
@@ -822,15 +828,17 @@ static const char *mod_name(int cls, int type) {                // "damage_weapo
 }
 
 // what is shown for a modifier type: its icon, which way is good for the squad, how the number reads, a short tag
-enum { EM_PCT, EM_RATE, EM_ADD, EM_ADDP, EM_ON, EM_OFF };   // PCT "+50%"; RATE: a time multiplier as a rate ("cooldown x0.5" = "+100%");
-                                                           // ADD "+50"; ADDP "-100%" (an addition to a chance); ON / OFF: enabled / disabled
+enum { EM_PCT, EM_RATE, EM_ADD, EM_ADDP, EM_ON, EM_OFF, EM_REGEN };   // PCT "+50%"; RATE: a time multiplier as a rate ("cooldown x0.5" = "+100%");
+                                                           // ADD "+50"; ADDP "-100%" (an addition to a chance); ON / OFF: enabled / disabled;
+                                                           // v8 REGEN: HP / energy regeneration - a multiplier "+100%", an addition per sim tick
+                                                           // shown per second "+1/s" (Brood Nest: addition 0.1 = the tooltip's "1 HP/s")
 // v7: fold - FOLD_STAT: the effect is in one of the stat numbers (shown by its colour, no icon of its own); FOLD_BAR: in the HP /
 // energy bar under the portrait (the selection panel only; the replay boxes have no such bar and keep its icon)
 enum { FOLD_NONE = 0, FOLD_STAT = 1, FOLD_BAR = 2 };
 typedef struct { unsigned char cls, type; signed char good; unsigned char mode, icon; const char *tag; unsigned char fold; } EffDef;
 static const EffDef EFFDEF[] = {
     { MC_ENTITY, 0x00, +1, EM_PCT,  EI_HEALTH,    "", FOLD_BAR }, // health_maximum
-    { MC_ENTITY, 0x01, +1, EM_PCT,  EI_REGEN,     "", FOLD_BAR }, // health_regeneration
+    { MC_ENTITY, 0x01, +1, EM_REGEN, EI_REGEN,    "", FOLD_BAR }, // health_regeneration
     { MC_ENTITY, 0x06, +1, EM_PCT,  EI_SPEED,     "", FOLD_STAT }, // speed_maximum
     { MC_ENTITY, 0x0A, +1, EM_PCT,  EI_SIGHT,     "", FOLD_STAT }, // sight_radius
     { MC_ENTITY, 0x0D, +1, EM_ON,   EI_INVIS,     "hidden" },    // camouflage_enable
@@ -877,7 +885,7 @@ static const EffDef EFFDEF[] = {
     { MC_SQUAD,  0x01, -1, EM_PCT,  EI_SUPPDEF,   "" },          // received_courage_damage
     { MC_SQUAD,  0x08, +1, EM_OFF,  EI_NORETREAT, "no retreat" },// retreat_enable
     { MC_SQUAD,  0x02, -1, EM_PCT,  EI_COOLDOWN,  "" },          // ability_recharge_time_squad
-    { MC_SQUAD,  0x0C, +1, EM_PCT,  EI_ENERGY,    "", FOLD_BAR }, // energy_regen_rate
+    { MC_SQUAD,  0x0C, +1, EM_REGEN, EI_ENERGY,   "", FOLD_BAR }, // energy_regen_rate
     { MC_SQUAD,  0x0E, +1, EM_PCT,  EI_ENERGY,    "max", FOLD_BAR }, // energy_maximum
 };
 #define NEFFDEF ((int)(sizeof EFFDEF / sizeof EFFDEF[0]))
@@ -896,6 +904,14 @@ static void *g_effEnts[64]; static int g_effNEnts;
 typedef struct { char *squad; Effs *fx; } EJob;
 // the engine's multiplier and addition of a modifier type for one entity / weapon: f(v) = (v + add) * mul
 static void fit(float f1, float f0, float *mul, float *add) { *mul = f1 - f0; *add = *mul > 1e-6f || *mul < -1e-6f ? f0 / *mul : f0; }
+// how big a change is (the biggest is shown first; > 0.004 = shown at all). v8: an addition counts by its size / 100 (+50 HP =
+// a +50% multiplier) but any real one is shown: the regeneration additions are per sim tick (Brood Nest +0.1 = 1 HP/s, Warlock
+// +0.07, energy +0.05) and scored 0.001 they were never shown (noofancy 24.11: "the dogs' regeneration is not shown").
+// No addition gives an exact 0 here ((0 + 0) x mul), float dust of a +x / -x pair stays under 1e-4.
+static float eff_score(float mul, float add) {
+    float m = mul > 1 ? mul - 1 : 1 - mul, a = add > 0 ? add : -add;
+    return m + (a > 1e-4f ? (a * 0.01f > 0.005f ? a * 0.01f : 0.005f) : 0);
+}
 static void eff_values(void *arg) {
     EJob *j = arg; Effs *fx = j->fx; char *squad = j->squad;
     char *grp = p_allEnts(squad); if (!grp) return;
@@ -932,11 +948,11 @@ static void eff_values(void *arg) {
                 float bs = 0;
                 for (int k = 0; k < nw; k++) {
                     float m, a; fit(us_mod(ws[k], 1.0f, wents[k], d->type), us_mod(ws[k], 0.0f, wents[k], d->type), &m, &a);
-                    float sc = (m > 1 ? m - 1 : 1 - m) + (a > 0 ? a : -a) * 0.01f;
+                    float sc = eff_score(m, a);
                     if (sc > bs) { bs = sc; mul = m; add = a; }
                 }
             } else continue;
-            float sc = (mul > 1 ? mul - 1 : 1 - mul) + (add > 0 ? add : -add) * 0.01f + (sum > 0 ? sum : -sum);
+            float sc = eff_score(mul, add) + (sum > 0 ? sum : -sum);
             if (sc > 0.004f) x->nEnt++;
             if (sc > x->score) { x->score = sc; x->mul = mul; x->add = add; x->sum = sum; }
         }
@@ -947,7 +963,7 @@ static void eff_values(void *arg) {
         char *en = mod_entry(sqx, 0x14, d->type, 0x18); if (!en) continue;
         x->mul = *(float *)(en + 0x0C); x->add = *(float *)(en + 0x10); x->sum = *(float *)(en + 0x1C);
         if (d->mode == EM_ON || d->mode == EM_OFF) x->score = x->sum > 0 ? x->sum : -x->sum;
-        else x->score = (x->mul > 1 ? x->mul - 1 : 1 - x->mul) + (x->add > 0 ? x->add : -x->add) * 0.01f;
+        else x->score = eff_score(x->mul, x->add);
         if (x->score > 0.004f) x->nEnt = g_effNEnts;
     }
 }
@@ -1209,6 +1225,14 @@ static void pct(char *o, size_t n, float d) {                   // +50% / -30% /
     if (a < 0.095f && a >= 0.005f) snprintf(o, n, "%+.1f%%", d * 100); else snprintf(o, n, "%+.0f%%", d * 100);
 }
 static void num(char *o, size_t n, float v) { if (v - (int)v > 0.05f || (int)v - v > 0.05f) snprintf(o, n, "%+.1f", v); else snprintf(o, n, "%+.0f", v); }
+// v8: a regeneration addition per second ("+1/s", "+0.5/s", "+0.25/s", "+12/s")
+#define TICKS_PER_SEC 10
+static void persec(char *o, size_t n, float a) {
+    float v = a * TICKS_PER_SEC, r = v < 0 ? -v : v, r10 = r * 10;
+    if (r >= 10 || fabsf(r - roundf(r)) < 0.005f) snprintf(o, n, "%+.0f/s", v);
+    else if (r >= 1 || fabsf(r10 - roundf(r10)) < 0.05f) snprintf(o, n, "%+.1f/s", v);
+    else snprintf(o, n, "%+.2f/s", v);
+}
 // v4: the effect tags in Russian when the game is Russian (see is_ru)
 static const char *TAG_RU[][2] = {
     { "hidden", "\xD1\x81\xD0\xBA\xD1\x80\xD1\x8B\xD1\x82" },
@@ -1246,6 +1270,12 @@ static float eff_text(int def, float m, float a, char *v, size_t n) {
         if (m > 0.01f && !addOnly) { delta = 1 / m - 1; pct(v, n, delta); } else { delta = -a; num(v, n, a); } break;
     case EM_ADD:  if (!addOnly && (a < 0.005f && a > -0.005f)) { delta = m - 1; pct(v, n, delta); } else { delta = a; num(v, n, a); } break;
     case EM_ADDP: if (!addOnly && (a < 0.005f && a > -0.005f)) { delta = m - 1; pct(v, n, delta); } else { delta = a; snprintf(v, n, "%+.0f%%", a); } break;
+    case EM_REGEN:                                             // v8: "+1/s", "+100%", both: "+100% +1/s"
+        if (addOnly) { delta = a; persec(v, n, a); }
+        else if (a < 1e-4f && a > -1e-4f) { delta = m - 1; pct(v, n, delta); }
+        else { char p1[16], p2[16]; pct(p1, sizeof p1, m - 1); persec(p2, sizeof p2, a); snprintf(v, n, "%s %s", p1, p2);
+               delta = (m - 1) + a * TICKS_PER_SEC * 0.01f; }
+        break;
     case EM_ON:   delta = 1; snprintf(v, n, "%s", tag_tr(d->tag)); break;
     case EM_OFF:  delta = -1; snprintf(v, n, "%s", tag_tr(d->tag)); break;
     default:      if (addOnly) { delta = a; num(v, n, a); } else { delta = m - 1; pct(v, n, delta); } break;
@@ -2096,7 +2126,7 @@ BOOL WINAPI DllMain(HINSTANCE h, DWORD reason, LPVOID _) {
         if (GetFileAttributesExW(g_log, GetFileExInfoStandard, &a) && (a.nFileSizeHigh || a.nFileSizeLow > 2u << 20)) DeleteFileW(g_log);
     }
     load_ini();
-    logmsg("UnitStats 0.7 (DPS as the attribute editor counts it%s; selected squad's DPS / melee skill / armour / range / speed / sight and its active effects with the game's icons left of Retreat, in the game's own selection panel movie; %s; in a replay: the hovered squad icon's tooltip and the selected squad over the observer panel)", g_showEngine ? "; ShowEngineCycle=1: the engine's real cycle shown instead" : "", g_buffColors ? (g_barFx ? "BuffColors=1: effects colour the numbers (green / red), HP / energy ones in the bars under the portrait" : "BuffColors=1: effects colour the numbers (green / red), BarEffects=0") : "BuffColors=0: every effect an icon, numbers white");
+    logmsg("UnitStats 0.8 (DPS as the attribute editor counts it%s; selected squad's DPS / melee skill / armour / range / speed / sight and its active effects with the game's icons left of Retreat, in the game's own selection panel movie; %s; in a replay: the hovered squad icon's tooltip and the selected squad over the observer panel)", g_showEngine ? "; ShowEngineCycle=1: the engine's real cycle shown instead" : "", g_buffColors ? (g_barFx ? "BuffColors=1: effects colour the numbers (green / red), HP / energy ones in the bars under the portrait" : "BuffColors=1: effects colour the numbers (green / red), BarEffects=0") : "BuffColors=0: every effect an icon, numbers white");
     if (!g_enabled) { logmsg("disabled in UnitStats.ini"); return TRUE; }
     s2t_install();
     CloseHandle(CreateThread(NULL, 0, worker, NULL, 0, NULL));
