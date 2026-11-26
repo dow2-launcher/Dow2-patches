@@ -1,0 +1,1 @@
+- Unit stats: works when you watch a live match from an observer seat too - the stats in the tooltip of a squad icon and over the observer panel for the selected squad, as in replays.

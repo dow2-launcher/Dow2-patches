@@ -779,3 +779,24 @@ speed x0.75, damage taken x0.75). Screenshots /var/www/media/dow2_shots/unitstat
 | the hormagaunts again | "+1/s" at full size again | - |
 
 No fault, no watchdog line.
+
+## v10 - a live match as an observer (0.10, 26.11.2026)
+
+noofancy (fb 2117): "as an observer UnitStats does not work". His log: the replay boxes worked in a replay (00:33), then a live
+3v3 he joined as an observer (00:35-00:40, PerfLog "match") had no UnitStats line at all. An observer in a LIVE match gets the
+replay HUD - `observer_player_list` with the squad icons and `unit_info_mc`, the squad icon tooltips, no selection panel - but the
+game type (settings `*(0x01335A78) + 0x118`) is the match's own (4 for a custom game with computers), not 0x800, and 0.6 drew
+the boxes only for 0x800.
+
+0.10: `is_obs_view()` instead of `is_replay()` in both box paths (the observer panel's update and the tooltip): 0x800, or the
+match's GameInfo (`settings + 0x118 + 0x810`, count `+0x814`, 0xA8 a slot, `+0` type - the table MatchSpeed reads) has a slot
+of type 2 (local observer) and none of type 0 (local player). Re-read once a second; logged when it changes ("v10: ...").
+
+The watchdog (v3) counts frames of the panel updates; the panel's update stops whenever the game leaves a match, so it logged
+"has not run for 5 s ... last in idle" after every replay or observed match - not a hang. It now stays quiet while `g_where`
+is "idle" (a real hang is inside a step of ours or of the game's panel update).
+
+Stand 1 (`unitstats/stand/session_v10.sh`, the menus clicked through `ui.sh`): Multiplayer -> Custom Games -> Private -> Ready,
+Observers 1 "Open this slot" + "Move to this slot", Expert computers in the four team slots, Start Skirmish. Log: "game type 4,
+8 slots, 1 local observer, 0 local player"; hovering an icon - the tooltip with the numbers; a click - the box over the panel.
+Screenshots /var/www/media/dow2_shots/unitstats/v10/shots/ (m15 tooltip, m16 both).

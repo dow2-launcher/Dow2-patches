@@ -4,6 +4,19 @@ Every version gets an entry here before it reaches `main`. CI then tags `vX.Y.Z`
 version (`X.Y.0`) it also publishes a GitHub Release with the DLLs and the entries since the previous `X.Y.0`.
 The version of the set lives only in `VERSION`; each DLL still writes its own version to its log.
 
+## 0.2.133 — 2026-11-26
+UnitStats 0.10 (store unitstats-0.10), noofancy in the launcher's feedback 26.11 (fb 2117): "as an observer UnitStats does not work".
+- A live match watched from an observer seat has the replay's HUD (the observer player list with the squad icons, no selection
+  panel), but its game type is not playback (0x800), so 0.6-0.9 showed nothing there: the hovered squad icon's tooltip and the
+  selected squad's box over the observer panel now also come up when the match's GameInfo has this machine's observer seat (slot
+  type 2) and no seat of a local player (type 0) - the slot table MatchSpeed reads. Logged once: "v10: a live match watched from
+  an observer seat". The selection panel version and replays are unchanged.
+- The watchdog no longer logs "the selection panel's update has not run" while UnitStats' own code is idle: the panel's update
+  stops whenever the game leaves a match (the player's log had it after leaving a replay and the observed match for the menu).
+- Stand 1, Elite 3.2.1 (unitstats/stand/session_v10.sh): Custom Games -> Private, the host on Observers 1, four Expert computers,
+  2v2: "game type 4, 8 slots, 1 local observer, 0 local player"; the tooltip of an icon (Slugga Boyz 3.82 / 150 / 60, -40%
+  effect) and the selected squad's box (Slugga Boyz, then Cultists) shown; back to the menu - no watchdog line, no fault.
+
 ## 0.2.132 — 2026-11-26
 Add-on presets for the launcher's Add-ons tab (launcher 1.6.35, owner 26.11.2026: "Minimal / Recommended / Custom"):
 - addons.json `"_presets"`: `minimal` = `"ids": "defaults"` (the add-ons on for a new player), `recommended` = relay_fwd, automatch,
