@@ -1652,5 +1652,31 @@
       "fr": "Modifie le jeu : à activer seulement si TOUS les joueurs de la partie l'ont aussi. Sinon la partie se désynchronise et ne compte pas. La version 5 ne joue pas avec la version 4 : tout le monde doit avoir la même version.",
       "de": "Ändert das Spiel: nur aktivieren, wenn ALLE Spieler des Matches es auch aktiviert haben. Sonst gibt es einen Desync und das Match zählt nicht. Version 5 läuft nicht zusammen mit Version 4: alle brauchen dieselbe Version."
     }
+  },
+  "texturepackfix": {
+    "version": "1",
+    "dll": "TexturePackFix.dll",
+    "default": false,
+    "games": [
+      "elite",
+      "vanilla",
+      "igrework"
+    ],
+    "category": "experiment",
+    "order": 1160,
+    "name": {
+      "en": "Texture pack fix",
+      "ru": "Texture pack fix",
+      "es": "Texture pack fix",
+      "fr": "Texture pack fix",
+      "de": "Texture pack fix"
+    },
+    "description": {
+      "en": "Fixes a game crash while a map loads or at the start of a match when the effects' texture atlas overflows (seen on Hades Wastes). The texture that does not fit is skipped, as the game intended.",
+      "ru": "Исправляет вылет игры при загрузке карты или в начале матча, когда переполняется атлас текстур эффектов (замечено на Hades Wastes). Не поместившаяся текстура пропускается, как и задумано игрой.",
+      "es": "Corrige un cierre del juego al cargar un mapa o al empezar una partida cuando se desborda el atlas de texturas de efectos (visto en Hades Wastes). La textura que no cabe se omite, como el juego pretendía.",
+      "fr": "Corrige un plantage du jeu au chargement d'une carte ou au début d'une partie quand l'atlas de textures des effets déborde (vu sur Hades Wastes). La texture qui ne rentre pas est ignorée, comme le jeu le prévoyait.",
+      "de": "Behebt einen Spielabsturz beim Laden einer Karte oder zu Beginn eines Matches, wenn der Texturatlas der Effekte überläuft (gesehen auf Hades Wastes). Die Textur, die nicht passt, wird ausgelassen, wie vom Spiel vorgesehen."
+    }
   }
 }

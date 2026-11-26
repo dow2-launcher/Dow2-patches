@@ -4,6 +4,26 @@ Every version gets an entry here before it reaches `main`. CI then tags `vX.Y.Z`
 version (`X.Y.0`) it also publishes a GitHub Release with the DLLs and the entries since the previous `X.Y.0`.
 The version of the set lives only in `VERSION`; each DLL still writes its own version to its log.
 
+## 0.2.126 — 2026-11-26
+Texture pack fix 1 (store texturepackfix-1, experiment 1160, off by default, Elite, vanilla and IG Rework). A crash of the game
+itself (no add-on in the stack), 5 reports from 2 players (likebeat 17-18.11 x3, noofancy 22.11 and 26.11 at the start of a
+match on Hades Wastes): C0000005 reading 0x8 at DOW2.exe+0x2B9B35, eax=0, on a worker thread of the platform pool, right after
+warnings.txt "Texture Pack size [4096] was overflowed with mipDrop [0..3]".
+- FUN_006B99F0 packs one FX texture into the atlas and returns an Inv::RefBase by value (hidden pointer = its 2nd argument);
+  its first Inv::RefBase::GetResourceData (0x006B9B2F) is used without a NULL check (0x006B9B35 mov ecx,[eax+8]).
+- Fix (5 bytes at 0x006B9B35 -> code cave): NULL goes to the function's own "nothing to pack" exit 0x006B9A52, which
+  default-constructs the returned RefBase and leaves through the common epilogue (same stack there); the caller FUN_006B9910
+  sees IsValid() false and takes its own "no texture" path. A jump straight to the epilogue (the first candidate) would have left
+  the returned RefBase unconstructed - the caller then calls IsValid and the destructor on stack garbage. Every skip is logged
+  (TexturePackFix.log). Render path only, no simulation code.
+- Stand 1 (26.11): TpfInject.dll (stand only) makes GetResourceData at 0x006B9B2F return NULL on every 5th call (at most 20).
+  Without the fix the game closes at the first one - CrashLog: C0000005 at DOW2.exe+0x2B9B35 reading 0x00000008, eax=0 (the
+  players' crash; their esi=3 is the mipDrop, the stand's 0). With the fix: 20 skips logged, the match runs on (5 min, Elite
+  6p_hades_wastes_redux 3v3 and vanilla 2p_calderisrefinery); a skipped texture shows as the engine's magenta "BAD"
+  placeholder where its effect is drawn. Without forced NULLs (fix alone, and no DLL at all) no placeholder in any shot, Hades
+  Wastes overflowed the 4096 pack at mipDrop 0 on the stand as well and recovered at mipDrop 1. Normal launch to the main menu
+  with the fix: fine. Runs: /var/www/media/dow2_archive/reports/texpackfix_1126/runs/.
+
 ## 0.2.125 — 2026-11-20
 MMFind 0.55 (Automatch v2.0; hand release: store automatch mmfind-0.55 = the live package mmfind-0.54 with this MMFind.dll), the
 army on Find a Game (SirItos 19.11: "after the game, back on the faction choice, the random is reset and another faction is set"):
