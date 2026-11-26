@@ -72,6 +72,22 @@
 //     wind_down for bursts, no firing tick, the mean of reload count / cooldown as written); checked on stand 1 against the
 //     shots the engine really fires (unitstats/stand/shotprobe.c);
 //   * the armour type: its icon + a short name ("Heavy inf." / "Tyazh. pekh."), English or Russian as the game is.
+// v7 / 0.7 (26.11.2026, grantovich: "on a transport the buffs/debuffs are drawn over the icons of the units inside"; "buffs to
+// speed, range, sight, damage, melee skill - change the number itself, green when buffed, red when debuffed, no separate
+// lines"; "energy and HP buffs - into the bar under the portrait"):
+//   * the stat numbers were already the engine's modified values (DPS through the weapon modifier function, speed / melee
+//     skill through the entity modifier function and the game's getter, range = the weapon's GetMaxRange, sight = SightExt);
+//     now each is compared with the same number without any modifier (DPS: the same formula with the weapon's raw damage,
+//     cooldown and reload; range / speed: the blueprint; sight / melee skill: the engine's own value with the entity
+//     modifier function's multiplier and addition taken out) and drawn green when the effects raise it, red when they lower
+//     it - and those effects (damage, melee / ranged / projectile damage, cooldown, reload, range, speed, sight, melee skill)
+//     get no icon of their own any more;
+//   * max HP / max energy: the native "500 / 500" text of the bar under the portrait (status_bars.health / .energy
+//     .amount_txt) turns green / red; HP / energy regeneration: a small icon + "+50%" at the right end of that bar;
+//   * the effects that map to no number (damage taken, suppression taken, accuracy, armour penetration, ...) stay icons, but
+//     start right of every native widget visible in that strip (the loaded / garrisoned squads' portraits of
+//     main_panel.multi_select), measured every update - nothing of ours covers them.
+//   [UnitStats] BuffColors=0 = as 0.6 (white numbers, every effect an icon).
 #include <windows.h>
 #include <stdio.h>
 #include <stdarg.h>
@@ -160,6 +176,7 @@ static int g_lang, g_ruSeen, g_langSeen;                  // v4: [UnitStats] Lan
 static int g_showEngine;                                  // v5: [UnitStats] ShowEngineCycle: 0 = the editor's DPS (default), 1 = the engine cycle (v4)
 static int g_useSkill = 1, g_useEmod = 1, g_useLvl = 1;   // [UnitStats] GameSkill / EntityMods / LevelMul: the engine calls, each can be switched off
 static int g_enabled = 1, g_size = 22, g_isize = 0, g_offX = 0, g_offY = 0, g_perModel = 1, g_verbose = 1;
+static int g_buffColors = 1, g_barFx = 1;                  // v7: [UnitStats] BuffColors (effects colour the numbers), BarEffects (HP / energy into the bars)
 static FILETIME g_iniTime;
 static int ini_int(const wchar_t *k, int def, int lo, int hi) { int v = GetPrivateProfileIntW(L"UnitStats", k, def, g_ini); return v < lo ? lo : v > hi ? hi : v; }
 static void ini_icon(const wchar_t *key, const wchar_t *def, Icon *ic) {
@@ -186,6 +203,7 @@ static void load_ini(void) {
       g_lang = !_wcsicmp(l, L"en") ? 1 : !_wcsicmp(l, L"ru") ? 2 : 0; }
     g_useSkill = ini_int(L"GameSkill", 1, 0, 1); g_useEmod = ini_int(L"EntityMods", 1, 0, 1); g_useLvl = ini_int(L"LevelMul", 1, 0, 1);
     g_showEngine = ini_int(L"ShowEngineCycle", 0, 0, 1);
+    g_buffColors = ini_int(L"BuffColors", 1, 0, 1); g_barFx = ini_int(L"BarEffects", 1, 0, 1);
     for (int k = 0; k < NITEMS; k++) if (k != I_ARMOUR) ini_icon(ITEM_KEY[k], ITEM_DEF[k], &g_icon[k]);
     for (int k = 0; k < NARM; k++) ini_icon(ARM_KEY[k], ARM_DEF[k], &g_armIcon[k]);
     g_effOn = GetPrivateProfileIntW(L"Effects", L"Enabled", 1, g_ini) != 0;
@@ -373,9 +391,13 @@ typedef struct {
     float rtip, mtip;                                         // v4: the game's tooltip formula (v1-v3's number), for the log
     float reng, meng;                                         // v5: the engine's real cycle (v4's number), for the log
     int skill, skillOld, models, weapons, armour, sameR, sameM, nRanged, nMelee;
-    float range0, speed0;                                     // blueprint values (the log)
+    float range0, speed0;                                     // blueprint values (the log; v7: the base of range / speed)
     char armourName[96], armourShort[64];                     // v4: the game's name (log) and the short one shown
+    float rdpsB, mdpsB, sightB; int skillB;                   // v7: the same numbers without any modifier (sightB < 0: zeroed by one)
+    signed char dir[NITEMS];                                  // v7: +1 the effects raise it (green), -1 they lower it (red), 0 white
 } Stats;
+static int g_noMods;   // v7: weapon_dps without the weapon modifiers (the base the shown DPS is compared with)
+static float wmod(void *w, float v, void *ent, int type) { return g_noMods ? v : us_mod(w, v, ent, type); }
 static float ticks(int t) { return (float)t; }
 // v4: DPS of the weapon's REAL firing cycle - the weapon state machine of DOW2.exe 3.19, ticks of 0.1 s, as it fires in a
 // fight against a target it keeps shooting (no target changes, no movement):
@@ -504,9 +526,9 @@ static double wsec(char *bag, int k, int tick) {
 // after F = min..max-1 shots) - is kept in the log ("engine"), and shown instead with [UnitStats] ShowEngineCycle=1.
 typedef struct { float tip, period, shots, F, R, cd, B, eng, edT, edN, edD, edR; int kind; } Cyc;   // for the log: tooltip DPS, the engine cycle, the editor terms
 static float weapon_dps(char *w, char *bag, char *ent, int *melee, Cyc *cy) {
-    float dmg = us_mod(w, *(float *)(bag + 0x64), ent, MOD_DAMAGE);
-    float cdf = us_mod(w, ticks(*(int *)(bag + 0xF0)), ent, MOD_COOLDOWN);
-    float rl0 = us_mod(w, ticks(*(int *)(bag + 0x11C)), ent, MOD_RELOAD), rl1 = us_mod(w, ticks(*(int *)(bag + 0x120)), ent, MOD_RELOAD);
+    float dmg = wmod(w, *(float *)(bag + 0x64), ent, MOD_DAMAGE);   // type 7 takes in the melee / ranged / projectile damage types too (0x8A65C0)
+    float cdf = wmod(w, ticks(*(int *)(bag + 0xF0)), ent, MOD_COOLDOWN);
+    float rl0 = wmod(w, ticks(*(int *)(bag + 0x11C)), ent, MOD_RELOAD), rl1 = wmod(w, ticks(*(int *)(bag + 0x120)), ent, MOD_RELOAD);
     int wu = *(int *)(bag + 0x10C), wd = *(int *)(bag + 0x110), cdi = (int)cdf, fmin = *(int *)(bag + 0x124), fmax = *(int *)(bag + 0x128);
     float half = 0.5f, tps = 10.0f;                   // 0x0105BB74, 0x0107D78C
     DWORD vt = rd(w, 4) ? *(DWORD *)w : 0;
@@ -662,9 +684,19 @@ static const char *armour_internal(int id) {
     return (unsigned)id < cnt && cnt <= 64 && rd(names + id * 0x100, 64) ? names + id * 0x100 : "";
 }
 typedef struct { char *squad; Stats *st; } Job;
+static void fit(float f1, float f0, float *mul, float *add);
+#define EMOD_SIGHT 0x0A
+#define EMOD_SKILL 0x2F
+// v7: the value without the entity modifiers of a type: the engine's value v = (base + add) x mul (0x8A6AC0, f(1) - f(0) = mul,
+// f(0) / mul = add) -> base = v / mul - add; -1 when a multiplier of ~0 took it all (no base to tell)
+static float unmod(float v, char *ent, int type) {
+    if (!g_haveEmod || !g_useEmod) return v;
+    float m, a; fit(us_emod(1.0f, ent, type), us_emod(0.0f, ent, type), &m, &a);
+    return m > 0.01f ? v / m - a : -1;
+}
 static void squad_stats(void *arg) {
-    Job *j = arg; Stats *st = j->st; memset(st, 0, sizeof *st); st->speed = st->speed0 = -1; st->skill = st->skillOld = -1; st->armour = -1;
-    st->sameR = st->sameM = 1;
+    Job *j = arg; Stats *st = j->st; memset(st, 0, sizeof *st); st->speed = st->speed0 = -1; st->skill = st->skillOld = st->skillB = -1; st->armour = -1;
+    st->sameR = st->sameM = 1; g_noMods = 0;
     g_detailN = 0; g_detail[0] = 0;
     static int allowDone;
     if (!allowDone && g_haveComb) {                      // the engine's range allowance, once (a tuning value, 1.0 in vanilla and Elite)
@@ -685,7 +717,7 @@ static void squad_stats(void *arg) {
         void *ctrl = *(void **)(ent + 0x3C); if (!ctrl) continue;
         st->models++;
         detail(" [%s:", p_entName ? p_entName(ent) : "?");
-        float erd = 0, emd = 0, ert = 0, emt = 0, ere = 0, eme = 0;
+        float erd = 0, emd = 0, ert = 0, emt = 0, ere = 0, eme = 0, erB = 0, emB = 0;
         char *ce = p_qi(ctrl, EXT_COMBAT);
         if (vt_is(ce, VT_COMBATEXT)) {
             char **hp = *(char ***)(ce + 0x50); int n = *(int *)(ce + 0x54);
@@ -694,7 +726,9 @@ static void squad_stats(void *arg) {
                 char *w = *(char **)(h + 0x50); if (!rd(w, 0xB0)) continue;
                 char *bag = *(char **)(w + 0x54); if (!vt_is(bag, VT_WEAPONBAG)) continue;
                 char *went = rd(*(char **)(w + 0xAC), 0x18) ? *(char **)(*(char **)(w + 0xAC) + 0x14) : ent;
-                int melee; Cyc cy; float dps = weapon_dps(w, bag, went, &melee, &cy);
+                int melee; Cyc cy; float dps = weapon_dps(w, bag, went, &melee, &cy), dpsB = dps;
+                if (g_buffColors) { int m2; Cyc c2; g_noMods = 1; dpsB = weapon_dps(w, bag, went, &m2, &c2); g_noMods = 0; }   // v7: the base
+                if (melee) { if (dpsB > emB) emB = dpsB; } else erB += dpsB;
 #ifdef US_DUMP
                 {   // stand only: the weapon bag as loaded, once per bag (where the blueprint's own seconds are kept)
                     static char *seen[64]; static int ns; int k = 0; while (k < ns && seen[k] != bag) k++;
@@ -724,11 +758,14 @@ static void squad_stats(void *arg) {
         }
         if (st->models == 1) { st->rdps1 = erd; st->mdps1 = emd; }
         else { if (erd < st->rdps1 - 0.05f || erd > st->rdps1 + 0.05f) st->sameR = 0; if (emd < st->mdps1 - 0.05f || emd > st->mdps1 + 0.05f) st->sameM = 0; }
-        st->rdps += erd; st->mdps += emd; st->rtip += ert; st->mtip += emt; st->reng += ere; st->meng += eme;
+        st->rdps += erd; st->mdps += emd; st->rtip += ert; st->mtip += emt; st->reng += ere; st->meng += eme; st->rdpsB += erB; st->mdpsB += emB;
         char *se = p_qi(ctrl, EXT_SIGHT);
-        if (vt_is(se, VT_SIGHTEXT)) { float s = *(float *)(se + 0x28); if (s > st->sight) st->sight = s; }
+        if (vt_is(se, VT_SIGHTEXT)) { float s = *(float *)(se + 0x28); if (s > st->sight) { st->sight = s; st->sightB = g_buffColors ? unmod(s, ent, EMOD_SIGHT) : s; } }
         int sk = -1;
-        if (g_haveSkill && g_useSkill && p_qi(ctrl, EXT_MELEE)) { sk = us_skill(ent); if (sk > st->skill) st->skill = sk; }
+        if (g_haveSkill && g_useSkill && p_qi(ctrl, EXT_MELEE)) {
+            sk = us_skill(ent);
+            if (sk > st->skill) { st->skill = sk; float b = g_buffColors ? unmod((float)sk, ent, EMOD_SKILL) : sk; st->skillB = b < 0 ? -2 : (int)floorf(b + 0.5f); }
+        }
         const char *pbg = p_entBp ? (const char *)p_entBp(ent) : NULL;
         if (pbg) {
             char *mv = pbg_bag(pbg, KEY_MOVING), *ml = pbg_bag(pbg, KEY_MELEE), *ty = pbg_bag(pbg, KEY_TYPE);
@@ -751,6 +788,16 @@ static void squad_stats(void *arg) {
     for (int q = 0, best = 0; q < nArm; q++) if (armN[q] > best) { best = armN[q]; st->armour = armId[q]; }   // most of the models
     armour_name(st->armour, st->armourName, sizeof st->armourName);
     armour_short(armour_internal(st->armour), st->armourName, st->armourShort, sizeof st->armourShort);
+    // v7: which way the effects move each number (half a percent of slack for the float noise of the modifier functions)
+    if (g_buffColors) {
+        #define DIR(c, b) ((c) > (b) + 0.005f * fabsf(b) + 0.001f ? 1 : (c) < (b) - 0.005f * fabsf(b) - 0.001f ? -1 : 0)
+        if (st->nRanged) { st->dir[I_RANGED] = DIR(st->rdps, st->rdpsB); st->dir[I_RANGE] = DIR(st->range, st->range0); }
+        if (st->nMelee) st->dir[I_MELEE] = DIR(st->mdps, st->mdpsB);
+        if (st->speed >= 0 && st->speed0 > 0) st->dir[I_SPEED] = DIR(st->speed, st->speed0);
+        if (st->sight > 0 || st->sightB != 0) st->dir[I_SIGHT] = st->sightB < 0 ? -1 : DIR(st->sight, st->sightB);
+        if (st->skill >= 0) st->dir[I_SKILL] = st->skillB == -2 ? -1 : st->skill > st->skillB ? 1 : st->skill < st->skillB ? -1 : 0;
+        #undef DIR
+    }
 }
 
 // ---------- v3: the effects on the squad (the engine's modifiers, as the game applies them) ----------
@@ -777,12 +824,15 @@ static const char *mod_name(int cls, int type) {                // "damage_weapo
 // what is shown for a modifier type: its icon, which way is good for the squad, how the number reads, a short tag
 enum { EM_PCT, EM_RATE, EM_ADD, EM_ADDP, EM_ON, EM_OFF };   // PCT "+50%"; RATE: a time multiplier as a rate ("cooldown x0.5" = "+100%");
                                                            // ADD "+50"; ADDP "-100%" (an addition to a chance); ON / OFF: enabled / disabled
-typedef struct { unsigned char cls, type; signed char good; unsigned char mode, icon; const char *tag; } EffDef;
+// v7: fold - FOLD_STAT: the effect is in one of the stat numbers (shown by its colour, no icon of its own); FOLD_BAR: in the HP /
+// energy bar under the portrait (the selection panel only; the replay boxes have no such bar and keep its icon)
+enum { FOLD_NONE = 0, FOLD_STAT = 1, FOLD_BAR = 2 };
+typedef struct { unsigned char cls, type; signed char good; unsigned char mode, icon; const char *tag; unsigned char fold; } EffDef;
 static const EffDef EFFDEF[] = {
-    { MC_ENTITY, 0x00, +1, EM_PCT,  EI_HEALTH,    "" },          // health_maximum
-    { MC_ENTITY, 0x01, +1, EM_PCT,  EI_REGEN,     "" },          // health_regeneration
-    { MC_ENTITY, 0x06, +1, EM_PCT,  EI_SPEED,     "" },          // speed_maximum
-    { MC_ENTITY, 0x0A, +1, EM_PCT,  EI_SIGHT,     "" },          // sight_radius
+    { MC_ENTITY, 0x00, +1, EM_PCT,  EI_HEALTH,    "", FOLD_BAR }, // health_maximum
+    { MC_ENTITY, 0x01, +1, EM_PCT,  EI_REGEN,     "", FOLD_BAR }, // health_regeneration
+    { MC_ENTITY, 0x06, +1, EM_PCT,  EI_SPEED,     "", FOLD_STAT }, // speed_maximum
+    { MC_ENTITY, 0x0A, +1, EM_PCT,  EI_SIGHT,     "", FOLD_STAT }, // sight_radius
     { MC_ENTITY, 0x0D, +1, EM_ON,   EI_INVIS,     "hidden" },    // camouflage_enable
     { MC_ENTITY, 0x0F, +1, EM_OFF,  EI_NOFIRE,    "no fire" },   // shoot_enable
     { MC_ENTITY, 0x11, -1, EM_PCT,  EI_EVADE,     "" },          // received_accuracy
@@ -798,16 +848,16 @@ static const EffDef EFFDEF[] = {
     { MC_ENTITY, 0x1B, -1, EM_PCT,  EI_RANGEDDEF, "plasma" },
     { MC_ENTITY, 0x1C, -1, EM_PCT,  EI_RANGEDDEF, "det" },
     { MC_ENTITY, 0x1E, -1, EM_PCT,  EI_COOLDOWN,  "" },          // ability_recharge_time_entity
-    { MC_ENTITY, 0x2F, +1, EM_ADD,  EI_SKILL,     "" },          // skill_melee
+    { MC_ENTITY, 0x2F, +1, EM_ADD,  EI_SKILL,     "", FOLD_STAT }, // skill_melee
     { MC_ENTITY, 0x31, -1, EM_ADDP, EI_KNOCKDEF,  "" },          // knockback_chance_* (five kinds, one icon)
     { MC_ENTITY, 0x32, -1, EM_ADDP, EI_KNOCKDEF,  "" },
     { MC_ENTITY, 0x33, -1, EM_ADDP, EI_KNOCKDEF,  "" },
     { MC_ENTITY, 0x34, -1, EM_ADDP, EI_KNOCKDEF,  "" },
     { MC_ENTITY, 0x35, -1, EM_ADDP, EI_KNOCKDEF,  "" },
-    { MC_WEAPON, 0x07, +1, EM_PCT,  EI_DAMAGE,    "" },          // damage_weapon
-    { MC_WEAPON, 0x0E, +1, EM_PCT,  EI_MELEE,     "" },          // damage_melee_weapon
-    { MC_WEAPON, 0x0F, +1, EM_PCT,  EI_RANGED,    "" },          // damage_ranged_weapon
-    { MC_WEAPON, 0x10, +1, EM_PCT,  EI_RANGED,    "" },          // damage_projectile_weapon
+    { MC_WEAPON, 0x07, +1, EM_PCT,  EI_DAMAGE,    "", FOLD_STAT }, // damage_weapon
+    { MC_WEAPON, 0x0E, +1, EM_PCT,  EI_MELEE,     "", FOLD_STAT }, // damage_melee_weapon
+    { MC_WEAPON, 0x0F, +1, EM_PCT,  EI_RANGED,    "", FOLD_STAT }, // damage_ranged_weapon
+    { MC_WEAPON, 0x10, +1, EM_PCT,  EI_RANGED,    "", FOLD_STAT }, // damage_projectile_weapon
     { MC_WEAPON, 0x11, +1, EM_PCT,  EI_DAMAGE,    "vs bld" },    // damage_armor_*
     { MC_WEAPON, 0x12, +1, EM_PCT,  EI_DAMAGE,    "vs bld" },
     { MC_WEAPON, 0x13, +1, EM_PCT,  EI_DAMAGE,    "vs hero" },
@@ -818,17 +868,17 @@ static const EffDef EFFDEF[] = {
     { MC_WEAPON, 0x05, +1, EM_PCT,  EI_ACCURACY,  "" },          // accuracy
     { MC_WEAPON, 0x19, +1, EM_PCT,  EI_ACCURACY,  "" },          // accuracy_ranged
     { MC_WEAPON, 0x18, +1, EM_PCT,  EI_ACCURACY,  "melee" },
-    { MC_WEAPON, 0x03, +1, EM_RATE, EI_RATE,      "" },          // cooldown
-    { MC_WEAPON, 0x02, +1, EM_RATE, EI_RATE,      "reload" },
+    { MC_WEAPON, 0x03, +1, EM_RATE, EI_RATE,      "", FOLD_STAT }, // cooldown
+    { MC_WEAPON, 0x02, +1, EM_RATE, EI_RATE,      "reload", FOLD_STAT },
     { MC_WEAPON, 0x04, +1, EM_PCT,  EI_RATE,      "burst" },
-    { MC_WEAPON, 0x17, +1, EM_PCT,  EI_RANGE,     "" },          // range_maximum
+    { MC_WEAPON, 0x17, +1, EM_PCT,  EI_RANGE,     "", FOLD_STAT }, // range_maximum
     { MC_WEAPON, 0x0B, +1, EM_PCT,  EI_SUPPDMG,   "" },          // courage_damage
     { MC_WEAPON, 0x1D, -1, EM_PCT,  EI_SETUP,     "" },          // setup
     { MC_SQUAD,  0x01, -1, EM_PCT,  EI_SUPPDEF,   "" },          // received_courage_damage
     { MC_SQUAD,  0x08, +1, EM_OFF,  EI_NORETREAT, "no retreat" },// retreat_enable
     { MC_SQUAD,  0x02, -1, EM_PCT,  EI_COOLDOWN,  "" },          // ability_recharge_time_squad
-    { MC_SQUAD,  0x0C, +1, EM_PCT,  EI_ENERGY,    "" },          // energy_regen_rate
-    { MC_SQUAD,  0x0E, +1, EM_PCT,  EI_ENERGY,    "max" },       // energy_maximum
+    { MC_SQUAD,  0x0C, +1, EM_PCT,  EI_ENERGY,    "", FOLD_BAR }, // energy_regen_rate
+    { MC_SQUAD,  0x0E, +1, EM_PCT,  EI_ENERGY,    "max", FOLD_BAR }, // energy_maximum
 };
 #define NEFFDEF ((int)(sizeof EFFDEF / sizeof EFFDEF[0]))
 #define MAXEFF 10
@@ -1031,17 +1081,29 @@ static void fmtdps(char *o, size_t n, float v) {
     char *e = o + strlen(o) - 1; while (e > d && *e == '0') *e-- = 0;
     if (e == d) *e = 0;
 }
-static void set_item_text(void *mv, int k, const char *val, const char *small) {
+static const char *C_GOOD = "#8FE36A", *C_BAD = "#FF6B5A", *C_NEUTRAL = "#FFFFFF", *C_SMALL = "#B8AE90";
+// the black shadow copy of a text: every color="#xxxxxx" -> #000000
+static void html_shadow(const char *h, char *o, size_t n) {
+    char *e = o + n - 1;
+    while (*h && o < e) {
+        if (!strncmp(h, "color=\"#", 8) && strlen(h) >= 15 && o + 15 <= e) { memcpy(o, "color=\"#000000", 14); o += 14; h += 14; }
+        else *o++ = *h++;
+    }
+    *o = 0;
+}
+// v7: the colour of a stat number - green when the effects on the squad raise it, red when they lower it
+static const char *dir_col(int d) { return d > 0 ? C_GOOD : d < 0 ? C_BAD : C_NEUTRAL; }
+static void item_html(char *h, size_t n, int fs, const char *val, const char *small, const char *col) {
+    if (small && *small) snprintf(h, n, "<font face=\"$NormalFont\" size=\"%d\" color=\"%s\">%s<font size=\"%d\" color=\"%s\"> %s</font></font>", fs, col, val, fs * 3 / 4, C_SMALL, small);
+    else snprintf(h, n, "<font face=\"$NormalFont\" size=\"%d\" color=\"%s\">%s</font>", fs, col, val);
+}
+static void set_item_text(void *mv, int k, const char *val, const char *small, const char *col) {
     char h[200], sh[200];
-    snprintf(h, sizeof h, "<font face=\"$NormalFont\" size=\"%d\" color=\"#FFFFFF\">%s</font>", g_size, val);
-    if (small && *small) snprintf(h, sizeof h, "<font face=\"$NormalFont\" size=\"%d\" color=\"#FFFFFF\">%s<font size=\"%d\" color=\"#B8AE90\"> %s</font></font>",
-                                  g_size, val, g_size * 3 / 4, small);
+    item_html(h, sizeof h, g_size, val, small, col);
     if (!strcmp(h, g_txt[k])) return;
     strcpy(g_txt[k], h); g_layoutDirty = 1;
     char p[96]; snprintf(p, sizeof p, BOX ".t%d.htmlText", k); gfx_setvar(mv, p, gv_str(h));
-    char *o = sh; const char *q = h;                 // the shadow: the same, black
-    while (*q && o < sh + sizeof sh - 8) { if (!strncmp(q, "#B8AE90", 7) || !strncmp(q, "#FFFFFF", 7)) { memcpy(o, "#000000", 7); o += 7; q += 7; } else *o++ = *q++; }
-    *o = 0;
+    html_shadow(h, sh, sizeof sh);
     snprintf(p, sizeof p, BOX ".s%d.htmlText", k); gfx_setvar(mv, p, gv_str(sh));
 }
 static void layout(void *mv) {
@@ -1082,7 +1144,7 @@ static const Icon *item_icon(const Stats *s, int k) { return k == I_ARMOUR ? &g_
 static void set_stats(void *mv, const Stats *s) {
     char v[NITEMS][64], sm[NITEMS][48];
     stat_strings(s, v, sm);
-    for (int k = 0; k < NITEMS; k++) set_item_text(mv, k, v[k], sm[k]);
+    for (int k = 0; k < NITEMS; k++) set_item_text(mv, k, v[k], sm[k], dir_col(s->dir[k]));
     for (int k = 0; k < NITEMS; k++) set_icon(mv, k, item_icon(s, k));
     if (g_layoutDirty) layout(mv);
 }
@@ -1142,7 +1204,6 @@ static void eff_icon(void *mv, int k, const Icon *ic) {
     snprintf(p, sizeof p, BOX ".e%d._yscale", k); gfx_setvar(mv, p, gv_num(sc));
     g_cellDone[k] = 1; g_effDirty = 1;
 }
-static const char *C_GOOD = "#8FE36A", *C_BAD = "#FF6B5A", *C_NEUTRAL = "#FFFFFF", *C_SMALL = "#B8AE90";
 static void pct(char *o, size_t n, float d) {                   // +50% / -30% / +2.5%
     float a = d < 0 ? -d : d;
     if (a < 0.095f && a >= 0.005f) snprintf(o, n, "%+.1f%%", d * 100); else snprintf(o, n, "%+.0f%%", d * 100);
@@ -1176,19 +1237,25 @@ static const char *tag_tr(const char *t) {
     for (unsigned i = 0; i < sizeof TAG_RU / sizeof TAG_RU[0]; i++) if (!strcmp(t, TAG_RU[i][0])) return TAG_RU[i][1];
     return t;
 }
-// the cell's text: the value (coloured by what it means for the squad), the tag and the seconds left in small type
-static void cell_text_fs(Cell *c, int efs) {   // v6: the font size given (the replay boxes have their own)
-    const EffDef *d = &EFFDEF[c->def]; char v[32] = ""; float delta = 0;
-    float m = c->mul, a = c->add; int addOnly = (m - 1 < 0.005f && 1 - m < 0.005f);
+// an effect's number as shown ("+50%", "-0.5", "x0.5 cooldown" as "+100%") and its change (> 0 more of it)
+static float eff_text(int def, float m, float a, char *v, size_t n) {
+    const EffDef *d = &EFFDEF[def]; float delta = 0; int addOnly = (m - 1 < 0.005f && 1 - m < 0.005f);
+    v[0] = 0;
     switch (d->mode) {
     case EM_RATE:
-        if (m > 0.01f && !addOnly) { delta = 1 / m - 1; pct(v, sizeof v, delta); } else { delta = -a; num(v, sizeof v, a); } break;
-    case EM_ADD:  if (!addOnly && (a < 0.005f && a > -0.005f)) { delta = m - 1; pct(v, sizeof v, delta); } else { delta = a; num(v, sizeof v, a); } break;
-    case EM_ADDP: if (!addOnly && (a < 0.005f && a > -0.005f)) { delta = m - 1; pct(v, sizeof v, delta); } else { delta = a; snprintf(v, sizeof v, "%+.0f%%", a); } break;
-    case EM_ON:   delta = 1; snprintf(v, sizeof v, "%s", tag_tr(d->tag)); break;
-    case EM_OFF:  delta = -1; snprintf(v, sizeof v, "%s", tag_tr(d->tag)); break;
-    default:      if (addOnly) { delta = a; num(v, sizeof v, a); } else { delta = m - 1; pct(v, sizeof v, delta); } break;
+        if (m > 0.01f && !addOnly) { delta = 1 / m - 1; pct(v, n, delta); } else { delta = -a; num(v, n, a); } break;
+    case EM_ADD:  if (!addOnly && (a < 0.005f && a > -0.005f)) { delta = m - 1; pct(v, n, delta); } else { delta = a; num(v, n, a); } break;
+    case EM_ADDP: if (!addOnly && (a < 0.005f && a > -0.005f)) { delta = m - 1; pct(v, n, delta); } else { delta = a; snprintf(v, n, "%+.0f%%", a); } break;
+    case EM_ON:   delta = 1; snprintf(v, n, "%s", tag_tr(d->tag)); break;
+    case EM_OFF:  delta = -1; snprintf(v, n, "%s", tag_tr(d->tag)); break;
+    default:      if (addOnly) { delta = a; num(v, n, a); } else { delta = m - 1; pct(v, n, delta); } break;
     }
+    return delta;
+}
+// the cell's text: the value (coloured by what it means for the squad), the tag in small type
+static void cell_text_fs(Cell *c, int efs) {   // v6: the font size given (the replay boxes have their own)
+    const EffDef *d = &EFFDEF[c->def]; char v[32];
+    float delta = eff_text(c->def, c->mul, c->add, v, sizeof v);
     const char *col = delta * d->good > 0 ? C_GOOD : delta * d->good < 0 ? C_BAD : C_NEUTRAL;
     const char *tag = d->mode == EM_ON || d->mode == EM_OFF ? "" : d->tag;
     char sm[48]; snprintf(sm, sizeof sm, "%s", tag_tr(tag));
@@ -1202,12 +1269,14 @@ static int cell_cmp(const void *x, const void *y) {           // the biggest cha
     const Cell *a = x, *b = y;
     return a->score < b->score ? 1 : a->score > b->score ? -1 : a->def - b->def;
 }
-// from the engine's numbers to the cells shown (merged by icon + tag: the five knockback chances are one "knockback")
-static int compose(const Effs *fx, Cell *out) {
+static int eff_on(const EffDef *d, const Eff *x) { return d->mode == EM_ON ? x->sum > 0 : d->mode == EM_OFF ? x->sum < 0 : x->score > 0.004f; }
+// from the engine's numbers to the cells shown (merged by icon + tag: the five knockback chances are one "knockback");
+// v7: the effects of the fold kinds in `fold` are in a number / a bar instead (no cell)
+static int compose(const Effs *fx, Cell *out, int fold) {
     Cell all[NEFFDEF]; int n = 0;
     for (int i = 0; i < NEFFDEF; i++) {
         const EffDef *d = &EFFDEF[i]; const Eff *x = &fx->e[i];
-        if (d->mode == EM_ON ? x->sum <= 0 : d->mode == EM_OFF ? x->sum >= 0 : x->score <= 0.004f) continue;
+        if (!eff_on(d, x) || (d->fold & fold)) continue;
         int f = -1;
         for (int q = 0; q < n; q++) if (EFFDEF[all[q].def].icon == d->icon && !strcmp(EFFDEF[all[q].def].tag, d->tag)) f = q;
         Cell c = { i, x->mul, x->add, x->sum, x->score, "", "" };
@@ -1232,15 +1301,81 @@ static double eff_row_right(int compact, int r) {      // the stats of the row(s
     if (r == 2) return g_rowLeft[1];
     return g_rowLeft[0] < g_rowLeft[1] ? g_rowLeft[0] : g_rowLeft[1];
 }
+// ---------- v7: native widgets in the strip of the effects (grantovich 26.11.2026: "on a transport the buffs / debuffs are drawn
+// over the icons of the units inside it") ----------
+// The selection panel shows the squads inside a transport / a garrison as small portraits main_panel.multi_select.mini_portrait00..07
+// (the same row the effects use: in core_actions' units x -490 + 66 per portrait, y 146..213). Every update their boxes are read back
+// from the movie (each clip's _x/_y/_width/_height in its parent, then each parent's _x/_y/_xscale/_yscale up to _root, then into
+// core_actions) and an effect row starts right of every visible one it really overlaps (more than 30 % of the height). The
+// reinforce button / queue and the squad count above the strip are not taken: their clips' boxes hold hidden parts (the queue's
+// progress dial, rollover frames) reaching far into the strip, while what they draw stays above it (stand 1, 26.11.2026).
+static int gfx_getnum(void *mv, const char *path, double *out);
+typedef struct { double x0, y0, x1, y1; } Rect;
+static const char *NATIVE[] = {
+    "main_panel.multi_select.mini_portrait00", "main_panel.multi_select.mini_portrait01", "main_panel.multi_select.mini_portrait02",
+    "main_panel.multi_select.mini_portrait03", "main_panel.multi_select.mini_portrait04", "main_panel.multi_select.mini_portrait05",
+    "main_panel.multi_select.mini_portrait06", "main_panel.multi_select.mini_portrait07" };
+#define NNATIVE ((int)(sizeof NATIVE / sizeof NATIVE[0]))
+static Rect g_obs[NNATIVE]; static int g_nObs; static int g_obsWho[NNATIVE];
+static int native_rect(void *mv, const char *rel, const double *ca, Rect *r) {
+    char p[160]; double v, x, y, w, h; int n = (int)strlen(rel);
+    for (int i = 1; i <= n; i++) if (i == n || rel[i] == '.') {            // the clip and every parent visible
+        snprintf(p, sizeof p, "_root.%.*s._visible", i, rel);
+        if (!gfx_getnum(mv, p, &v) || !v) return 0;
+    }
+    snprintf(p, sizeof p, "_root.%s._x", rel); if (!gfx_getnum(mv, p, &x)) return 0;
+    snprintf(p, sizeof p, "_root.%s._y", rel); if (!gfx_getnum(mv, p, &y)) return 0;
+    snprintf(p, sizeof p, "_root.%s._width", rel); if (!gfx_getnum(mv, p, &w)) return 0;
+    snprintf(p, sizeof p, "_root.%s._height", rel); if (!gfx_getnum(mv, p, &h)) return 0;
+    if (w <= 0.5 || h <= 0.5) return 0;
+    for (int i = n - 1; i > 0; i--) if (rel[i] == '.') {                    // the parents, innermost first (no rotation in this movie)
+        double px, py, sx, sy;
+        snprintf(p, sizeof p, "_root.%.*s._x", i, rel); if (!gfx_getnum(mv, p, &px)) return 0;
+        snprintf(p, sizeof p, "_root.%.*s._y", i, rel); if (!gfx_getnum(mv, p, &py)) return 0;
+        snprintf(p, sizeof p, "_root.%.*s._xscale", i, rel); if (!gfx_getnum(mv, p, &sx)) return 0;
+        snprintf(p, sizeof p, "_root.%.*s._yscale", i, rel); if (!gfx_getnum(mv, p, &sy)) return 0;
+        x = px + x * sx / 100; y = py + y * sy / 100; w *= sx / 100; h *= sy / 100;
+    }
+    r->x0 = (x - ca[0]) / ca[2]; r->x1 = (x + w - ca[0]) / ca[2]; r->y0 = (y - ca[1]) / ca[3]; r->y1 = (y + h - ca[1]) / ca[3];
+    return 1;
+}
+static void scan_native(void *mv) {
+    double ca[4]; Rect r[NNATIVE]; int who[NNATIVE], n = 0;
+    if (gfx_getnum(mv, "_root.core_actions._x", &ca[0]) && gfx_getnum(mv, "_root.core_actions._y", &ca[1])
+        && gfx_getnum(mv, "_root.core_actions._xscale", &ca[2]) && gfx_getnum(mv, "_root.core_actions._yscale", &ca[3])
+        && (ca[2] /= 100) > 0.01 && (ca[3] /= 100) > 0.01)
+        for (int i = 0; i < NNATIVE; i++) if (native_rect(mv, NATIVE[i], ca, &r[n])) who[n++] = i;
+    for (int i = 0; i < n; i++) { r[i].x0 = floor(r[i].x0); r[i].y0 = floor(r[i].y0); r[i].x1 = ceil(r[i].x1); r[i].y1 = ceil(r[i].y1); }
+    if (n == g_nObs && !memcmp(r, g_obs, n * sizeof r[0]) && !memcmp(who, g_obsWho, n * sizeof who[0])) return;
+    memcpy(g_obs, r, n * sizeof r[0]); memcpy(g_obsWho, who, n * sizeof who[0]); g_nObs = n; g_effDirty = 1;
+    if (g_verbose) {
+        char t[1024]; int o = 0; t[0] = 0;
+        for (int i = 0; i < n && o < (int)sizeof t - 100; i++) { const char *nm = strrchr(NATIVE[who[i]], '.');
+            o += snprintf(t + o, sizeof t - o, " %s x %.0f..%.0f y %.0f..%.0f;", nm ? nm + 1 : NATIVE[who[i]], r[i].x0, r[i].x1, r[i].y0, r[i].y1); }
+        logmsg("v7: native widgets in the panel's bottom strip (core_actions units):%s", n ? t : " none");
+    }
+}
+// where a cell row may start: [Effects] Left, or right of every native widget it overlaps by more than 30 % of the smaller height
+static double eff_row_left(int compact, int r) {
+    double x0 = g_effX + g_offX, y = eff_row_y(compact, r), h = eff_row_h(compact), right = eff_row_right(compact, r);
+    for (int i = 0; i < g_nObs; i++) {
+        const Rect *o = &g_obs[i];
+        double ov = (y + h < o->y1 ? y + h : o->y1) - (y > o->y0 ? y : o->y0), oh = o->y1 - o->y0;
+        if (ov <= 0.3 * (h < oh ? h : oh) || (right != 0 && o->x0 >= right)) continue;
+        if (o->x1 + g_effGap > x0) x0 = o->x1 + g_effGap;
+    }
+    return x0;
+}
 // place the cells with text widths w[] at font fs: x / row of each, how many fit
 static int eff_place(int compact, int fs, const double *w, int n, double *xs, int *rs) {
     double iconS = g_eisize ? g_eisize * fs / (double)g_esize : 1.3 * fs, gapI = 0.2 * fs, gapItem = 0.6 * fs;
-    double x0 = g_effX + g_offX, x = x0; int row = 0, fit = 0;
+    int row = 0, fit = 0; double x0 = eff_row_left(compact, 0), x = x0;
     for (int k = 0; k < n; k++) {
         double cw = iconS + gapI + w[k];
-        for (; row < eff_rows(compact); row++, x = x0) {
+        while (row < eff_rows(compact)) {
             double right = eff_row_right(compact, row);
             if (x + cw <= right - g_effGap || (x == x0 && right == 0)) break;
+            if (++row < eff_rows(compact)) x = x0 = eff_row_left(compact, row);
         }
         if (row >= eff_rows(compact)) break;
         xs[k] = x; rs[k] = row; x += cw + gapItem; fit++;
@@ -1262,6 +1397,11 @@ static void layout_eff(void *mv) {
         for (int k = 0; k < MAXEFF; k++) { g_cell[k].html[0] = 0; if (g_cellDone[k] > 0) g_cellDone[k] = 0; }
         g_effDirty = 1;
         if (g_verbose) logmsg("effects: %d cells - %s", n, want ? "three compact rows" : "two rows");
+        for (int k = 0; k < MAXEFF; k++) { char p[96];                 // nothing shown at the old size meanwhile
+            snprintf(p, sizeof p, BOX ".e%d._visible", k); gfx_setvar(mv, p, gv_bool(0));
+            snprintf(p, sizeof p, BOX ".f%d._visible", k); gfx_setvar(mv, p, gv_bool(0));
+            snprintf(p, sizeof p, BOX ".g%d._visible", k); gfx_setvar(mv, p, gv_bool(0)); }
+        g_effShown = 0;
         return;
     }
     int fit = eff_place(g_eCompact, fs, w, n, xs, rs); g_effShown = 0;
@@ -1287,12 +1427,7 @@ static void set_effects(void *mv, const Cell *c, int n) {
         if (strcmp(c[k].html, g_cell[k].html)) {
             char p[96], sh[260];
             snprintf(p, sizeof p, BOX ".f%d.htmlText", k); gfx_setvar(mv, p, gv_str(c[k].html));
-            char *o = sh; const char *q = c[k].html;                 // the shadow: the same, black
-            while (*q && o < sh + sizeof sh - 8) {
-                if (*q == '#' && strlen(q) >= 7 && (!strncmp(q, C_GOOD, 7) || !strncmp(q, C_BAD, 7) || !strncmp(q, C_NEUTRAL, 7) || !strncmp(q, C_SMALL, 7))) { memcpy(o, "#000000", 7); o += 7; q += 7; }
-                else *o++ = *q++;
-            }
-            *o = 0;
+            html_shadow(c[k].html, sh, sizeof sh);
             snprintf(p, sizeof p, BOX ".g%d.htmlText", k); gfx_setvar(mv, p, gv_str(sh));
             g_effDirty = 1;
         }
@@ -1305,6 +1440,141 @@ static void set_effects(void *mv, const Cell *c, int n) {
     if (g_effDirty) layout_eff(mv);
 }
 
+// ---------- v7: HP / energy effects in the bars under the portrait (grantovich: "buffs to energy and HP - into the bar itself") ----------
+// status_bars.health / .energy each have amount_txt ("500 / 500", the engine's own current / max, centred over the bar - the field
+// spans -2..143.8 of the bar, white, set by the game with .text through Receive_SetText). Max HP / max energy changed by an effect:
+// that native text turns green / red through the movie's own Receive_SetTextColor (put back to white when the effect is gone or
+// nothing / another squad is shown; re-applied every update in case the game sets it). HP / energy regeneration changed: our small
+// clip us_n in the bar (the effect's icon + "+50%"), right aligned at the bar's right end; when the centred number would reach it,
+// the native field is moved left just enough (back to its own place when the note goes).
+#define RGB_GOOD 0x8FE36A
+#define RGB_BAD  0xFF6B5A
+#define RGB_NATIVE 0xFFFFFF            // amount_txt's own colour (DefineEditText 151 / 160: white, vanilla and Elite)
+#define BAR_FS 10
+typedef struct { const char *bar; int maxCls, maxType, regCls, regType, icon; int maxDef, regDef; double ty, tx0, txNow;
+                 int tinted, made, done, gen, vis, dirty, logged; char txt[240], ipath[200]; double noteW, pill[2]; } Bar;
+static Bar g_bar[2] = { { "health", MC_ENTITY, 0x00, MC_ENTITY, 0x01, EI_REGEN }, { "energy", MC_SQUAD, 0x0E, MC_SQUAD, 0x0C, EI_ENERGY } };
+static int g_barsOk;
+static void bar_path(const Bar *b, char *o, size_t n, const char *rest) { snprintf(o, n, "_root.status_bars.%s.us_n%s%s", b->bar, *rest ? "." : "", rest); }
+static void bar_make(void *mv, Bar *b) {
+    char p[160], q[96]; snprintf(q, sizeof q, "_root.status_bars.%s.createEmptyMovieClip", b->bar);
+    GfxVal a[2] = { gv_str("us_n"), gv_num(16110) }; invoke_n(mv, q, a, 2);
+    for (int sh = 0; sh < 2; sh++) {
+        const char *nm = sh ? "t" : "s";
+        GfxVal c[6] = { gv_str(nm), gv_num(10 + sh), gv_num(0), gv_num(0), gv_num(10), gv_num(BAR_FS * 1.3 + 4) };
+        bar_path(b, p, sizeof p, "createTextField"); invoke_n(mv, p, c, 6);
+        char f[32]; snprintf(f, sizeof f, "%s.html", nm); bar_path(b, p, sizeof p, f); gfx_setvar(mv, p, gv_bool(1));
+        snprintf(f, sizeof f, "%s.selectable", nm); bar_path(b, p, sizeof p, f); gfx_setvar(mv, p, gv_bool(0));
+        snprintf(f, sizeof f, "%s.autoSize", nm); bar_path(b, p, sizeof p, f); gfx_setvar(mv, p, gv_str("left"));
+        if (!sh) { snprintf(f, sizeof f, "%s._alpha", nm); bar_path(b, p, sizeof p, f); gfx_setvar(mv, p, gv_num(75)); }
+    }
+    GfxVal c[2] = { gv_str("i"), gv_num(20) }; bar_path(b, p, sizeof p, "createEmptyMovieClip"); invoke_n(mv, p, c, 2);
+    GfxVal d[2] = { gv_str("h"), gv_num(1) }; bar_path(b, p, sizeof p, "i.createEmptyMovieClip"); invoke_n(mv, p, d, 2);
+    bar_path(b, p, sizeof p, "_visible"); gfx_setvar(mv, p, gv_bool(0));
+    snprintf(q, sizeof q, "_root.status_bars.%s.createEmptyMovieClip", b->bar);              // the dark backing of a coloured number:
+    GfxVal bg[2] = { gv_str("us_bg"), gv_num(9 - 16384) }; invoke_n(mv, q, bg, 2);            // timeline depth 9 (AS: -16375) = over the bar's fill (4), under amount_txt (10)
+    snprintf(q, sizeof q, "_root.status_bars.%s.us_bg._visible", b->bar); gfx_setvar(mv, q, gv_bool(0));
+    b->pill[0] = b->pill[1] = 0;
+    snprintf(q, sizeof q, "_root.status_bars.%s.amount_txt._y", b->bar); if (!gfx_getnum(mv, q, &b->ty)) b->ty = -0.5;
+    snprintf(q, sizeof q, "_root.status_bars.%s.amount_txt._x", b->bar); if (!gfx_getnum(mv, q, &b->tx0)) b->tx0 = 3.2;
+    b->txNow = b->tx0; b->maxDef = def_of(b->maxCls, b->maxType); b->regDef = def_of(b->regCls, b->regType);
+    b->made = 1; b->done = 0; b->vis = 0; b->txt[0] = 0; b->ipath[0] = 0; b->dirty = 1; b->tinted = 0; b->noteW = 0;
+}
+// green / red text on the green HP bar (or the purple energy bar) is hard to read: a dark backing behind the coloured native number
+// and behind our regeneration note (our clip us_bg at the timeline depth 9 of the bar - AS depth -16375: over the bar's fill at 4,
+// under amount_txt at 10 - drawn with the AS drawing API, the number's part sized to its textWidth)
+static void bar_rect(void *mv, const char *clip, double x0, double y0, double x1, double y1) {
+    char p[128]; int n = snprintf(p, sizeof p, "%s", clip);
+    double pts[5][2] = { { x0, y0 }, { x1, y0 }, { x1, y1 }, { x0, y1 }, { x0, y0 } };
+    GfxVal f[2] = { gv_num(0), gv_num(60) }; snprintf(p + n, sizeof p - n, ".beginFill"); invoke_n(mv, p, f, 2);
+    GfxVal m[2] = { gv_num(x0), gv_num(y0) }; snprintf(p + n, sizeof p - n, ".moveTo"); invoke_n(mv, p, m, 2);
+    for (int i = 1; i < 5; i++) { GfxVal l[2] = { gv_num(pts[i][0]), gv_num(pts[i][1]) }; snprintf(p + n, sizeof p - n, ".lineTo"); invoke_n(mv, p, l, 2); }
+    snprintf(p + n, sizeof p - n, ".endFill"); invoke_n(mv, p, NULL, 0);
+}
+static void bar_pill(void *mv, Bar *b, int num, int note) {
+    char q[96], c[96]; double tw = 0;
+    snprintf(q, sizeof q, "_root.status_bars.%s.amount_txt.textWidth", b->bar);
+    if (num && (!gfx_getnum(mv, q, &tw) || tw <= 0)) num = 0;
+    double x0 = num ? b->txNow + 70.9 - tw / 2 - 3 : 0, x1 = note ? 145 - b->noteW - 4 : 0;   // where each part starts (0 = none)
+    if (x0 == b->pill[0] && x1 == b->pill[1]) return;
+    b->pill[0] = x0; b->pill[1] = x1;
+    snprintf(c, sizeof c, "_root.status_bars.%s.us_bg", b->bar);
+    snprintf(q, sizeof q, "%s._visible", c); gfx_setvar(mv, q, gv_bool(num || note));
+    snprintf(q, sizeof q, "%s.clear", c); invoke_n(mv, q, NULL, 0);
+    double y0 = b->ty + 1.5, y1 = b->ty + 15.5;
+    if (num) bar_rect(mv, c, x0, y0, b->txNow + 70.9 + tw / 2 + 3, y1);
+    if (note) bar_rect(mv, c, x1, y0, 145, y1);
+}
+static void bar_native_x(void *mv, Bar *b, double x) {
+    if (x == b->txNow) return;
+    char q[96]; snprintf(q, sizeof q, "_root.status_bars.%s.amount_txt._x", b->bar); gfx_setvar(mv, q, gv_num(x)); b->txNow = x;
+}
+static void bar_set(void *mv, Bar *b, const Effs *fx, int on) {
+    char p[160], q[96];
+    if (!b->made) { if (!on) return; snprintf(q, sizeof q, "status_bars.%s.amount_txt", b->bar); if (!gfx_exists(mv, q)) return; bar_make(mv, b); }
+    if (b->maxDef < 0 || b->regDef < 0) return;
+    // the native number: max HP / max energy
+    int dir = 0; char v[32];
+    if (on && eff_on(&EFFDEF[b->maxDef], &fx->e[b->maxDef])) { float d = eff_text(b->maxDef, fx->e[b->maxDef].mul, fx->e[b->maxDef].add, v, sizeof v); dir = d > 0 ? 1 : d < 0 ? -1 : 0; }
+    if (dir || b->tinted) {
+        snprintf(q, sizeof q, "_root.status_bars.%s.amount_txt", b->bar);
+        GfxVal a[2] = { gv_str(q), gv_num(dir > 0 ? RGB_GOOD : dir < 0 ? RGB_BAD : RGB_NATIVE) }; invoke_n(mv, "Receive_SetTextColor", a, 2);
+        if (g_verbose && !b->logged) { double c = -1; snprintf(p, sizeof p, "%s.textColor", q); gfx_getnum(mv, p, &c); logmsg("v7: %s bar number coloured, textColor now %06X", b->bar, (unsigned)c); b->logged = 1; }
+        b->tinted = dir != 0;
+    }
+    // regeneration: icon + the change at the bar's right end
+    char html[240] = "";
+    if (on && eff_on(&EFFDEF[b->regDef], &fx->e[b->regDef])) {
+        float d = eff_text(b->regDef, fx->e[b->regDef].mul, fx->e[b->regDef].add, v, sizeof v);
+        item_html(html, sizeof html, BAR_FS, v, NULL, d > 0 ? C_GOOD : d < 0 ? C_BAD : C_NEUTRAL);
+    }
+    if (strcmp(html, b->txt)) {
+        snprintf(b->txt, sizeof b->txt, "%s", html); b->dirty = 1;
+        if (*html) { char sh[240]; bar_path(b, p, sizeof p, "t.htmlText"); gfx_setvar(mv, p, gv_str(html));
+                     html_shadow(html, sh, sizeof sh); bar_path(b, p, sizeof p, "s.htmlText"); gfx_setvar(mv, p, gv_str(sh)); }
+    }
+    int vis = *html != 0; double is = BAR_FS * 1.15;
+    if (vis) {
+        const Icon *ic = &g_eicon[b->icon];
+        if (strcmp(b->ipath, ic->path)) {                    // a fresh child per texture, as the effect icons
+            char f[48];
+            if (b->gen) { snprintf(f, sizeof f, "i.h.m%d.removeMovieClip", b->gen); bar_path(b, p, sizeof p, f); invoke_n(mv, p, NULL, 0); }
+            b->gen++; snprintf(f, sizeof f, "m%d", b->gen); GfxVal a[2] = { gv_str(f), gv_num(b->gen % 1000 + 1) };
+            bar_path(b, p, sizeof p, "i.h.createEmptyMovieClip"); invoke_n(mv, p, a, 2);
+            snprintf(f, sizeof f, "i.h.m%d", b->gen); bar_path(b, p, sizeof p, f);
+            GfxVal l[2] = { gv_str(p), gv_str(ic->path) }; invoke_n(mv, "Receive_LoadMovie", l, 2);
+            snprintf(b->ipath, sizeof b->ipath, "%s", ic->path); b->done = 0;
+            bar_path(b, p, sizeof p, "i._visible"); gfx_setvar(mv, p, gv_bool(0));
+        } else if (b->done <= 0) {
+            char f[48]; snprintf(f, sizeof f, "i.h.m%d", b->gen); bar_path(b, p, sizeof p, f);
+            double w = clip_w(mv, p), h = clip_h(mv, p);
+            if (w > 0 && h > 0) {
+                double sc = ic->scale * is / (w > h ? w : h);
+                bar_path(b, p, sizeof p, "i._xscale"); gfx_setvar(mv, p, gv_num(sc)); bar_path(b, p, sizeof p, "i._yscale"); gfx_setvar(mv, p, gv_num(sc));
+                bar_path(b, p, sizeof p, "i._visible"); gfx_setvar(mv, p, gv_bool(1)); b->done = 1; b->dirty = 1;
+            } else b->done--;
+        }
+        if (b->dirty) {                                      // right aligned at the bar's right end
+            bar_path(b, p, sizeof p, "t"); double w = clip_w(mv, p); if (w < 0) w = 3 * BAR_FS;
+            double x = 142 - w, y = b->ty + 1.5, ov = is * (ic->scale - 100) / 200.0;
+            bar_path(b, p, sizeof p, "t._x"); gfx_setvar(mv, p, gv_num(x)); bar_path(b, p, sizeof p, "t._y"); gfx_setvar(mv, p, gv_num(y));
+            bar_path(b, p, sizeof p, "s._x"); gfx_setvar(mv, p, gv_num(x + 1)); bar_path(b, p, sizeof p, "s._y"); gfx_setvar(mv, p, gv_num(y + 1.2));
+            bar_path(b, p, sizeof p, "i._x"); gfx_setvar(mv, p, gv_num(x - 1.5 - is - ov));
+            bar_path(b, p, sizeof p, "i._y"); gfx_setvar(mv, p, gv_num(y + (BAR_FS * 1.3 + 4 - is) / 2 - ov));
+            b->noteW = w + 1.5 + is; b->dirty = 0;
+        }
+        // the native number, centred in its field (-2..143.8 from its _x): moved left only as far as needed to end 4 before the
+        // note, never further than its field's left edge at the bar's start
+        double tw = 0; snprintf(q, sizeof q, "_root.status_bars.%s.amount_txt.textWidth", b->bar);
+        if (gfx_getnum(mv, q, &tw) && tw > 0) {
+            double right = b->tx0 + 70.9 + tw / 2, limit = 142 - b->noteW - 4, sh = right > limit ? limit - right : 0, lo = 1 - (70.9 - tw / 2);
+            bar_native_x(mv, b, b->tx0 + (sh < lo ? lo : sh));
+        }
+    } else bar_native_x(mv, b, b->tx0);
+    if (vis != b->vis) { b->vis = vis; bar_path(b, p, sizeof p, "_visible"); gfx_setvar(mv, p, gv_bool(vis)); }
+    bar_pill(mv, b, b->tinted, vis && b->done > 0);
+}
+static void bars_update(void *mv, const Effs *fx, int on) { for (int i = 0; i < 2; i++) bar_set(mv, &g_bar[i], fx, on && fx); }
 static void show(void *mv, int vis) {
     if (vis == g_shown) return;
     g_shown = vis;
@@ -1339,20 +1609,38 @@ static void frame(char *form) {
         if (!gfx_exists(mv, "core_actions")) return;
         g_mv = mv; g_check = now; g_shown = -1;
         make_fields(mv); make_eff_fields(mv);
+        for (int i = 0; i < 2; i++) { g_bar[i].made = 0; g_bar[i].tinted = 0; }   // v7: made again on first use
+        g_barsOk = gfx_exists(mv, "status_bars.health.amount_txt") && gfx_exists(mv, "status_bars.energy.amount_txt"); g_nObs = 0;
+        logmsg("v7: HP / energy bars %s", g_barsOk ? "found (their effects go into them)" : "NOT found (their effects stay icons)");
     }
     if (now - g_lastCalc < 250) return;                  // four times a second is plenty
     g_lastCalc = now;
     Sel s; memset(&s, 0, sizeof s);
     AT("selection");
     if (g_enabled && !g_dead && run_guarded(get_selection, &s, "the selection") && s.n == -1) return;   // the selection is busy: as it was
-    if (!g_enabled || g_dead || s.n != 1) { show(mv, 0); g_lastSq = NULL; return; }
+    if (!g_enabled || g_dead || s.n != 1) { show(mv, 0); bars_update(mv, NULL, 0); g_lastSq = NULL; return; }
     AT("stats"); Stats st; Job j = { s.squad, &st };
-    if (!run_guarded(squad_stats, &j, "the squad's numbers") || !st.models) { show(mv, 0); return; }
+    if (!run_guarded(squad_stats, &j, "the squad's numbers") || !st.models) { show(mv, 0); bars_update(mv, NULL, 0); return; }
+    // the effects (v3); v7: also with [Effects] Enabled=0 when they colour the HP / energy bars
+    static Effs fx; int haveFx = 0;
+    if (!g_dead && ((g_effOn && g_effMax > 0) || (g_buffColors && g_barFx))) {
+        memset(&fx, 0, sizeof fx); fx.squad = s.squad; EJob ej = { s.squad, &fx };
+        AT("effect values"); haveFx = run_guarded(eff_values, &ej, "the squad's effects");
+    }
     AT("stats panel"); set_stats(mv, &st);
     show(mv, 1);
+    AT("bars"); bars_update(mv, haveFx ? &fx : NULL, g_buffColors && g_barFx);
     if (g_verbose && s.squad != g_lastSq) {
         logmsg("sel %s: ranged %.2f (tooltip %.2f, engine %.2f), melee %.2f (tooltip %.2f, engine %.2f), skill %d (v1 %d), %s, range %.1f, speed %.2f, sight %.1f",
                p_sqName ? p_sqName(s.squad) : "?", st.rdps, st.rtip, st.reng, st.mdps, st.mtip, st.meng, st.skill, st.skillOld, st.armourName, st.range, st.speed, st.sight);
+    }
+    if (g_verbose) {                                     // v7: each number the effects move, and its base (when that changes)
+        static char last[512]; static char *lastSq; char t[512]; int o = 0; t[0] = 0;
+        static const char *NM[NITEMS] = { "ranged", "melee", "skill", "armour", "range", "speed", "sight" };
+        float base[NITEMS] = { st.rdpsB, st.mdpsB, (float)st.skillB, 0, st.range0, st.speed0, st.sightB }, cur[NITEMS] = { st.rdps, st.mdps, (float)st.skill, 0, st.range, st.speed, st.sight };
+        for (int k = 0; k < NITEMS && o < (int)sizeof t - 80; k++) if (st.dir[k])
+            o += snprintf(t + o, sizeof t - o, " %s %.2f %s (without effects %.2f);", NM[k], cur[k], st.dir[k] > 0 ? "GREEN" : "RED", base[k]);
+        if (strcmp(t, last) || s.squad != lastSq) { logmsg("v7 numbers %s:%s", p_sqName ? p_sqName(s.squad) : "?", *t ? t : " none changed by effects"); strcpy(last, t); lastSq = s.squad; }
     }
     g_lastSq = s.squad;
     int seen = 0; for (int i = 0; i < g_nLogged; i++) if (g_loggedSq[i] == s.squad) seen = 1;
@@ -1364,24 +1652,23 @@ static void frame(char *form) {
                st.sameM ? "" : " differ", st.mtip, st.meng, st.skill, st.skillOld, st.armour, armour_internal(st.armour), st.armourName, st.range, st.range0,
                st.speed, st.speed0, st.sight, g_wtCalls, g_wtCount, g_detail);
     }
-    // v3: the effects
-    if (g_effOn && g_effMax > 0 && !g_dead) {
-        static Effs fx; memset(&fx, 0, sizeof fx); fx.squad = s.squad;
-        EJob ej = { s.squad, &fx };
-        g_detailN = 0; g_detail[0] = 0;
-        AT("effect values");
-        if (run_guarded(eff_values, &ej, "the squad's effects")) {
-            AT("effects panel"); Cell cells[MAXEFF]; int n = compose(&fx, cells);
-            set_effects(mv, cells, n);
-            static char last[1024]; static char *lastSq; char now[1024]; int o = 0; now[0] = 0;
-            for (int k = 0; k < n && o < (int)sizeof now - 80; k++) o += snprintf(now + o, sizeof now - o, "%s%s", k ? "; " : "", cells[k].plain);
-            if (g_verbose && (strcmp(now, last) || s.squad != lastSq)) {
-                char per[400]; int q = 0; per[0] = 0;                 // the engine's numbers, and how many of the models have each
-                for (int k = 0; k < n && q < (int)sizeof per - 60; k++) q += snprintf(per + q, sizeof per - q, " %s x%.3f %+.2f sum %g on %d/%d;", mod_name(EFFDEF[cells[k].def].cls, EFFDEF[cells[k].def].type),
-                                                                   cells[k].mul, cells[k].add, cells[k].sum, fx.e[cells[k].def].nEnt, g_effNEnts);
-                logmsg("effects %s: %s%s (%d shown) |%s", p_sqName ? p_sqName(s.squad) : "?", n ? now : "none", n > g_effShown ? " - not all fit" : "", g_effShown, per);
-                strcpy(last, now); lastSq = s.squad;
-            }
+    // v3: the effect icons; v7: without the ones a number / a bar shows, right of the native widgets of the strip
+    if (g_effOn && g_effMax > 0 && haveFx) {
+        int fold = g_buffColors ? FOLD_STAT | (g_barFx && g_barsOk ? FOLD_BAR : 0) : 0;
+        AT("native widgets"); scan_native(mv);
+        AT("effects panel"); Cell cells[MAXEFF]; int n = compose(&fx, cells, fold);
+        set_effects(mv, cells, n);
+        static char last[1024]; static char *lastSq; char now[1024]; int o = 0; now[0] = 0;
+        for (int k = 0; k < n && o < (int)sizeof now - 80; k++) o += snprintf(now + o, sizeof now - o, "%s%s", k ? "; " : "", cells[k].plain);
+        if (g_verbose && (strcmp(now, last) || s.squad != lastSq)) {
+            char per[400]; int q = 0; per[0] = 0;                 // the engine's numbers, and how many of the models have each
+            for (int k = 0; k < n && q < (int)sizeof per - 60; k++) q += snprintf(per + q, sizeof per - q, " %s x%.3f %+.2f sum %g on %d/%d;", mod_name(EFFDEF[cells[k].def].cls, EFFDEF[cells[k].def].type),
+                                                               cells[k].mul, cells[k].add, cells[k].sum, fx.e[cells[k].def].nEnt, g_effNEnts);
+            char in[400]; int r = 0; in[0] = 0;                   // v7: the ones in a number or a bar instead
+            for (int i = 0; i < NEFFDEF && r < (int)sizeof in - 60; i++) if ((EFFDEF[i].fold & fold) && eff_on(&EFFDEF[i], &fx.e[i]))
+                r += snprintf(in + r, sizeof in - r, " %s x%.3f %+.2f (%s);", mod_name(EFFDEF[i].cls, EFFDEF[i].type), fx.e[i].mul, fx.e[i].add, EFFDEF[i].fold == FOLD_BAR ? "bar" : "number");
+            logmsg("effects %s: %s%s (%d shown) |%s |in numbers / bars:%s", p_sqName ? p_sqName(s.squad) : "?", n ? now : "none", n > g_effShown ? " - not all fit" : "", g_effShown, per, r ? in : " none");
+            strcpy(last, now); lastSq = s.squad;
         }
     } else if (g_nCell) set_effects(mv, NULL, 0);
 }
@@ -1502,12 +1789,7 @@ static void rb_show(RBox *b, int vis) {
 static void rb_settext(RBox *b, int sh, int k, const char *html, int eff) {     // the text, and its black copy as the shadow
     char p[200], s[300], f[24];
     snprintf(f, sizeof f, eff ? "f%d.htmlText" : "t%d.htmlText", k); rb_path(b, p, sizeof p, f, 0); gfx_setvar(b->mv, p, gv_str(html));
-    char *o = s; const char *q = html;
-    while (*q && o < s + sizeof s - 8) {
-        if (*q == '#' && strlen(q) >= 7 && (!strncmp(q, C_GOOD, 7) || !strncmp(q, C_BAD, 7) || !strncmp(q, C_NEUTRAL, 7) || !strncmp(q, C_SMALL, 7))) { memcpy(o, "#000000", 7); o += 7; q += 7; }
-        else *o++ = *q++;
-    }
-    *o = 0; (void)sh;
+    html_shadow(html, s, sizeof s); (void)sh;
     snprintf(f, sizeof f, eff ? "g%d.htmlText" : "s%d.htmlText", k); rb_path(b, p, sizeof p, f, 0); gfx_setvar(b->mv, p, gv_str(s));
 }
 // an icon into <box>.i<k>.h.img (items) or a fresh <box>.e<k>.h.m<gen> (effects), scaled once its size is known
@@ -1586,15 +1868,11 @@ static void rb_layout(RBox *b, double maxW) {
     }
     b->dirty = 0;
 }
-static void rb_item_html(char *h, size_t n, int fs, const char *val, const char *small) {
-    if (small && *small) snprintf(h, n, "<font face=\"$NormalFont\" size=\"%d\" color=\"#FFFFFF\">%s<font size=\"%d\" color=\"#B8AE90\"> %s</font></font>", fs, val, fs * 3 / 4, small);
-    else snprintf(h, n, "<font face=\"$NormalFont\" size=\"%d\" color=\"#FFFFFF\">%s</font>", fs, val);
-}
 static void rb_set(RBox *b, const Stats *s, Cell *cells, int n) {
     char v[NITEMS][64], sm[NITEMS][48], h[300];
     stat_strings(s, v, sm);
     for (int k = 0; k < NITEMS; k++) {
-        rb_item_html(h, sizeof h, b->fs, v[k], sm[k]);
+        item_html(h, sizeof h, b->fs, v[k], sm[k], dir_col(s->dir[k]));
         if (strcmp(h, b->txt[k])) { strcpy(b->txt[k], h); rb_settext(b, 1, k, h, 0); b->dirty = 1; }
         rb_icon(b, 0, k, item_icon(s, k));
     }
@@ -1616,7 +1894,7 @@ static int rb_fill(RBox *b, char *sq, DWORD now) {
     static Effs fx; Cell cells[MAXEFF]; int n = 0;
     if (g_effOn && g_effMax > 0) {
         memset(&fx, 0, sizeof fx); fx.squad = sq; EJob ej = { sq, &fx }; g_detailN = 0; g_detail[0] = 0;
-        if (run_guarded(eff_values, &ej, "the squad's effects (replay)")) n = compose(&fx, cells);
+        if (run_guarded(eff_values, &ej, "the squad's effects (replay)")) n = compose(&fx, cells, g_buffColors ? FOLD_STAT : 0);   // v7: no bar there
     }
     rb_set(b, &st, cells, n);
     if (g_verbose && sq != b->sq)
@@ -1818,7 +2096,7 @@ BOOL WINAPI DllMain(HINSTANCE h, DWORD reason, LPVOID _) {
         if (GetFileAttributesExW(g_log, GetFileExInfoStandard, &a) && (a.nFileSizeHigh || a.nFileSizeLow > 2u << 20)) DeleteFileW(g_log);
     }
     load_ini();
-    logmsg("UnitStats 0.6 (DPS as the attribute editor counts it%s; selected squad's DPS / melee skill / armour / range / speed / sight and its active effects with the game's icons left of Retreat, in the game's own selection panel movie; in a replay: the hovered squad icon's tooltip and the selected squad over the observer panel)", g_showEngine ? "; ShowEngineCycle=1: the engine's real cycle shown instead" : "");
+    logmsg("UnitStats 0.7 (DPS as the attribute editor counts it%s; selected squad's DPS / melee skill / armour / range / speed / sight and its active effects with the game's icons left of Retreat, in the game's own selection panel movie; %s; in a replay: the hovered squad icon's tooltip and the selected squad over the observer panel)", g_showEngine ? "; ShowEngineCycle=1: the engine's real cycle shown instead" : "", g_buffColors ? (g_barFx ? "BuffColors=1: effects colour the numbers (green / red), HP / energy ones in the bars under the portrait" : "BuffColors=1: effects colour the numbers (green / red), BarEffects=0") : "BuffColors=0: every effect an icon, numbers white");
     if (!g_enabled) { logmsg("disabled in UnitStats.ini"); return TRUE; }
     s2t_install();
     CloseHandle(CreateThread(NULL, 0, worker, NULL, 0, NULL));

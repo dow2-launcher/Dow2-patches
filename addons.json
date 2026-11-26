@@ -549,7 +549,7 @@
     "order": 15
   },
   "unitstats": {
-    "version": "0.6",
+    "version": "0.7",
     "dll": "UnitStats.dll",
     "default": false,
     "name": {
@@ -560,11 +560,11 @@
       "de": "Unit stats"
     },
     "description": {
-      "en": "Left of the Retreat button: the selected squad's ranged and melee DPS (counted as in the attribute editor), melee skill, armour, range, speed, sight and active effects. Only you see it. In replays: in the tooltip of a squad icon.",
-      "ru": "Слева от кнопки отступления: DPS выбранного отряда в дальнем и ближнем бою (считается как в редакторе атрибутов), навык ближнего боя, броня, дальность, скорость, обзор и действующие эффекты. Видите только вы. В реплеях — в подсказке иконки отряда.",
-      "es": "A la izquierda del botón de retirada: DPS a distancia y cuerpo a cuerpo de la escuadra seleccionada, habilidad cuerpo a cuerpo, blindaje, alcance, velocidad, visión y efectos activos. Solo lo ves tú. También en repeticiones.",
-      "fr": "À gauche du bouton de retraite : DPS à distance et au corps à corps de l'escouade choisie (comme l'éditeur d'attributs), mêlée, armure, portée, vitesse, vision et effets actifs. Vous seul le voyez. Aussi en replay (survol d'icône).",
-      "de": "Links vom Rückzugsknopf: Fern- und Nahkampf-DPS des gewählten Trupps (gerechnet wie im Attribut-Editor), Nahkampfwert, Rüstung, Reichweite, Tempo, Sicht und aktive Effekte. Nur du siehst es. In Replays: im Tooltip des Trupp-Symbols."
+      "en": "Left of the Retreat button: the selected squad's ranged and melee DPS (counted as in the attribute editor), melee skill, armour, range, speed, sight and active effects; a buff turns a number green, a debuff red. Only you see it. In replays: in the tooltip of a squad icon.",
+      "ru": "Слева от кнопки отступления: DPS выбранного отряда в дальнем и ближнем бою (считается как в редакторе атрибутов), навык ближнего боя, броня, дальность, скорость, обзор и действующие эффекты; бафф делает число зелёным, дебафф — красным. Видите только вы. В реплеях — в подсказке иконки отряда.",
+      "es": "A la izquierda del botón de retirada: DPS a distancia y cuerpo a cuerpo de la escuadra seleccionada, habilidad cuerpo a cuerpo, blindaje, alcance, velocidad, visión y efectos activos; una mejora pone el número en verde, una penalización en rojo. Solo lo ves tú. También en repeticiones.",
+      "fr": "À gauche du bouton de retraite : DPS à distance et au corps à corps de l'escouade choisie (comme l'éditeur d'attributs), mêlée, armure, portée, vitesse, vision et effets actifs ; un bonus met le chiffre en vert, un malus en rouge. Vous seul le voyez. Aussi en replay (survol d'icône).",
+      "de": "Links vom Rückzugsknopf: Fern- und Nahkampf-DPS des gewählten Trupps (gerechnet wie im Attribut-Editor), Nahkampfwert, Rüstung, Reichweite, Tempo, Sicht und aktive Effekte; ein Buff färbt die Zahl grün, ein Debuff rot. Nur du siehst es. In Replays: im Tooltip des Trupp-Symbols."
     },
     "conflicts": [
       "dow2-patches/UnitStats.dll"

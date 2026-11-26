@@ -4,6 +4,24 @@ Every version gets an entry here before it reaches `main`. CI then tags `vX.Y.Z`
 version (`X.Y.0`) it also publishes a GitHub Release with the DLLs and the entries since the previous `X.Y.0`.
 The version of the set lives only in `VERSION`; each DLL still writes its own version to its log.
 
+## 0.2.127 — 2026-11-26
+Unit stats 0.7 (store unitstats-0.7, the store entry keeps its group / order, off by default, Elite and vanilla), grantovich 26.11
+(screenshot: a Chimera with two squads inside, our "-25%" over the first one's portrait). UnitStats.dll 0.7:
+- buffs / debuffs change the numbers themselves: ranged / melee DPS, range, speed, sight and melee skill are drawn green when the
+  effects on the squad raise them, red when they lower them, and the effects they take in (damage, melee / ranged / projectile
+  damage, cooldown, reload, range, speed, sight, melee skill) get no icon of their own. The numbers stay the engine's (DPS through
+  the weapon modifier function 0x8A6790 - type 7 already multiplies in the melee / ranged / projectile damage types, 0x8A65C0 -,
+  speed through 0x8A6AC0, range = GetMaxRange, sight = SightExt, melee skill = the game's getter 0x862CB0); the base they are
+  compared with is the same number without modifiers (DPS: the same formula on the weapon bag's raw damage / cooldown / reload;
+  range / speed: the blueprint; sight / melee skill: (base + add) x mul of 0x8A6AC0 inverted), half a percent of slack;
+- max HP / max energy effects colour the bar's own "500 / 500" under the portrait (the movie's Receive_SetTextColor, a dark
+  backing behind it for contrast on the green / purple bar, white again when gone); HP / energy regeneration: the effect's icon +
+  "+100%" at the bar's right end (the native number moved left only when it would reach it). `[UnitStats] BarEffects=0`: icons;
+- the remaining effect icons start right of the portraits of the squads inside a transport / a building
+  (main_panel.multi_select.mini_portrait00..07, boxes read back from the movie every update) - nothing of ours covers them;
+- `[UnitStats] BuffColors=0` = 0.6 (white numbers, every effect an icon). Replays: the same colours; HP / energy effects stay
+  icons there (no bar). Stand scripts: unitstats/stand/session_v7.sh, vsession_v7.sh (vanilla), unitstats_v7.scar.
+
 ## 0.2.126 — 2026-11-26
 Texture pack fix 1 (store texturepackfix-1, experiment 1160, off by default, Elite, vanilla and IG Rework). A crash of the game
 itself (no add-on in the stack), 5 reports from 2 players (likebeat 17-18.11 x3, noofancy 22.11 and 26.11 at the start of a
