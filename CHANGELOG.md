@@ -4,6 +4,17 @@ Every version gets an entry here before it reaches `main`. CI then tags `vX.Y.Z`
 version (`X.Y.0`) it also publishes a GitHub Release with the DLLs and the entries since the previous `X.Y.0`.
 The version of the set lives only in `VERSION`; each DLL still writes its own version to its log.
 
+## 0.2.130 — 2026-11-26
+Add-on presets for the launcher's Add-ons tab (launcher 1.6.35, owner 26.11.2026: "Minimal / Recommended / Custom"):
+- addons.json `"_presets"`: `minimal` = `"ids": "defaults"` (the add-ons on for a new player), `recommended` = relay_fwd, automatch,
+  steamkeep, roomjoin, livereplay, replayopen, elitefix_wmic, obsfix_r2, shellfix, herolabelfix, soundfix, lobbystats_r3,
+  loadingratings_r3, replayspeed, elitetext_lang (servers, automatch, replays, OBS and Steam-drop fixes, lobby ratings - nothing
+  that changes the simulation, no performance / experiment / debug). Names and descriptions in 5 languages.
+- The deploy (launcher repo scripts/server/dow2-patches-deploy) copies it to the staging store's launcher.json `"presets"`;
+  `elite-release apply presets` releases it. Every reader of addons.json skips `_` keys, so older deploys ignore it.
+- scripts/store_texts.py check: `_presets` well formed (5 languages, ids "defaults" or known store ids, none twice, no gameplay /
+  performance / debug / dangerous add-on); run in CI (version job). docs/ADDON_RULES.md "Presets of the Add-ons tab".
+
 ## 0.2.129 — 2026-11-26
 MMFind 0.56 (Automatch v2.0; hand release: store automatch mmfind-0.56 = the live package mmfind-0.55 with this MMFind.dll), parties
 on Find a Game (SirItos 24.11, party leader: "he had Random - Orks were shown, mine showed fine"; "at the end of the game we could

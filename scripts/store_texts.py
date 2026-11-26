@@ -1,6 +1,7 @@
 """Player texts of the add-ons (docs/store-texts.json) -> a launcher.json and/or addons.json.
 
   store_texts.py check                     docs/store-texts.json is complete (5 languages, a known category, an order number)
+                                           and addons.json "_presets" is well formed (launcher 1.6.35)
   store_texts.py addons                    writes the texts into addons.json (its add-ons only)
   store_texts.py store <launcher.json>     shows what would change in that store file
   store_texts.py store <launcher.json> -w  writes it (then sign it as usual: elite-publish sign ...)
@@ -36,6 +37,50 @@ def load_texts():
     return texts
 
 
+# launcher 1.6.35: the add-on presets of the Add-ons tab (addons.json "_presets" -> launcher.json "presets" by the deploy)
+# never in a preset: the add-ons that change the simulation (gameplay, a "danger" text) and the speed-up / debugging groups.
+# "experiment" is not refused here: the store moved some of them to network by hand (roomjoin, livereplay, replayopen) and
+# this file keeps the group of the first deploy
+UNSAFE_CATEGORIES = ("gameplay", "performance", "debug")
+# store ids released by hand that have no entry in docs/store-texts.json
+STORE_ONLY = ("elitetext_lang",)
+
+
+def check_presets(texts):
+    pre = json.loads(ADDONS.read_text(encoding="utf-8")).get("_presets")
+    if pre is None:
+        return 0
+    errors = []
+    if not isinstance(pre, dict) or not pre:
+        sys.exit('addons.json _presets: {"<key>": {"name": {...}, "description": {...}, "ids": "defaults" | [<store ids>]}}')
+    known = {base(sid): t for sid, t in texts.items()}
+    for key, p in pre.items():
+        if not isinstance(p, dict):
+            errors.append(f"{key}: not an object"); continue
+        for k in ("name", "description"):
+            missing = [lang for lang in LANGS if not str((p.get(k) or {}).get(lang) or "").strip()]
+            if missing:
+                errors.append(f"{key}: {k} without {', '.join(missing)}")
+        ids = p.get("ids")
+        if ids == "defaults":
+            continue
+        if not isinstance(ids, list) or not all(isinstance(x, str) and x for x in ids):
+            errors.append(f"{key}: ids is \"defaults\" or a list of store ids"); continue
+        if len(set(map(base, ids))) != len(ids):
+            errors.append(f"{key}: an id twice")
+        for sid in ids:
+            t = known.get(base(sid))
+            if t is None and sid not in STORE_ONLY:
+                errors.append(f"{key}: {sid} is no add-on of docs/store-texts.json")
+            elif t is not None and t.get("category") in UNSAFE_CATEGORIES:
+                errors.append(f"{key}: {sid} is {t['category']} - not for a preset")
+            elif t is not None and t.get("danger"):
+                errors.append(f"{key}: {sid} is marked dangerous - not for a preset")
+    if errors:
+        sys.exit("addons.json _presets:\n  " + "\n  ".join(errors))
+    return len(pre)
+
+
 def base(store_id):
     for end in ("_r2", "_r3"):
         if store_id.endswith(end):
@@ -62,7 +107,8 @@ def main():
         sys.exit(__doc__)
     texts = load_texts()
     if args[0] == "check":
-        print(f"ok: {len(texts)} add-ons")
+        n = check_presets(texts)
+        print(f"ok: {len(texts)} add-ons" + (f", {n} presets" if n else ""))
         return
     if args[0] == "addons":
         addons = json.loads(ADDONS.read_text(encoding="utf-8"))
