@@ -98,6 +98,12 @@
 // the HP but with all the other stats"): HP / energy regeneration leaves the bars - an item of the stat rows (the game's
 // regeneration / energy trait icon + "+1/s" / "+100%" / "+100% +1/s", green / red), at the left end of the row with more room and
 // clear of a transport's cargo portraits, only while an effect changes it. Max HP / max energy stay in the bars (0.7).
+// v10 / 0.10 (26.11.2026, noofancy in the launcher's feedback fb 2117: "as an observer UnitStats does not work"): a LIVE match
+// watched from an observer seat has the same observer HUD as a replay (observer_player_list + the squad icon tooltips) and no
+// selection panel, but it is not game type 0x800 - so 0.6-0.9 showed nothing there. The replay boxes now also come up when the
+// match's GameInfo has this machine's observer seat (slot type 2 "local observer") and no seat of a local player (type 0) - the
+// same slot table MatchSpeed reads (settings+0x118+0x810, 0xA8 each). The watchdog says nothing while our code is idle (the
+// panel's update stops whenever the game leaves a match: replay or observer -> menu was logged as "no panel update").
 #include <windows.h>
 #include <stdio.h>
 #include <stdarg.h>
@@ -1629,6 +1635,7 @@ static DWORD WINAPI watchdog(LPVOID _) {
         Sleep(1000);
         DWORD f = g_frames, now = GetTickCount();
         if (f != lastFrames) { lastFrames = f; quiet = 0; told = 0; continue; }
+        if (!strcmp((const char *)g_where, "idle")) { quiet = 0; continue; }   // v10: not inside our code (menu, loading): no hang of ours
         if (++quiet == 5 && f) { logmsg("watchdog: the selection panel's update has not run for 5 s (frames %lu), last in \"%s\" %lu ms ago", f, (const char *)g_where, now - g_whereT); told = 1; }
         if (told && quiet % 60 == 0) logmsg("watchdog: still no panel update (%lu s), last in \"%s\"", quiet, (const char *)g_where);
     }
@@ -1764,9 +1771,29 @@ static void load_ini_replay(void) {
     g_rOffX = GetPrivateProfileIntW(L"Replay", L"OffsetX", 0, g_ini); g_rOffY = GetPrivateProfileIntW(L"Replay", L"OffsetY", 0, g_ini);
     g_rWidth = GetPrivateProfileIntW(L"Replay", L"Width", 520, g_ini); if (g_rWidth < 150 || g_rWidth > 2000) g_rWidth = 520;
 }
-static int is_replay(void) {
+// v10: the observer HUD's boxes - a replay, or a live match this machine only watches: its GameInfo (settings+0x118+0x810, n at
+// +0x814, 0xA8 a slot, +0 type) has the local observer (2) and no local player (0). Re-read once a second (main thread only).
+static int g_obsView = -1; static DWORD g_obsViewT;
+static int is_obs_view(void) {
+    DWORD now = GetTickCount();
+    if (g_obsView >= 0 && now - g_obsViewT < 1000) return g_obsView;
+    g_obsViewT = now;
     char *st = rd((void *)G_SETTINGS, 4) ? *(char **)G_SETTINGS : NULL;
-    return st && rd(st + 0x118, 4) && (*(DWORD *)(st + 0x118) & T_PLAYBACK);
+    int v = 0, n = -1, obs = 0, me = 0; DWORD type = 0;
+    if (st && rd(st + 0x118, 4) && (type = *(DWORD *)(st + 0x118)) != 0) {
+        if (type & T_PLAYBACK) v = 1;
+        else if (rd(st + 0x118 + 0x810, 8)) {
+            char *arr = *(char **)(st + 0x118 + 0x810); n = *(int *)(st + 0x118 + 0x814);
+            if (n > 0 && n <= 16 && rd(arr, n * 0xA8))
+                for (int i = 0; i < n; i++) { int t = *(int *)(arr + i * 0xA8); obs += t == 2; me += t == 0; }
+            v = obs > 0 && me == 0;
+        }
+    }
+    if (v != g_obsView && (g_obsView >= 0 || v))
+        logmsg("v10: %s (game type %lX, %d slots, %d local observer, %d local player)",
+               v ? (type & T_PLAYBACK ? "a replay - the observer panel boxes on" : "a live match watched from an observer seat - the observer panel boxes on")
+                 : "not an observer view - the observer panel boxes off", type, n, obs, me);
+    return g_obsView = v;
 }
 static int gfx_getnum(void *mv, const char *path, double *out) {        // movie vtable +0x30 = GetVariable(GFxValue *, path)
     GfxVal r; memset(&r, 0, sizeof r);
@@ -1982,7 +2009,7 @@ static Upd_t2 o_obsUpd, o_ttUpd;
 static DWORD g_obsCheck;
 static void frame_obs(char *form) {
     if (!g_replay || !g_rPanel || g_dead || !g_enabled) { if (g_rbSel.mv && g_rbSel.mv == gfx_movie_of_form(form)) rb_show(&g_rbSel, 0); return; }
-    if (!is_replay()) return;
+    if (!is_obs_view()) return;
     void *mv = gfx_movie_of_form(form); if (!mv) return;
     DWORD now = GetTickCount();
     char p[160]; snprintf(p, sizeof p, "player_list_mc.unit_info_mc.%s.t0", g_rbSel.name);
@@ -2032,7 +2059,7 @@ static void frame_tt(char *form) {
     char *mm = rd((void *)G_MOVIEMGR, 4) ? *(char **)G_MOVIEMGR : NULL;
     char *info = mm && rd(mm + 0x2C, 4) ? *(char **)(mm + 0x2C) : NULL;
     WJob j; memset(&j, 0, sizeof j);
-    if (info && rd(info + 0x204, 8) && *(int *)(info + 0x208) == 2 && (j.widget = *(char **)(info + 0x204)) && g_obsBind && is_replay())
+    if (info && rd(info + 0x204, 8) && *(int *)(info + 0x208) == 2 && (j.widget = *(char **)(info + 0x204)) && g_obsBind && is_obs_view())
         if (!run_guarded(widget_squad, &j, "the hovered squad icon")) j.squad = NULL;
     double up = 0;
     if (j.squad && (!gfx_getnum(mv, "_root.upgrade_mc._visible", &up) || !up)) j.squad = NULL;   // the game shows no tooltip now
@@ -2140,7 +2167,7 @@ BOOL WINAPI DllMain(HINSTANCE h, DWORD reason, LPVOID _) {
         if (GetFileAttributesExW(g_log, GetFileExInfoStandard, &a) && (a.nFileSizeHigh || a.nFileSizeLow > 2u << 20)) DeleteFileW(g_log);
     }
     load_ini();
-    logmsg("UnitStats 0.9 (DPS as the attribute editor counts it%s; selected squad's DPS / melee skill / armour / range / speed / sight and its active effects with the game's icons left of Retreat, in the game's own selection panel movie; %s; in a replay: the hovered squad icon's tooltip and the selected squad over the observer panel)", g_showEngine ? "; ShowEngineCycle=1: the engine's real cycle shown instead" : "", g_buffColors ? (g_barFx ? "BuffColors=1: effects colour the numbers (green / red), max HP / energy in the bars under the portrait, HP / energy regeneration a stat item" : "BuffColors=1: effects colour the numbers (green / red), HP / energy regeneration a stat item, BarEffects=0") : "BuffColors=0: every effect an icon, numbers white");
+    logmsg("UnitStats 0.10 (DPS as the attribute editor counts it%s; selected squad's DPS / melee skill / armour / range / speed / sight and its active effects with the game's icons left of Retreat, in the game's own selection panel movie; %s; in a replay or watching a live match from an observer seat: the hovered squad icon's tooltip and the selected squad over the observer panel)", g_showEngine ? "; ShowEngineCycle=1: the engine's real cycle shown instead" : "", g_buffColors ? (g_barFx ? "BuffColors=1: effects colour the numbers (green / red), max HP / energy in the bars under the portrait, HP / energy regeneration a stat item" : "BuffColors=1: effects colour the numbers (green / red), HP / energy regeneration a stat item, BarEffects=0") : "BuffColors=0: every effect an icon, numbers white");
     if (!g_enabled) { logmsg("disabled in UnitStats.ini"); return TRUE; }
     s2t_install();
     CloseHandle(CreateThread(NULL, 0, worker, NULL, 0, NULL));
