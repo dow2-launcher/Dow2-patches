@@ -104,6 +104,13 @@
 // match's GameInfo has this machine's observer seat (slot type 2 "local observer") and no seat of a local player (type 0) - the
 // same slot table MatchSpeed reads (settings+0x118+0x810, 0xA8 each). The watchdog says nothing while our code is idle (the
 // panel's update stops whenever the game leaves a match: replay or observer -> menu was logged as "no panel update").
+// v11 / 0.11 (26.11.2026, noofancy in the launcher's feedback fb 2135: "max HP is not shown in the HP bar, there is just a dark
+// strip; I want it where all the other stats are, not in the HP bar"): max HP / max energy changed by an effect (Adrenal Glands
+// +10 %, ...) leave the bars as regeneration did in 0.9 - items of the stat rows: the game's health trait icon + "+10%" (an
+// addition "+200", both "+10% +200"), the energy icon + "+50%" with a small "max" (energy regeneration has "/s"), green / red,
+// only while an effect changes it. The bar under the portrait stays the game's own (no colouring, no dark backing).
+// [UnitStats] MaxInBars=1 = as 0.7-0.10 (the bar's number coloured); the old key BarEffects (=1 in the ini every earlier
+// version shipped) is not read any more.
 #include <windows.h>
 #include <stdio.h>
 #include <stdarg.h>
@@ -123,7 +130,8 @@ static volatile const char *g_where = "idle"; static volatile DWORD g_whereT, g_
 
 // ---------- the items and their icons (the game's own textures) ----------
 enum { I_RANGED, I_MELEE, I_SKILL, I_ARMOUR, I_RANGE, I_SPEED, I_SIGHT, NITEMS,
-       I_HPREG = NITEMS, I_ENREG, NPITEMS };   // v9: HP / energy regeneration - items of the selection panel only, shown when an effect changes it
+       I_HPMAX = NITEMS, I_HPREG, I_ENMAX, I_ENREG, NPITEMS };   // v9: HP / energy regeneration, v11: max HP / max energy - items of
+                                                                // the selection panel only, shown when an effect changes it
 enum { A_LIGHT, A_HEAVY, A_VEHICLE, A_BUILDING, NARM };
 static const int ITEM_ROW[NITEMS] = { 0, 0, 0, 1, 1, 1, 1 };
 static const wchar_t *ITEM_KEY[NITEMS] = { L"Ranged", L"Melee", L"Skill", L"Armour", L"Range", L"Speed", L"Sight" };
@@ -193,7 +201,7 @@ static int g_lang, g_ruSeen, g_langSeen;                  // v4: [UnitStats] Lan
 static int g_showEngine;                                  // v5: [UnitStats] ShowEngineCycle: 0 = the editor's DPS (default), 1 = the engine cycle (v4)
 static int g_useSkill = 1, g_useEmod = 1, g_useLvl = 1;   // [UnitStats] GameSkill / EntityMods / LevelMul: the engine calls, each can be switched off
 static int g_enabled = 1, g_size = 22, g_isize = 0, g_offX = 0, g_offY = 0, g_perModel = 1, g_verbose = 1;
-static int g_buffColors = 1, g_barFx = 1;                  // v7: [UnitStats] BuffColors (effects colour the numbers), BarEffects (HP / energy into the bars)
+static int g_buffColors = 1, g_barFx = 0;                  // v7: [UnitStats] BuffColors (effects colour the numbers); v11: MaxInBars (max HP / energy into the bars, as 0.7-0.10)
 static FILETIME g_iniTime;
 static int ini_int(const wchar_t *k, int def, int lo, int hi) { int v = GetPrivateProfileIntW(L"UnitStats", k, def, g_ini); return v < lo ? lo : v > hi ? hi : v; }
 static void ini_icon(const wchar_t *key, const wchar_t *def, Icon *ic) {
@@ -220,7 +228,7 @@ static void load_ini(void) {
       g_lang = !_wcsicmp(l, L"en") ? 1 : !_wcsicmp(l, L"ru") ? 2 : 0; }
     g_useSkill = ini_int(L"GameSkill", 1, 0, 1); g_useEmod = ini_int(L"EntityMods", 1, 0, 1); g_useLvl = ini_int(L"LevelMul", 1, 0, 1);
     g_showEngine = ini_int(L"ShowEngineCycle", 0, 0, 1);
-    g_buffColors = ini_int(L"BuffColors", 1, 0, 1); g_barFx = ini_int(L"BarEffects", 1, 0, 1);
+    g_buffColors = ini_int(L"BuffColors", 1, 0, 1); g_barFx = ini_int(L"MaxInBars", 0, 0, 1);
     for (int k = 0; k < NITEMS; k++) if (k != I_ARMOUR) ini_icon(ITEM_KEY[k], ITEM_DEF[k], &g_icon[k]);
     for (int k = 0; k < NARM; k++) ini_icon(ARM_KEY[k], ARM_DEF[k], &g_armIcon[k]);
     g_effOn = GetPrivateProfileIntW(L"Effects", L"Enabled", 1, g_ini) != 0;
@@ -1176,13 +1184,13 @@ static void layout(void *mv) {
     // v9: HP / energy regeneration (noofancy 26.11: "the per cent and the addition - not at the HP, with the other stats"): at the
     // left end of the row with more room - room counted to the native widgets of the strip (a transport's cargo portraits) or,
     // with none there, to [Effects] Left
-    for (int k = I_HPREG; k < NPITEMS; k++) {
+    for (int k = NITEMS; k < NPITEMS; k++) {                        // v11: max HP / max energy the same way
         if (!g_itemVis[k]) continue;
         double cw = item_w(mv, k), room[2];
         for (int row = 0; row < 2; row++) room[row] = xr[row] - cw - stat_row_limit(y0 + row * g_lineH, g_lineH, xr[row] + gapItem);
         int row = room[1] > room[0] ? 1 : 0;
         place_item(mv, k, xr[row], y0 + row * g_lineH); xr[row] -= cw + gapItem;
-        if (g_verbose && room[row] < 0) logmsg("v9: regeneration item %d does not fit its row (%.0f short)", k, -room[row]);
+        if (g_verbose && room[row] < 0) logmsg("v9: HP / energy item %d does not fit its row (%.0f short)", k, -room[row]);
     }
     for (int row = 0; row < 2; row++) if (g_rowLeft[row] != xr[row] + gapItem) { g_rowLeft[row] = xr[row] + gapItem; g_effDirty = 1; }
     g_layoutDirty = 0;
@@ -1224,14 +1232,18 @@ static void set_stats(void *mv, const Stats *s, const Effs *fx) {
     stat_strings(s, v, sm);
     for (int k = 0; k < NITEMS; k++) set_item_text(mv, k, v[k], sm[k], dir_col(s->dir[k]));
     for (int k = 0; k < NITEMS; k++) set_icon(mv, k, item_icon(s, k));
-    static int defs[2] = { -2, -2 };
-    if (defs[0] == -2) { defs[0] = def_of(MC_ENTITY, 0x01); defs[1] = def_of(MC_SQUAD, 0x0C); }
-    for (int k = I_HPREG; k < NPITEMS; k++) {                       // v9: HP / energy regeneration, only when an effect changes it
-        char r[48]; const char *col; regen_text(fx, defs[k - I_HPREG], r, sizeof r, &col);
-        if (*r) { set_item_text(mv, k, r, NULL, col); set_icon(mv, k, &g_eicon[k == I_HPREG ? EI_REGEN : EI_ENERGY]); }
+    // v9: HP / energy regeneration; v11: max HP / max energy (not with MaxInBars=1 - the bar has them then); only when an effect changes it
+    static int defs[NPITEMS - NITEMS] = { -2 };
+    static const int XICON[NPITEMS - NITEMS] = { EI_HEALTH, EI_REGEN, EI_ENERGY, EI_ENERGY };
+    static const char *XNAME[NPITEMS - NITEMS] = { "max HP", "HP regeneration", "max energy", "energy regeneration" };
+    if (defs[0] == -2) { defs[0] = def_of(MC_ENTITY, 0x00); defs[1] = def_of(MC_ENTITY, 0x01); defs[2] = def_of(MC_SQUAD, 0x0E); defs[3] = def_of(MC_SQUAD, 0x0C); }
+    for (int k = NITEMS; k < NPITEMS; k++) {
+        int x = k - NITEMS; char r[48]; const char *col;
+        if ((k == I_HPMAX || k == I_ENMAX) && g_barFx) r[0] = 0; else regen_text(fx, defs[x], r, sizeof r, &col);
+        if (*r) { set_item_text(mv, k, r, k == I_ENMAX ? (is_ru() ? "\xD0\xBC\xD0\xB0\xD0\xBA\xD1\x81" : "max") : NULL, col); set_icon(mv, k, &g_eicon[XICON[x]]); }
         item_vis(mv, k, *r != 0);
-        static char last[2][48];
-        if (g_verbose && strcmp(last[k - I_HPREG], r)) { logmsg("v9: %s regeneration item: %s", k == I_HPREG ? "HP" : "energy", *r ? r : "(none - hidden)"); snprintf(last[k - I_HPREG], 48, "%s", r); }
+        static char last[NPITEMS - NITEMS][48];
+        if (g_verbose && strcmp(last[x], r)) { logmsg("v11: %s item: %s", XNAME[x], *r ? r : "(none - hidden)"); snprintf(last[x], 48, "%s", r); }
     }
     if (g_layoutDirty) layout(mv);
 }
@@ -1671,7 +1683,7 @@ static void frame(char *form) {
     AT("native widgets"); scan_native(mv);                        // v9: before the stats (the regeneration items keep clear of them too)
     if (s.squad != g_regenSq) {                                   // v9: full size again for another squad
         g_regenSq = s.squad;
-        if (g_regenSmall) { g_regenSmall = 0; for (int k = I_HPREG; k < NPITEMS; k++) { if (g_iconDone[k] > 0) g_iconDone[k] = 0; g_txt[k][0] = 0; } }
+        if (g_regenSmall) { g_regenSmall = 0; for (int k = NITEMS; k < NPITEMS; k++) { if (g_iconDone[k] > 0) g_iconDone[k] = 0; g_txt[k][0] = 0; } }
     }
     AT("stats panel"); set_stats(mv, &st, haveFx && g_buffColors ? &fx : NULL);
     show(mv, 1);
@@ -1700,7 +1712,7 @@ static void frame(char *form) {
     }
     // v3: the effect icons; v7: without the ones a number / a bar shows, right of the native widgets of the strip
     if (g_effOn && g_effMax > 0 && haveFx) {
-        int fold = g_buffColors ? FOLD_STAT | FOLD_REGEN | (g_barFx && g_barsOk ? FOLD_BAR : 0) : 0;
+        int fold = g_buffColors ? FOLD_STAT | FOLD_REGEN | (!g_barFx || g_barsOk ? FOLD_BAR : 0) : 0;   // v11: max HP / energy - stat items (MaxInBars=1: the bars)
         AT("effects panel"); Cell cells[MAXEFF]; int n = compose(&fx, cells, fold);
         set_effects(mv, cells, n);
         static char last[1024]; static char *lastSq; char now[1024]; int o = 0; now[0] = 0;
@@ -1711,16 +1723,17 @@ static void frame(char *form) {
                                                                cells[k].mul, cells[k].add, cells[k].sum, fx.e[cells[k].def].nEnt, g_effNEnts);
             char in[400]; int r = 0; in[0] = 0;                   // v7: the ones in a number or a bar instead
             for (int i = 0; i < NEFFDEF && r < (int)sizeof in - 60; i++) if ((EFFDEF[i].fold & fold) && eff_on(&EFFDEF[i], &fx.e[i]))
-                r += snprintf(in + r, sizeof in - r, " %s x%.3f %+.2f (%s);", mod_name(EFFDEF[i].cls, EFFDEF[i].type), fx.e[i].mul, fx.e[i].add, EFFDEF[i].fold == FOLD_BAR ? "bar" : EFFDEF[i].fold == FOLD_REGEN ? "stat item" : "number");
+                r += snprintf(in + r, sizeof in - r, " %s x%.3f %+.2f (%s);", mod_name(EFFDEF[i].cls, EFFDEF[i].type), fx.e[i].mul, fx.e[i].add, EFFDEF[i].fold == FOLD_BAR && g_barFx ? "bar" : EFFDEF[i].fold & (FOLD_REGEN | FOLD_BAR) ? "stat item" : "number");
             logmsg("effects %s: %s%s (%d shown) |%s |in numbers / bars:%s", p_sqName ? p_sqName(s.squad) : "?", n ? now : "none", n > g_effShown ? " - not all fit" : "", g_effShown, per, r ? in : " none");
             strcpy(last, now); lastSq = s.squad;
         }
     } else if (g_nCell) set_effects(mv, NULL, 0);
     // v9: the effects did not all fit even in three compact rows beside a regeneration item: that item at 3/4 size (next update)
-    if (!g_regenSmall && g_effPlaced && g_eCompact && g_effShown < g_nCell && (g_itemVis[I_HPREG] || g_itemVis[I_ENREG])) {
+    int anyX = 0; for (int k = NITEMS; k < NPITEMS; k++) anyX |= g_itemVis[k];
+    if (!g_regenSmall && g_effPlaced && g_eCompact && g_effShown < g_nCell && anyX) {
         g_regenSmall = 1;
-        for (int k = I_HPREG; k < NPITEMS; k++) { if (g_iconDone[k] > 0) g_iconDone[k] = 0; g_txt[k][0] = 0; }
-        if (g_verbose) logmsg("v9: %d of %d effects fit - the regeneration items at 3/4 size", g_effShown, g_nCell);
+        for (int k = NITEMS; k < NPITEMS; k++) { if (g_iconDone[k] > 0) g_iconDone[k] = 0; g_txt[k][0] = 0; }
+        if (g_verbose) logmsg("v9: %d of %d effects fit - the HP / energy items at 3/4 size", g_effShown, g_nCell);
     }
 }
 static void __thiscall hk_sp_upd(char *form, float dt) { g_frames++; AT("the game's panel update"); o_spUpd(form, dt); AT("ours"); frame(form); AT("idle"); }
@@ -2167,7 +2180,7 @@ BOOL WINAPI DllMain(HINSTANCE h, DWORD reason, LPVOID _) {
         if (GetFileAttributesExW(g_log, GetFileExInfoStandard, &a) && (a.nFileSizeHigh || a.nFileSizeLow > 2u << 20)) DeleteFileW(g_log);
     }
     load_ini();
-    logmsg("UnitStats 0.10 (DPS as the attribute editor counts it%s; selected squad's DPS / melee skill / armour / range / speed / sight and its active effects with the game's icons left of Retreat, in the game's own selection panel movie; %s; in a replay or watching a live match from an observer seat: the hovered squad icon's tooltip and the selected squad over the observer panel)", g_showEngine ? "; ShowEngineCycle=1: the engine's real cycle shown instead" : "", g_buffColors ? (g_barFx ? "BuffColors=1: effects colour the numbers (green / red), max HP / energy in the bars under the portrait, HP / energy regeneration a stat item" : "BuffColors=1: effects colour the numbers (green / red), HP / energy regeneration a stat item, BarEffects=0") : "BuffColors=0: every effect an icon, numbers white");
+    logmsg("UnitStats 0.11 (DPS as the attribute editor counts it%s; selected squad's DPS / melee skill / armour / range / speed / sight and its active effects with the game's icons left of Retreat, in the game's own selection panel movie; %s; in a replay or watching a live match from an observer seat: the hovered squad icon's tooltip and the selected squad over the observer panel)", g_showEngine ? "; ShowEngineCycle=1: the engine's real cycle shown instead" : "", g_buffColors ? (g_barFx ? "BuffColors=1: effects colour the numbers (green / red), MaxInBars=1: max HP / energy in the bars under the portrait, HP / energy regeneration a stat item" : "BuffColors=1: effects colour the numbers (green / red), max HP / energy and HP / energy regeneration stat items") : "BuffColors=0: every effect an icon, numbers white");
     if (!g_enabled) { logmsg("disabled in UnitStats.ini"); return TRUE; }
     s2t_install();
     CloseHandle(CreateThread(NULL, 0, worker, NULL, 0, NULL));
