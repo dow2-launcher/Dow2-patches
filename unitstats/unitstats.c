@@ -94,6 +94,10 @@
 // its size - under the 0.004 cut, never shown. Any real addition is shown now (eff_score), regeneration as "+1/s" (per second),
 // a multiplier and an addition together "+100% +1/s". Other additions (max HP +200, range +5, melee skill +10, knockback -100)
 // already scored above the cut; small speed additions (+0.15) only colour the speed number, as before.
+// v9 / 0.9 (26.11.2026, noofancy in the launcher's feedback: "these stats - the per cent and the addition - should be shown not at
+// the HP but with all the other stats"): HP / energy regeneration leaves the bars - an item of the stat rows (the game's
+// regeneration / energy trait icon + "+1/s" / "+100%" / "+100% +1/s", green / red), at the left end of the row with more room and
+// clear of a transport's cargo portraits, only while an effect changes it. Max HP / max energy stay in the bars (0.7).
 #include <windows.h>
 #include <stdio.h>
 #include <stdarg.h>
@@ -112,7 +116,8 @@ static volatile const char *g_where = "idle"; static volatile DWORD g_whereT, g_
 #define AT(s) (g_where = (s), g_whereT = GetTickCount())
 
 // ---------- the items and their icons (the game's own textures) ----------
-enum { I_RANGED, I_MELEE, I_SKILL, I_ARMOUR, I_RANGE, I_SPEED, I_SIGHT, NITEMS };
+enum { I_RANGED, I_MELEE, I_SKILL, I_ARMOUR, I_RANGE, I_SPEED, I_SIGHT, NITEMS,
+       I_HPREG = NITEMS, I_ENREG, NPITEMS };   // v9: HP / energy regeneration - items of the selection panel only, shown when an effect changes it
 enum { A_LIGHT, A_HEAVY, A_VEHICLE, A_BUILDING, NARM };
 static const int ITEM_ROW[NITEMS] = { 0, 0, 0, 1, 1, 1, 1 };
 static const wchar_t *ITEM_KEY[NITEMS] = { L"Ranged", L"Melee", L"Skill", L"Armour", L"Range", L"Speed", L"Sight" };
@@ -834,11 +839,12 @@ enum { EM_PCT, EM_RATE, EM_ADD, EM_ADDP, EM_ON, EM_OFF, EM_REGEN };   // PCT "+5
                                                            // shown per second "+1/s" (Brood Nest: addition 0.1 = the tooltip's "1 HP/s")
 // v7: fold - FOLD_STAT: the effect is in one of the stat numbers (shown by its colour, no icon of its own); FOLD_BAR: in the HP /
 // energy bar under the portrait (the selection panel only; the replay boxes have no such bar and keep its icon)
-enum { FOLD_NONE = 0, FOLD_STAT = 1, FOLD_BAR = 2 };
+// v9: FOLD_REGEN: HP / energy regeneration - an item of its own in the stat rows of the panel (the replay boxes keep its icon)
+enum { FOLD_NONE = 0, FOLD_STAT = 1, FOLD_BAR = 2, FOLD_REGEN = 4 };
 typedef struct { unsigned char cls, type; signed char good; unsigned char mode, icon; const char *tag; unsigned char fold; } EffDef;
 static const EffDef EFFDEF[] = {
     { MC_ENTITY, 0x00, +1, EM_PCT,  EI_HEALTH,    "", FOLD_BAR }, // health_maximum
-    { MC_ENTITY, 0x01, +1, EM_REGEN, EI_REGEN,    "", FOLD_BAR }, // health_regeneration
+    { MC_ENTITY, 0x01, +1, EM_REGEN, EI_REGEN,    "", FOLD_REGEN }, // health_regeneration
     { MC_ENTITY, 0x06, +1, EM_PCT,  EI_SPEED,     "", FOLD_STAT }, // speed_maximum
     { MC_ENTITY, 0x0A, +1, EM_PCT,  EI_SIGHT,     "", FOLD_STAT }, // sight_radius
     { MC_ENTITY, 0x0D, +1, EM_ON,   EI_INVIS,     "hidden" },    // camouflage_enable
@@ -885,7 +891,7 @@ static const EffDef EFFDEF[] = {
     { MC_SQUAD,  0x01, -1, EM_PCT,  EI_SUPPDEF,   "" },          // received_courage_damage
     { MC_SQUAD,  0x08, +1, EM_OFF,  EI_NORETREAT, "no retreat" },// retreat_enable
     { MC_SQUAD,  0x02, -1, EM_PCT,  EI_COOLDOWN,  "" },          // ability_recharge_time_squad
-    { MC_SQUAD,  0x0C, +1, EM_REGEN, EI_ENERGY,   "", FOLD_BAR }, // energy_regen_rate
+    { MC_SQUAD,  0x0C, +1, EM_REGEN, EI_ENERGY,   "", FOLD_REGEN }, // energy_regen_rate
     { MC_SQUAD,  0x0E, +1, EM_PCT,  EI_ENERGY,    "max", FOLD_BAR }, // energy_maximum
 };
 #define NEFFDEF ((int)(sizeof EFFDEF / sizeof EFFDEF[0]))
@@ -1003,8 +1009,15 @@ static void get_selection(void *arg) {
 typedef void (__thiscall *Upd_t)(char *form, float dt);
 static Upd_t o_spUpd;
 static void *g_mv; static int g_shown = -1; static DWORD g_check, g_lastCalc;
-static char g_txt[NITEMS][200]; static int g_iconDone[NITEMS]; static char g_iconPath[NITEMS][200]; static int g_layoutDirty;
-static double g_lineH, g_iconS; static int g_iconSc[NITEMS];
+static char g_txt[NPITEMS][200]; static int g_iconDone[NPITEMS]; static char g_iconPath[NPITEMS][200]; static int g_layoutDirty;
+static double g_lineH, g_iconS; static int g_iconSc[NPITEMS];
+static int g_itemVis[NPITEMS];     // v9: the regeneration items are there only while an effect changes it (no empty slot)
+// v9: the regeneration items at 3/4 size while the effects would not all fit beside them otherwise (a hero with HP and energy
+// regeneration and passive resistances, stand 1: "+100% +1/s" and "+0.5/s" at full size left room for one of three effects);
+// back to full size when another squad is selected
+static int g_regenSmall; static char *g_regenSq;
+static int item_fs(int k) { return k >= NITEMS && g_regenSmall ? g_size * 3 / 4 : g_size; }
+static double item_iconS(int k) { return item_fs(k) == g_size ? g_iconS : g_iconS * item_fs(k) / g_size; }
 static double g_rowLeft[2] = { 0, 0 }; static int g_effDirty;      // v3: where each stat row starts (the effects end left of it)
 static void setnum(void *mv, const char *fmt, int k, const char *prop, double v) {
     char p[96]; snprintf(p, sizeof p, fmt, k); strcat(p, prop); gfx_setvar(mv, p, gv_num(v));
@@ -1027,7 +1040,7 @@ static void make_fields(void *mv) {
     g_lineH = 1.3 * g_size + 4; g_iconS = g_isize ? g_isize : 1.2 * g_size;
     GfxVal a[6] = { gv_str("us_box"), gv_num(16110) };
     if (!invoke_n(mv, "_root.core_actions.createEmptyMovieClip", a, 2)) logmsg("movie %p: createEmptyMovieClip us_box failed", mv);
-    for (int k = 0; k < NITEMS; k++) {
+    for (int k = 0; k < NPITEMS; k++) {
         char nm[16], p[96];
         for (int s = 0; s < 2; s++) {                    // s = 0 the shadow (below), 1 the text
             snprintf(nm, sizeof nm, s ? "t%d" : "s%d", k);
@@ -1045,7 +1058,12 @@ static void make_fields(void *mv) {
         GfxVal d[2] = { gv_str("h"), gv_num(1) }; invoke_n(mv, p, d, 2);
         snprintf(p, sizeof p, BOX ".i%d.h.createEmptyMovieClip", k);
         GfxVal im[2] = { gv_str("img"), gv_num(1) }; invoke_n(mv, p, im, 2);
-        g_txt[k][0] = 0; g_iconDone[k] = 0; g_iconPath[k][0] = 0;
+        g_txt[k][0] = 0; g_iconDone[k] = 0; g_iconPath[k][0] = 0; g_iconSc[k] = 100; g_itemVis[k] = 1;
+        if (k >= NITEMS) {                               // v9: the regeneration items start hidden
+            const char *f[3] = { "t%d._visible", "s%d._visible", "i%d._visible" };
+            for (int q = 0; q < 3; q++) { char r[32]; snprintf(r, sizeof r, f[q], k); snprintf(p, sizeof p, BOX ".%s", r); gfx_setvar(mv, p, gv_bool(0)); }
+            g_itemVis[k] = 0;
+        }
     }
     g_layoutDirty = 1;
     logmsg("clip us_box in the selection panel movie %p, core_actions: %s (font %d, icons %g, line %g)", mv,
@@ -1076,7 +1094,7 @@ static void set_icon(void *mv, int k, const Icon *ic) {
         }
         return;
     }
-    double sc = ic->scale * g_iconS / (w > h ? w : h);
+    double sc = ic->scale * item_iconS(k) / (w > h ? w : h);
     snprintf(p, sizeof p, BOX ".i%d._xscale", k); gfx_setvar(mv, p, gv_num(sc));
     snprintf(p, sizeof p, BOX ".i%d._yscale", k); gfx_setvar(mv, p, gv_num(sc));
     snprintf(p, sizeof p, BOX ".i%d._visible", k); gfx_setvar(mv, p, gv_bool(1));
@@ -1115,31 +1133,52 @@ static void item_html(char *h, size_t n, int fs, const char *val, const char *sm
 }
 static void set_item_text(void *mv, int k, const char *val, const char *small, const char *col) {
     char h[200], sh[200];
-    item_html(h, sizeof h, g_size, val, small, col);
+    item_html(h, sizeof h, item_fs(k), val, small, col);
     if (!strcmp(h, g_txt[k])) return;
     strcpy(g_txt[k], h); g_layoutDirty = 1;
     char p[96]; snprintf(p, sizeof p, BOX ".t%d.htmlText", k); gfx_setvar(mv, p, gv_str(h));
     html_shadow(h, sh, sizeof sh);
     snprintf(p, sizeof p, BOX ".s%d.htmlText", k); gfx_setvar(mv, p, gv_str(sh));
 }
+static double stat_row_limit(double y, double h, double right);   // v9: below (the effects' native widgets)
+static void place_item(void *mv, int k, double x, double y) {        // the text right aligned at x, the icon left of it
+    char p[96]; snprintf(p, sizeof p, BOX ".t%d", k);
+    double w = clip_w(mv, p); if (w < 0) w = 0.55 * g_size * (strlen(g_txt[k]) > 90 ? 6 : 3);
+    x -= w;
+    int fs = item_fs(k); double is = item_iconS(k), yt = y + (g_lineH - (1.3 * fs + 4)) / 2;   // a smaller item centred in the row
+    setnum(mv, BOX ".t%d", k, "._x", x); setnum(mv, BOX ".t%d", k, "._y", yt);
+    setnum(mv, BOX ".s%d", k, "._x", x + 1.2); setnum(mv, BOX ".s%d", k, "._y", yt + 1.5);
+    x -= 0.2 * fs + is;
+    double ov = is * (g_iconSc[k] - 100) / 200.0;                   // a scaled-up icon overflows its box evenly
+    setnum(mv, BOX ".i%d", k, "._x", x - ov); setnum(mv, BOX ".i%d", k, "._y", y + (g_lineH - is) / 2 + 1 - ov);
+}
+static double item_w(void *mv, int k) {                               // text + gap + icon
+    char p[96]; snprintf(p, sizeof p, BOX ".t%d", k);
+    double w = clip_w(mv, p); if (w < 0) w = 0.55 * g_size * (strlen(g_txt[k]) > 90 ? 6 : 3);
+    return w + 0.2 * item_fs(k) + item_iconS(k);
+}
 static void layout(void *mv) {
-    double right = 70.9 - 6 + g_offX, y0 = 134.7 + 2 + g_offY, gapI = 0.2 * g_size, gapItem = 0.75 * g_size;
+    double right = 70.9 - 6 + g_offX, y0 = 134.7 + 2 + g_offY, gapItem = 0.75 * g_size, xr[2];
     for (int row = 1; row >= 0; row--) {
         double x = right, y = y0 + row * g_lineH;
         for (int k = NITEMS - 1; k >= 0; k--) {
             if (ITEM_ROW[k] != row) continue;
-            char p[96]; snprintf(p, sizeof p, BOX ".t%d", k);
-            double w = clip_w(mv, p); if (w < 0) w = 0.55 * g_size * (strlen(g_txt[k]) > 90 ? 6 : 3);
-            x -= w;
-            setnum(mv, BOX ".t%d", k, "._x", x); setnum(mv, BOX ".t%d", k, "._y", y);
-            setnum(mv, BOX ".s%d", k, "._x", x + 1.2); setnum(mv, BOX ".s%d", k, "._y", y + 1.5);
-            x -= gapI + g_iconS;
-            double ov = g_iconS * (g_iconSc[k] - 100) / 200.0;          // a scaled-up icon overflows its box evenly
-            setnum(mv, BOX ".i%d", k, "._x", x - ov); setnum(mv, BOX ".i%d", k, "._y", y + (g_lineH - g_iconS) / 2 + 1 - ov);
-            x -= gapItem;
+            place_item(mv, k, x, y); x -= item_w(mv, k) + gapItem;
         }
-        if (g_rowLeft[row] != x + gapItem) { g_rowLeft[row] = x + gapItem; g_effDirty = 1; }
+        xr[row] = x;
     }
+    // v9: HP / energy regeneration (noofancy 26.11: "the per cent and the addition - not at the HP, with the other stats"): at the
+    // left end of the row with more room - room counted to the native widgets of the strip (a transport's cargo portraits) or,
+    // with none there, to [Effects] Left
+    for (int k = I_HPREG; k < NPITEMS; k++) {
+        if (!g_itemVis[k]) continue;
+        double cw = item_w(mv, k), room[2];
+        for (int row = 0; row < 2; row++) room[row] = xr[row] - cw - stat_row_limit(y0 + row * g_lineH, g_lineH, xr[row] + gapItem);
+        int row = room[1] > room[0] ? 1 : 0;
+        place_item(mv, k, xr[row], y0 + row * g_lineH); xr[row] -= cw + gapItem;
+        if (g_verbose && room[row] < 0) logmsg("v9: regeneration item %d does not fit its row (%.0f short)", k, -room[row]);
+    }
+    for (int row = 0; row < 2; row++) if (g_rowLeft[row] != xr[row] + gapItem) { g_rowLeft[row] = xr[row] + gapItem; g_effDirty = 1; }
     g_layoutDirty = 0;
 }
 // the shown text of each item: the value and the small "(3x14.6)" after it (v6: shared by the panel and the replay boxes)
@@ -1157,11 +1196,37 @@ static void stat_strings(const Stats *s, char v[NITEMS][64], char sm[NITEMS][48]
     fmtnum(v[I_SIGHT], 64, s->sight);
 }
 static const Icon *item_icon(const Stats *s, int k) { return k == I_ARMOUR ? &g_armIcon[armour_class(armour_internal(s->armour))] : &g_icon[k]; }
-static void set_stats(void *mv, const Stats *s) {
+static float eff_text(int def, float m, float a, char *v, size_t n);
+static int eff_on_i(const Effs *fx, int def);
+// v9: a regeneration item's text ("+1/s", "+100%", "+100% +1/s", "-0.5/s") and colour; "" = no effect on it
+static void regen_text(const Effs *fx, int def, char *v, size_t n, const char **col) {
+    *v = 0; *col = C_NEUTRAL;
+    if (!fx || def < 0 || !eff_on_i(fx, def)) return;
+    float d = eff_text(def, fx->e[def].mul, fx->e[def].add, v, n) * EFFDEF[def].good;
+    *col = d > 0 ? C_GOOD : d < 0 ? C_BAD : C_NEUTRAL;
+}
+static void item_vis(void *mv, int k, int vis) {
+    if (vis == g_itemVis[k]) return;
+    g_itemVis[k] = vis; g_layoutDirty = 1;
+    char p[96];
+    snprintf(p, sizeof p, BOX ".t%d._visible", k); gfx_setvar(mv, p, gv_bool(vis));
+    snprintf(p, sizeof p, BOX ".s%d._visible", k); gfx_setvar(mv, p, gv_bool(vis));
+    if (!vis || g_iconDone[k] > 0) { snprintf(p, sizeof p, BOX ".i%d._visible", k); gfx_setvar(mv, p, gv_bool(vis)); }
+}
+static void set_stats(void *mv, const Stats *s, const Effs *fx) {
     char v[NITEMS][64], sm[NITEMS][48];
     stat_strings(s, v, sm);
     for (int k = 0; k < NITEMS; k++) set_item_text(mv, k, v[k], sm[k], dir_col(s->dir[k]));
     for (int k = 0; k < NITEMS; k++) set_icon(mv, k, item_icon(s, k));
+    static int defs[2] = { -2, -2 };
+    if (defs[0] == -2) { defs[0] = def_of(MC_ENTITY, 0x01); defs[1] = def_of(MC_SQUAD, 0x0C); }
+    for (int k = I_HPREG; k < NPITEMS; k++) {                       // v9: HP / energy regeneration, only when an effect changes it
+        char r[48]; const char *col; regen_text(fx, defs[k - I_HPREG], r, sizeof r, &col);
+        if (*r) { set_item_text(mv, k, r, NULL, col); set_icon(mv, k, &g_eicon[k == I_HPREG ? EI_REGEN : EI_ENERGY]); }
+        item_vis(mv, k, *r != 0);
+        static char last[2][48];
+        if (g_verbose && strcmp(last[k - I_HPREG], r)) { logmsg("v9: %s regeneration item: %s", k == I_HPREG ? "HP" : "energy", *r ? r : "(none - hidden)"); snprintf(last[k - I_HPREG], 48, "%s", r); }
+    }
     if (g_layoutDirty) layout(mv);
 }
 // ---------- v3: the effects block, left of the stat rows: per effect an icon clip e<k> and a text f<k> (shadow g<k>) ----------
@@ -1300,6 +1365,7 @@ static int cell_cmp(const void *x, const void *y) {           // the biggest cha
     return a->score < b->score ? 1 : a->score > b->score ? -1 : a->def - b->def;
 }
 static int eff_on(const EffDef *d, const Eff *x) { return d->mode == EM_ON ? x->sum > 0 : d->mode == EM_OFF ? x->sum < 0 : x->score > 0.004f; }
+static int eff_on_i(const Effs *fx, int def) { return eff_on(&EFFDEF[def], &fx->e[def]); }
 // from the engine's numbers to the cells shown (merged by icon + tag: the five knockback chances are one "knockback");
 // v7: the effects of the fold kinds in `fold` are in a number / a bar instead (no cell)
 static int compose(const Effs *fx, Cell *out, int fold) {
@@ -1318,7 +1384,7 @@ static int compose(const Effs *fx, Cell *out, int fold) {
     for (int k = 0; k < n; k++) { out[k] = all[k]; cell_text(&out[k]); }
     return n;
 }
-static int g_effShown;                                         // cells laid out (the rest did not fit)
+static int g_effShown, g_effPlaced;                            // cells laid out (the rest did not fit); v9: a full placement done
 // v4: two rows of cells at [Effects] FontSize beside the two stat rows; when they do not hold all the cells, three rows at
 // CompactFontSize in the same height (grantovich: "not all the modifiers fit"). A dry run with the widths at the normal
 // size decides; switching changes the font, so the cells are re-made and placed on the next update.
@@ -1377,7 +1443,7 @@ static void scan_native(void *mv) {
         for (int i = 0; i < NNATIVE; i++) if (native_rect(mv, NATIVE[i], ca, &r[n])) who[n++] = i;
     for (int i = 0; i < n; i++) { r[i].x0 = floor(r[i].x0); r[i].y0 = floor(r[i].y0); r[i].x1 = ceil(r[i].x1); r[i].y1 = ceil(r[i].y1); }
     if (n == g_nObs && !memcmp(r, g_obs, n * sizeof r[0]) && !memcmp(who, g_obsWho, n * sizeof who[0])) return;
-    memcpy(g_obs, r, n * sizeof r[0]); memcpy(g_obsWho, who, n * sizeof who[0]); g_nObs = n; g_effDirty = 1;
+    memcpy(g_obs, r, n * sizeof r[0]); memcpy(g_obsWho, who, n * sizeof who[0]); g_nObs = n; g_effDirty = 1; g_layoutDirty = 1;
     if (g_verbose) {
         char t[1024]; int o = 0; t[0] = 0;
         for (int i = 0; i < n && o < (int)sizeof t - 100; i++) { const char *nm = strrchr(NATIVE[who[i]], '.');
@@ -1392,6 +1458,17 @@ static double eff_row_left(int compact, int r) {
         const Rect *o = &g_obs[i];
         double ov = (y + h < o->y1 ? y + h : o->y1) - (y > o->y0 ? y : o->y0), oh = o->y1 - o->y0;
         if (ov <= 0.3 * (h < oh ? h : oh) || (right != 0 && o->x0 >= right)) continue;
+        if (o->x1 + g_effGap > x0) x0 = o->x1 + g_effGap;
+    }
+    return x0;
+}
+// v9: how far left a stat row (y, h) may reach from `right`: right of the native widgets it overlaps, else [Effects] Left
+static double stat_row_limit(double y, double h, double right) {
+    double x0 = g_effX + g_offX;
+    for (int i = 0; i < g_nObs; i++) {
+        const Rect *o = &g_obs[i];
+        double ov = (y + h < o->y1 ? y + h : o->y1) - (y > o->y0 ? y : o->y0), oh = o->y1 - o->y0;
+        if (ov <= 0.3 * (h < oh ? h : oh) || o->x0 >= right) continue;
         if (o->x1 + g_effGap > x0) x0 = o->x1 + g_effGap;
     }
     return x0;
@@ -1431,10 +1508,10 @@ static void layout_eff(void *mv) {
             snprintf(p, sizeof p, BOX ".e%d._visible", k); gfx_setvar(mv, p, gv_bool(0));
             snprintf(p, sizeof p, BOX ".f%d._visible", k); gfx_setvar(mv, p, gv_bool(0));
             snprintf(p, sizeof p, BOX ".g%d._visible", k); gfx_setvar(mv, p, gv_bool(0)); }
-        g_effShown = 0;
+        g_effShown = 0; g_effPlaced = 0;
         return;
     }
-    int fit = eff_place(g_eCompact, fs, w, n, xs, rs); g_effShown = 0;
+    int fit = eff_place(g_eCompact, fs, w, n, xs, rs); g_effShown = 0; g_effPlaced = 1;
     double lh = 1.3 * fs + 4, rh = eff_row_h(g_eCompact);
     for (int k = 0; k < MAXEFF; k++) {
         char p[96]; int vis = k < fit;
@@ -1474,45 +1551,28 @@ static void set_effects(void *mv, const Cell *c, int n) {
 // status_bars.health / .energy each have amount_txt ("500 / 500", the engine's own current / max, centred over the bar - the field
 // spans -2..143.8 of the bar, white, set by the game with .text through Receive_SetText). Max HP / max energy changed by an effect:
 // that native text turns green / red through the movie's own Receive_SetTextColor (put back to white when the effect is gone or
-// nothing / another squad is shown; re-applied every update in case the game sets it). HP / energy regeneration changed: our small
-// clip us_n in the bar (the effect's icon + "+50%"), right aligned at the bar's right end; when the centred number would reach it,
-// the native field is moved left just enough (back to its own place when the note goes).
+// nothing / another squad is shown; re-applied every update in case the game sets it), on a dark backing.
+// v9: HP / energy regeneration is no longer in the bar (0.7-0.8: icon + "+50%" at its right end) - it is a stat item (layout).
 #define RGB_GOOD 0x8FE36A
 #define RGB_BAD  0xFF6B5A
 #define RGB_NATIVE 0xFFFFFF            // amount_txt's own colour (DefineEditText 151 / 160: white, vanilla and Elite)
-#define BAR_FS 10
-typedef struct { const char *bar; int maxCls, maxType, regCls, regType, icon; int maxDef, regDef; double ty, tx0, txNow;
-                 int tinted, made, done, gen, vis, dirty, logged; char txt[240], ipath[200]; double noteW, pill[2]; } Bar;
-static Bar g_bar[2] = { { "health", MC_ENTITY, 0x00, MC_ENTITY, 0x01, EI_REGEN }, { "energy", MC_SQUAD, 0x0E, MC_SQUAD, 0x0C, EI_ENERGY } };
+typedef struct { const char *bar; int maxCls, maxType; int maxDef; double ty, tx0; int tinted, made, logged; double pill; } Bar;
+static Bar g_bar[2] = { { "health", MC_ENTITY, 0x00 }, { "energy", MC_SQUAD, 0x0E } };
 static int g_barsOk;
-static void bar_path(const Bar *b, char *o, size_t n, const char *rest) { snprintf(o, n, "_root.status_bars.%s.us_n%s%s", b->bar, *rest ? "." : "", rest); }
 static void bar_make(void *mv, Bar *b) {
-    char p[160], q[96]; snprintf(q, sizeof q, "_root.status_bars.%s.createEmptyMovieClip", b->bar);
-    GfxVal a[2] = { gv_str("us_n"), gv_num(16110) }; invoke_n(mv, q, a, 2);
-    for (int sh = 0; sh < 2; sh++) {
-        const char *nm = sh ? "t" : "s";
-        GfxVal c[6] = { gv_str(nm), gv_num(10 + sh), gv_num(0), gv_num(0), gv_num(10), gv_num(BAR_FS * 1.3 + 4) };
-        bar_path(b, p, sizeof p, "createTextField"); invoke_n(mv, p, c, 6);
-        char f[32]; snprintf(f, sizeof f, "%s.html", nm); bar_path(b, p, sizeof p, f); gfx_setvar(mv, p, gv_bool(1));
-        snprintf(f, sizeof f, "%s.selectable", nm); bar_path(b, p, sizeof p, f); gfx_setvar(mv, p, gv_bool(0));
-        snprintf(f, sizeof f, "%s.autoSize", nm); bar_path(b, p, sizeof p, f); gfx_setvar(mv, p, gv_str("left"));
-        if (!sh) { snprintf(f, sizeof f, "%s._alpha", nm); bar_path(b, p, sizeof p, f); gfx_setvar(mv, p, gv_num(75)); }
-    }
-    GfxVal c[2] = { gv_str("i"), gv_num(20) }; bar_path(b, p, sizeof p, "createEmptyMovieClip"); invoke_n(mv, p, c, 2);
-    GfxVal d[2] = { gv_str("h"), gv_num(1) }; bar_path(b, p, sizeof p, "i.createEmptyMovieClip"); invoke_n(mv, p, d, 2);
-    bar_path(b, p, sizeof p, "_visible"); gfx_setvar(mv, p, gv_bool(0));
+    char q[96];
     snprintf(q, sizeof q, "_root.status_bars.%s.createEmptyMovieClip", b->bar);              // the dark backing of a coloured number:
     GfxVal bg[2] = { gv_str("us_bg"), gv_num(9 - 16384) }; invoke_n(mv, q, bg, 2);            // timeline depth 9 (AS: -16375) = over the bar's fill (4), under amount_txt (10)
     snprintf(q, sizeof q, "_root.status_bars.%s.us_bg._visible", b->bar); gfx_setvar(mv, q, gv_bool(0));
-    b->pill[0] = b->pill[1] = 0;
+    b->pill = 0;
     snprintf(q, sizeof q, "_root.status_bars.%s.amount_txt._y", b->bar); if (!gfx_getnum(mv, q, &b->ty)) b->ty = -0.5;
     snprintf(q, sizeof q, "_root.status_bars.%s.amount_txt._x", b->bar); if (!gfx_getnum(mv, q, &b->tx0)) b->tx0 = 3.2;
-    b->txNow = b->tx0; b->maxDef = def_of(b->maxCls, b->maxType); b->regDef = def_of(b->regCls, b->regType);
-    b->made = 1; b->done = 0; b->vis = 0; b->txt[0] = 0; b->ipath[0] = 0; b->dirty = 1; b->tinted = 0; b->noteW = 0;
+    b->maxDef = def_of(b->maxCls, b->maxType);
+    b->made = 1; b->tinted = 0;
 }
 // green / red text on the green HP bar (or the purple energy bar) is hard to read: a dark backing behind the coloured native number
-// and behind our regeneration note (our clip us_bg at the timeline depth 9 of the bar - AS depth -16375: over the bar's fill at 4,
-// under amount_txt at 10 - drawn with the AS drawing API, the number's part sized to its textWidth)
+// (our clip us_bg at the timeline depth 9 of the bar - AS depth -16375: over the bar's fill at 4, under amount_txt at 10 - drawn with
+// the AS drawing API, sized to its textWidth)
 static void bar_rect(void *mv, const char *clip, double x0, double y0, double x1, double y1) {
     char p[128]; int n = snprintf(p, sizeof p, "%s", clip);
     double pts[5][2] = { { x0, y0 }, { x1, y0 }, { x1, y1 }, { x0, y1 }, { x0, y0 } };
@@ -1521,28 +1581,22 @@ static void bar_rect(void *mv, const char *clip, double x0, double y0, double x1
     for (int i = 1; i < 5; i++) { GfxVal l[2] = { gv_num(pts[i][0]), gv_num(pts[i][1]) }; snprintf(p + n, sizeof p - n, ".lineTo"); invoke_n(mv, p, l, 2); }
     snprintf(p + n, sizeof p - n, ".endFill"); invoke_n(mv, p, NULL, 0);
 }
-static void bar_pill(void *mv, Bar *b, int num, int note) {
+static void bar_pill(void *mv, Bar *b, int num) {
     char q[96], c[96]; double tw = 0;
     snprintf(q, sizeof q, "_root.status_bars.%s.amount_txt.textWidth", b->bar);
     if (num && (!gfx_getnum(mv, q, &tw) || tw <= 0)) num = 0;
-    double x0 = num ? b->txNow + 70.9 - tw / 2 - 3 : 0, x1 = note ? 145 - b->noteW - 4 : 0;   // where each part starts (0 = none)
-    if (x0 == b->pill[0] && x1 == b->pill[1]) return;
-    b->pill[0] = x0; b->pill[1] = x1;
+    double x0 = num ? b->tx0 + 70.9 - tw / 2 - 3 : 0;                          // where it starts (0 = none)
+    if (x0 == b->pill) return;
+    b->pill = x0;
     snprintf(c, sizeof c, "_root.status_bars.%s.us_bg", b->bar);
-    snprintf(q, sizeof q, "%s._visible", c); gfx_setvar(mv, q, gv_bool(num || note));
+    snprintf(q, sizeof q, "%s._visible", c); gfx_setvar(mv, q, gv_bool(num));
     snprintf(q, sizeof q, "%s.clear", c); invoke_n(mv, q, NULL, 0);
-    double y0 = b->ty + 1.5, y1 = b->ty + 15.5;
-    if (num) bar_rect(mv, c, x0, y0, b->txNow + 70.9 + tw / 2 + 3, y1);
-    if (note) bar_rect(mv, c, x1, y0, 145, y1);
-}
-static void bar_native_x(void *mv, Bar *b, double x) {
-    if (x == b->txNow) return;
-    char q[96]; snprintf(q, sizeof q, "_root.status_bars.%s.amount_txt._x", b->bar); gfx_setvar(mv, q, gv_num(x)); b->txNow = x;
+    if (num) bar_rect(mv, c, x0, b->ty + 1.5, b->tx0 + 70.9 + tw / 2 + 3, b->ty + 15.5);
 }
 static void bar_set(void *mv, Bar *b, const Effs *fx, int on) {
     char p[160], q[96];
     if (!b->made) { if (!on) return; snprintf(q, sizeof q, "status_bars.%s.amount_txt", b->bar); if (!gfx_exists(mv, q)) return; bar_make(mv, b); }
-    if (b->maxDef < 0 || b->regDef < 0) return;
+    if (b->maxDef < 0) return;
     // the native number: max HP / max energy
     int dir = 0; char v[32];
     if (on && eff_on(&EFFDEF[b->maxDef], &fx->e[b->maxDef])) { float d = eff_text(b->maxDef, fx->e[b->maxDef].mul, fx->e[b->maxDef].add, v, sizeof v); dir = d > 0 ? 1 : d < 0 ? -1 : 0; }
@@ -1552,57 +1606,7 @@ static void bar_set(void *mv, Bar *b, const Effs *fx, int on) {
         if (g_verbose && !b->logged) { double c = -1; snprintf(p, sizeof p, "%s.textColor", q); gfx_getnum(mv, p, &c); logmsg("v7: %s bar number coloured, textColor now %06X", b->bar, (unsigned)c); b->logged = 1; }
         b->tinted = dir != 0;
     }
-    // regeneration: icon + the change at the bar's right end
-    char html[240] = "";
-    if (on && eff_on(&EFFDEF[b->regDef], &fx->e[b->regDef])) {
-        float d = eff_text(b->regDef, fx->e[b->regDef].mul, fx->e[b->regDef].add, v, sizeof v);
-        item_html(html, sizeof html, BAR_FS, v, NULL, d > 0 ? C_GOOD : d < 0 ? C_BAD : C_NEUTRAL);
-    }
-    if (strcmp(html, b->txt)) {
-        snprintf(b->txt, sizeof b->txt, "%s", html); b->dirty = 1;
-        if (*html) { char sh[240]; bar_path(b, p, sizeof p, "t.htmlText"); gfx_setvar(mv, p, gv_str(html));
-                     html_shadow(html, sh, sizeof sh); bar_path(b, p, sizeof p, "s.htmlText"); gfx_setvar(mv, p, gv_str(sh)); }
-    }
-    int vis = *html != 0; double is = BAR_FS * 1.15;
-    if (vis) {
-        const Icon *ic = &g_eicon[b->icon];
-        if (strcmp(b->ipath, ic->path)) {                    // a fresh child per texture, as the effect icons
-            char f[48];
-            if (b->gen) { snprintf(f, sizeof f, "i.h.m%d.removeMovieClip", b->gen); bar_path(b, p, sizeof p, f); invoke_n(mv, p, NULL, 0); }
-            b->gen++; snprintf(f, sizeof f, "m%d", b->gen); GfxVal a[2] = { gv_str(f), gv_num(b->gen % 1000 + 1) };
-            bar_path(b, p, sizeof p, "i.h.createEmptyMovieClip"); invoke_n(mv, p, a, 2);
-            snprintf(f, sizeof f, "i.h.m%d", b->gen); bar_path(b, p, sizeof p, f);
-            GfxVal l[2] = { gv_str(p), gv_str(ic->path) }; invoke_n(mv, "Receive_LoadMovie", l, 2);
-            snprintf(b->ipath, sizeof b->ipath, "%s", ic->path); b->done = 0;
-            bar_path(b, p, sizeof p, "i._visible"); gfx_setvar(mv, p, gv_bool(0));
-        } else if (b->done <= 0) {
-            char f[48]; snprintf(f, sizeof f, "i.h.m%d", b->gen); bar_path(b, p, sizeof p, f);
-            double w = clip_w(mv, p), h = clip_h(mv, p);
-            if (w > 0 && h > 0) {
-                double sc = ic->scale * is / (w > h ? w : h);
-                bar_path(b, p, sizeof p, "i._xscale"); gfx_setvar(mv, p, gv_num(sc)); bar_path(b, p, sizeof p, "i._yscale"); gfx_setvar(mv, p, gv_num(sc));
-                bar_path(b, p, sizeof p, "i._visible"); gfx_setvar(mv, p, gv_bool(1)); b->done = 1; b->dirty = 1;
-            } else b->done--;
-        }
-        if (b->dirty) {                                      // right aligned at the bar's right end
-            bar_path(b, p, sizeof p, "t"); double w = clip_w(mv, p); if (w < 0) w = 3 * BAR_FS;
-            double x = 142 - w, y = b->ty + 1.5, ov = is * (ic->scale - 100) / 200.0;
-            bar_path(b, p, sizeof p, "t._x"); gfx_setvar(mv, p, gv_num(x)); bar_path(b, p, sizeof p, "t._y"); gfx_setvar(mv, p, gv_num(y));
-            bar_path(b, p, sizeof p, "s._x"); gfx_setvar(mv, p, gv_num(x + 1)); bar_path(b, p, sizeof p, "s._y"); gfx_setvar(mv, p, gv_num(y + 1.2));
-            bar_path(b, p, sizeof p, "i._x"); gfx_setvar(mv, p, gv_num(x - 1.5 - is - ov));
-            bar_path(b, p, sizeof p, "i._y"); gfx_setvar(mv, p, gv_num(y + (BAR_FS * 1.3 + 4 - is) / 2 - ov));
-            b->noteW = w + 1.5 + is; b->dirty = 0;
-        }
-        // the native number, centred in its field (-2..143.8 from its _x): moved left only as far as needed to end 4 before the
-        // note, never further than its field's left edge at the bar's start
-        double tw = 0; snprintf(q, sizeof q, "_root.status_bars.%s.amount_txt.textWidth", b->bar);
-        if (gfx_getnum(mv, q, &tw) && tw > 0) {
-            double right = b->tx0 + 70.9 + tw / 2, limit = 142 - b->noteW - 4, sh = right > limit ? limit - right : 0, lo = 1 - (70.9 - tw / 2);
-            bar_native_x(mv, b, b->tx0 + (sh < lo ? lo : sh));
-        }
-    } else bar_native_x(mv, b, b->tx0);
-    if (vis != b->vis) { b->vis = vis; bar_path(b, p, sizeof p, "_visible"); gfx_setvar(mv, p, gv_bool(vis)); }
-    bar_pill(mv, b, b->tinted, vis && b->done > 0);
+    bar_pill(mv, b, b->tinted);
 }
 static void bars_update(void *mv, const Effs *fx, int on) { for (int i = 0; i < 2; i++) bar_set(mv, &g_bar[i], fx, on && fx); }
 static void show(void *mv, int vis) {
@@ -1653,11 +1657,16 @@ static void frame(char *form) {
     if (!run_guarded(squad_stats, &j, "the squad's numbers") || !st.models) { show(mv, 0); bars_update(mv, NULL, 0); return; }
     // the effects (v3); v7: also with [Effects] Enabled=0 when they colour the HP / energy bars
     static Effs fx; int haveFx = 0;
-    if (!g_dead && ((g_effOn && g_effMax > 0) || (g_buffColors && g_barFx))) {
+    if (!g_dead && ((g_effOn && g_effMax > 0) || g_buffColors)) {     // v9: also for the regeneration items
         memset(&fx, 0, sizeof fx); fx.squad = s.squad; EJob ej = { s.squad, &fx };
         AT("effect values"); haveFx = run_guarded(eff_values, &ej, "the squad's effects");
     }
-    AT("stats panel"); set_stats(mv, &st);
+    AT("native widgets"); scan_native(mv);                        // v9: before the stats (the regeneration items keep clear of them too)
+    if (s.squad != g_regenSq) {                                   // v9: full size again for another squad
+        g_regenSq = s.squad;
+        if (g_regenSmall) { g_regenSmall = 0; for (int k = I_HPREG; k < NPITEMS; k++) { if (g_iconDone[k] > 0) g_iconDone[k] = 0; g_txt[k][0] = 0; } }
+    }
+    AT("stats panel"); set_stats(mv, &st, haveFx && g_buffColors ? &fx : NULL);
     show(mv, 1);
     AT("bars"); bars_update(mv, haveFx ? &fx : NULL, g_buffColors && g_barFx);
     if (g_verbose && s.squad != g_lastSq) {
@@ -1684,8 +1693,7 @@ static void frame(char *form) {
     }
     // v3: the effect icons; v7: without the ones a number / a bar shows, right of the native widgets of the strip
     if (g_effOn && g_effMax > 0 && haveFx) {
-        int fold = g_buffColors ? FOLD_STAT | (g_barFx && g_barsOk ? FOLD_BAR : 0) : 0;
-        AT("native widgets"); scan_native(mv);
+        int fold = g_buffColors ? FOLD_STAT | FOLD_REGEN | (g_barFx && g_barsOk ? FOLD_BAR : 0) : 0;
         AT("effects panel"); Cell cells[MAXEFF]; int n = compose(&fx, cells, fold);
         set_effects(mv, cells, n);
         static char last[1024]; static char *lastSq; char now[1024]; int o = 0; now[0] = 0;
@@ -1696,11 +1704,17 @@ static void frame(char *form) {
                                                                cells[k].mul, cells[k].add, cells[k].sum, fx.e[cells[k].def].nEnt, g_effNEnts);
             char in[400]; int r = 0; in[0] = 0;                   // v7: the ones in a number or a bar instead
             for (int i = 0; i < NEFFDEF && r < (int)sizeof in - 60; i++) if ((EFFDEF[i].fold & fold) && eff_on(&EFFDEF[i], &fx.e[i]))
-                r += snprintf(in + r, sizeof in - r, " %s x%.3f %+.2f (%s);", mod_name(EFFDEF[i].cls, EFFDEF[i].type), fx.e[i].mul, fx.e[i].add, EFFDEF[i].fold == FOLD_BAR ? "bar" : "number");
+                r += snprintf(in + r, sizeof in - r, " %s x%.3f %+.2f (%s);", mod_name(EFFDEF[i].cls, EFFDEF[i].type), fx.e[i].mul, fx.e[i].add, EFFDEF[i].fold == FOLD_BAR ? "bar" : EFFDEF[i].fold == FOLD_REGEN ? "stat item" : "number");
             logmsg("effects %s: %s%s (%d shown) |%s |in numbers / bars:%s", p_sqName ? p_sqName(s.squad) : "?", n ? now : "none", n > g_effShown ? " - not all fit" : "", g_effShown, per, r ? in : " none");
             strcpy(last, now); lastSq = s.squad;
         }
     } else if (g_nCell) set_effects(mv, NULL, 0);
+    // v9: the effects did not all fit even in three compact rows beside a regeneration item: that item at 3/4 size (next update)
+    if (!g_regenSmall && g_effPlaced && g_eCompact && g_effShown < g_nCell && (g_itemVis[I_HPREG] || g_itemVis[I_ENREG])) {
+        g_regenSmall = 1;
+        for (int k = I_HPREG; k < NPITEMS; k++) { if (g_iconDone[k] > 0) g_iconDone[k] = 0; g_txt[k][0] = 0; }
+        if (g_verbose) logmsg("v9: %d of %d effects fit - the regeneration items at 3/4 size", g_effShown, g_nCell);
+    }
 }
 static void __thiscall hk_sp_upd(char *form, float dt) { g_frames++; AT("the game's panel update"); o_spUpd(form, dt); AT("ours"); frame(form); AT("idle"); }
 
@@ -2126,7 +2140,7 @@ BOOL WINAPI DllMain(HINSTANCE h, DWORD reason, LPVOID _) {
         if (GetFileAttributesExW(g_log, GetFileExInfoStandard, &a) && (a.nFileSizeHigh || a.nFileSizeLow > 2u << 20)) DeleteFileW(g_log);
     }
     load_ini();
-    logmsg("UnitStats 0.8 (DPS as the attribute editor counts it%s; selected squad's DPS / melee skill / armour / range / speed / sight and its active effects with the game's icons left of Retreat, in the game's own selection panel movie; %s; in a replay: the hovered squad icon's tooltip and the selected squad over the observer panel)", g_showEngine ? "; ShowEngineCycle=1: the engine's real cycle shown instead" : "", g_buffColors ? (g_barFx ? "BuffColors=1: effects colour the numbers (green / red), HP / energy ones in the bars under the portrait" : "BuffColors=1: effects colour the numbers (green / red), BarEffects=0") : "BuffColors=0: every effect an icon, numbers white");
+    logmsg("UnitStats 0.9 (DPS as the attribute editor counts it%s; selected squad's DPS / melee skill / armour / range / speed / sight and its active effects with the game's icons left of Retreat, in the game's own selection panel movie; %s; in a replay: the hovered squad icon's tooltip and the selected squad over the observer panel)", g_showEngine ? "; ShowEngineCycle=1: the engine's real cycle shown instead" : "", g_buffColors ? (g_barFx ? "BuffColors=1: effects colour the numbers (green / red), max HP / energy in the bars under the portrait, HP / energy regeneration a stat item" : "BuffColors=1: effects colour the numbers (green / red), HP / energy regeneration a stat item, BarEffects=0") : "BuffColors=0: every effect an icon, numbers white");
     if (!g_enabled) { logmsg("disabled in UnitStats.ini"); return TRUE; }
     s2t_install();
     CloseHandle(CreateThread(NULL, 0, worker, NULL, 0, NULL));
