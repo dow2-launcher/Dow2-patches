@@ -741,3 +741,41 @@ Entity_Create, six Hormagaunt broods at half HP, model 0 HP logged every 2 s). S
 
 Each 0.1 of addition = 1 HP/s more (Z - Y), the per-second factor 10 confirmed; the half HP/s more than the additions is the
 Hormagaunt's own regeneration (0.05 per tick, which N's -0.05 cancels). No fault, no watchdog line.
+
+## v9 - regeneration among the stats (0.9, 26.11.2026)
+
+noofancy (launcher feedback, 26.11): "I'd like these stats - the per cent and the addition [of regeneration] - shown not at the HP but
+with all the other stats". Max HP / max energy stay in the bars (grantovich, 0.7); only regeneration moves.
+
+- HP regeneration (entity health_regeneration) and energy regeneration (squad energy_regen_rate) are two more items of the panel's
+  stat rows (`I_HPREG`, `I_ENREG` - panel only, after the seven of `NITEMS`; the replay boxes keep their icons): the game's trait
+  icon the effects list used for them before 0.7 (`icon_traits_xp2/health_regeneration.dds`, `energy.dds`; `[EffectIcons]
+  Regeneration` / `Energy`) and the 0.8 text ("+1/s", "+100%", "+100% +1/s", "-0.5/s"), green / red by what it means for the squad.
+  Only while an effect changes it: no effect, no item, the other stats stay where they were. Fold kind `FOLD_REGEN` (with
+  `BuffColors=1`; `BuffColors=0` = 0.6, an icon); `BarEffects` is now only max HP / max energy. The bar's note clip `us_n` is gone.
+- Where: the stats keep their places right aligned at Retreat; a regeneration item goes to the left end of the row with more room,
+  room counted to the native widgets of the strip (the cargo portraits read back as in v7) or, with none, to `[Effects] Left`.
+  `scan_native` runs before the stats now (it set only the effects' layout before).
+- Fit: an item at the stats' size takes ~180 units ("+100% +1/s") of the ~535 between `[Effects] Left` and Retreat. A hero with HP and
+  energy regeneration and three passive resistances (stand run a: Chaos Lord) left room for one of the three effects even in three
+  compact rows. Now, when a full placement of the effects in compact rows still drops some while a regeneration item is shown, the
+  regeneration items go to 3/4 size (icon too, centred in the row) until another squad is selected (log "v9: 1 of 3 effects fit -
+  the regeneration items at 3/4 size"); run b: all three effects shown.
+
+Stand 1, Elite 3.2.1 (`unitstats/stand/session_v9.sh` + `unitstats_v9.scar`: Tyranids, a real Brood Nest, hormagaunts with
+regeneration modifiers, our hero (index 0 of the player's squads came out a Chaos Lord) with HP regeneration x2, energy regeneration
++0.05, max energy x1.5, damage taken x0.8, and an IG Chimera of ours with guardsmen loaded by Cmd_InstantGarrison, regeneration +0.1,
+speed x0.75, damage taken x0.75). Screenshots /var/www/media/dow2_shots/unitstats/v9/ (raw runs in raw/a, raw/b), logs there too.
+
+| Squad | stat rows | bars / effect icons |
+|---|---|---|
+| hormagaunts at the Brood Nest | regeneration icon + "+1/s" green, left end of the top row (DPS) | HP bar as the game draws it; "-40%" melee taken icon |
+| regeneration x2, damage taken x0.75 | "+100%" | "-40%" "-25%" icons |
+| x2 and +0.1 | "+100% +1/s" | "-40%" |
+| -0.05 | "-0.5/s" red | "-40%" |
+| nothing | no regeneration item, no gap | "-40%" |
+| Chimera with guardsmen inside | "+1/s" (top row), speed 6.0 red | two cargo portraits (x -483..-355), "-25%" right of them, nothing covered |
+| Chaos Lord: HP x2 (+ the nest's +0.1), energy +0.05, max energy x1.5 | "+100% +1/s" and "+0.5/s" at 3/4 size, both in the top row | energy "150 / 150" green on its backing; "-70%" "-50%" "-20%" in three compact rows |
+| the hormagaunts again | "+1/s" at full size again | - |
+
+No fault, no watchdog line.

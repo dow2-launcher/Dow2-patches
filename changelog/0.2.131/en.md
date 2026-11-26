@@ -1,0 +1,1 @@
+- Unit stats: health and energy regeneration effects (per cent and per second, e.g. "+100% +1/s", "-0.5/s") are now a stat of their own next to damage, range, speed and sight, with the game's regeneration icon, green for a bonus, red for a penalty - shown only while such an effect is on the squad. Max health and max energy bonuses stay in the bars under the portrait.
