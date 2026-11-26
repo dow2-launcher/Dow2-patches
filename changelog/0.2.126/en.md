@@ -1,0 +1,1 @@
+- New: Texture pack fix (experiment, off by default, Elite, vanilla and IG Rework): fixes a game crash while a map loads or at the start of a match when the texture atlas of the effects overflows (seen on Hades Wastes); the effect texture that does not fit is skipped instead.
