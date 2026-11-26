@@ -602,7 +602,7 @@
     "order": 15
   },
   "unitstats": {
-    "version": "0.8",
+    "version": "0.9",
     "dll": "UnitStats.dll",
     "default": false,
     "name": {

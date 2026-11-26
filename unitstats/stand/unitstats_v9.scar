@@ -1,0 +1,101 @@
+-- ===== STAND ONLY (unitstats v9 session): HP / energy regeneration as a stat item (noofancy 26.11: "the per cent and the addition
+-- - not at the HP, with all the other stats") =====
+-- We are Tyranids (hero 0), the enemy IG (AI off). As v8: hormagaunts at a real Brood Nest (+0.1 = "+1/s"), SCAR additions,
+-- multipliers, both, a negative addition, nothing; plus the hero (HP regeneration x2, energy regeneration +0.05, max energy
+-- x1.5: two regeneration items and the coloured energy bar) and an IG Chimera of ours with guardsmen inside (cargo portraits)
+-- and regeneration +0.1, speed x0.75, damage taken x0.75. One squad selected at a time ("SELECT <what>" in EliteAI.log).
+local UL = eliteai_log or (string and string.eliteai_log) or print
+US = { t = -1, n = 0 }
+local function q(f, ...) if type(f) ~= "function" then return nil end local ok, r = pcall(f, ...); if ok then return r end return nil end
+local function bpid(name) local ok, id = pcall(World_GetPropertyBagGroupID, name); if ok and id then return id end; UL("NO BLUEPRINT", name) end
+local function uspawn(p, bp, pos, toward, tag, inv)
+	local id = bpid(bp); if not id then return end
+	local ok2, s = pcall(Squad_CreateAndSpawnToward, id, p, 0, pos, toward)
+	if not ok2 or not s then UL("SPAWN FAILED", bp, tostring(s)); return end
+	US.n = US.n + 1; local g = SGroup_CreateIfNotFound("us9_g" .. US.n); SGroup_Add(g, s)
+	if inv then pcall(SGroup_SetInvulnerable, g, true) end
+	UL("spawned", tag, bp); return s, g
+end
+local function off(b, x, z) return World_Pos(b.x + x, b.y, b.z + z) end
+local function sel(s, what)
+	if US.prev then if pcall(Squad_GetPosition, US.prev) then pcall(Misc_SelectSquad, US.prev, false) end end
+	local ok, p = pcall(Squad_GetPosition, s); if not ok then UL("gone", what); US.prev = nil; return end
+	pcall(Camera_FocusOnPosition, p, false, 0, false)
+	UL("SELECT", what, tostring(pcall(Misc_SelectSquad, s, true))); US.prev = s
+end
+local function mod(g, app, name, usage, v, what)
+	local ok, m = pcall(Modifier_Create, app, name, usage, false, v, "")
+	if not ok or not m then UL("MOD create failed", what, tostring(m)); return end
+	SGroup_ForEach(g, function(gg, i, s) UL("MOD", what, tostring(pcall(Modifier_ApplyToSquad, m, s))) end)
+end
+local function half(g, what) UL("HALF", what, tostring(pcall(SGroup_SetAvgHealth, g, 0.5))) end
+local function inhold(s) return s and (q(Squad_IsInHoldEntity, s) or q(Squad_IsInHoldSquad, s)) and true or false end
+local function load(g, s, t, what)
+	if inhold(s) then return end
+	local eg = EGroup_CreateIfNotFound("us9_eg_" .. what); EGroup_Clear(eg); EGroup_Add(eg, Squad_EntityAt(t, 0))
+	if type(Cmd_InstantGarrison) == "function" then UL("LOAD", what, "Cmd_InstantGarrison", tostring(pcall(Cmd_InstantGarrison, g, eg))) end
+	UL("LOAD", what, "in hold now", tostring(inhold(s)))
+end
+local R = "modifiers\\entity_modifiers\\health_regeneration_modifier"
+function US_Setup()
+	US.P = World_GetPlayerAt(1); US.E = World_GetPlayerAt(2)
+	local b = Player_GetStartingPosition(US.P); US.base = b
+	US.own = {}; SGroup_ForEach(Player_GetSquads(US.P), function(g, i, s) US.own[i] = s end)
+	US.hero = US.own[1]; US.Hg = SGroup_CreateIfNotFound("us9_hero"); if US.hero then SGroup_Add(US.Hg, US.hero) end
+	local nid = bpid("ebps/pvp/race_tyranid/buildings/tyr_spawning_pool")
+	if nid then
+		local ok, e = pcall(Entity_Create, nid, US.P, off(b, 14, 14), b)
+		UL("NEST create", tostring(ok), tostring(e))
+		if ok and e then
+			UL("NEST spawn", tostring(pcall(Entity_Spawn, e)))
+			if type(Entity_ForceConstruct) == "function" then UL("NEST construct", tostring(pcall(Entity_ForceConstruct, e))) end
+		end
+	end
+	local H = "sbps/pvp/race_tyranid/troops/tyr_hormagaunt"
+	US.X, US.Xg = uspawn(US.P, H, off(b, 14, 20), b, "own X hormagaunts at the Brood Nest")
+	US.M, US.Mg = uspawn(US.P, H, off(b, 64, 14), b, "own M hormagaunts, regen x2, damage taken x0.75")
+	US.B, US.Bg = uspawn(US.P, H, off(b, 64, 34), b, "own B hormagaunts, regen x2 and +0.1")
+	US.N, US.Ng = uspawn(US.P, H, off(b, 44, 54), b, "own N hormagaunts, regen -0.05")
+	US.K, US.Kg = uspawn(US.P, H, off(b, 84, 54), b, "own K hormagaunts, nothing")
+	US.T, US.Tg = uspawn(US.P, "sbps/pvp/race_imperial_guard/vehicles/ig_chimera", off(b, 4, 44), b, "own T chimera", true)
+	US.Q, US.Qg = uspawn(US.P, "sbps/pvp/race_imperial_guard/troops/ig_guardsmen_squad", off(b, 4, 36), b, "own Q guardsmen (into the chimera)", true)
+	pcall(FOW_RevealAll); UL("AI_Enable off", tostring(pcall(AI_Enable, US.E, false)))
+	if US.Mg then mod(US.Mg, MAT_Entity, R, MUT_Multiplication, 2.0, "M regen x2")
+	              UL("M received damage", tostring(pcall(Modify_ReceivedDamage, US.Mg, 0.75))) end
+	if US.Bg then mod(US.Bg, MAT_Entity, R, MUT_Multiplication, 2.0, "B regen x2"); mod(US.Bg, MAT_Entity, R, MUT_Addition, 0.1, "B regen +0.1") end
+	if US.Ng then mod(US.Ng, MAT_Entity, R, MUT_Addition, -0.05, "N regen -0.05") end
+	if US.Tg then
+		mod(US.Tg, MAT_Entity, R, MUT_Addition, 0.1, "T regen +0.1")
+		UL("T speed", tostring(pcall(Modify_UnitSpeed, US.Tg, 0.75)))
+		UL("T received damage", tostring(pcall(Modify_ReceivedDamage, US.Tg, 0.75)))
+	end
+	if US.hero then
+		mod(US.Hg, MAT_Entity, R, MUT_Multiplication, 2.0, "hero regen x2")
+		mod(US.Hg, MAT_Squad, "modifiers\\squad_modifiers\\energy_regen_rate_squad_modifier", MUT_Addition, 0.05, "hero energy regen +0.05")
+		mod(US.Hg, MAT_Squad, "modifiers\\squad_modifiers\\energy_maximum_squad_modifier", MUT_Multiplication, 1.5, "hero max energy x1.5")
+		UL("hero received damage", tostring(pcall(Modify_ReceivedDamage, US.Hg, 0.8)))
+	end
+	for _, g in ipairs({ US.Xg, US.Mg, US.Bg, US.Ng, US.Kg, US.Hg }) do if g then half(g, "group") end end
+	UL("US9 SETUP done")
+	Rule_AddInterval(US_Tick, 1)
+end
+Rule_AddOneShot(US_Setup, 3)
+local PLAN = {
+	{ 2, function() if US.Q and US.T then load(US.Qg, US.Q, US.T, "guardsmen->chimera") end end },
+	{ 8, function() sel(US.X, "X hormagaunts at the Brood Nest") end },
+	{ 14, function() sel(US.M, "M hormagaunts regen x2 damage taken x0.75") end },
+	{ 20, function() sel(US.B, "B hormagaunts regen x2 and plus 0.1") end },
+	{ 26, function() sel(US.N, "N hormagaunts regen minus 0.05") end },
+	{ 32, function() sel(US.K, "K hormagaunts nothing") end },
+	{ 38, function() if US.Q and US.T then load(US.Qg, US.Q, US.T, "guardsmen->chimera (again)") end
+	                 sel(US.T, "T chimera with guardsmen inside regen plus 0.1") end },
+	{ 44, function() sel(US.hero, "hero HP regen x2 energy regen plus 0.05 max energy x1.5") end },
+	{ 50, function() sel(US.X, "X hormagaunts at the Brood Nest again") end },
+	{ 56, function() sel(US.K, "K hormagaunts nothing again") end },
+}
+function US_Tick()
+	US.t = US.t + 1; local t = US.t
+	for _, e in ipairs(PLAN) do if e[1] == t then local ok, err = pcall(e[2]); if not ok then UL("PLAN ERR", t, tostring(err)) end end end
+	if t == 62 then UL("US9 DONE") end
+end
+UL("unitstats v9 scar loaded")

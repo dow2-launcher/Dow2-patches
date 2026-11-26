@@ -4,7 +4,7 @@ Every version gets an entry here before it reaches `main`. CI then tags `vX.Y.Z`
 version (`X.Y.0`) it also publishes a GitHub Release with the DLLs and the entries since the previous `X.Y.0`.
 The version of the set lives only in `VERSION`; each DLL still writes its own version to its log.
 
-## 0.2.130 — 2026-11-26
+## 0.2.132 — 2026-11-26
 Add-on presets for the launcher's Add-ons tab (launcher 1.6.35, owner 26.11.2026: "Minimal / Recommended / Custom"):
 - addons.json `"_presets"`: `minimal` = `"ids": "defaults"` (the add-ons on for a new player), `recommended` = relay_fwd, automatch,
   steamkeep, roomjoin, livereplay, replayopen, elitefix_wmic, obsfix_r2, shellfix, herolabelfix, soundfix, lobbystats_r3,
@@ -14,6 +14,18 @@ Add-on presets for the launcher's Add-ons tab (launcher 1.6.35, owner 26.11.2026
   `elite-release apply presets` releases it. Every reader of addons.json skips `_` keys, so older deploys ignore it.
 - scripts/store_texts.py check: `_presets` well formed (5 languages, ids "defaults" or known store ids, none twice, no gameplay /
   performance / debug / dangerous add-on); run in CI (version job). docs/ADDON_RULES.md "Presets of the Add-ons tab".
+
+## 0.2.131 — 2026-11-26
+UnitStats 0.9 (store unitstats-0.9), noofancy in the launcher's feedback 26.11: "I'd like these stats - the per cent and the addition
+[of regeneration] - shown not at the HP but with all the other stats".
+- HP and energy regeneration effects leave the bars under the portrait: each is an item of the stat rows (the game's regeneration /
+  energy trait icon, the effects list's before 0.7) with the 0.8 text ("+1/s", "+100%", "+100% +1/s", "-0.5/s"), green / red, only
+  while an effect changes it (no empty slot). Max HP / max energy stay in the bars (0.7). Replay boxes unchanged (icons).
+- Placed at the left end of the stat row with more room, clear of a transport's cargo portraits; when the effect icons would not
+  all fit even in three compact rows, the regeneration items shrink to 3/4 size for that squad.
+- Stand 1, Elite 3.2.1 (session_v9.sh + unitstats_v9.scar): Brood Nest "+1/s", x2 "+100%", both "+100% +1/s", -0.05 "-0.5/s" red,
+  nothing = no item; Chimera with guardsmen inside: "+1/s", the "-25%" icon right of the two portraits; Chaos Lord with HP and
+  energy regeneration: both items, energy bar green, all three resistances shown. No fault, no watchdog.
 
 ## 0.2.129 — 2026-11-26
 MMFind 0.56 (Automatch v2.0; hand release: store automatch mmfind-0.56 = the live package mmfind-0.55 with this MMFind.dll), parties
