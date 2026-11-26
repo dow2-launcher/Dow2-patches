@@ -4,6 +4,18 @@ Every version gets an entry here before it reaches `main`. CI then tags `vX.Y.Z`
 version (`X.Y.0`) it also publishes a GitHub Release with the DLLs and the entries since the previous `X.Y.0`.
 The version of the set lives only in `VERSION`; each DLL still writes its own version to its log.
 
+## 0.2.134 — 2026-11-26
+UnitStats 0.11 (store unitstats-0.11), noofancy in the launcher's feedback 26.11 (fb 2135): "max HP is not shown in the HP bar, there
+is just a dark strip; I want it where all the other stats are, not in the HP bar".
+- Max HP / max energy changed by an effect (Adrenal Glands +10 %, ...) leave the bar under the portrait, as the regeneration did in
+  0.9: an item of the stat rows - the game's health trait icon + "+10%" (an addition "+40", both "+10% +40"), the energy icon +
+  "+50%" with a small "max", green / red, only while an effect changes it. The bar is the game's own again (no colouring, no dark
+  backing). `[UnitStats] MaxInBars=1` = as 0.7-0.10; the old key BarEffects is not read any more (every earlier ini had it =1).
+- Stand 1, Elite 3.2.1 (unitstats/stand/session_v11.sh + unitstats_v11.scar): Tyranids, hormagaunts with max HP x1.1 / +40 / x0.8 / x1.1 and
+  regeneration x2: "+10%", "+40", "-20%" red, "+10%" and "+100%"; the bar the game's own (white, no backing); a hero with all four
+  (max HP, HP and energy regeneration, max energy): four items at 3/4 size - its three resistance icons did not fit then (a hero with
+  one or two of them keeps its effects). No fault, no watchdog line.
+
 ## 0.2.133 — 2026-11-26
 UnitStats 0.10 (store unitstats-0.10), noofancy in the launcher's feedback 26.11 (fb 2117): "as an observer UnitStats does not work".
 - A live match watched from an observer seat has the replay's HUD (the observer player list with the squad icons, no selection

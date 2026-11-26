@@ -800,3 +800,37 @@ Stand 1 (`unitstats/stand/session_v10.sh`, the menus clicked through `ui.sh`): M
 Observers 1 "Open this slot" + "Move to this slot", Expert computers in the four team slots, Start Skirmish. Log: "game type 4,
 8 slots, 1 local observer, 0 local player"; hovering an icon - the tooltip with the numbers; a click - the box over the panel.
 Screenshots /var/www/media/dow2_shots/unitstats/v10/shots/ (m15 tooltip, m16 both).
+
+## v11 - max HP / max energy among the stats (0.11, 26.11.2026)
+
+noofancy (launcher feedback fb 2135, a screenshot of Hormagaunts with Adrenal Glands, the bar "704 / 704" on our dark backing): "max
+HP is not shown in the HP bar, there is just a dark strip; I want it where all the other stats are, not in the HP bar". The same
+move as v9 for regeneration, now for the last two effects that were in the bars.
+
+- Two more items of the panel's stat rows: `I_HPMAX` (entity health_maximum; `icon_traits_xp2/health_generic.dds`, `[EffectIcons]
+  Health`) and `I_ENMAX` (squad energy_maximum; `energy.dds` + a small "max" / "макс" - energy regeneration has the same icon and
+  "/s"). Text as the effect cells: "+10%", an addition "+40", both "+10% +40"; green / red. Only while an effect changes it. Order of
+  the extra items: max HP, HP regeneration, max energy, energy regeneration (`NITEMS..NPITEMS`), each to the left end of the row
+  with more room, as v9; the 3/4 size step of v9 covers all four.
+- The bars are the game's own again: `bars_update` gets `on = 0` (puts a tint back to white, hides `us_bg`). `[UnitStats]
+  MaxInBars=1` = 0.7-0.10 (the coloured bar number). The old key `BarEffects` is not read: every earlier ini shipped it `=1`.
+- The replay / observer boxes are unchanged (no bar there, these effects were and stay icons).
+- Hero armour wargear in Elite is a health_maximum modifier (79 wargear blueprints carry one), so a geared hero has the max HP item
+  most of the time. Room: one or two extra items leave the effects their place (hormagaunts: "+10%" and two effect icons; "+10%" and
+  "+100%" in the other row). Four extra items on a hero (the stand's worst case) take the strip: even at 3/4 size the three
+  resistance icons did not fit (log "0 of 3 effects fit"); the stats and the four items are shown, the effects dropped, as any
+  "not all fit" before.
+
+Stand 1, Elite 3.2.1 (`unitstats/stand/session_v11.sh` + `unitstats_v11.scar`, Tyranids, AI off; screenshots
+/var/www/media/dow2_shots/unitstats/v11/raw/a):
+
+| Squad | stat rows | bar |
+|---|---|---|
+| A hormagaunts, max HP x1.1 (as Adrenal Glands) | "+10%" green | "435 / 704" white, no backing |
+| D, max HP +40 | "+40" green | "552 / 960" |
+| B, max HP x1.1 and regeneration x2 | "+10%" (top row), "+100%" (bottom row) | "546 / 704" |
+| N, max HP x0.8 | "-20%" red | "377 / 512" |
+| K, nothing | no extra item, no gap | "465 / 640" |
+| hero (Chaos Lord) max HP x1.2, HP regen x2, energy regen +0.05, max energy x1.5 | "+0.5/s" "+100%" "+20%" / "+50% max", at 3/4 size | both bars white |
+
+No fault, no watchdog line.

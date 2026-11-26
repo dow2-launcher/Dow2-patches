@@ -1,0 +1,1 @@
+- Unit stats: an effect on max HP or max energy (Adrenal Glands +10% and the like) is now shown beside the other stats, like regeneration, instead of in the bar under the portrait.
