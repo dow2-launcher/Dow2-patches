@@ -4,8 +4,61 @@
     "Publishing: dow2-patches-deploy builds a raised version into the STAGING store only (its timer is off on purpose since 04.11.2026); players get it only through elite-release on rts. See README, Building and releasing.",
     "Not here, released by hand (their store version is not <id>-<version> or they are not one DLL of this repo): automatch (mmfind-<ver>: MMFind.dll + OwnLobby.dll + Relay.dll + early winmm.dll), relay_fwd (relayfwd-<n>; Relay.dll of the same source ships inside automatch since 05.11.2026), elitefix_wmic (Elite.exe), rusifikator (text files), eliteai_off.",
     "Texts for players (name, description, category, order): edit docs/store-texts.json, then scripts/store_texts.py addons (rules: docs/ADDON_TEXTS.md). category and order go to the store with a deploy only for a NEW add-on (an existing one keeps the store's: change it there by hand); min_launcher lives in the store only.",
-    "games (launcher 1.4.11: [\"elite\", \"vanilla\"] or [\"elite\"]), requires and excludes (launcher 1.5.2: lists of store ids - this add-on works only together with / never together with those) go to the store with a deploy when the add-on here has them (since 09.11.2026: dxvk, fpsunlock); without them here games lives in the store only and deploys keep it. The top-level vanilla.loader (vloader-<n> = make build/launcher/winmm.dll) lives in the store only; see docs/ADDON_RULES.md."
+    "games (launcher 1.4.11: [\"elite\", \"vanilla\"] or [\"elite\"]), requires and excludes (launcher 1.5.2: lists of store ids - this add-on works only together with / never together with those) go to the store with a deploy when the add-on here has them (since 09.11.2026: dxvk, fpsunlock); without them here games lives in the store only and deploys keep it. The top-level vanilla.loader (vloader-<n> = make build/launcher/winmm.dll) lives in the store only; see docs/ADDON_RULES.md.",
+    "_presets (launcher 1.6.35, owner 26.11.2026): the add-on presets of the launcher's Add-ons tab (Minimal / Recommended / Custom) - {\"<key>\": {\"name\": {5 languages}, \"description\": {5 languages}, \"ids\": \"defaults\" | [<store ids>]}}; \"defaults\" = the add-ons on for a new player, a list = exactly those (the launcher ignores an _r2/_r3/_mac end; the earlier one wins when two exclude each other). A deploy copies it to launcher.json \"presets\" in the staging store; players get it with elite-release apply presets. Only safe add-ons in Recommended: nothing that changes the simulation (gameplay), no performance / experiment / debug ones. Checked by scripts/store_texts.py check."
   ],
+  "_presets": {
+    "minimal": {
+      "name": {
+        "en": "Minimal",
+        "ru": "Минимальный",
+        "es": "Mínimo",
+        "fr": "Minimal",
+        "de": "Minimal"
+      },
+      "description": {
+        "en": "Only what is on for a new player.",
+        "ru": "Только то, что включено у нового игрока.",
+        "es": "Solo lo que está activado para un jugador nuevo.",
+        "fr": "Seulement ce qui est activé pour un nouveau joueur.",
+        "de": "Nur das, was bei einem neuen Spieler an ist."
+      },
+      "ids": "defaults"
+    },
+    "recommended": {
+      "name": {
+        "en": "Recommended",
+        "ru": "Рекомендуемый",
+        "es": "Recomendado",
+        "fr": "Recommandé",
+        "de": "Empfohlen"
+      },
+      "description": {
+        "en": "Our servers, automatch, replays, lobby ratings and safe fixes. Nothing that changes the game itself.",
+        "ru": "Наши серверы, автоматч, реплеи, рейтинги в лобби и безопасные исправления. Ничего, что меняет саму игру.",
+        "es": "Nuestros servidores, emparejamiento, repeticiones, puntuaciones en la sala y arreglos seguros. Nada que cambie el juego en sí.",
+        "fr": "Nos serveurs, le matchmaking, les replays, les classements dans le salon et des correctifs sûrs. Rien qui change le jeu lui-même.",
+        "de": "Unsere Server, Automatch, Replays, Wertungen in der Lobby und sichere Fixes. Nichts, was das Spiel selbst verändert."
+      },
+      "ids": [
+        "relay_fwd",
+        "automatch",
+        "steamkeep",
+        "roomjoin",
+        "livereplay",
+        "replayopen",
+        "elitefix_wmic",
+        "obsfix_r2",
+        "shellfix",
+        "herolabelfix",
+        "soundfix",
+        "lobbystats_r3",
+        "loadingratings_r3",
+        "replayspeed",
+        "elitetext_lang"
+      ]
+    }
+  },
   "lobbystats": {
     "version": "0.12.0",
     "dll": "LobbyStats.dll",

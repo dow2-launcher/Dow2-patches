@@ -25,6 +25,8 @@ jobs:
         run: |
           version="$(tr -d '[:space:]' < VERSION)"
           python3 scripts/release_notes.py check "$version"
+          # the store texts of every add-on and the launcher's add-on presets (addons.json "_presets", launcher 1.6.35)
+          python3 scripts/store_texts.py check
           {
             echo "number=$version"
             echo "tag=v$version"

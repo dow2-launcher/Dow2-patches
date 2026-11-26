@@ -49,6 +49,29 @@ Launcher 1.5.2: an entry may also have `"requires": [<store id>, ...]` (the tick
 requires dxvk) and `"excludes": [<store id>, ...]` (never together). `games`, `requires` and `excludes` written in addons.json
 go to the store with a deploy; an add-on without them there keeps what the store has.
 
+## Presets of the Add-ons tab (launcher 1.6.35, owner 26.11.2026)
+
+At the top of the launcher's Add-ons tab the player picks a preset - Minimal / Recommended / Custom. The sets live in
+addons.json `"_presets"` (not in the launcher, so they change without a launcher release); the deploy copies the object to the
+staging store's launcher.json `"presets"`, `elite-release apply presets` gives it to the players. Older launchers ignore the key.
+
+```json
+"_presets": {
+  "minimal":     {"name": {"en": "Minimal", ...}, "description": {...}, "ids": "defaults"},
+  "recommended": {"name": {"en": "Recommended", ...}, "description": {...}, "ids": ["relay_fwd", "automatch", ...]}
+}
+```
+
+- `"defaults"` = the add-ons on for a new player (`default: true`, never a dangerous one); a list = exactly those store ids (an
+  `_r2`/`_r3`/`_mac` end does not matter, a Mac build matches its add-on). Name and description in all five languages.
+- A pick ticks exactly the preset's add-ons **of the game Play starts** (Elite / vanilla / IG Rework - by `games`) and unticks the
+  others of that game; other games' ticks stay. Two that exclude each other: the earlier one of the list wins; one whose
+  `requires` is not in the set stays off.
+- Nothing is applied by itself (players' consent): the launcher only shows the preset equal to the current ticks, else Custom.
+- Recommended holds only add-ons that improve and do not change the simulation: no gameplay ones (retreatnow, reverse,
+  jumpretry, reinforcefix, ctrlattack, overwatchonce, replaytakeover), nothing marked dangerous, no performance / experiment /
+  debug trials. `scripts/store_texts.py check` (CI) refuses gameplay / performance / debug / dangerous ids and unknown ids.
+
 ## Turning an add-on off for everyone (owner 05.11 / 15.11.2026)
 
 "Off for everyone" = everyone's tick goes off, the add-on may come back later. The launcher keeps each player's tick by the

@@ -1,0 +1,1 @@
+- Add-on presets for the launcher (1.6.35 and newer): at the top of the Add-ons page pick Minimal (what is on for a new player) or Recommended (our servers, automatch, replays, lobby ratings and safe fixes - nothing that changes the game). Nothing changes until you pick one yourself.
